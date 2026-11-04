@@ -42,8 +42,27 @@ function dbAt(root: string, rev: string): { db: DatabaseSync | null; done: () =>
   }
 }
 
+/** The oldest commit any document says it was written at (its front matter) that this checkout has, else HEAD~1. */
+export function documentsBase(root: string): string {
+  const commits: string[] = []
+  for (const k of DOC_KINDS) {
+    const f = join(root, DOCS[k].file)
+    if (!existsSync(f)) continue
+    const c = parseDoc(readFileSync(f, 'utf8')).front?.commit
+    if (!c || !/^[0-9a-f]{4,40}$/.test(c)) continue
+    try { execFileSync('git', ['cat-file', '-e', `${c}^{commit}`], { cwd: root, stdio: 'ignore' }); commits.push(c) } catch { /* not in this history */ }
+  }
+  if (!commits.length) return 'HEAD~1'
+  // the oldest: the one every other is a descendant of, else the first that is no one's descendant
+  return commits.find((c) => commits.every((o) => o === c || isAncestor(root, c, o))) ?? commits[0]!
+}
+
+const isAncestor = (root: string, a: string, b: string): boolean => {
+  try { execFileSync('git', ['merge-base', '--is-ancestor', a, b], { cwd: root, stdio: 'ignore' }); return true } catch { return false }
+}
+
 /** Whether the project has an interface to specify: a protocol spec or a protocol model. */
-function hasInterfaces(): boolean {
+export function hasInterfaces(): boolean {
   const db = openProject()
   try {
     const n = (sql: string): number => { try { return (db.prepare(sql).get() as { n: number }).n } catch { return 0 } }
@@ -57,23 +76,25 @@ const stale = defineTool({
   name: 'docs.stale',
   description: 'Which sections of the project\'s documents a change touched: the files changed between two commits and the project database\'s tables compared between them, mapped to the records each section is written from. Returns each document with the sections to write again and the records that marked each; also the documents the stage needs that do not exist yet.',
   input: z.object({
-    base: z.string().regex(commitOk).default('HEAD~1').describe('the commit before the change (a stacked change: its base branch)'),
+    base: z.string().regex(commitOk).optional().describe('the commit to compare with (a stacked change: its base branch); default: the commit the documents were last written at (their front matter), so every change since, missed or not, is seen'),
     head: z.string().regex(commitOk).default('HEAD'),
     stage: z.enum(STAGE_IDS).describe('the project\'s current stage: which documents it needs'),
   }),
   run: (a) => {
     const root = process.cwd()
+    const base = a.base ?? documentsBase(root)
     let paths: string[] = []
-    try { paths = git(root, ['diff', '--name-only', a.base, a.head]).split('\n').filter(Boolean) } catch { throw new ToolError(`cannot compare ${a.base} with ${a.head}: is ${a.base} in this checkout?`) }
+    try { paths = git(root, ['diff', '--name-only', base, a.head]).split('\n').filter(Boolean) } catch { throw new ToolError(`cannot compare ${base} with ${a.head}: is ${base} in this checkout?`) }
     const sources = sourcesOfPaths(paths)
     if (paths.includes(DB)) {
-      const before = dbAt(root, a.base)
+      const before = dbAt(root, base)
       const after = dbAt(root, a.head)
       try { sourcesOfDatabases(before.db, after.db).forEach((s) => sources.add(s)) } finally { before.done(); after.done() }
     }
     const due = docsFor(a.stage as StageId, hasInterfaces()).map((d) => d.kind)
     const docs = staleSections(sources, DOC_KINDS.filter((k) => due.includes(k) || existsSync(join(root, DOCS[k].file))))
     return {
+      base,
       changed: paths.filter((p) => !p.startsWith('docs/design/')),
       records: [...sources].sort(),
       documents: docs.map((d) => ({ kind: d.kind, file: DOCS[d.kind].file, exists: existsSync(join(root, DOCS[d.kind].file)), sections: d.sections })),

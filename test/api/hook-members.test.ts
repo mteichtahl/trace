@@ -86,7 +86,7 @@ describe('hook.members', () => {
     expect(who(BACKEND)).toBe('backend:web-hooks')
     // hook.apply is the backend's too (docs/stay-in-trace.md "Applying"): it applies people's edits, nothing else; and
     // hook.conflicts (src/api/conflicts.ts): it brings changes in conflict up to date after a push, nothing else
-    for (const a of ACTION_NAMES.filter((x) => x !== 'hook.members' && x !== 'hook.apply' && x !== 'hook.conflicts')) {
+    for (const a of ACTION_NAMES.filter((x) => x !== 'hook.members' && x !== 'hook.apply' && x !== 'hook.conflicts' && x !== 'hook.docs')) {
       await expect(run(BACKEND, a, { repo: 'acme/board' }), a).rejects.toBeInstanceOf(AccessDenied)
     }
   })

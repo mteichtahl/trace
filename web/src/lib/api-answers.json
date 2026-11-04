@@ -369,7 +369,7 @@
           "optional": false,
           "state": "queued",
           "met": 0,
-          "total": 4,
+          "total": 5,
           "progress": "Queued: starts when the layout review gate is signed",
           "started": null,
           "finished": null,
@@ -414,6 +414,16 @@
               "ref": {
                 "kind": "criterion",
                 "id": "signoff.bom"
+              }
+            },
+            {
+              "id": "signoff.docs",
+              "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "signoff.docs"
               }
             },
             {
@@ -903,7 +913,7 @@
           "title": "the release approval gate",
           "state": "queued",
           "met": 0,
-          "total": 4,
+          "total": 5,
           "criteria": [
             {
               "id": "signoff.coverage",
@@ -939,6 +949,17 @@
               "checked_at": null
             },
             {
+              "id": "signoff.docs",
+              "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the documents check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
               "id": "signoff.report",
               "text": "The release report is reviewed: coverage, interference estimates, parts list and open waivers.",
               "owner": "person",
@@ -958,8 +979,8 @@
             "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change.",
             "Only an admin can sign a gate.",
             "The release approval gate is not in the current stage (Define).",
-            "4 criteria are not met or waived: every requirement is verified or waived; the radio interference prechecks are run and within the target; the parts list is checked for cost and stock at the build quantity; the release report is reviewed: coverage, interference estimates, parts list and open waivers.",
-            "Open the evidence for 4 more criteria."
+            "5 criteria are not met or waived: every requirement is verified or waived; the radio interference prechecks are run and within the target; the parts list is checked for cost and stock at the build quantity; the project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check; the release report is reviewed: coverage, interference estimates, parts list and open waivers.",
+            "Open the evidence for 5 more criteria."
           ],
           "pending": [
             "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change."
@@ -1649,6 +1670,10 @@
                         "text": "The parts list is checked for cost and stock at the build quantity."
                       },
                       {
+                        "id": "signoff.docs",
+                        "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check."
+                      },
+                      {
                         "id": "signoff.report",
                         "text": "The release report is reviewed: coverage, interference estimates, parts list and open waivers."
                       }
@@ -1908,6 +1933,10 @@
                       {
                         "id": "signoff.bom",
                         "text": "The parts list is checked for cost and stock at the build quantity."
+                      },
+                      {
+                        "id": "signoff.docs",
+                        "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check."
                       },
                       {
                         "id": "signoff.report",
@@ -2475,6 +2504,10 @@
                         "text": "The parts list is checked for cost and stock at the build quantity."
                       },
                       {
+                        "id": "signoff.docs",
+                        "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check."
+                      },
+                      {
                         "id": "signoff.report",
                         "text": "The release report is reviewed: coverage, interference estimates, parts list and open waivers."
                       }
@@ -2820,6 +2853,10 @@
                     {
                       "id": "signoff.bom",
                       "text": "The parts list is checked for cost and stock at the build quantity."
+                    },
+                    {
+                      "id": "signoff.docs",
+                      "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check."
                     },
                     {
                       "id": "signoff.report",
@@ -3347,6 +3384,18 @@
                   ]
                 },
                 {
+                  "id": "signoff.docs",
+                  "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check.",
+                  "owner": "trace",
+                  "evidence": "the documents check",
+                  "templates": [
+                    "board",
+                    "fpga",
+                    "firmware",
+                    "mixed"
+                  ]
+                },
+                {
                   "id": "signoff.report",
                   "text": "The release report is reviewed: coverage, interference estimates, parts list and open waivers.",
                   "owner": "person",
@@ -3751,6 +3800,10 @@
                   {
                     "id": "signoff.bom",
                     "text": "The parts list is checked for cost and stock at the build quantity."
+                  },
+                  {
+                    "id": "signoff.docs",
+                    "text": "The project's documents are current: every one the release needs is there, every section due is written, and they pass the documents check."
                   },
                   {
                     "id": "signoff.report",

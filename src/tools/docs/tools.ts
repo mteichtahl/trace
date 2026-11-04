@@ -18,13 +18,13 @@ import { STAGE_IDS, type StageId } from '../../core/journey-catalog.js'
 import { type AnyTool, defineTool, ToolError } from '../../core/registry.js'
 import { Work } from '../../core/store.js'
 import { backendFor, runJob } from '../../gpu/jobs.js'
-import { DOC_KINDS, DOCS, type DocKind } from '../../docs/catalog.js'
+import { DOC_KINDS, DOCS, docsFor, type DocKind } from '../../docs/catalog.js'
 import { checkDoc, passes } from '../../docs/checks.js'
 import { logoPaths } from '../../docs/logo.js'
 import { PY_DIR } from '../mech/engine.js'
 import { commitOf } from '../render/model.js'
 import { figureTools } from './figures.js'
-import { scribeTools } from './scribe.js'
+import { hasInterfaces, scribeTools } from './scribe.js'
 
 const Kinds = z.array(z.enum(DOC_KINDS)).min(1).max(4).optional().describe('which documents (hld, lld, protocol, guide); default: every one the repository has')
 
@@ -46,17 +46,29 @@ export function imagesOf(md: string): string[] {
 
 const check = defineTool({
   name: 'docs.check',
-  description: 'Check the project\'s documents (docs/design: high level design, low level design, protocol specification, user guide) against Scribe\'s quality bar at a stage: every section present, sections due by the stage written, figures with kind, source, caption and the right diagram type, values with a basis and a source, no unexplained acronyms. Errors block a change.',
+  description: 'Check the project\'s documents (docs/design: high level design, low level design, protocol specification, user guide) against Scribe\'s quality bar at a stage: every document the stage needs there, every section present, sections due by the stage written, figures with kind, source, caption and the right diagram type, values with a basis and a source, no unexplained acronyms. Recorded as a run: the evidence for the documents criterion (signoff.docs, journey.check). Errors block a change.',
   input: z.object({ docs: Kinds, stage: z.enum(STAGE_IDS).describe('the project\'s current stage: sections due by it must be written') }),
   run: (a) => {
     const root = process.cwd()
     const kinds = present(root, a.docs)
-    if (!kinds.length) return { documents: [], note: 'No documents yet under docs/design.' }
-    return {
-      documents: kinds.map((k) => {
-        const findings = checkDoc(k, readFileSync(join(root, DOCS[k].file), 'utf8'), { stage: a.stage as StageId })
-        return { kind: k, file: DOCS[k].file, passes: passes(findings), errors: findings.filter((f) => f.severity === 'error').length, findings }
-      }),
+    const missing = a.docs ? [] : docsFor(a.stage as StageId, hasInterfaces()).map((d) => d.kind).filter((k) => !kinds.includes(k))
+    const documents = kinds.map((k) => {
+      const findings = checkDoc(k, readFileSync(join(root, DOCS[k].file), 'utf8'), { stage: a.stage as StageId })
+      return { kind: k, file: DOCS[k].file, passes: passes(findings), errors: findings.filter((f) => f.severity === 'error').length, findings }
+    })
+    const ok = !missing.length && documents.every((d) => d.passes)
+    const commit = commitOf(root)
+    const work = new Work()
+    try {
+      const id = work.start('docs.check', { subject: `documents at ${a.stage}`, args: a, ...(commit ? { gitSha: commit } : {}) })
+      for (const d of documents) work.measure(id, `${d.kind}.errors`, d.errors, '')
+      work.measure(id, 'missing', missing.length, '')
+      const summary = ok ? `${documents.length} document(s) pass at ${a.stage}` : [missing.length ? `missing: ${missing.join(', ')}` : '', ...documents.filter((d) => !d.passes).map((d) => `${d.kind}: ${d.errors} error(s)`)].filter(Boolean).join('; ')
+      const result = { run_id: id, stage: a.stage, passes: ok, missing: missing.map((k) => DOCS[k].file), documents, ...(kinds.length ? {} : { note: 'No documents yet under docs/design.' }) }
+      work.finish(id, ok ? 'pass' : 'fail', summary, { ...result, documents: documents.map(({ findings: _, ...d }) => d) })
+      return result
+    } finally {
+      work.db.close()
     }
   },
 })

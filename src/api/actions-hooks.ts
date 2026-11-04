@@ -18,6 +18,10 @@
  *                            own edits again and starts the worker for the rest (src/api/conflicts.ts). The hooks
  *                            function tells the people on the project which ones, as a live event
  *
+ *   hook.docs      backend   { repo } → what it did: a push to the project's default branch. When the commit changed a record
+ *                            a document is written from, Scribe brings the documents up to date (src/api/docs-follow.ts);
+ *                            a commit of only the documents, or only Scribe's own runs, starts nothing
+ *
  * Only the web backend's own identity reaches it (need 'backend', src/api/backend-auth.ts), and that identity reaches
  * nothing else (perform). The API runtime still decides who is on a project, as it does for project.members; the
  * backend still never reads the access store.
@@ -29,6 +33,9 @@ import { z } from 'zod'
 import { def } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
 import { type ConflictReport, resolveConflicts } from './conflicts.js'
+import { docsRequest, recordsOfCommit, startScribe } from './docs-follow.js'
+import { journeyStore } from './action-kit.js'
+import { loadJourney } from '../core/journey.js'
 
 export interface HookMembers { repo: string; project: boolean; subs: string[] }
 
@@ -51,5 +58,18 @@ export const HOOK_ACTIONS = {
   'hook.conflicts': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx): Promise<ConflictReport> => {
     if (!(await projects()).includes(repo)) return { repo, conflicts: [], remade: [], worker: [], left: [], checking: [], started: 'not-needed' }
     return resolveConflicts(ctx, repo)
+  }),
+
+  'hook.docs': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx) => {
+    if (!(await projects()).includes(repo) || (await lifecycleOf(repo)).paused) return { repo, records: [], started: null }
+    const rec = (await journeyStore(ctx, repo).read((db) => loadJourney(db))).result
+    // before Architect there are no documents to keep
+    if (!rec || ['define'].includes(rec.journey.currentStage)) return { repo, records: [], started: null, why: 'no documents before Architect' }
+    const gh = await ctx.deps.github()
+    const { sha } = await gh.defaultBranch(repo)
+    const { records } = await recordsOfCommit(ctx, repo, sha)
+    if (!records.length) return { repo, commit: sha, records, started: null, why: 'the push changed no record a document is written from' }
+    const r = await startScribe(ctx, repo, docsRequest(`The default branch moved to ${sha.slice(0, 12)}.`, { stage: rec.journey.currentStage, records }))
+    return { repo, commit: sha, records, started: r.started ?? null, ...(r.jobId ? { job: r.jobId } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.jobError ? { error: r.jobError } : {}) }
   }),
 }

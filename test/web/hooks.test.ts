@@ -292,6 +292,26 @@ describe('who is told, and what', () => {
   })
 })
 
+describe('the documents after a push to the default branch', () => {
+  it('asks the API whether Scribe should bring the documents up to date, and logs what it started', async () => {
+    const w = hooksWorld()
+    w.runtime.answers.set('hook.docs', () => ({ body: { ok: true, result: { repo: 'acme/board', commit: 'abc', records: ['schematic'], started: 'The Documentation agent brings the project\'s documents up to date.' } } }))
+    expect((await w.deliver('push', push('acme/board', 'refs/heads/main'))).status).toBe(202)
+    expect(w.runtime.calls.map((c) => [c.action, c.args])).toContainEqual(['hook.docs', { repo: 'acme/board' }])
+    expect(w.logs.find((l) => l.hook === 'docs')).toMatchObject({ repo: 'acme/board', records: ['schematic'], started: true })
+  })
+
+  it('a pull request delivery never asks, and a failure is logged with GitHub still answered 202', async () => {
+    let w = hooksWorld()
+    await w.deliver('pull_request', pr('acme/board', 7))
+    expect(w.runtime.calls.map((c) => c.action)).not.toContain('hook.docs')
+    w = hooksWorld()
+    w.runtime.answers.set('hook.docs', () => ({ status: 500, body: { ok: false, error: 'boom' } }))
+    expect((await w.deliver('push', push('acme/board', 'refs/heads/main'))).status).toBe(202)
+    expect(w.logs.find((l) => l.hook === 'docs failed')).toMatchObject({ repo: 'acme/board' })
+  })
+})
+
 describe('conflicts after a push to the default branch', () => {
   const report = (o: Record<string, unknown> = {}) => ({ body: { ok: true, result: { repo: 'acme/board', conflicts: [4, 9], remade: [9], worker: [4], left: [], checking: [], started: 'yes', ...o } } })
 

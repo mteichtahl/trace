@@ -31,6 +31,8 @@
  *            waits for GitHub to settle, makes trace's own edits again and starts the worker for the rest; when any
  *            were in conflict, the people on the project get `record.changed { repo, kind: 'change', conflicts,
  *            remade, resolving }` (numbers only), and the app says which changes trace is bringing up to date
+ *   docs     the same push also asks `hook.docs { repo }` (src/api/docs-follow.ts): when it changed a record the
+ *            project's documents are written from, the API starts Scribe on them (docs/scribe.md "Event driven")
  *   publish  `record.changed { repo, kind: 'change', number? }` to each person's channel (src/web/events.ts), naming no
  *            content, as every live event. One push sets off dozens of check_run and status deliveries, each its own
  *            invocation and often its own container, so the debounce is shared (Debounce over a DebounceStore: the
@@ -251,6 +253,8 @@ const ApplyAnswer = z.object({ result: z.object({ applied: z.array(z.object({ br
 const ConflictAnswer = z.object({ result: z.object({
   conflicts: z.array(z.number()), remade: z.array(z.number()), worker: z.array(z.number()), left: z.array(z.number()), started: z.string(),
 }).loose() })
+/** hook.docs' answer: the records the push changed, and whether Scribe was started (src/api/actions-hooks.ts). */
+const DocsAnswer = z.object({ result: z.object({ records: z.array(z.string()), started: z.string().nullable() }).loose() })
 const MembersAnswer = z.object({ ok: z.literal(true), result: z.object({ project: z.boolean(), subs: z.array(z.string().min(1)) }).loose() }).loose()
 
 export interface HooksOptions {
@@ -395,6 +399,23 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
     }
   }
 
+  /**
+   * After a push to the default branch: ask the API whether the push changed a record the project's documents are
+   * written from, and if so to start Scribe on them (hook.docs, src/api/docs-follow.ts). Logged; a failure is logged
+   * and dropped (Scribe compares with the documents' last commit, so the next push it starts on sees this one too).
+   */
+  async function documents(cfg: WebConfig, repo: string): Promise<void> {
+    try {
+      const t = await backendToken(cfg)
+      const a = await callApi(deps, { config: cfg, token: t, sub: 'backend:web-hooks' }, 'hook.docs', { repo })
+      const r = DocsAnswer.safeParse(a.json)
+      if (!r.success) { deps.log({ hook: 'docs failed', repo, status: a.status }); return }
+      if (r.data.result.started || r.data.result.records.length) deps.log({ hook: 'docs', repo, records: r.data.result.records, started: Boolean(r.data.result.started) })
+    } catch (e) {
+      deps.log({ hook: 'docs failed', repo, error: e instanceof Error ? e.message.slice(0, 200) : 'error' })
+    }
+  }
+
   return [
     route('POST', '/api/hooks/github', async (req) => {
       // before anything else (the body, the settings, a secret): only CloudFront's hooks path carries this
@@ -451,7 +472,7 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
             debounce ??= new Debounce(deps.hookStore?.(cfg) ?? memoryStore(), { now: deps.now, log: deps.log })
             // a push to the default branch: the conflicts it made are found beside the debounce, not after it (the
             // function's time is bounded, and a holder may keep its window for MAX_ROUNDS)
-            const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base ? conflicts(cfg, d.repo) : undefined])
+            const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base ? conflicts(cfg, d.repo) : undefined, d.base ? documents(cfg, d.repo) : undefined])
             if (how === 'joined') deps.log({ hook: 'debounced', repo: d.repo, event: d.event, number: d.number })
           } catch (e) {
             deps.log({ warning: 'hooks: not published', repo: d.repo, event: d.event, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })

@@ -150,11 +150,12 @@ describe('the journey record', () => {
     expect(rec().decisions.some((d) => d.kind === 'criterion.approved' && d.ref === 'layout.renders')).toBe(true)
   })
 
-  it('the release report review waits on coverage, interference and the parts list, met or waived', () => {
+  it('the release report review waits on coverage, interference, the parts list and the documents, met or waived', () => {
     const waits = (): string[] => reviewWaitsOn(rec(), 'signoff.report').map((c) => c.id)
-    expect(waits()).toEqual(['signoff.coverage', 'signoff.emc', 'signoff.bom'])
+    expect(waits()).toEqual(['signoff.coverage', 'signoff.emc', 'signoff.bom', 'signoff.docs'])
     setCriterion(db, 'signoff.coverage', 'met', [], 'trace')
     setCriterion(db, 'signoff.bom', 'met', [], 'trace')
+    setCriterion(db, 'signoff.docs', 'met', [], 'trace')
     expect(waits()).toEqual(['signoff.emc'])
     addWaiver(db, { target: { kind: 'criterion', id: 'signoff.emc' }, reason: 'A bench board with no radio target.', risk: 'Interference is not estimated.', severity: 'cosmetic', caught_where: 'Bring up', scope: 'this revision only' }, signer)
     expect(waits()).toEqual([])
