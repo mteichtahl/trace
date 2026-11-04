@@ -60,7 +60,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
+  confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -438,6 +438,13 @@ export const JOURNEY_ACTIONS = {
     journeyWrite(ctx, a.repo, (db) => {
       const r = returnGate(db, a.gate, signer(ctx), { reason: a.reason, reopen: a.reopen })
       return { result: { repo: a.repo, ...r, summary: r.reopened ? `Returned. ${r.reopened} is reopened.` : 'Returned with what has to change.' } }
+    })),
+
+  // a criterion an admin added to the template, which a person signs off by saying what they checked (no skill meets it)
+  'criterion.confirm': def('write', Repo.extend({ criterion: Id, met: z.boolean().default(true), note: z.string().trim().max(300).default('') }), async (a, ctx) =>
+    journeyWrite(ctx, a.repo, (db) => {
+      confirmCriterion(db, a.criterion, { met: a.met, note: a.note }, signer(ctx))
+      return { result: { repo: a.repo, criterion: a.criterion, met: a.met, summary: a.met ? 'Signed off.' : 'Taken back: it is not met.' } }
     })),
 
   'question.answer': def('write', Repo.extend({

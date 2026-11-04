@@ -60,128 +60,17 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import type { HandoffFact } from './handoffs.js'
-import { type StageGuide, stageGuideText } from './stage-guides.js'
+import type { StageGuide } from './stage-guides.js'
+import { TemplateDoc, addedCriteria, catalogTemplate, docGuide, docStages, templateProblems } from './templates.js'
 
-// ------------------------------------------------------------------ templates
+// ------------------------------------------------------------------ templates (src/core/journey-catalog.ts)
 
-export const TEMPLATES = ['board', 'fpga', 'firmware', 'mixed'] as const
-export type Template = (typeof TEMPLATES)[number]
-export const LATER_STAGES = ['certify', 'produce', 'sustain'] as const
-export type LaterStage = (typeof LATER_STAGES)[number]
-export const STAGE_IDS = ['define', 'architect', 'capture', 'prove', 'layout', 'signoff', 'release', 'fabricate', 'bringup', ...LATER_STAGES] as const
-export type StageId = (typeof STAGE_IDS)[number]
-
-export const TEMPLATE_NAMES: Readonly<Record<Template, string>> = { board: 'Board', fpga: 'FPGA', firmware: 'Firmware', mixed: 'Mixed' }
-
-export const STAGE_NAMES: Readonly<Record<StageId, string>> = {
-  define: 'Define', architect: 'Architect', capture: 'Capture', prove: 'Prove', layout: 'Layout', signoff: 'Sign-off',
-  release: 'Release', fabricate: 'Fabricate', bringup: 'Bring up', certify: 'Certify', produce: 'Produce', sustain: 'Sustain',
-}
-
-const STAGES_OF: Readonly<Record<Template, readonly StageId[]>> = {
-  board: ['define', 'architect', 'capture', 'prove', 'layout', 'signoff', 'release', 'fabricate', 'bringup'],
-  fpga: ['define', 'architect', 'prove', 'signoff', 'release', 'fabricate', 'bringup'],
-  firmware: ['define', 'architect', 'prove', 'release', 'bringup'],
-  mixed: ['define', 'architect', 'capture', 'prove', 'layout', 'signoff', 'release', 'fabricate', 'bringup'],
-}
-
-/** Who moves a criterion: a person (through a guided skill) or trace (a checker tool). */
-export type Owner = 'person' | 'trace'
-
-/**
- * `after`: the criteria (keys of the same gate) whose work this one reviews; a person's criterion is not the next step
- * until they are met (the renders are approved once the board is routed, not before trace has drawn anything).
- */
-interface CriterionDef { key: string; text: string; owner: Owner; evidence: string; in?: readonly Template[]; after?: readonly string[] }
-interface GateDef { id: string; stage: StageId; name: string; criteria: readonly CriterionDef[] }
-
-const ALL = TEMPLATES
-const HARDWARE: readonly Template[] = ['board', 'fpga', 'mixed']
-const BOARDS: readonly Template[] = ['board', 'mixed']
-const FIRMWARE: readonly Template[] = ['firmware', 'mixed']
-const LOGIC: readonly Template[] = ['fpga', 'mixed']
-
-/** Every gate trace knows, in journey order, with each criterion and the templates it applies to (all, when unsaid). */
-export const GATES: readonly GateDef[] = [
-  { id: 'define', stage: 'define', name: 'requirements baseline', criteria: [
-    { key: 'accepted', text: 'Every requirement is accepted or struck.', owner: 'person', evidence: 'the requirements list' },
-    { key: 'measurable', text: 'Every requirement has a criterion that can be measured, with a number and a unit.', owner: 'person', evidence: 'the requirements list' },
-    { key: 'firmware', text: 'The firmware requirements are accepted with the rest.', owner: 'person', evidence: 'the firmware requirements', in: FIRMWARE },
-  ] },
-  { id: 'architect', stage: 'architect', name: 'architecture review', criteria: [
-    { key: 'blocks', text: 'The blocks and key parts are approved.', owner: 'person', evidence: 'the block diagram and key parts list' },
-    { key: 'mapped', text: 'Every requirement maps to at least one block.', owner: 'trace', evidence: 'the requirement to block map' },
-    { key: 'stock', text: 'Every key part is in stock for the build quantity, or its exception is signed.', owner: 'trace', evidence: 'the stock check', in: HARDWARE },
-    { key: 'peripherals', text: 'Every interface has a peripheral on the microcontroller, and no peripheral is claimed twice.', owner: 'trace', evidence: 'the peripheral budget', in: FIRMWARE },
-  ] },
-  { id: 'capture', stage: 'capture', name: 'schematic review', criteria: [
-    { key: 'erc', text: 'The electrical rule check is clean, or each finding is waived with a reason.', owner: 'trace', evidence: 'the electrical rule check report' },
-    { key: 'datasheets', text: 'No conflict with a part\'s datasheet is left open.', owner: 'trace', evidence: 'the datasheet limit check' },
-    { key: 'stock', text: 'Every part is in stock for the build quantity, or its exception is signed.', owner: 'trace', evidence: 'the parts list stock check' },
-    { key: 'pins', text: 'The pin plan matches the schematic.', owner: 'person', evidence: 'the pin plan' },
-    { key: 'alternates', text: 'No two functions claim the same pin\'s alternate function.', owner: 'trace', evidence: 'the pin plan check', in: ['mixed'] },
-  ] },
-  { id: 'prove', stage: 'prove', name: 'design proven', criteria: [
-    { key: 'verified', text: 'Every requirement that can be checked before layout is verified or waived.', owner: 'trace', evidence: 'the coverage matrix' },
-    { key: 'failing', text: 'No test item is failing.', owner: 'trace', evidence: 'the test plan results' },
-    { key: 'logic', text: 'The logic builds for the chip and meets its timing.', owner: 'trace', evidence: 'the synthesis and timing report', in: LOGIC },
-    { key: 'firmware', text: 'The firmware builds cleanly and its unit tests pass.', owner: 'trace', evidence: 'the firmware build and test run', in: FIRMWARE },
-    { key: 'size', text: 'The firmware fits in the chip\'s flash and memory.', owner: 'trace', evidence: 'the firmware size report', in: FIRMWARE },
-  ] },
-  { id: 'layout', stage: 'layout', name: 'layout review', criteria: [
-    { key: 'routed', text: 'Every connection is routed.', owner: 'trace', evidence: 'the routing report' },
-    { key: 'drc', text: 'The design rule check is clean, or each finding is waived.', owner: 'trace', evidence: 'the design rule check report' },
-    { key: 'lengths', text: 'Matched-length groups are within tolerance.', owner: 'trace', evidence: 'the length-match report' },
-    { key: 'fit', text: 'The board fits its enclosure, or each clash is waived.', owner: 'trace', evidence: 'the fit check' },
-    { key: 'renders', text: 'The board renders are approved.', owner: 'person', evidence: 'the board renders', after: ['routed', 'drc'] },
-    { key: 'pins', text: 'The pin plan still matches after any pin swaps.', owner: 'trace', evidence: 'the pin plan check', in: ['mixed'] },
-  ] },
-  { id: 'signoff', stage: 'signoff', name: 'release approval', criteria: [
-    { key: 'coverage', text: 'Every requirement is verified or waived.', owner: 'trace', evidence: 'the coverage matrix' },
-    { key: 'emc', text: 'The radio interference prechecks are run and within the target.', owner: 'trace', evidence: 'the interference precheck', in: BOARDS },
-    { key: 'bom', text: 'The parts list is checked for cost and stock at the build quantity.', owner: 'trace', evidence: 'the parts list check' },
-    { key: 'report', text: 'The release report is reviewed: coverage, interference estimates, parts list and open waivers.', owner: 'person', evidence: 'the release report', after: ['coverage', 'emc', 'bom'] },
-  ] },
-  { id: 'fabricate.order', stage: 'fabricate', name: 'order approval', criteria: [
-    { key: 'package', text: 'The release package is built and stored.', owner: 'trace', evidence: 'the release package' },
-    { key: 'stock', text: 'Stock and prices are checked again today, and every line is available.', owner: 'trace', evidence: 'today\'s stock check' },
-    { key: 'sheet', text: 'The order sheet matches the release.', owner: 'person', evidence: 'the order sheet' },
-  ] },
-  { id: 'fabricate.received', stage: 'fabricate', name: 'boards received', criteria: [
-    { key: 'inspected', text: 'The boards are received and inspected.', owner: 'person', evidence: 'the inspection record' },
-    { key: 'bench', text: 'The bring-up plan, test scripts and bench are ready.', owner: 'person', evidence: 'the bring-up plan and bench setup' },
-    { key: 'firmware', text: 'The bring-up firmware is built and tagged with the hardware revision.', owner: 'trace', evidence: 'the firmware release build', in: ['mixed'] },
-  ] },
-  { id: 'bringup', stage: 'bringup', name: 'revision accepted', criteria: [
-    { key: 'package', text: 'The release package is built and stored.', owner: 'trace', evidence: 'the release package', in: ['firmware'] },
-    { key: 'verified', text: 'Every requirement is verified on hardware, or carried to the next revision as an issue.', owner: 'trace', evidence: 'the coverage matrix with bench results' },
-    { key: 'firmware', text: 'The firmware requirements are verified on hardware.', owner: 'trace', evidence: 'the bench results', in: FIRMWARE },
-  ] },
-  { id: 'certify', stage: 'certify', name: 'certification', criteria: [
-    { key: 'lab', text: 'Every compliance requirement passed at the lab, or a change request is raised.', owner: 'person', evidence: 'the lab results' },
-  ] },
-  { id: 'produce', stage: 'produce', name: 'production release', criteria: [
-    { key: 'reviews', text: 'The manufacture and test reviews are closed or waived.', owner: 'person', evidence: 'the manufacture and test review' },
-    { key: 'golden', text: 'The test procedure ran on the golden board and every step passed.', owner: 'trace', evidence: 'the golden board run' },
-    { key: 'quote', text: 'The volume quote is recorded.', owner: 'person', evidence: 'the volume quote' },
-  ] },
-]
-
-export interface TemplateCriterion { id: string; text: string; owner: Owner; evidence: string }
-export interface TemplateGate { id: string; stage: StageId; name: string; criteria: TemplateCriterion[] }
-export interface TemplateStage { id: StageId; name: string; optional: boolean; gates: TemplateGate[] }
-
-/** The stages, gates and criteria a template (with its later stages) gives a project, in journey order. */
-export function templateStages(template: Template, later: readonly LaterStage[] = []): TemplateStage[] {
-  const ids = [...STAGES_OF[template], ...LATER_STAGES.filter((s) => later.includes(s))]
-  return ids.map((id) => ({
-    id, name: STAGE_NAMES[id], optional: (LATER_STAGES as readonly string[]).includes(id),
-    gates: GATES.filter((g) => g.stage === id).map((g) => ({
-      id: g.id, stage: g.stage, name: g.name,
-      criteria: g.criteria.filter((c) => (c.in ?? ALL).includes(template)).map((c) => ({ id: `${g.id}.${c.key}`, text: c.text, owner: c.owner, evidence: c.evidence })),
-    })),
-  }))
-}
+export {
+  TEMPLATES, type Template, LATER_STAGES, type LaterStage, STAGE_IDS, type StageId, TEMPLATE_NAMES, STAGE_NAMES, STAGES_OF, type Owner, type CriterionDef, type GateDef, GATES, type TemplateCriterion, type TemplateGate, type TemplateStage, templateStages
+} from './journey-catalog.js'
+import {
+  TEMPLATES, type Template, LATER_STAGES, type LaterStage, STAGE_IDS, type StageId, TEMPLATE_NAMES, STAGE_NAMES, STAGES_OF, type Owner, type CriterionDef, type GateDef, GATES, type TemplateCriterion, type TemplateGate, type TemplateStage, templateStages
+} from './journey-catalog.js'
 
 // ------------------------------------------------------------------ the tables
 
@@ -453,10 +342,26 @@ BEGIN${JOURNEY_FIELDS.map(([f, by]) => `
   SELECT '${f}@' || ${UPDATED}, '${f}', old.${f}, new.${f}, ${by ? 'new.by' : 'NULL'}, new.updated WHERE old.${f} IS NOT new.${f};`).join('')}
 END;` })
 
+/**
+ * The template definition the journey started from (src/core/templates.ts), kept with it so the journey never changes
+ * when an admin edits the installation's template: `version` the installation's version of it (0: the code's catalog,
+ * before the installation kept templates), `doc` the definition as JSON. Written once, at the start; a merge keeps the
+ * row it has.
+ */
+ensureProjectSchema({ table: 'journey_template', sql: `
+CREATE TABLE IF NOT EXISTS journey_template (
+  id TEXT PRIMARY KEY CHECK (id = 'current'),
+  template TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  doc TEXT NOT NULL,
+  at REAL NOT NULL,
+  by TEXT
+);`, merge: 'INSERT OR IGNORE INTO journey_template SELECT * FROM theirs.journey_template' })
+
 export const HISTORY_TABLES = ['criterion_history', 'stage_history', 'journey_history'] as const
 
 /** The journey's tables, in the order they are created and copied. */
-export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'handoff_declines', 'design_decisions', ...BUILD_TABLES, ...HISTORY_TABLES] as const
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'handoff_declines', 'design_decisions', 'journey_template', ...BUILD_TABLES, ...HISTORY_TABLES] as const
 
 /**
  * Tables only the journey store keeps: each person's unsubmitted guided-skill drafts. They are never copied into the
@@ -622,6 +527,8 @@ export interface JourneyRecord {
   dismissals?: DismissalRow[] | undefined
   /** declined hand-offs (absent in a record written before they existed: none) */
   declines?: DeclineRow[] | undefined
+  /** the template definition it started from (absent: a journey from before templates were kept, on the catalog) */
+  definition?: { version: number; doc: TemplateDoc } | null | undefined
 }
 
 const tableExists = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
@@ -676,7 +583,17 @@ export function loadJourney(db: DatabaseSync): JourneyRecord | null {
     declines: (tableExists(db, 'handoff_declines') ? rows('SELECT * FROM handoff_declines ORDER BY at') : []).map((r) => ({
       handoffId: String(r.handoff_id), reason: String(r.reason), by: String(r.by), byHash: String(r.by_hash), at: Number(r.at),
     })),
+    definition: definitionOf(db),
   }
+}
+
+/** The template definition the journey keeps, or null (none kept, or one this code cannot read). */
+function definitionOf(db: DatabaseSync): { version: number; doc: TemplateDoc } | null {
+  if (!tableExists(db, 'journey_template')) return null
+  const r = db.prepare("SELECT version, doc FROM journey_template WHERE id='current'").get() as { version: number; doc: string } | undefined
+  if (!r) return null
+  const doc = TemplateDoc.safeParse(json<unknown>(r.doc, null))
+  return doc.success ? { version: Number(r.version), doc: doc.data } : null
 }
 
 // ------------------------------------------------------------------ the computed view (pure)
@@ -704,6 +621,8 @@ export interface CriterionView {
   waiver: string | null; opened_by_you: boolean; checked_at: string | null
   /** met on evidence that is now out of date (withStaleEvidence): not met until trace checks it again, and why */
   stale?: string
+  /** an admin added it to the template: a person signs it off by saying what they checked (criterion.confirm) */
+  added?: true
 }
 export interface GateView {
   id: string; stage: StageId; name: string; title: string; state: GateState; met: number; total: number
@@ -1093,12 +1012,14 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
 function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): CriterionView[] {
   const waived = waiverFor(r)
   const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const added = addedCriteria(r.definition?.doc ?? null)
   return r.criteria.filter((c) => c.gate === gate).map((c) => {
     const w = waived.get(c.id)
     return {
       id: c.id, text: c.text, owner: c.owner, status: c.status === 'met' ? 'met' : w ? 'waived' : 'not_met', evidence: c.evidence,
       evidence_label: c.evidenceLabel, waiver: w?.id ?? null, opened_by_you: opened.has(c.id), checked_at: iso(c.checkedAt),
       ...(c.staleBecause ? { stale: c.staleBecause } : {}),
+      ...(added.has(c.id) ? { added: true as const } : {}),
     }
   })
 }
@@ -1257,7 +1178,7 @@ export function afterWords(r: JourneyRecord, n: Omit<NextStep, 'step' | 'after'>
   const stageId = r.journey.currentStage
   const following = r.stages.find((s) => s.ord > (r.stages.find((x) => x.id === stageId)?.ord ?? 0))
   const end = following
-    ? `${STAGE_NAMES[following.id]} starts, to ${lowerFirst(stageGuideText(following.id, r.journey.template).purpose)}`
+    ? `${STAGE_NAMES[following.id]} starts, to ${lowerFirst(docGuide(r.definition?.doc ?? null, following.id, r.journey.template).purpose)}`
     : `revision ${r.journey.revision} is accepted`
   switch (n.kind) {
     case 'done': return null
@@ -1387,10 +1308,10 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
 const cap = (s: string): string => `${s[0]?.toUpperCase() ?? ''}${s.slice(1)}`
 
 /** A stage's guide for this project's template, with what comes after it here (none after the last stage). */
-export function stageGuide(r: Pick<JourneyRecord, 'journey'>, stage: StageId, following: StageId | null): StageGuideView {
-  const t = stageGuideText(stage, r.journey.template)
+export function stageGuide(r: Pick<JourneyRecord, 'journey' | 'definition'>, stage: StageId, following: StageId | null): StageGuideView {
+  const t = docGuide(r.definition?.doc ?? null, stage, r.journey.template)
   // every guide's purpose starts with what to do ("Choose how …"), so it follows "to"
-  return { ...t, next: following ? `${STAGE_NAMES[following]}, to ${lowerFirst(stageGuideText(following, r.journey.template).purpose)}.` : null }
+  return { ...t, next: following ? `${STAGE_NAMES[following]}, to ${lowerFirst(docGuide(r.definition?.doc ?? null, following, r.journey.template).purpose)}.` : null }
 }
 
 /** The criteria (keys of its gate) a criterion `gate.key` reviews the work of, from its definition. */
@@ -1508,12 +1429,18 @@ export interface StartOptions {
   build?: z.input<typeof BuildSchema> | undefined
   by: string
   revision?: string | undefined
+  /** the installation's definition of the template and its version (src/core/templates.ts); absent: the catalog's */
+  definition?: { version: number; doc: TemplateDoc } | undefined
 }
 
 /** Write a project's first journey state from its template. Refuses when the project already has a journey. */
 export function startJourney(db: DatabaseSync, o: StartOptions): JourneyRecord {
   if (hasJourney(db)) throw new JourneyError('This project already has a journey; its template cannot change.')
-  const stages = templateStages(o.template, o.later ?? [])
+  const def = o.definition ?? { version: 0, doc: catalogTemplate(o.template) }
+  if (def.doc.id !== o.template) throw new JourneyError(`That definition is of the ${TEMPLATE_NAMES[def.doc.id]} template, not ${TEMPLATE_NAMES[o.template]}.`)
+  const problems = templateProblems(def.doc)
+  if (problems.length) throw new JourneyError(`The ${TEMPLATE_NAMES[o.template]} template cannot start a project: ${problems.join(' ')}`)
+  const stages = docStages(def.doc, o.later ?? [])
   const first = stages[0]
   if (!first) throw new JourneyError('The template has no stages.')
   const t = now()
@@ -1533,7 +1460,8 @@ export function startJourney(db: DatabaseSync, o: StartOptions): JourneyRecord {
         })
       }
     })
-    decide(db, { kind: 'journey.started', stage: first.id, ref: null, by: o.by, summary: `The project started from the ${TEMPLATE_NAMES[o.template]} template, at ${STAGE_NAMES[first.id]}.`, detail: { template: o.template, later: o.later ?? [] } })
+    db.prepare("INSERT OR REPLACE INTO journey_template (id, template, version, doc, at, by) VALUES ('current',?,?,?,?,?)").run(o.template, def.version, JSON.stringify(def.doc), t, o.by)
+    decide(db, { kind: 'journey.started', stage: first.id, ref: null, by: o.by, summary: `The project started from the ${def.doc.name === TEMPLATE_NAMES[o.template] ? TEMPLATE_NAMES[o.template] : `${def.doc.name} (${TEMPLATE_NAMES[o.template]})`} template${def.version ? `, version ${def.version}` : ''}, at ${STAGE_NAMES[first.id]}.`, detail: { template: o.template, later: o.later ?? [], version: def.version } })
   })
   return loadJourney(db) as JourneyRecord
 }
@@ -1594,7 +1522,8 @@ export function updateAbout(db: DatabaseSync, patch: AboutPatch, by: string): Jo
       }
       let stageOrd = Math.max(-1, ...r.stages.map((s) => s.ord)) + 1
       let gateOrd = Math.max(-1, ...r.gates.map((g) => g.ord)) + 1
-      for (const s of templateStages(j.template, added).filter((x) => added.includes(x.id as LaterStage))) {
+      const stagesOf = r.definition ? docStages(r.definition.doc, added) : templateStages(j.template, added)
+      for (const s of stagesOf.filter((x) => added.includes(x.id as LaterStage))) {
         db.prepare('INSERT OR REPLACE INTO stages (id, ord, revision, started, finished, updated) VALUES (?,?,?,NULL,NULL,?)').run(s.id, stageOrd++, j.revision, t)
         for (const g of s.gates) {
           db.prepare('INSERT OR REPLACE INTO gates (id, stage, ord, name, updated) VALUES (?,?,?,?,?)').run(g.id, s.id, gateOrd++, g.name, t)
@@ -1646,6 +1575,29 @@ export function setCriterion(db: DatabaseSync, id: string, status: 'met' | 'not_
   const n = db.prepare('UPDATE gate_criteria SET status=?, evidence=?, checked_at=?, checked_by=?, updated=? WHERE id=?')
     .run(status, JSON.stringify(evidence), now(), by, now(), id).changes
   if (!Number(n)) throw new JourneyError(`There is no criterion called ${id} in this project.`)
+}
+
+/**
+ * A person signs off a criterion an admin added to the project's template (src/core/templates.ts): no skill or check of
+ * trace's meets one, so the person says what they checked, and it is met with that as its evidence. `met` false takes
+ * it back to not met. Only an added criterion of the template the journey started from; trace's own are met by their
+ * skills and checks. Logged in the decisions.
+ */
+export function confirmCriterion(db: DatabaseSync, id: string, o: { met: boolean; note: string }, by: Signer): JourneyRecord {
+  const r = need(db)
+  const c = r.criteria.find((x) => x.id === id)
+  if (!c) throw new JourneyError(`There is no criterion called ${id} in this project.`)
+  if (!addedCriteria(r.definition?.doc ?? null).has(id)) throw new JourneyError(`${c.text} is met by ${c.owner === 'trace' ? 'trace\'s own check' : 'its guided step'}, not by signing it off here.`)
+  const gate = r.gates.find((g) => g.id === c.gate)
+  if (r.signatures.some((s) => s.gate === c.gate && s.revision === r.journey.revision && s.supersededAt === null)) throw new JourneyError(`The ${gate?.name ?? c.gate} gate is signed: return it before changing what it was signed on.`)
+  const note = o.note.trim()
+  if (o.met && note.length < 3) throw new JourneyError('Say what you checked: it is the evidence the gate is signed on.')
+  transaction(db, () => {
+    setCriterion(db, id, o.met ? 'met' : 'not_met', o.met ? [{ kind: 'note', ref: id, label: note.slice(0, 300) }] : [], by.label)
+    decide(db, { kind: o.met ? 'criterion.confirmed' : 'criterion.unconfirmed', stage: gate?.stage ?? null, ref: id, by: by.label,
+      summary: o.met ? `${by.label} signed off "${c.text}": ${note}` : `${by.label} took back the sign-off of "${c.text}"${note ? `: ${note}` : ''}.`, detail: { criterion: id } })
+  })
+  return loadJourney(db) as JourneyRecord
 }
 
 /**

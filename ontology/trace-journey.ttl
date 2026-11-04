@@ -17,14 +17,14 @@
     rdfs:label "trace journey" ;
     rdfs:comment "Templates, stages, gates and their criteria, signatures, waivers, questions, decisions, hand-offs and jobs: the record of how a project got where it is." ;
     owl:imports <https://trace-eda.com/ns/trace/core> ;
-    owl:versionInfo "0.2.0" .
+    owl:versionInfo "0.3.0" .
 
 # ================================================================== templates, journey, revisions, stages
 
 trace:JourneyTemplate a owl:Class ;
     rdfs:label "Project template" ;
     rdfs:comment "The stages, gates and criteria for one kind of project: board, programmable logic, firmware or mixed." ;
-    trace:keptIn "trace's code (TEMPLATES and GATES in src/core/journey.ts), and later each installation's settings" .
+    trace:keptIn "each installation's settings (src/core/template-store.ts), seeded from trace's code (src/core/journey-catalog.ts); a journey keeps the version it started from" .
 
 trace:Journey a owl:Class ;
     rdfs:label "Journey" ;
@@ -267,8 +267,7 @@ trace:buildPlan a owl:DatatypeProperty ;
 
 trace:hasStage a owl:ObjectProperty ;
     rdfs:label "has stage" ;
-    rdfs:comment "A stage of the journey." ;
-    rdfs:domain trace:Journey ;
+    rdfs:comment "A stage of the journey, or of a template." ;
     rdfs:range trace:Stage .
 
 trace:inRevision a owl:ObjectProperty ;
