@@ -16,6 +16,7 @@
  * draft, the statements Submit accepts) is laid over the record first (`pending`), so the bar shows what Submit would
  * record.
  */
+import type { CaseOptions } from '../tools/mech/tools.js'
 import type { InstrumentId, Reading } from '../core/bench.js'
 import { stepOrderProblems } from '../core/bench.js'
 import { type BoardRow, inspectionProblems } from '../core/boards.js'
@@ -61,6 +62,8 @@ export interface CheckInput {
   placement: { status: string; summary: string | null } | null
   /** the latest mech.build run (Case design): its status, summary and result (process, fit, rules, warnings) */
   caseBuild?: { id: string; status: string; summary: string | null; result: Record<string, unknown> | null } | null
+  /** the latest mech.options run (Case design's process step): the designs that could work, and why the rest do not */
+  caseOptions?: { id: string; options: CaseOptions } | null
   /** why that build no longer stands for the default branch (src/tools/mech/stale.ts staleReasons; empty: current;
    * absent: not compared) */
   caseStale?: string[] | null

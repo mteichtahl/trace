@@ -1420,10 +1420,14 @@ optional `pipeline: 'antmicro'` mode is left as future work. Enclosures use buil
 ## Enclosures
 
 A board's case is a build123d script in the project repository, rebuilt from the board, and its fit check is the
-layout gate's evidence for "The board fits its enclosure, or each clash is waived" (`layout.fit`). The design and the
+layout gate's evidence for "The board fits its enclosure, or each clash is waived" (`layout.fit`), decided by that
+criterion's shape (`shape.check layout.fit`) over the newest build, each clash waivable on its own. The Design tab's
+**Case** view pins each problem on its part of the board and says in plain words when the build is out of date: a part
+moved in the middle of the board leaves it current, an edge connector moved does not. The design and the
 choice of build123d over FreeCAD are in [docs/enclosure-cad.md](docs/enclosure-cad.md); the build contract between the
 TypeScript tools and the Python engine is [docs/enclosure-build.md](docs/enclosure-build.md). The Implementation
-specialist runs the tools; a person works through the **Case design** skill.
+specialist runs the tools; a person works through the **Case design** skill. Three case designs are built in: a
+printed two-part shell (the recommendation), an extruded box the board slides into, and a DIN rail enclosure.
 
 A project's case lives in `mechanical/`:
 

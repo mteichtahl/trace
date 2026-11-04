@@ -57,6 +57,7 @@ export const NODE_WORD: Record<NodeKind, { one: string; many: string }> = {
   datasheet: { one: 'Datasheet page', many: 'datasheet pages' },
   component: { one: 'Placed part', many: 'placed parts' },
   net: { one: 'Net', many: 'nets' },
+  case: { one: 'Case', many: 'cases' },
   run: { one: 'Run or evidence', many: 'runs' },
   artifact: { one: 'Output of a run', many: 'outputs' },
   gate: { one: 'Gate', many: 'gates' },

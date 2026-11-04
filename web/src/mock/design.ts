@@ -76,6 +76,17 @@ function design(): DesignView {
       findings: [{ id: 'peripheral:U1:USART2:claimed_twice', target: 'peripheral:U1.USART2', kind: 'claimed_twice', severity: 'blocks', text: "U1's USART2 is claimed by 2 uses: debug console, gps." }],
     },
     drawings: { run: '9f8e7d6c5b4a3210', at },
+    case: {
+      run: '5e6f7a8b9c0d1e2f', at, status: 'fail', summary: '2 clashes (C1 with lid 3.10 mm³; J2 with lid 1.42 mm³); 1 gap under its clearance (J1 in its opening 0.20 mm, needs 0.50 mm)',
+      board: 'hardware/soil-sensor.kicad_pcb', process: 'MJF PA12-HP at jlc3dp', size: '58.4 × 38.4 × 19.6 mm',
+      findings: [
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-finding:clash%2FC1%2Flid', kind: 'clash', severity: 'blocks', text: 'C1 clashes with the lid (3.1 mm³)', where: 'C1', x_mm: 28, y_mm: 14.1, source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-finding:clash%2FJ2%2Flid', kind: 'clash', severity: 'waived', text: 'J2 clashes with the lid (1.42 mm³)', where: 'J2', x_mm: 40, y_mm: 8, source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-finding:gap%2FJ1%2Faround', kind: 'gap', severity: 'blocks', text: 'J1 in its opening: 0.2 mm, needs 0.5 mm', where: 'J1', x_mm: 13, y_mm: 14.4, source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-rule:lid_top', kind: 'rule', severity: 'blocks', text: 'Outside the process\'s rules: the lid\'s top as built is 1.4 mm, under MJF\'s 2 mm for a 58 mm part', source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+      ],
+      stale: ['J1 at the board\'s edge moved or changed since the build'],
+    },
     notes: [
       ...(chosen ? [] : ['No architecture is chosen yet: the diagram shows trace\'s recommendation, until a person chooses in Architecture choice.']),
       'Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate\'s stock criterion records it.',
@@ -117,6 +128,25 @@ const SKILLS: Record<string, () => Partial<SkillView>> = {
       { id: 'criterion', status: 'not_met', detail: '2 requirements neither accepted nor under an open question: R-017, R-019.' }, { id: 'conflicts', status: 'not_met', unavailable: 'a conflict check between requirements (duplicates are checked and there are none; no tool checks that two requirements can both hold)' },
       { id: 'sources', status: 'met' }, { id: 'covered', status: 'not_met', detail: '1 intent statement no requirement covers, and not left out with a reason: I-6.' }, { id: 'struck', status: 'met', detail: 'No requirement is struck.' },
     ],
+  }),
+  'case-design': () => ({
+    summary: 'Six case designs could work for this board; trace recommends a **DIN rail enclosure** printed in MJF PA12-HP, because the requirements ask for a rail mount.',
+    recommendation: {
+      question: 'Which case should trace build?', recommended: 'din-rail/screws/lid/mjf',
+      options: [
+        { id: 'din-rail/screws/lid/mjf', label: 'DIN rail enclosure, MJF PA12-HP at JLC3DP, board screwed into its mounting holes', detail: "right when it mounts on a rail in a cabinet. MJF PA12-HP at JLC3DP is trace's recommended process (strong and isotropic nylon). the requirements ask for a DIN rail mount (“R-021: Mounts on a 35 mm DIN rail”). Gives up: about 5 mm more height for the rail foot, and it must hang on a rail" },
+        { id: 'printed-shell/screws/lid/mjf', label: 'Printed two-part shell, MJF PA12-HP at JLC3DP, board screwed into its mounting holes', detail: "the simplest case: two printed parts, the board screwed or clamped inside. MJF PA12-HP at JLC3DP is trace's recommended process (strong and isotropic nylon). Gives up: nothing to mount it by: it sits on a shelf or is fixed by its own screws" },
+        { id: 'din-rail/screws/lid/cnc', label: 'DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes', detail: 'right when it mounts on a rail in a cabinet. the requirements ask for a DIN rail mount. Gives up: about 5 mm more height for the rail foot, and it must hang on a rail; machined aluminium costs several times a printed case' },
+      ],
+      why: "right when it mounts on a rail in a cabinet; MJF PA12-HP at JLC3DP is trace's recommended process; the requirements ask for a DIN rail mount (“R-021: Mounts on a 35 mm DIN rail”)",
+      givesUp: 'about 5 mm more height for the rail foot, and it must hang on a rail',
+      evidence: [{ kind: 'run', id: '3c4d5e6f7a8b9c0d', label: 'the case options' }],
+    },
+    items: [
+      { id: 'not-offered:extruded-box/mjf', title: 'Extruded box with end plates, MJF PA12-HP at JLC3DP', detail: "J2 sticks out past the board's long edge, so the board cannot slide into the tube", status: 'waived', label: 'Not offered' },
+      { id: 'not-offered:extruded-box/cnc', title: 'Extruded box with end plates, CNC aluminium 6061 at JLCCNC', detail: "J2 sticks out past the board's long edge, so the board cannot slide into the tube", status: 'waived', label: 'Not offered' },
+    ],
+    checks: [{ id: 'process', status: 'met', detail: 'MJF PA12-HP at jlc3dp, within its build size.' }, { id: 'clearances', status: 'met' }, { id: 'fit', status: 'not_met', detail: 'No case build is recorded yet: run mech.build.' }, { id: 'rules', status: 'not_met', detail: 'No case build is recorded yet: run mech.build.' }],
   }),
   'pin-plan-review': () => ({
     summary: 'The pin plan matches the schematic except one conflict: USART2 is planned for both the debug console and the GPS.',

@@ -26,10 +26,11 @@ describe('case settings', () => {
     expect(s.process).toEqual(RECOMMENDED)
   })
 
-  it('validate: a board, version 1, the one template, positive walls, a file for source "file"; unknown keys are kept', () => {
+  it('validate: a board, version 1, one of the templates, positive walls, a file for source "file"; unknown keys are kept', () => {
     expect(CaseSettingsSchema.safeParse({}).success).toBe(false)
     expect(CaseSettingsSchema.safeParse({ board: 'b', version: 2 }).success).toBe(false)
-    expect(CaseSettingsSchema.safeParse({ board: 'b', template: 'din-rail' }).success).toBe(false)
+    expect(CaseSettingsSchema.safeParse({ board: 'b', template: 'clamshell' }).success).toBe(false)
+    expect(CaseSettingsSchema.safeParse({ board: 'b', template: 'din-rail' }).success).toBe(true)
     expect(CaseSettingsSchema.safeParse({ board: 'b', params: { wall_mm: 0 } }).success).toBe(false)
     expect(CaseSettingsSchema.safeParse({ board: 'b', clearance: { edge_mm: -1 } }).success).toBe(false)
     expect(CaseSettingsSchema.safeParse({ board: 'b', source: 'file' }).success).toBe(false)
