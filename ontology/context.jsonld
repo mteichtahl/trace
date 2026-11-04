@@ -244,6 +244,10 @@
       "@id": "trace:inputOf",
       "@type": "@id"
     },
+    "inRenderSet": {
+      "@id": "trace:inRenderSet",
+      "@type": "@id"
+    },
     "inRevision": {
       "@id": "trace:inRevision",
       "@type": "@id"
@@ -344,6 +348,10 @@
       "@id": "trace:outlineOf",
       "@type": "@id"
     },
+    "paletteFromLogo": {
+      "@id": "trace:paletteFromLogo",
+      "@type": "@id"
+    },
     "parentJob": {
       "@id": "trace:parentJob",
       "@type": "@id"
@@ -420,6 +428,10 @@
       "@id": "trace:returnedAt",
       "@type": "xsd:dateTime"
     },
+    "revisionDate": {
+      "@id": "trace:revisionDate",
+      "@type": "xsd:date"
+    },
     "ruleOf": {
       "@id": "trace:ruleOf",
       "@type": "@id"
@@ -487,6 +499,10 @@
     "updatedAt": {
       "@id": "trace:updatedAt",
       "@type": "xsd:dateTime"
+    },
+    "usedPalette": {
+      "@id": "trace:usedPalette",
+      "@type": "@id"
     },
     "usesFastener": {
       "@id": "trace:usesFastener",

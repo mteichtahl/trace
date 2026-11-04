@@ -347,7 +347,7 @@ export const TABLES: readonly TableMap[] = [
   },
   {
     db: 'project', table: 'runs', class: 'Run', kind: 'run', key: 'id',
-    typeBy: { column: 'kind', classes: { 'kicad.drc': 'DesignRuleCheckReport', 'kicad.erc': 'ElectricalRuleCheckReport' } },
+    typeBy: { column: 'kind', classes: { 'kicad.drc': 'DesignRuleCheckReport', 'kicad.erc': 'ElectricalRuleCheckReport', 'render.showcase': 'RenderSet' } },
     columns: {
       id: ID(), kind: { prop: 'runKind' }, subject: { prop: 'subject' }, started: { prop: 'startedAt', as: 'time' }, finished: { prop: 'endedAt', as: 'time' },
       status: { prop: 'status' }, summary: { prop: 'summary' }, args: { prop: 'arguments', as: 'json' }, result: { prop: 'resultOf', as: 'json' },
