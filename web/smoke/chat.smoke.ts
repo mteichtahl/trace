@@ -1,5 +1,5 @@
 /** Ask trace: markdown, history, recall with the up key, read-aloud and the inline file viewers. */
-import { projectPath } from './env'
+import { live, projectPath } from './env'
 import { expect, test } from './fixtures'
 
 test('a message is sent, recalled with the up key, and the reply renders markdown @phone', async ({ app, page }) => {
@@ -33,4 +33,19 @@ test('read-aloud and dictation controls are there', async ({ app }) => {
   const chat = await app.openChat()
   await expect(chat.getByRole('switch', { name: 'Read replies aloud' })).toBeVisible()
   await expect(chat.getByRole('button', { name: /^Dictate/ })).toBeVisible()
+})
+
+test('trace offers to remember something, and nothing is kept until the person confirms @phone', async ({ app, page }) => {
+  // the mock offers the card whenever a message says "remember"; a live model decides for itself
+  test.skip(live, 'the mock offers a remember card on "remember"')
+  await app.open(projectPath())
+  const chat = await app.openChat()
+  await chat.getByRole('textbox', { name: 'Message to trace' }).fill('Please remember that the probe runs from a 3.3 V rail.')
+  await page.keyboard.press('Enter')
+  const card = chat.getByLabel('What trace will remember').last()
+  await expect(card).toContainText('3.3 V rail', { timeout: 30_000 })
+  const keep = chat.getByRole('button', { name: 'Remember this' }).last()
+  await expect(keep).toBeEnabled()
+  await keep.click()
+  await expect(keep).toBeHidden()
 })

@@ -39,3 +39,26 @@ test('a gate cannot be signed while its stage has pending work', async ({ app, p
   const pending = page.getByText(/pending|still open|not met|waiting/i).first()
   if (await pending.isVisible().catch(() => false)) await expect(page.getByRole('button', { name: /^Sign the .* gate/ }).last()).toBeDisabled()
 })
+
+test('a gate shows what each shape still needs under its criterion, each waivable on its own @phone', async ({ app, page }) => {
+  // the mock's schematic gate has a stock criterion with two findings; a live project may have none right now
+  test.skip(live, 'needs a gate with shape findings: the mock\'s schematic gate has them')
+  await app.open(projectPath('/gates/schematic'))
+  const needed = page.getByRole('list', { name: 'Still needed' }).first()
+  await expect(needed.getByRole('listitem').first()).toBeVisible()
+  await expect(needed.getByRole('link', { name: /^Waive this one/ }).first()).toBeVisible()
+})
+
+test('a criterion an admin added is signed off by saying what was checked', async ({ app, page }) => {
+  test.skip(live, 'needs a gate with an added criterion: the mock\'s schematic gate has one')
+  await app.open(projectPath('/gates/schematic'))
+  await page.getByRole('button', { name: /^Sign off/ }).first().click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'What did you check?' })
+  await expect(dialog).toBeVisible()
+  const confirm = dialog.getByRole('button', { name: 'Sign off', exact: true })
+  await expect(confirm).toBeDisabled()
+  await dialog.getByRole('textbox').fill('Read the battery datasheet and the charger\'s protection limits.')
+  await expect(confirm).toBeEnabled()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toBeHidden()
+})
