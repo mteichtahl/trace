@@ -165,8 +165,8 @@ import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
   type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, TaskBranch, toolNeed, tempDb, withProjectDb,
 } from './action-kit.js'
-import { CHAT_ACTIONS } from './actions-chats.js'
-import { ThreadId } from '../core/chats.js'
+import { CHAT_ACTIONS, author as chatAuthor, limited, store as chatStore } from './actions-chats.js'
+import { ThreadId, isAuthor } from '../core/chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
@@ -314,6 +314,18 @@ export const rememberText = (scope: 'personal' | 'project', text: string): strin
   scope === 'personal'
     ? `I asked trace to remember this preference of mine: ${text}`
     : `I asked trace to remember this about the project: ${text}`
+
+/** The most recent messages of a thread looked at for the caller's own turn (memory.remember's `thread`). */
+const OWN_THREAD_LOOKBACK = 500
+
+/** memory.remember's thread: one on `repo` that the caller started or wrote in. Anything else is refused, the same way
+ * whether it is missing, another project's, or someone else's. */
+async function ownThread(ctx: Context, repo: string, thread: string): Promise<void> {
+  const who = chatAuthor(ctx)
+  const t = await chatStore(ctx, repo).get(thread, { limit: OWN_THREAD_LOOKBACK })
+  const yours = !!t && (isAuthor(who, t.thread.by_hash) || t.messages.some((m) => m.role === 'user' && isAuthor(who, m.by_hash)))
+  if (!yours) throw new ActionError(`There is no conversation ${thread} of yours on this project.`)
+}
 
 const MemoryArgs = Repo.extend({ agent: AgentName.optional() })
 
@@ -656,8 +668,13 @@ export const ACTIONS = {
     scope: z.enum(['personal', 'project']).default('project'),
     thread: ThreadId.optional(),
   }), async (a, ctx) => {
+    // the same soft limit on writes as the chat's own (src/api/actions-chats.ts CHAT_WRITES)
+    limited(ctx)
     const mem = projectMemory(ctx, a.repo)
     if (!mem) throw new ActionError('memory is not enabled in this installation')
+    // the thread, when one is named: a conversation on this project that is the caller's (they started it, or wrote in
+    // it), so a remembered thing is never filed under another project's or another person's session
+    if (a.thread) await ownThread(ctx, a.repo, a.thread)
     // whose: the signed-in caller (their sub's hash), whatever the request says
     const actor = a.scope === 'personal' ? personActor(a.repo, ctx.principal.sub) : chatActor(a.repo)
     const session = a.thread ? chatSession(a.thread) : sessionIdFor(`remember-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`)

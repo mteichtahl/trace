@@ -30,6 +30,7 @@
 import type { Construct } from 'constructs'
 import type * as ecr from 'aws-cdk-lib/aws-ecr'
 import * as iam from 'aws-cdk-lib/aws-iam'
+import { RegionInfo } from 'aws-cdk-lib/region-info'
 import type * as s3 from 'aws-cdk-lib/aws-s3'
 import type * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
@@ -163,8 +164,10 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
   grantReadRecords(role, p.memories)
   grantReadEvents(role, p.memories, { partition: p.partition, region: p.region, account: p.account, prefix: p.prefix })
   // Ask trace's conversations and memory.remember (people only: systems neither chat nor remember): CreateEvent on each
-  // project's memory, for its chat and person actors only
-  if (people) grantChatEvents(role, p.chatMemories ?? [], { partition: 'aws', region: p.region, account: p.account })
+  // project's memory, for its chat and person actors only. The region's own partition, written out when the region is
+  // known (aws, aws-cn, aws-us-gov, …): the stack's partition is a reference, which in every one of the sixty statements
+  // would cost the role one more overflow policy (test/infra/layout.test.ts); a region it does not know takes that reference
+  if (people) grantChatEvents(role, p.chatMemories ?? [], { partition: RegionInfo.get(p.region).partition ?? p.partition, region: p.region, account: p.account })
   // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
   if (people) role.addToPolicy(apiVocabularyStatement({ partition: p.partition, region: p.region, account: p.account, prefix: p.prefix }))
   // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.
