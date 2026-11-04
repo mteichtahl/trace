@@ -1,0 +1,197 @@
+# trace's ontology: the documentation module (docs/scribe.md). The documents Scribe keeps for each project — the high
+# level design, low level design, protocol specification and user guide — as the graph reads them: each document's
+# sections, the figures and stated values in them, and what each was made from, so a document goes stale through the
+# same lineage as everything else. None of it is a table: src/ontology/docs.ts reads the repository's docs/design files
+# when the graph is built, the way src/ontology/board.ts reads the board.
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+
+<https://trace-eda.com/ns/trace/docs> a owl:Ontology ;
+    rdfs:label "trace documentation" ;
+    rdfs:comment "The documents each project keeps: their sections, figures and stated values, where each came from, and the published copies." ;
+    owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/journey>, <https://trace-eda.com/ns/trace/board> ;
+    owl:versionInfo "0.1.0" .
+
+# ================================================================== documents and their parts
+
+trace:Document a owl:Class ;
+    rdfs:subClassOf trace:FileArtifact ;
+    rdfs:label "Project document" ;
+    rdfs:comment "One of the documents Scribe keeps for a project: the high level design, low level design, protocol specification or user guide." ;
+    trace:keptIn "the project repository's docs/design files, read when the graph is built (src/ontology/docs.ts)" .
+
+trace:DocumentSection a owl:Class ;
+    rdfs:subClassOf trace:DesignArtifact ;
+    rdfs:label "Document section" ;
+    rdfs:comment "One section of a project document, between its markers: what it is written from and whether it is still pending." ;
+    trace:keptIn "the project repository's docs/design files, read when the graph is built (src/ontology/docs.ts)" .
+
+trace:Figure a owl:Class ;
+    rdfs:subClassOf trace:DesignArtifact ;
+    rdfs:label "Figure" ;
+    rdfs:comment "A picture in a document section: a diagram, a render, a drawing or a trace, with its caption and where it came from." ;
+    trace:keptIn "the project repository's docs/design files, read when the graph is built (src/ontology/docs.ts)" .
+
+trace:DocumentValue a owl:Class ;
+    rdfs:label "Stated value" ;
+    rdfs:comment "A power, heat or load figure a document states: the value, its limit and margin, how it was arrived at and the run it came from." ;
+    trace:keptIn "the project repository's docs/design files, read when the graph is built (src/ontology/docs.ts)" .
+
+trace:PublishedDocument a owl:Class ;
+    rdfs:subClassOf trace:FileArtifact ;
+    rdfs:label "Published document" ;
+    rdfs:comment "The printable copy of a project document, made from one version of its text and the project's logo, and attached to a release." ;
+    trace:keptIn "the installation's central storage, written when a document is published (docs/scribe.md, layer 3)" .
+
+# ================================================================== links
+
+trace:hasSection a owl:ObjectProperty ;
+    rdfs:label "has section" ;
+    rdfs:comment "A section of the document." ;
+    rdfs:domain trace:Document ;
+    rdfs:range trace:DocumentSection .
+
+trace:hasFigure a owl:ObjectProperty ;
+    rdfs:label "has figure" ;
+    rdfs:comment "A figure in the section." ;
+    rdfs:domain trace:DocumentSection ;
+    rdfs:range trace:Figure .
+
+trace:statesValue a owl:ObjectProperty ;
+    rdfs:label "states value" ;
+    rdfs:comment "A power, heat or load figure the section states." ;
+    rdfs:domain trace:DocumentSection ;
+    rdfs:range trace:DocumentValue .
+
+trace:figureFromRun a owl:ObjectProperty ;
+    rdfs:label "figure from run" ;
+    rdfs:comment "The run that made the figure, such as a render or a timing diagram." ;
+    rdfs:domain trace:Figure ;
+    rdfs:range trace:Run .
+
+trace:valueFromRun a owl:ObjectProperty ;
+    rdfs:label "value from run" ;
+    rdfs:comment "The run a stated value came from." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range trace:Run .
+
+trace:publishedFrom a owl:ObjectProperty ;
+    rdfs:label "published from" ;
+    rdfs:comment "The document a printable copy was made from." ;
+    rdfs:domain trace:PublishedDocument ;
+    rdfs:range trace:Document .
+
+trace:publishedFor a owl:ObjectProperty ;
+    rdfs:label "published for" ;
+    rdfs:comment "The release a printable copy is attached to." ;
+    rdfs:domain trace:PublishedDocument ;
+    rdfs:range trace:Revision .
+
+trace:projectLogo a owl:ObjectProperty ;
+    rdfs:label "logo" ;
+    rdfs:comment "The picture a project's documents carry on their cover and in their page header." ;
+    rdfs:domain trace:Project ;
+    rdfs:range trace:FileArtifact .
+
+trace:projectLogoDark a owl:ObjectProperty ;
+    rdfs:label "logo for dark backgrounds" ;
+    rdfs:comment "The version of the project's logo used on a dark background, when one was given." ;
+    rdfs:domain trace:Project ;
+    rdfs:range trace:FileArtifact .
+
+# ================================================================== what each part says
+
+trace:documentKind a owl:DatatypeProperty ;
+    rdfs:label "document kind" ;
+    rdfs:comment "Which document it is: hld (high level design), lld (low level design), protocol or guide." ;
+    rdfs:domain trace:Document ;
+    rdfs:range xsd:string .
+
+trace:documentRevision a owl:DatatypeProperty ;
+    rdfs:label "document revision" ;
+    rdfs:comment "The revision of the design the document describes, as its front matter says." ;
+    rdfs:domain trace:Document ;
+    rdfs:range xsd:string .
+
+trace:sectionId a owl:DatatypeProperty ;
+    rdfs:label "section id" ;
+    rdfs:comment "The section's name in its markers, such as power-budget." ;
+    rdfs:domain trace:DocumentSection ;
+    rdfs:range xsd:string .
+
+trace:dueStage a owl:DatatypeProperty ;
+    rdfs:label "due by stage" ;
+    rdfs:comment "The stage by which the section must be written rather than pending." ;
+    rdfs:domain trace:DocumentSection ;
+    rdfs:range xsd:string .
+
+trace:writtenFrom a owl:DatatypeProperty ;
+    rdfs:label "written from" ;
+    rdfs:comment "A kind of record the section is written from, such as requirements, schematic or power: a change to it marks the section for rewriting." ;
+    rdfs:domain trace:DocumentSection ;
+    rdfs:range xsd:string .
+
+trace:isPending a owl:DatatypeProperty ;
+    rdfs:label "pending" ;
+    rdfs:comment "True while the section only says what it still needs." ;
+    rdfs:domain trace:DocumentSection ;
+    rdfs:range xsd:boolean .
+
+trace:figureKind a owl:DatatypeProperty ;
+    rdfs:label "figure kind" ;
+    rdfs:comment "What the figure is, such as data-flow, render-top, mech-drawing or timing-diagram." ;
+    rdfs:domain trace:Figure ;
+    rdfs:range xsd:string .
+
+trace:caption a owl:DatatypeProperty ;
+    rdfs:label "caption" ;
+    rdfs:comment "The line under a figure saying what it shows." ;
+    rdfs:domain trace:Figure ;
+    rdfs:range xsd:string .
+
+trace:figureSource a owl:DatatypeProperty ;
+    rdfs:label "figure source" ;
+    rdfs:comment "Where the figure came from, as its marker says: a run, or the records it was drawn from and at which commit." ;
+    rdfs:domain trace:Figure ;
+    rdfs:range xsd:string .
+
+trace:valueKind a owl:DatatypeProperty ;
+    rdfs:label "value kind" ;
+    rdfs:comment "Power, thermal or load." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range xsd:string .
+
+trace:statedQuantity a owl:DatatypeProperty ;
+    rdfs:label "stated quantity" ;
+    rdfs:comment "What the value is of, in words, such as the current on the 3.3 volt supply." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range xsd:string .
+
+trace:statedValue a owl:DatatypeProperty ;
+    rdfs:label "stated value" ;
+    rdfs:comment "The value with its unit, as the document writes it, or pending." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range xsd:string .
+
+trace:statedLimit a owl:DatatypeProperty ;
+    rdfs:label "stated limit" ;
+    rdfs:comment "The limit the value is held to, with its unit, as the document writes it." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range xsd:string .
+
+trace:statedMargin a owl:DatatypeProperty ;
+    rdfs:label "stated margin" ;
+    rdfs:comment "How far the value is from its limit, as the document writes it." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range xsd:string .
+
+trace:valueBasis a owl:DatatypeProperty ;
+    rdfs:label "basis" ;
+    rdfs:comment "How the value was arrived at: estimated, simulated, measured, or pending when it has not been worked out yet." ;
+    rdfs:domain trace:DocumentValue ;
+    rdfs:range xsd:string .

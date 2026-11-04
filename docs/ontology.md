@@ -355,6 +355,25 @@ Pruned options stay in the record with the rule that pruned them, so a person ca
 
 **Delivery.** Phase 7 of the plan, about 9 days: write `trace-mech.ttl`, add build123d to the tools image and the `mech` tools to the implementation specialist, draft the interface from the board, add option generation with assembly-reasoning pruning, back `layout.fit` with its shape, sync JLC3DP capabilities, and add a sample project with a case to the fixtures.
 
+## Documentation module
+
+`trace-docs.ttl` (docs/scribe.md). The four documents Scribe keeps for each project, read from the repository's
+`docs/design` files through their markers when the graph is built (`src/ontology/docs.ts`), like the board: nothing is
+a table.
+
+| Term | What it is |
+| --- | --- |
+| `Document` (a File) | One of the four documents, with its kind, revision and commit |
+| `DocumentSection` | A section between its markers: its due stage, the kinds of record it is written from (`writtenFrom`) and whether it is pending |
+| `Figure` | A diagram, render, drawing or trace in a section, with its kind, caption and source; `figureFromRun` links the run that made it |
+| `DocumentValue` | A power, heat or load figure a section states: value, limit, margin, basis (estimated, simulated, measured, pending) and `valueFromRun` |
+| `PublishedDocument` (a File) | The printable copy, `publishedFrom` a document and `publishedFor` a release, kept in central storage |
+| `projectLogo`, `projectLogoDark` | The picture on every cover and page header |
+
+The basis of a value lives on the stated value, not on `Measurement`: a measurement already names its run, and the run's
+kind says how it was arrived at; the document is where a value is claimed, so that is where its basis is checked.
+A figure or value whose run is superseded goes stale through the run's lineage (Input/output, versions and staleness).
+
 ## Input/output, versions and staleness
 
 Every artifact version records which input versions it was made from, so Trace can compute what went stale when anything upstream changes and raise an event for it.

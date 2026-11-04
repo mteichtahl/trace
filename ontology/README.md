@@ -10,6 +10,7 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
 | `trace-journey.ttl` | The journey record, the agents' facts and the job index: templates, stages, gates, criteria, signatures, waivers, questions, decisions, hand-offs, jobs, orders, boards, and the history tables |
 | `trace-board.ttl` | The design record, the verification and run records, bench readings, parts and offers, and the board read from its file: components, pads, nets, layers |
 | `trace-mech.ttl` | The case a board goes in, from its newest build: its parts, material, fasteners, openings, joints, the fit check with each problem it found, the process's rule results, the settings and each part's space |
+| `trace-docs.ttl` | The documents each project keeps (docs/scribe.md): document, section, figure, stated value, published copy, logo |
 | `trace-si2-align.ttl` | How trace's terms relate to the Si2 EDA ontology's; the only file that names Si2 |
 | `si2/terms.txt` | The terms Si2 defines at the pinned commit, which every alignment is checked against |
 | `context.jsonld` | The JSON-LD context, written from the ontology by `scripts/ontology-context.mjs` |
@@ -33,6 +34,7 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
 - `src/ontology/mapping.ts` says which table and column becomes which class and property, for every column of the
   journey record (journey.db), the agents' facts (facts.db), the job index (jobs.db), the project database
   (.trace/project.db) and the parts database.
+- `src/ontology/docs.ts` reads the project's documents from their markers when the graph is built (`documents` in the graph's sources).
 - `src/ontology/board.ts` reads a board from its .kicad_pcb when the graph is built: nothing about the board is stored.
 - `src/ontology/mech.ts` reads the newest case build (mech.build's artifacts in the run record) when the graph is built.
 - `src/ontology/graph.ts` builds a project's graph in memory through the mapping, and checks records against the
