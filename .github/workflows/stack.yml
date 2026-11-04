@@ -1,0 +1,90 @@
+# trace's own stacked pull requests (docs/stacked-changes.md "Trace's own development"; CLAUDE.md).
+#
+# trace's repository is not onboarded with its own harness, so this keeps its stacks in order the same way the
+# harness does for projects (src/harness/stack.ts):
+#
+#   a pull request merged         the open pull requests built on it move to where it went (its base, main) and get
+#                                 that branch merged in, so they show only their own commits and run CI on main's code
+#   a pull request closed unmerged the ones built on it are told, since they still carry its commits
+#   a pull request pushed to      the ones built on it get its new commits merged in
+#
+# Merge commits only: nothing is rebased or force-pushed. Pushes are made with the TRACE_TOKEN secret when the
+# repository has one, so they start CI; with only GITHUB_TOKEN the stack is still kept in order (GitHub starts no
+# workflow for its pushes) and CI runs on the next push to that branch. Kill switch: repository variable
+# TRACE_STACK_SYNC = 'false'.
+#
+# Runners: AWS CodeBuild once `tracectl install` has set TRACE_CODEBUILD_PROJECT, GitHub's ubuntu-24.04 until then,
+# as in ci.yml.
+name: stack
+
+on:
+  pull_request:
+    types: [closed, synchronize]
+
+permissions: {}
+
+jobs:
+  restack:
+    if: vars.TRACE_STACK_SYNC != 'false'
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","restack"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    # one pass per branch at a time: a merge and a push to the same branch never race
+    concurrency: { group: 'stack-${{ github.event.pull_request.head.ref }}', cancel-in-progress: false }
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.TRACE_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo
+            const pr = context.payload.pull_request
+            // only a branch of this repository can be a base other pull requests build on
+            if (pr.head.repo?.full_name !== `${owner}/${repo}`) return core.info('A fork\'s pull request: nothing is built on it here.')
+            const own = (p) => p.head.repo?.full_name === `${owner}/${repo}`
+            const above = (await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', base: pr.head.ref, per_page: 100 })).filter(own)
+            // a merged branch GitHub deleted has its pull requests retargeted by GitHub already: the ones on the merged
+            // pull request's base that still hold its head commit were built on it, and need its base merged in
+            const moved = []
+            if (pr.merged) {
+              for (const p of (await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', base: pr.base.ref, per_page: 100 })).filter(own)) {
+                if (p.number === pr.number || p.head.ref === pr.head.ref) continue
+                const cmp = await github.rest.repos.compareCommits({ owner, repo, base: pr.head.sha, head: p.head.sha }).catch(() => null)
+                if (cmp && cmp.data.behind_by === 0 && cmp.data.ahead_by > 0) moved.push(p)
+              }
+            }
+            if (!above.length && !moved.length) return core.info(`Nothing is built on #${pr.number}.`)
+            const update = async (p) => {
+              try {
+                await github.rest.pulls.updateBranch({ owner, repo, pull_number: p.number, expected_head_sha: p.head.sha })
+                return true
+              } catch (e) {
+                if (e.status !== 422) throw e
+                return false // a conflict: whoever owns the branch merges it by hand
+              }
+            }
+            const lines = []
+            for (const p of above) {
+              if (context.payload.action === 'synchronize') {
+                lines.push(await update(p) ? `#${p.number}: merged #${pr.number}'s new commits in.` : `#${p.number} conflicts with #${pr.number}: merge \`${pr.head.ref}\` into \`${p.head.ref}\` by hand.`)
+              } else if (pr.merged) {
+                await github.rest.pulls.update({ owner, repo, pull_number: p.number, base: pr.base.ref })
+                const done = await update(p)
+                lines.push(`#${p.number}: #${pr.number} merged, so it now targets \`${pr.base.ref}\`${done ? ' and is up to date' : ` (it conflicts there: merge \`${pr.base.ref}\` into \`${p.head.ref}\` by hand)`}.`)
+              } else {
+                // once per base: a pull request closed and reopened, then closed again, does not say it twice
+                const marker = `<!-- stack: base-closed #${pr.number} -->`
+                const said = (await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: p.number, per_page: 100 })).some((c) => (c.body ?? '').includes(marker))
+                if (!said) {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: p.number,
+                    body: `#${pr.number}, which this is built on, was closed without merging, so this branch still carries its commits. Rebuild it on \`${pr.base.ref}\` without them, or close it. Do not merge it as it is.\n${marker}` })
+                }
+                lines.push(`#${p.number}: ${said ? 'already told' : 'told'} that #${pr.number} was closed unmerged.`)
+              }
+            }
+            for (const p of moved) {
+              lines.push(await update(p) ? `#${p.number}: #${pr.number} merged and GitHub moved it onto \`${pr.base.ref}\`; now up to date.` : `#${p.number} conflicts with \`${pr.base.ref}\`: merge it in by hand.`)
+            }
+            for (const l of lines) core.info(l)
+            await core.summary.addRaw(lines.map((l) => `- ${l}`).join('\n') + '\n').write()
