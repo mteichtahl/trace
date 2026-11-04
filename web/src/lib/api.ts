@@ -48,6 +48,7 @@ export interface Actions {
   task: { args: Repo & { request: string; agent?: string; branch?: string }; result: { accepted: boolean; jobId: string; reason?: string } }
   'memory.list': { args: Repo & { agent?: string; limit?: number; includeInactive?: boolean }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.recall': { args: Repo & { query: string; top_k?: number }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
+  'memory.remember': { args: Repo & { text: string; scope: 'personal' | 'project'; thread?: string }; result: { repo: string; recorded: boolean; scope: 'personal' | 'project'; actor: string; session: string; note: string } }
   'memory.deactivate': { args: Repo & { recordId: string; reason: string }; result: Record<string, unknown> }
   'memory.reactivate': { args: Repo & { recordId: string }; result: Record<string, unknown> }
   'kb.search': { args: Repo & { query: string; top_k?: number }; result: { repo: string; enabled: boolean; results?: unknown[] } }

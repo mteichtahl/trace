@@ -32,7 +32,8 @@
  *                          are an overlay in S3 (src/agents/runtime/memory-state.ts). And one write: CreateEvent on
  *                          each project's memory, for that project's chat actor and person actors only
  *                          (`<owner>/<repo>/chat`, `<owner>/<repo>/person/*`, bedrock-agentcore:actorId; grantChatEvents):
- *                          Ask trace's conversations and what a person confirmed it should remember (memory.remember).
+ *                          a person's own chat turns (their person actor) and what a person confirmed Ask trace should
+ *                          remember (memory.remember: the chat actor only so).
  *                          Never an agent's actor, never another project's, never a record or a delete
  *   the OIDC role          the same as its project's worker, on its own project's memory only (the worker.runner =
  *                          actions fallback is the worker in GitHub Actions): src/infra/project.ts

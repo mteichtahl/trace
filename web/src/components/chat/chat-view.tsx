@@ -29,7 +29,7 @@ import { AGENT_ID, resetWire, setWire } from './agent'
 import { pendingAsk, threadCreated, useRecallHistory } from './chat-state'
 import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
-import { ChatRepo, LiveCall } from './renderers'
+import { ChatRepo, ChatThread, LiveCall } from './renderers'
 import { toReplay } from './thread'
 import { configureSpeech, enqueueSpeech, listVoices, speak, speakable, stopSpeaking, unlockAudio, useSpeech } from './voice/speech'
 
@@ -273,7 +273,9 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
               {m.toolCalls?.map((tc) => (
                 <LiveCall.Provider key={tc.id} value={i > lastTurn}>
                   <ChatRepo.Provider value={repo}>
-                    <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+                    <ChatThread.Provider value={threadId ?? loaded}>
+                      <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+                    </ChatThread.Provider>
                   </ChatRepo.Provider>
                 </LiveCall.Provider>
               ))}

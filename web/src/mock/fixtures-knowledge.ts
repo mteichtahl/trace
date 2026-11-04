@@ -32,6 +32,7 @@ export const MEMORIES: Record<string, MockMemory[]> = {
     mem('mem-a6', 'preferences', 'verify', 'Bench supply limited to 100 mA at first power-on.', 12 * DAY),
     mem('mem-a7', 'facts', 'worker', 'Build quantity is 10 per run.', 17 * DAY),
     mem('mem-a8', 'preferences', 'person/h-marc', 'Explain test results in plain words, no acronyms.', 16 * DAY),
+    mem('mem-a9', 'facts', 'chat', 'The enclosure is 3D-printed in PETG, so nothing near the regulator may run hotter than 60 °C.', 6 * DAY),
     mem('mem-a9', 'facts', 'ams', 'Decided with Priya: keep the regulator at 3.3 V; ceramic output capacitors only, X5R or better. Tantalum adds too much series resistance here.', 13 * DAY),
     mem('mem-a10', 'facts', 'verify', 'TX power 14 dBm is the firmware default; the radio allows up to 22 dBm.', 5 * DAY),
     mem('mem-s1', 'sessions', 'verify', 'Priya asked why R-006 (2 km radio range) is failing. The agent read the radio datasheet and the last range test, found the link 0.6 km short, and suggested raising transmit power to +20 dBm.', 2 * HOUR),
