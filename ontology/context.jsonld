@@ -148,6 +148,10 @@
       "@id": "trace:fromJob",
       "@type": "@id"
     },
+    "fromRun": {
+      "@id": "trace:fromRun",
+      "@type": "@id"
+    },
     "fromSpecialist": {
       "@id": "trace:fromSpecialist",
       "@type": "@id"
@@ -174,6 +178,10 @@
     },
     "inProject": {
       "@id": "trace:inProject",
+      "@type": "@id"
+    },
+    "inputOf": {
+      "@id": "trace:inputOf",
       "@type": "@id"
     },
     "inRevision": {

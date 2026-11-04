@@ -90,6 +90,7 @@ function apply(c: Ctx, s: NamedNode, name: string, rule: ColumnRule, v: unknown,
     if (v === null || v === undefined || v === '') return
     const target = typeof rule.ref === 'function' ? rule.ref(String(v), row) : [rule.ref, String(v)] as const
     if (target) c.store.addQuad(quad(s, p, link(c, target[0], target[1], rule.type)))
+    else if (rule.orLiteral) { const l = asLiteral(v); if (l) c.store.addQuad(quad(s, T(rule.orLiteral), l)) }
     return
   }
   if ('refList' in rule) {

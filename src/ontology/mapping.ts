@@ -14,7 +14,8 @@
  *                            (0/1), date (YYYY-MM-DD), json (kept whole, rdf:JSON)
  *   { prop, ref, type? }     a link to the node of kind `ref` with the column's value as its id (stage, gate, job, …);
  *                            `type`: the linked node's class is also stated (for kinds no table stores: a revision, a
- *                            specialist, a template). `ref` may be a function of the value: [kind, id] or null
+ *                            specialist, a template). `ref` may be a function of the value and the row: [kind, id], or
+ *                            null for no link (`orLiteral`: then the value as a literal of that property instead)
  *   { prop, refList, type? } a JSON list of ids, each linked like `ref`
  *   { prop, textList }       a JSON list of strings, each a literal
  *   { prop, objects }        a JSON list of objects, each its own node (<row>/<prop>/<n>) of `objects.class`, its fields
@@ -38,7 +39,7 @@ export interface FieldMap { class: string; fields: Readonly<Record<string, Colum
 
 export type ColumnRule =
   | { prop: string; as?: LiteralAs }
-  | { prop: string; ref: RefTarget; type?: string }
+  | { prop: string; ref: RefTarget; type?: string; orLiteral?: string }
   | { prop: string; refList: string; type?: string }
   | { prop: string; textList: true }
   | { prop: string; objects: FieldMap }
@@ -353,6 +354,17 @@ export const TABLES: readonly TableMap[] = [
     columns: {
       run_id: { prop: 'ofRun', ref: 'run' }, name: { prop: 'name' }, mime: { prop: 'format' },
       bytes: { ignore: 'the file\'s content: the graph names it, files.url and the run record give it' },
+    },
+  },
+  {
+    db: 'project', table: 'artifact_hashes', class: 'RunArtifact', kind: 'artifact', key: ['run_id', 'name'],
+    columns: { run_id: { prop: 'ofRun', ref: 'run' }, name: { prop: 'name' }, sha256: { prop: 'sha256' } },
+  },
+  {
+    db: 'project', table: 'run_inputs', class: 'RunInput', kind: 'run-input', key: ['run_id', 'ord'],
+    columns: {
+      run_id: { prop: 'inputOf', ref: 'run' }, ord: { prop: 'order', as: 'decimal' }, kind: { prop: 'inputKind' },
+      ref: { prop: 'fromRun', ref: (v, row) => (row.kind === 'artifact' ? ['run', v] : null), orLiteral: 'path' }, name: { prop: 'name' }, sha256: { prop: 'sha256' },
     },
   },
   {
