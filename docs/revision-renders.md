@@ -101,8 +101,16 @@ test-esp32_rev-B_2026-11-04_exploded.png
 4. **The hook.** After `snapshot()` succeeds in `gate.sign` and `journey.snapshot`, trace starts a job with
    `agent: 'render'` and a request naming the revision, the date and the shots. The signature stands even if the job
    cannot start, as with `STAGE_WORK`.
-5. **In the app.** The revision's images show on the Release stage and in the run page's file viewer. The phone gets
-   the same images.
+5. **In the app: the Renders tab** (chosen by Marc, November 2026, over the Build tab; screens in
+   `docs/ui/screens/Renders*.png`). It shows from Release on.
+   - **Each revision, newest first** (`renders.list`). The newest is a gallery, with the exploded view large. Earlier
+     revisions are a row each.
+   - **A revision still being made** shows what the rendering agent is doing, and its log.
+   - **The viewer** steps through a revision's pictures with the arrow keys. It shows the file, the revision, the
+     commit, the case's material, the size and the colours. On a phone it opens full screen.
+   - **Downloads.** One picture, or all of them as a zip. The browser makes the zip from the pictures, because a full
+     set at 2560 × 1600 is over the API's 8 MB answer limit.
+   - **When they are ready**, people get a push notification and an item in Next.
 
 ## What the ontology needs
 

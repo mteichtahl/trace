@@ -29,10 +29,19 @@ describe('the Evidence tab', () => {
 
   it('the later line names the stage the project actually has', () => {
     const b = journey(BOARD, 'Architect')
-    expect(laterLine(visibleTabs(b, { admin: false }), b)).toBe('Evidence and Build appear once the project reaches Capture and Release.')
+    expect(laterLine(visibleTabs(b, { admin: false }), b)).toBe('Evidence, Build and Renders appear once the project reaches Capture and Release.')
     const f = journey(FIRMWARE, 'Architect')
-    expect(laterLine(visibleTabs(f, { admin: false }), f)).toBe('Evidence and Build appear once the project reaches Prove and Release.')
+    expect(laterLine(visibleTabs(f, { admin: false }), f)).toBe('Evidence, Build and Renders appear once the project reaches Prove and Release.')
     const c = journey(BOARD, 'Capture')
-    expect(laterLine(visibleTabs(c, { admin: false }), c)).toBe('Build appears once the project reaches Release.')
+    expect(laterLine(visibleTabs(c, { admin: false }), c)).toBe('Build and Renders appear once the project reaches Release.')
+  })
+})
+
+describe('the Renders tab', () => {
+  const renders = (j: Journey) => visibleTabs(j, { admin: false }).some((t) => t.id === 'renders')
+  it('shows from Release on, when the first revision is cut and rendered', () => {
+    expect(renders(journey(BOARD, 'Sign-off'))).toBe(false)
+    expect(renders(journey(BOARD, 'Release'))).toBe(true)
+    expect(renders(journey(FIRMWARE, 'Release'))).toBe(true)
   })
 })
