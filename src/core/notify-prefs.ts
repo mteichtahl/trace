@@ -3,13 +3,13 @@
  * `notifications` in the person's preferences document (web/src/lib/settings-catalog.ts, which this follows: the same
  * kinds, channels and defaults), and the push sender reads them here.
  *
- *   kinds      gate, question, spend, stuck: each with app, email and push switches (push is off until the person turns
+ *   kinds      gate, question, spend, stuck, renders (a revision's renders are ready): each with app, email and push switches (push is off until the person turns
  *              it on, which the app does when they allow notifications on a device)
  *   quiet      quiet hours: no push from `from` to `to` (local time on the device, which may run past midnight) on
  *              the days listed (0 Sunday). Nothing is lost: the item stays in Next, and is not pushed afterwards
  *   projects   per project: 'gates-spend' pushes only gates and spend for it
  */
-export const NOTIFY_KINDS = ['gate', 'question', 'spend', 'stuck'] as const
+export const NOTIFY_KINDS = ['gate', 'question', 'spend', 'stuck', 'renders'] as const
 export type NotifyKind = (typeof NOTIFY_KINDS)[number]
 export type Channel = 'app' | 'email' | 'push'
 
@@ -25,6 +25,8 @@ export const DEFAULT_NOTIFY: NotifyPrefs = {
     question: { app: true, email: true, push: false },
     spend: { app: true, email: true, push: false },
     stuck: { app: true, email: true, push: false },
+    // news, not a request: in Next and pushed, never emailed by default
+    renders: { app: true, email: false, push: false },
   },
   quiet: { on: false, from: '19:00', to: '07:00', days: [0, 1, 2, 3, 4, 5, 6] },
   projects: {},

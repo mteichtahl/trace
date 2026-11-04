@@ -83,7 +83,7 @@ export function peopleOf(db: DatabaseSync, repo: string): { people: Person[]; de
   return { people, devices }
 }
 
-const KIND_WORD: Record<NotifyKind, string> = { gate: 'Gate ready', question: 'Question', spend: 'Ready to spend', stuck: 'Agent stuck' }
+const KIND_WORD: Record<NotifyKind, string> = { gate: 'Gate ready', question: 'Question', spend: 'Ready to spend', stuck: 'Agent stuck', renders: 'Renders ready' }
 
 /** The message for one item: what the device shows, and where a tap goes. */
 export function messageFor(item: InboxItem): { id: string; kind: string; title: string; body: string; url: string; tag: string } {
@@ -94,7 +94,9 @@ export function messageFor(item: InboxItem): { id: string; kind: string; title: 
   const pid = item.repo.replace('/', '~')
   const url = item.ref.kind === 'gate'
     ? `/p/${encodeURIComponent(pid)}/gates/${encodeURIComponent(item.ref.id)}`
-    : `/next?item=${encodeURIComponent(item.id)}&repo=${encodeURIComponent(item.repo)}`
+    : item.ref.kind === 'renders'
+      ? `/p/${encodeURIComponent(pid)}/renders`
+      : `/next?item=${encodeURIComponent(item.id)}&repo=${encodeURIComponent(item.repo)}`
   return { id: item.id, kind, title: `${item.project} · ${KIND_WORD[kind] ?? 'Needs you'}`, body, url, tag: `${item.repo}:${item.id}` }
 }
 

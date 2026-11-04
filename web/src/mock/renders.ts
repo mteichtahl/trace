@@ -39,7 +39,7 @@ const MAKING: MakingRenders[] = [
 
 const shotOf = (name: string): Shot | null => (name.match(/_([a-z-]+)\.png$/)?.[1] as Shot | undefined) ?? null
 
-/** renders.list and the renders' artifacts; undefined for anything else. */
+/** renders.list, renders.seen and the renders' artifacts; undefined for anything else. */
 export function rendersAction(name: string, a: Record<string, unknown>): Response | undefined {
   const repo = String(a.repo ?? '')
   if (name === 'renders.list') {
@@ -48,6 +48,7 @@ export function rendersAction(name: string, a: Record<string, unknown>): Respons
       : { repo, revisions: [], making: [], shots: [] }
     return ok(v)
   }
+  if (name === 'renders.seen') return ok({ repo, revision: a.revision, seen: true })
   if (name === 'artifact' && typeof a.id === 'string' && a.id.startsWith('run_rnd_')) {
     const shot = shotOf(String(a.name))
     const url = shot ? IMAGES[shot] : undefined

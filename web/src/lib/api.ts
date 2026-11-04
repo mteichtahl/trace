@@ -156,6 +156,7 @@ export interface Actions {
   /** releases, orders, boards */
   'build.get': { args: Repo; result: import('./types-s1').BuildView }
   'renders.list': { args: Repo; result: import('./types-renders').RendersView }
+  'renders.seen': { args: Repo & { revision: string }; result: { repo: string; revision: string; seen: boolean } }
   /** record a placed order (number, paid cost, ship date) */
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null }; result: { ok: true; wait?: Wait } }
   /** the stage timeline; money for admins (cloud estimates and actuals from the cost ledger, orders); notes */

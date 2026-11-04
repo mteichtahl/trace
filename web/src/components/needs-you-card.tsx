@@ -22,7 +22,7 @@ import { waited } from '@/lib/format'
 import type { InboxItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-export const KIND: Record<InboxItem['kind'], string> = { gate: 'Gate ready', question: 'Question', spend: 'Spend', stuck: 'Agent stuck', review: 'Change to review' }
+export const KIND: Record<InboxItem['kind'], string> = { gate: 'Gate ready', question: 'Question', spend: 'Spend', stuck: 'Agent stuck', review: 'Change to review', renders: 'Renders ready' }
 
 export interface NeedsYouCardProps {
   item: InboxItem

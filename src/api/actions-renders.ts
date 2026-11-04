@@ -3,6 +3,8 @@
  * first, and the revisions whose renders are still being made.
  *
  *   renders.list   read   { repo } → { revisions: RevisionRenders[], making: MakingRenders[] }
+ *   renders.seen   read   { repo, revision } → the person has seen a revision's renders: its Next item leaves their list
+ *                         (src/core/journey.ts inboxItems). Nothing to commit when they had seen them already
  *
  * A revision's renders are its render.showcase runs in the run record (.trace/project.db, as committed): the newest
  * passing run of each revision, its pictures by shot and the colours they used (src/ontology/renders.ts reads the same
@@ -14,7 +16,9 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { Work } from '../core/store.js'
 import { SHOTS, type Shot, showcaseRecord } from '../ontology/renders.js'
-import { type Context, Repo, def, withProjectDb } from './action-kit.js'
+import { z } from 'zod'
+import { loadJourney, recordOpen } from '../core/journey.js'
+import { type Context, Repo, def, hashOf, plainly, withProjectDb, writeJourney } from './action-kit.js'
 import { listJobs } from './actions-jobs.js'
 
 /** The order the app shows a revision's pictures in: the assembly first, the board's own views after. */
@@ -109,5 +113,18 @@ export const RENDER_ACTIONS = {
       making(ctx, a.repo).catch(() => [] as MakingRenders[]),
     ])
     return { repo: a.repo, revisions, making: now, shots: SHOTS }
+  }),
+  'renders.seen': def('read', Repo.extend({ revision: z.string().regex(/^[A-Z]{1,3}$/) }), async (a, ctx) => {
+    const who = hashOf(ctx.principal)
+    return plainly(() => writeJourney(ctx, a.repo, (db) => {
+      const before = loadJourney(db)
+      const ready = before?.decisions.find((d) => d.kind === 'renders.ready' && (d.detail as { revision?: unknown } | null)?.revision === a.revision)
+      // no renders recorded as ready (made before this, or by hand): nothing to clear
+      if (!ready) return { result: { repo: a.repo, revision: a.revision, seen: false }, changed: false }
+      const seen = before?.opens.some((o) => o.item === `renders:${a.revision}` && o.who === who && o.at >= ready.at) ?? false
+      if (seen) return { result: { repo: a.repo, revision: a.revision, seen: true }, changed: false }
+      recordOpen(db, { renders: a.revision }, who)
+      return { result: { repo: a.repo, revision: a.revision, seen: true } }
+    }))
   }),
 }

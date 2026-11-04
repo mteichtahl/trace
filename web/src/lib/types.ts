@@ -581,8 +581,8 @@ export interface JobView {
 
 // ------------------------------------------------------------------ inbox
 
-/** `review`: a change a trace job made, to review and accept in the app */
-export type InboxKind = 'gate' | 'question' | 'spend' | 'stuck' | 'review'
+/** `review`: a change a trace job made, to review and accept in the app; `renders`: a revision's renders are ready */
+export type InboxKind = 'gate' | 'question' | 'spend' | 'stuck' | 'review' | 'renders'
 
 export interface InboxItem {
   id: string

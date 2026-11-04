@@ -40,8 +40,8 @@ export const Route = createFileRoute('/_app/next')({
   component: Next,
 })
 
-export const INBOX_KINDS: InboxKind[] = ['gate', 'question', 'spend', 'stuck', 'review']
-export const KIND_WORDS: Record<InboxKind, string> = { gate: 'Gates ready', question: 'Questions', spend: 'Spend', stuck: 'Agents stuck', review: 'Changes to review' }
+export const INBOX_KINDS: InboxKind[] = ['gate', 'question', 'spend', 'stuck', 'review', 'renders']
+export const KIND_WORDS: Record<InboxKind, string> = { gate: 'Gates ready', question: 'Questions', spend: 'Spend', stuck: 'Agents stuck', review: 'Changes to review', renders: 'Renders ready' }
 
 /** The kinds that need a person (the four that earn a notification, and trace's changes to review), most blocking and oldest first (the API's order is kept). */
 export function inboxItems(items: InboxItem[] | undefined): InboxItem[] {
@@ -127,7 +127,7 @@ function Next() {
           {items.slice(0, 12).map((i, n) => <span key={i.id} className={cn('h-1 flex-1 rounded-full', n === 0 ? 'bg-primary' : 'bg-muted')} />)}
         </div>
       )}
-      {!phone && <p className="mt-3 text-sm text-muted-foreground">What needs you, one at a time: a gate that is ready, a question that blocks work, money about to be spent, an agent that is stuck, and changes trace made for you to review. Acting here clears it everywhere.</p>}
+      {!phone && <p className="mt-3 text-sm text-muted-foreground">What needs you, one at a time: a gate that is ready, a question that blocks work, money about to be spent, an agent that is stuck, changes trace made for you to review, and a revision's renders when they are ready. Acting here clears it everywhere.</p>}
       {offline && <p className="mt-3 text-sm text-muted-foreground">You are offline: answers wait until you are back, and gates and spending cannot be approved offline.</p>}
       <div className="mt-6">
         {inbox.isError ? (

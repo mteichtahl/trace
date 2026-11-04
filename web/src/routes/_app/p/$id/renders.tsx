@@ -5,7 +5,7 @@
  * one picture or all of them (a zip made in the browser) download from the gallery or the viewer.
  */
 import { createFileRoute } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { TabSkeleton } from '@/components/project/shared'
 import { MakingCard, RendersViewer, RevisionCard } from '@/components/renders/gallery'
@@ -13,7 +13,7 @@ import { RunSheet } from '@/components/run-sheet'
 import { Section } from '@/components/shell/app-shell'
 import { EmptyState, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
-import { useAction } from '@/lib/queries'
+import { useAction, useCall } from '@/lib/queries'
 import type { MakingRenders, RevisionRenders } from '@/lib/types-renders'
 
 export const Route = createFileRoute('/_app/p/$id/renders')({
@@ -28,6 +28,16 @@ function Renders() {
   const [open, setOpen] = useState<{ rev: RevisionRenders; i: number } | null>(null)
   const [log, setLog] = useState<MakingRenders | null>(null)
   const data = r.data
+  // opening the tab is seeing each revision's renders: their "renders ready" items leave this person's Next
+  const seen = useCall('renders.seen', () => [['inbox']])
+  const marked = useRef(new Set<string>())
+  useEffect(() => {
+    for (const x of data?.revisions ?? []) {
+      if (marked.current.has(x.revision)) continue
+      marked.current.add(x.revision)
+      seen.mutate({ repo, revision: x.revision }, { onError: () => marked.current.delete(x.revision) })
+    }
+  }, [data, repo, seen])
   useTraceContext({
     label: 'Renders', description: 'The project tab on screen',
     value: { tab: 'renders', revisions: data?.revisions.map((x) => ({ revision: x.revision, date: x.date, pictures: x.pictures.length })) ?? [], making: data?.making.map((m) => m.revision) ?? [] },

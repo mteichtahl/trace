@@ -40,7 +40,7 @@ export const SETTINGS: Setting[] = [
   { id: 'security.password', group: 'security', label: 'Password and authenticator app', line: 'A password with a six-digit code from an app on your phone.', keywords: ['totp', 'two-factor', '2fa', 'mfa', 'code'] },
   { id: 'security.sessions', group: 'security', label: 'Where you are signed in', line: 'Each browser and tracectl login session, with Sign out.', keywords: ['sessions', 'devices', 'sign out'] },
 
-  { id: 'notifications.kinds', group: 'notifications', label: 'Each kind, and how', line: 'Gate ready, question, spend and agent stuck: in the app, by email, by push.', key: 'notifications.kinds', keywords: ['email', 'push', 'gate', 'question', 'spend', 'stuck'] },
+  { id: 'notifications.kinds', group: 'notifications', label: 'Each kind, and how', line: 'Gate ready, question, spend, agent stuck and renders ready: in the app, by email, by push.', key: 'notifications.kinds', keywords: ['email', 'push', 'gate', 'question', 'spend', 'stuck', 'renders'] },
   { id: 'notifications.emailAfter', group: 'notifications', label: 'Email when unanswered for', line: 'An email follows only if you have not acted in the app by then.', key: 'notifications.emailAfter' },
   { id: 'notifications.quiet', group: 'notifications', label: 'Quiet hours', line: 'No email or push in this window; everything waits in the Inbox.', key: 'notifications.quiet', keywords: ['do not disturb', 'night'] },
   { id: 'notifications.projects', group: 'notifications', label: 'Per project', line: 'Normal, or only gates and spend.', key: 'notifications.projects' },
@@ -97,13 +97,14 @@ export function searchSettings(text: string, list: Setting[] = SETTINGS): Settin
 
 // ------------------------------------------------------------------ notifications
 
-export type NotifyKind = 'gate' | 'question' | 'spend' | 'stuck'
+export type NotifyKind = 'gate' | 'question' | 'spend' | 'stuck' | 'renders'
 export type Channel = 'app' | 'email' | 'push'
 export const NOTIFY_KINDS: { id: NotifyKind; label: string }[] = [
   { id: 'gate', label: 'A gate is ready' },
   { id: 'question', label: 'A question blocks work' },
   { id: 'spend', label: 'Money is about to be spent' },
   { id: 'stuck', label: 'An agent is stuck' },
+  { id: 'renders', label: 'A revision\'s renders are ready' },
 ]
 export const CHANNELS: { id: Channel; label: string }[] = [
   { id: 'app', label: 'In app' },
@@ -124,6 +125,7 @@ export const DEFAULT_NOTIFY: NotifyPrefs = {
     question: { app: true, email: true, push: false },
     spend: { app: true, email: true, push: false },
     stuck: { app: true, email: true, push: false },
+    renders: { app: true, email: false, push: false },
   },
   emailAfter: '1h',
   quiet: { on: false, from: '19:00', to: '07:00', days: [0, 1, 2, 3, 4, 5, 6] },
