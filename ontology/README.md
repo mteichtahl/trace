@@ -42,6 +42,8 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
   ontology. With `asOf` it builds the graph as it stood at that moment (`src/ontology/as-of.ts`: rows not made yet left
   out, later times cleared, criteria and the journey's stage from their history); `src/ontology/lineage.ts` takes the
   same moment.
+- `src/ontology/journey-graph.ts` reads the journey's gates, criteria, signatures, waivers, questions and decisions
+  from the graph: `graph.neighbourhood` draws the journey's kinds from it, not from the journey's tables.
 - `src/ontology/replay.ts` gives the record as events in time order, each typed by the mapping's class and naming the
   graph node it changes (`journey.replay`, the graph view's player), and the journey record as of a moment
   (`recordAsOf`), which the replay test checks against every signature. `src/ontology/replay-video.ts` draws the same

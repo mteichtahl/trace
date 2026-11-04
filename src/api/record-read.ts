@@ -47,7 +47,10 @@ export interface TraceRequirement {
  *   verified   it has tests, and every one not waived passed
  *   untested   no test yet, or a test has not run (planned, blocked)
  */
-export function requirementEvidence(db: DatabaseSync, r: JourneyRecord | null): TraceRequirement[] {
+/** The waivers a requirement's evidence reads: the journey record's, or the journey as the ontology has it. */
+export type RequirementWaivers = { waivers: readonly { id: string; closedAt: number | null; targetKind: string; target: string; severity: string; reason: string }[] } | null
+
+export function requirementEvidence(db: DatabaseSync, r: RequirementWaivers): TraceRequirement[] {
   if (!hasTable(db, 'requirements')) return []
   const tests = hasTable(db, 'test_items') ? rows(db, 'SELECT id, title, requirements, method, status, last_run FROM test_items ORDER BY id') : []
   const waived = new Map((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'requirement').map((w) => [w.target, w]))
