@@ -160,6 +160,7 @@ Forty screens cover the whole system, but most are one of six shared layouts, so
 | Library | Datasheet viewer | `/library/datasheets/:id` | Shell + canvas | Everyone | No |
 | Admin | People and access | `/admin/people` | Shell + list | Admins | Yes |
 | Admin | Agent instructions and system prompts (installation; a project's under its Settings) | `/admin/prompts` | Shell + list | Admins | No |
+| Admin | Project templates: the stages, gates and criteria a new project starts from | `/admin/templates` | Shell + editor | Admins | No |
 | Admin | Installation health and keys | `/admin/installation` | Shell + column | Admins | No |
 | Admin | Usage and cost, all projects | `/admin/usage` | Shell + column | Admins | No |
 | You | Preferences: profile, sign-in, notifications, voice, chat, display, work | `/me` | Shell + column | Everyone | No |
@@ -494,6 +495,8 @@ Admin is four plain screens for admins only, each a view of something trace alre
 **People and access.** A table of people: name and email, account class (Admin, User, Guest) as a dropdown, the projects they are on as chips showing their part on each ("Soil sensor · Contributor", "Motor driver · Reviewer"), last seen. The class is a ceiling: a User can be a Contributor or a Reviewer on each project, a Guest only a Reviewer, and an Admin is on every project. Invite opens a short sheet: email, class, and for each project chosen the part, each explained in one line ("Contributor: changes the design, answers questions, runs tools"; "Reviewer: reads everything and comments at gates"). A person's row opens their history from the assignment log. Changing someone to Admin asks for confirmation and says what it grants (every project, signing every gate). A person cannot remove their own admin class.
 
 **Agent instructions.** Every instruction and system prompt the agents receive, managed per installation and per project; specified in full in Agent instructions and system prompts below.
+
+**Project templates.** The four templates a new project starts from (Board, FPGA, Firmware, Mixed), each "trace's own" until an admin changes it. The editor lists every stage trace knows with a tick (Define and the later stages fixed), and under each stage its gates' criteria: tick, reword or put back trace's words, see who decides each (trace's check or a person) and its evidence, add a criterion a person signs off, and reword the stage guide. What the API says is wrong shows as the admin works; Save needs a reason and makes the next version; Back to trace's own resets it; the history is listed. A project keeps the version it started from. In the gate, a criterion an admin added shows Sign off…, which asks what the person checked.
 
 **Installation.** One health list, each line a Wait line or a status: the stack deployed, the GitHub connection authorised, each project's build runner, the graphics card image built, the knowledge bases, the live connection. Anything not healthy says what is wrong and the one thing to do about it. Below it, **Optional keys**: Nexar, Mouser and DigiKey, each marked "Optional: parts search works without it; adds live stock and prices from this distributor". A key is entered once, shown only as its last four characters, and can be replaced or removed.
 
