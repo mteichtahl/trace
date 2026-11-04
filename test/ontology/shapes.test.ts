@@ -91,6 +91,8 @@ describe('the shape files', () => {
       expect(named.length, c).toBeGreaterThan(0)
       expect(new Set(named), c).toEqual(new Set([c]))
       for (const q of quads.filter((x) => /shacl#message$|rdf-schema#(label|comment)$/.test(x.predicate.value))) expect(acronyms(q.object.value), `${c}: ${q.object.value}`).toEqual([])
+      // a message names the thing, the problem and the next step, briefly (plan P5.5): under 25 words as written
+      for (const q of quads.filter((x) => x.predicate.value.endsWith('shacl#message'))) expect(q.object.value.split(/\s+/).length, `${c}: ${q.object.value}`).toBeLessThan(25)
     }
   })
 })
