@@ -1,7 +1,7 @@
 /**
  * Settings (/p/:id/settings): what the project is and who works on it. The template and repository are shown
  * read-only with the reason (the record depends on them). Name, description, icon, the people and their parts, the
- * build quantity, the budget and the later stages are editable by admins: each change is written to the journey
+ * build quantity, the budget and the later stages, and the logo on the project's documents (project-logo.tsx), are editable by admins: each change is written to the journey
  * record with project.update (they are what the project is, not repository settings) or, for people, assign — and
  * says "Saved" when it lands. Everyone else reads. Agent instructions for this project are one link away.
  */
@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useTraceContext } from '@/components/chat/context'
 import { IconPicker, ProjectIconView } from '@/components/project/project-icon'
+import { ProjectLogo } from '@/components/project/project-logo'
 import { TabSkeleton } from '@/components/project/shared'
 import { Section } from '@/components/shell/app-shell'
 import { StatusBadge } from '@/components/status-badge'
@@ -82,6 +83,10 @@ function Settings() {
             <div className="flex-1"><IconPicker value={icon} disabled={!admin || pending === 'icon'} onChange={(x) => save('icon', { icon: JSON.stringify({ glyph: x.glyph, colour: x.colour }) })} /></div>
           </div>
         </div>
+      </Section>
+
+      <Section label="Documents">
+        <ProjectLogo repo={repo} name={j.data.name} icon={icon} admin={admin} />
       </Section>
 
       <Section label="Fixed when the project was made">
