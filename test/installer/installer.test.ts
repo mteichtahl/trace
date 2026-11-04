@@ -164,6 +164,21 @@ for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
 OUTPUTS[ciRunnerOutput('mteichtahl/trace')] = `trace-ci-${projectHash('mteichtahl/trace')}`
 const secretWrites = (): { SecretId: string; SecretString: string }[] => calls.secrets.map((c) => (c as { input: { SecretId: string; SecretString: string } }).input)
 
+
+/** The smoke user's Cognito and Secrets Manager, in memory (src/installer/smoke.ts SmokeIo). */
+function fakeSmoke() {
+  const users = new Set<string>()
+  const secrets = new Map<string, string>()
+  const io: import('../../src/installer/smoke.js').SmokeIo = {
+    exists: async (e) => users.has(e), create: async (e) => { users.add(e) }, admin: async () => undefined,
+    password: async () => undefined, mfaOff: async () => undefined, signIn: async () => 'access-token',
+    associate: async () => 'JBSWY3DPEHPK3PXP', verify: async () => undefined,
+    read: async (n) => secrets.get(n) ?? null, write: async (n, v) => { secrets.set(n, v) },
+  }
+  return { io, users, secrets }
+}
+const smoke = fakeSmoke()
+
 describe('answers', () => {
   it('requires assignments to name a project being installed, and no repository or person twice', () => {
     expect(AnswersSchema.safeParse(ANSWERS).success).toBe(true)
@@ -955,7 +970,7 @@ describe('the CodeBuild runners', () => {
 
   it('takes the runner settings from the answers, and plans the connection after the deploy, then the runners', () => {
     const a = AnswersSchema.parse(ANSWERS)
-    expect(a.runners).toEqual({ auth: 'auto', token: 'agent', buildTrace: true, traceRepository: '', traceBranch: '', selfUpdate: true, ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
+    expect(a.runners).toEqual({ auth: 'auto', token: 'agent', buildTrace: true, traceRepository: '', traceBranch: '', selfUpdate: true, smokeTest: true, smokeProject: '', ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
     // nothing is needed up front: no connection ARN (the stack creates one), ready by default
     const props = InfraPropsSchema.parse(infraInput(a))
     expect(props.runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:8.0', privileged: false, ciPrivileged: false })
@@ -1428,6 +1443,7 @@ describe('keeping the installation up to date', () => {
       cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(env.TRACE_INFRA ?? ''); return 0 }, outputs: async () => OUTPUTS,
       saveRecord: async (_c, _r, bucket, key, text) => { saved.push({ bucket, key, text }) },
       integrations: { set: async (name) => `trace/integrations/${name}` }, checkIntegration: async () => ({ ok: true, detail: 'accepted' }),
+      smoke: smoke.io,
     })
     expect(ok).toBe(true)
     expect(saved).toHaveLength(1)
@@ -1437,8 +1453,13 @@ describe('keeping the installation up to date', () => {
     // exactly what the deploy was given
     expect(record.props).toEqual(JSON.parse(infra.at(-1) ?? '{}'))
     expect(record).toMatchObject({ stack: 'TraceStack', region: 'us-east-1', runnerAuth: 'auto', traceRepository: TRACE, traceBranch: 'trunk', connectionArn: '' })
-    expect(record.props.selfUpdate).toEqual({ repository: TRACE, branch: 'trunk' })
+    expect(record.props.selfUpdate).toEqual({ repository: TRACE, branch: 'trunk', smoke: true })
     for (const v of [TOKEN, ADMIN, OWN, KEY, 'AKIAEXAMPLE', 'mouser-key-0123456789', 'nexar-id-0123456789', 'nexar-secret-0123456789']) expect(saved[0]?.text).not.toContain(v)
+    // the smoke user's sign-in is in its own secret, never in the record; the variable that turns the live smoke test on
+    const signIn = JSON.parse(smoke.secrets.get('trace/smoke/sign-in') ?? '{}') as Record<string, string>
+    expect(signIn).toMatchObject({ TRACE_SMOKE_EMAIL: 'smoke@trace.trace.invalid', TRACE_SMOKE_URL: (OUTPUTS.WebUrl ?? '').replace(/\/+$/, '') })
+    expect(saved[0]?.text).not.toContain(signIn.TRACE_SMOKE_PASSWORD)
+    expect(calls.values.get(`${TRACE}:TRACE_SMOKE_SECRET`)).toBe('trace/smoke/sign-in')
     // the repository's variables for the update job
     expect(calls.values.get(`${TRACE}:TRACE_UPDATE_ROLE`)).toBe(OUTPUTS.SelfUpdateRoleArn)
     expect(calls.values.get(`${TRACE}:TRACE_AWS_REGION`)).toBe('us-east-1')
@@ -1456,7 +1477,11 @@ describe('keeping the installation up to date', () => {
 
   it('asks the stack for the role only while trace\'s own repository is built and the option is on, and plans it in plain words', () => {
     const on = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, traceBranch: 'main' } })
-    expect(infraInput(on).selfUpdate).toEqual({ repository: TRACE, branch: 'main' })
+    expect(infraInput(on).selfUpdate).toEqual({ repository: TRACE, branch: 'main', smoke: true })
+    expect(plan(on).map((x) => x.id)).toContain('smoke')
+    const noSmoke = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, traceBranch: 'main', smokeTest: false } })
+    expect(infraInput(noSmoke).selfUpdate).toEqual({ repository: TRACE, branch: 'main' })
+    expect(plan(noSmoke).map((x) => x.id)).not.toContain('smoke')
     expect(plan(on).find((x) => x.id === 'deploy')?.detail).toMatch(/Keep this installation up to date: when mteichtahl\/trace's main branch changes and its tests pass, its ci workflow deploys this stack again .* only that workflow on main can use, so whoever can merge to main there can change this installation\.$/)
     const optedOut = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, selfUpdate: false } })
     expect(infraInput(optedOut).selfUpdate).toBeUndefined()

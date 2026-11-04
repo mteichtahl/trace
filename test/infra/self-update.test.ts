@@ -56,6 +56,14 @@ describe('the self-update role', () => {
     expect(InfraPropsSchema.safeParse({ ...base, selfUpdate: { repository: 'not a repo' } }).success).toBe(false)
   })
 
+  it('may read the smoke user\'s sign-in only when the live smoke test is on, and nothing else of it', () => {
+    expect(JSON.stringify(roleOf(on.parent, 'trace-self-update').statements)).not.toContain('smoke')
+    const smoke = synth(InfraPropsSchema.parse({ ...base, selfUpdate: { repository: TRACE, smoke: true } }), stackName('trace'))
+    const st = roleOf(smoke.parent, 'trace-self-update').statements.find((x) => x.Sid === 'SmokeUserSecret')
+    expect(st?.Action).toBe('secretsmanager:GetSecretValue')
+    expect(JSON.stringify(st?.Resource)).toContain(':secretsmanager:us-east-1:123456789012:secret:trace/smoke/sign-in-??????')
+  }, 300_000)
+
   it('trusts only the ci workflow of trace\'s own repository on its branch, through GitHub OIDC, for an hour', () => {
     const { role } = roleOf(on.parent, 'trace-self-update')
     expect(role.Properties.MaxSessionDuration).toBe(3600)

@@ -145,6 +145,13 @@ export const RunnerAnswers = z.object({
    * date"): its ci workflow deploys the stack again with the settings this installer saved. Only while trace's own
    * repository is built on AWS too (buildTrace, and the token can configure it). On by default. */
   selfUpdate: z.boolean().default(true),
+  /** Run the screen smoke test against this installation after each self-update (docs/smoke-test.md "Live runs"): the
+   * installer makes a smoke user (an admin that receives no mail) and its sign-in secret, which only the self-update
+   * role may read. Only while selfUpdate is on and the web app is. On by default. */
+  smokeTest: z.boolean().default(true),
+  /** the project the live smoke test checks the screens on, OWNER/NAME; empty: the sample project when installed, else
+   * the first project */
+  smokeProject: z.union([Repo, z.literal('')]).default(''),
   /** Other repositories to build on AWS without making them projects: each gets a build runner and nothing else. */
   ciRepositories: z.array(Repo).max(EXTRA_BUILD_REPOSITORIES_MAX).default([]),
   /** An existing GitHub connection to use (auth auto or connection); empty: the installer reuses one already authorized
@@ -226,6 +233,7 @@ export const AnswersSchema = z.object({
   a.people.forEach((p, i) => p.projects.forEach((r, j) => {
     if (!repos.has(r.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people', i, 'projects', j], message: `${r} is not one of the projects being installed` })
   }))
+  if (a.runners.smokeProject && !repos.has(a.runners.smokeProject.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['runners', 'smokeProject'], message: `${a.runners.smokeProject} is not one of the projects being installed` })
   const emails = a.people.map((p) => p.email.toLowerCase())
   if (new Set(emails).size !== emails.length) ctx.addIssue({ code: 'custom', path: ['people'], message: 'a person is listed twice' })
   if (a.adminEmail && emails.includes(a.adminEmail.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people'], message: 'the first administrator is already an admin: leave them out of the list' })

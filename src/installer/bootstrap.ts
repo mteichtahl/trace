@@ -83,7 +83,7 @@ import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
   CENTRAL_BUCKET_OUTPUT, CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, SELF_UPDATE_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS, WEB_HOOKS_OUTPUTS, webHooksClientSecret, webHooksOn, webHooksSecret,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS, WEB_HOOKS_OUTPUTS, smokeSecret, webHooksClientSecret, webHooksOn, webHooksSecret,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
@@ -103,6 +103,7 @@ import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
 import { type ReleaseResult, liveReleaseDeps, releaseSetup } from './release.js'
 import { traceRepository } from './source.js'
+import { SMOKE_SECRET_VARIABLE, type SmokeIo, ensureSmokeUser, liveSmokeIo, smokeEmail } from './smoke.js'
 import { type HooksSecretIo, ensureClientSecret, ensureHooksSecret, liveClientSecret, liveHooksSecretIo, registerWebhooks } from './hooks.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
@@ -217,6 +218,16 @@ export function selfUpdateOf(a: Answers): { repository: string; branch: string }
   return r && a.runners.selfUpdate ? { repository: r, branch: a.runners.traceBranch || 'main' } : null
 }
 
+/** The live smoke test after each self-update (src/installer/smoke.ts): on while the installation updates itself and has
+ * its web app, unless runners.smokeTest is turned off. */
+export const smokeOn = (a: Answers): boolean => Boolean(selfUpdateOf(a)) && a.runners.smokeTest && a.agents.webEnabled
+
+/** The project the live smoke test checks the screens on: the one chosen, else the sample, else the first project;
+ * '' when there is none yet. */
+export function smokeProjectOf(a: Answers): string {
+  return a.runners.smokeProject || sampleRepoOf(a) || a.projects[0]?.repo || ''
+}
+
 /**
  * Before deploying: trace's own repository for the answers (runners.traceRepository), when it is to be built on AWS
  * (runners.buildTrace) and the token can configure it; '' otherwise. Returns the answers and what to tell the person.
@@ -247,7 +258,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     region: a.aws.region,
     repositories: a.projects.map((p) => `${p.repo}@${p.branch}`),
     ...(buildRepositories(a).length ? { ciRepositories: buildRepositories(a) } : {}),
-    ...(selfUpdateOf(a) ? { selfUpdate: selfUpdateOf(a) ?? undefined } : {}),
+    ...(selfUpdateOf(a) ? { selfUpdate: { ...selfUpdateOf(a)!, ...(smokeOn(a) ? { smoke: true } : {}) } } : {}),
     ...(Object.keys(a.github.subjects).length ? { githubSubjects: a.github.subjects } : {}),
     createOidcProvider: a.agents.createOidcProvider,
     model: a.agents.model,
@@ -552,6 +563,9 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
       : 'CloudFront\'s own address (https://<id>.cloudfront.net), shown when the deploy is done; passkeys belong to this address'}${webHooksOn(props) && a.projects.length
       ? `. Live updates from GitHub: the secret ${webHooksSecret(props.prefix)} (made when missing), and a webhook on ${a.projects.map((p) => p.repo).join(', ')} (registered, or updated in place); one the token may not add is a warning, and that project's screens look again every 60 s`
       : ''}`] as [string, string, string]] : []),
+    ...(smokeOn(a) ? [['smoke', 'Set up the live smoke test', smokeProjectOf(a)
+      ? `the smoke user ${smokeEmail(props.prefix)} (an admin that receives no mail, with a random password and an authenticator enrolled now; kept as it is when it already works), its sign-in in the secret ${smokeSecret(props.prefix)} that only the self-update role may read, and ${SMOKE_SECRET_VARIABLE} on ${selfUpdateOf(a)?.repository}: after each self-update its ci workflow checks every screen of the web app on ${smokeProjectOf(a)} (docs/smoke-test.md)`
+      : 'no project yet: the smoke user is made once there is one to check the screens on'] as [string, string, string]] : []),
     ['local', 'Save this installation locally', '~/.trace/client.db, so `tracectl login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
       ? `set this account up to publish trace's images, all by API: CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${releaseRepository(a)}'s main and v* tags), the registry's default alias, ${releaseRepository(a)}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY and its trace-images release (where every installation finds the images), then the first release run, on ${selfBuild(a) ? 'its own AWS build runner (Docker-in-Docker)' : 'GitHub\'s runners until it has an AWS one'}`
@@ -644,6 +658,8 @@ export interface Hooks {
   edge?: { outputs: EdgeDeps['outputs']; remove: (stack: string, region: string) => Promise<void> }
   /** live updates from GitHub (src/installer/hooks.ts): the secret's store, the backend's client secret, and one
    * repository's webhook registration */
+  /** the smoke user and its secret (src/installer/smoke.ts liveSmokeIo) */
+  smoke?: SmokeIo
   webhooks?: {
     secrets?: HooksSecretIo
     clientSecret?: (poolId: string, clientId: string) => Promise<string | null>
@@ -1147,6 +1163,13 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       if (update) {
         const vars = { [UPDATE_ROLE_VARIABLE]: need(SELF_UPDATE_OUTPUT), TRACE_AWS_REGION: a.aws.region, [UPDATE_STACK_VARIABLE]: stack }
         await Promise.all(Object.entries(vars).map(async ([k, v]) => log('repos', `${update.repository}: ${k} ${await setVariable(adminToken, update.repository, k, v)} (keeps this installation up to date when its ${update.branch} branch changes)`)))
+        // the live smoke test after each update: set only once the smoke user's secret is there (the smoke step below);
+        // off, the job must stop looking for it. Best effort
+        if (!smokeOn(a) || !smokeProjectOf(a)) {
+          try {
+            if (await deleteVariable(adminToken, update.repository, SMOKE_SECRET_VARIABLE)) log('repos', `${update.repository}: ${SMOKE_SECRET_VARIABLE} removed (no live smoke test)`)
+          } catch (e) { log('repos', `${update.repository}: could not remove ${SMOKE_SECRET_VARIABLE} (${redact(e instanceof Error ? e.message : String(e), s)})`) }
+        }
       }
       if (!runnersReady) log('repos', GITHUB_RUNNERS_NOTE)
       const refusedNote = refused.length ? webhookRefusedNote(refused, access) : null
@@ -1290,6 +1313,29 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         if (r.url) hooksLine = `; live updates from GitHub on ${a.projects.length - r.warnings.length} of ${a.projects.length} project${a.projects.length === 1 ? '' : 's'}`
       }
       set('web', webUrl ? 'done' : 'skipped', webUrl ? `${webUrl}${hooksLine}` : `the stack has no output ${WEB_OUTPUTS.url} yet: run the installer again once the deploy has it`)
+    }
+
+    // the live smoke test (src/installer/smoke.ts): the smoke user and its secret, then the variable that turns the ci
+    // workflow's smoke-live job on. Never fatal: trace is installed either way
+    if (byId.has('smoke')) {
+      current = 'smoke'
+      const project = smokeProjectOf(a)
+      const update = selfUpdateOf(a)
+      if (!webUrl || !project || !update) {
+        set('smoke', 'skipped', !webUrl ? `the stack has no output ${WEB_OUTPUTS.url} yet: run the installer again once the deploy has it` : 'no project yet: run the installer again once there is one')
+      } else {
+        set('smoke', 'running')
+        try {
+          const io = hooks.smoke ?? await liveSmokeIo(creds, a.aws.region, need('UserPoolId'), need(WEB_OUTPUTS.clientId))
+          const r = await ensureSmokeUser(io, { prefix: props.prefix, url: webUrl, project, log: (l) => log('smoke', l) })
+          log('smoke', `${update.repository}: ${SMOKE_SECRET_VARIABLE} ${await setVariable(adminToken, update.repository, SMOKE_SECRET_VARIABLE, r.secret)}`)
+          set('smoke', 'done', `${r.email} checks every screen on ${project} after each update (${r.state === 'made' ? 'made now' : r.state === 'updated' ? 'its address or project brought up to date' : 'already set up'})`)
+        } catch (e) {
+          const m = redact(e instanceof Error ? e.message : String(e), s)
+          set('smoke', 'failed', m)
+          summary.push(`The live smoke test is not set up: ${m}. Everything else is installed; run the installer again to finish it.`)
+        }
+      }
     }
 
     // 12 — this machine

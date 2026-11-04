@@ -41,20 +41,32 @@ installation only with `TRACE_SMOKE_WRITES=1`. Accepting a change never runs liv
 
 ## Live runs
 
-The CI job `smoke-live` runs after `update-installation` once the repository variable `TRACE_SMOKE_SECRET` names a
-Secrets Manager secret the update role can read. The secret is one JSON object:
+The CI job `smoke-live` runs after `update-installation` once trace's own repository has the variable
+`TRACE_SMOKE_SECRET`. The installer sets all of it up, with nothing to do by hand (`src/installer/smoke.ts`, the
+"Set up the live smoke test" step), whenever the installation updates itself and has its web app:
 
-| Key | Needed | Meaning |
-| --- | --- | --- |
-| `TRACE_SMOKE_URL` | yes | the web app, e.g. `https://d1ubkf6kpykgil.cloudfront.net` |
-| `TRACE_SMOKE_EMAIL`, `TRACE_SMOKE_PASSWORD` | yes | the smoke user |
-| `TRACE_SMOKE_TOTP_SECRET` | yes | the base32 secret of the smoke user's authenticator app |
-| `TRACE_SMOKE_PROJECT` | yes | the project the screens are checked on, as in its address (`owner~test-esp32`) |
-| `TRACE_SMOKE_WRITES` | no | `1` lets checks that change data run on the smoke project |
-| `TRACE_SMOKE_TOKEN_URL`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_API_URL`, `_MCP_URL` | no | a read-only connected system on the smoke project, for the external API and MCP checks |
+- **The smoke user**, `smoke@<prefix>.trace.invalid`: an admin (the admin screens are part of the test) at an address that
+  can never receive mail, so Cognito is told to send none. Its password is random and an authenticator is enrolled by
+  the installer, with a secret only this installation keeps.
+- **Its sign-in**, in the Secrets Manager secret `<prefix>/smoke/sign-in`: one JSON object of the variables below.
+- **The read grant**: the self-update role may read that secret (`SmokeUserSecret`) and nothing else of it. That role can
+  already deploy the whole installation, so reading an admin's sign-in gives it nothing new.
+- **The variable** `TRACE_SMOKE_SECRET` on trace's own repository, set once the secret is there.
 
-Still to do, so nobody sets this up by hand: the installer creating the smoke user (password plus authenticator, an
-admin, on the smoke project only), the secret, the read grant for the update role, and the variable.
+A later run keeps a smoke user that works and only updates the address or project in its secret. One without a usable
+secret gets a new password and authenticator. Turn it off with the installer answer `runners.smokeTest: false` (the
+variable is then removed); choose the project with `runners.smokeProject` (default: the sample project, else the first).
+
+| Key | Meaning |
+| --- | --- |
+| `TRACE_SMOKE_URL` | the web app, e.g. `https://d1ubkf6kpykgil.cloudfront.net` |
+| `TRACE_SMOKE_EMAIL`, `TRACE_SMOKE_PASSWORD` | the smoke user |
+| `TRACE_SMOKE_TOTP_SECRET` | the base32 secret of the smoke user's authenticator |
+| `TRACE_SMOKE_PROJECT` | the project the screens are checked on, as in its address (`owner~test-esp32`) |
+
+Optional keys, added to the secret by hand when wanted: `TRACE_SMOKE_WRITES=1` lets checks that change data run on the
+smoke project; `TRACE_SMOKE_TOKEN_URL`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_API_URL` and `_MCP_URL` of a read-only connected
+system turn on the external API and MCP checks. A later installer run keeps them.
 
 ## Findings
 
