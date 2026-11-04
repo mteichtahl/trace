@@ -14,7 +14,7 @@
     rdfs:label "trace board" ;
     rdfs:comment "Intent, requirements, architecture, the pin plan, tests and runs, parts and offers, and the board's components, pads and nets." ;
     owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/journey> ;
-    owl:versionInfo "0.3.1" .
+    owl:versionInfo "0.4.0" .
 
 # ================================================================== intent and requirements
 
@@ -877,6 +877,85 @@ trace:trackCount a owl:DatatypeProperty ;
     rdfs:domain trace:Board ;
     rdfs:range xsd:integer .
 
+# ================================================================== revision renders (docs/revision-renders.md)
+
+trace:RenderSet a owl:Class ;
+    rdfs:subClassOf trace:Run ;
+    rdfs:label "Revision renders" ;
+    rdfs:comment "The photorealistic pictures made of one revision when it was cut: the board, the case, the board in the case and the exploded view." ;
+    trace:keptIn "the run record's render.showcase runs" .
+
+trace:Render a owl:Class ;
+    rdfs:subClassOf trace:RunArtifact ;
+    rdfs:label "Render" ;
+    rdfs:comment "One picture of a revision's renders, named by the project, the revision, the day it was cut and the shot." ;
+    trace:keptIn "the artifacts of the run record's render.showcase runs" .
+
+trace:BrandPalette a owl:Class ;
+    rdfs:label "Colour palette" ;
+    rdfs:comment "The colours a revision's renders were lit and backed with: taken from the project's logo, or trace's neutral studio colours when it has none." ;
+    trace:keptIn "the render.showcase run's result, worked out from the logo when the renders are made" .
+
+trace:inRenderSet a owl:ObjectProperty ;
+    rdfs:label "in renders" ;
+    rdfs:comment "The revision renders a picture belongs to." ;
+    rdfs:domain trace:Render ;
+    rdfs:range trace:RenderSet .
+
+trace:shotKind a owl:DatatypeProperty ;
+    rdfs:label "shot" ;
+    rdfs:comment "What the picture shows: board, board-top, board-bottom, case, board-in-case or exploded." ;
+    rdfs:domain trace:Render ;
+    rdfs:range xsd:string .
+
+trace:revisionDate a owl:DatatypeProperty ;
+    rdfs:label "revision day" ;
+    rdfs:comment "The day the revision was cut, as the pictures' names carry it." ;
+    rdfs:domain trace:RenderSet ;
+    rdfs:range xsd:date .
+
+trace:usedPalette a owl:ObjectProperty ;
+    rdfs:label "colours" ;
+    rdfs:comment "The colour palette the renders were made with." ;
+    rdfs:domain trace:RenderSet ;
+    rdfs:range trace:BrandPalette .
+
+trace:paletteSource a owl:DatatypeProperty ;
+    rdfs:label "colours from" ;
+    rdfs:comment "Where the colours came from: logo, or neutral when the project has no logo." ;
+    rdfs:domain trace:BrandPalette ;
+    rdfs:range xsd:string .
+
+trace:paletteFromLogo a owl:ObjectProperty ;
+    rdfs:label "taken from logo" ;
+    rdfs:comment "The logo file the colours were taken from, by its path and content hash." ;
+    rdfs:domain trace:BrandPalette ;
+    rdfs:range trace:FileArtifact .
+
+trace:baseColour a owl:DatatypeProperty ;
+    rdfs:label "base colour" ;
+    rdfs:comment "The logo's most common colour, as #rrggbb: the background is made from it." ;
+    rdfs:domain trace:BrandPalette ;
+    rdfs:range xsd:string .
+
+trace:accentColour a owl:DatatypeProperty ;
+    rdfs:label "accent colour" ;
+    rdfs:comment "The logo's most saturated colour far from the base, as #rrggbb: the rim light is tinted with it." ;
+    rdfs:domain trace:BrandPalette ;
+    rdfs:range xsd:string .
+
+trace:neutralColour a owl:DatatypeProperty ;
+    rdfs:label "neutral colour" ;
+    rdfs:comment "The logo's most common low-saturation colour, as #rrggbb: the background when the base is too strong to sit behind a board." ;
+    rdfs:domain trace:BrandPalette ;
+    rdfs:range xsd:string .
+
+trace:backgroundColours a owl:DatatypeProperty ;
+    rdfs:label "background" ;
+    rdfs:comment "The background's gradient as the renders used it, top colour then bottom colour, each #rrggbb." ;
+    rdfs:domain trace:BrandPalette ;
+    rdfs:range xsd:string .
+
 # ------------------------------------------------------------------ how the graph view draws them (graphKind)
 
 trace:IntentStatement trace:graphKind "intent" .
@@ -886,6 +965,8 @@ trace:SchematicSheet trace:graphKind "document" .
 trace:TestItem trace:graphKind "run" .
 trace:Run trace:graphKind "run" .
 trace:RunArtifact trace:graphKind "artifact" .
+trace:RenderSet trace:graphKind "run" .
+trace:Render trace:graphKind "artifact" .
 trace:Part trace:graphKind "part" .
 trace:Component trace:graphKind "component" .
 trace:Net trace:graphKind "net" .

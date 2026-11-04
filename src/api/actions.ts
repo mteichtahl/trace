@@ -160,6 +160,7 @@ import { CHAT_ACTIONS } from './actions-chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
+import { LOGO_ACTIONS } from './actions-logo.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
 import { JOB_ACTIONS, withControls } from './actions-jobs.js'
@@ -829,6 +830,7 @@ export const ACTIONS = {
   ...SKILL_ACTIONS,
   ...DESIGN_ACTIONS,
   ...HANDIN_ACTIONS,
+  ...LOGO_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,
