@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { App, Stack } from 'aws-cdk-lib'
+import { DRIFT_EVENT, DRIFT_HOUR_UTC } from '../../src/docs/drift.js'
 import { Match, Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { InfraPropsSchema, WEB_HOOKS_OUTPUTS, WEB_OUTPUTS, stackName, webConfigParameter } from '../../src/infra/props.js'
@@ -278,7 +279,10 @@ describe('the web app', () => {
     on.parent.resourceCountIs('Custom::S3BucketNotifications', 0)
     // the rule: Object Created of the agents' facts objects in that bucket, and the journey record for push only (the
     // backend publishes people's writes as live events, so they are not sent twice: src/web/journey-events.ts)
-    const rule = only(web, 'AWS::Events::Rule').Properties as { Name: string; EventPattern: unknown; Targets: { Arn: unknown; RetryPolicy: unknown }[] }
+    // (the other rule is the documents' nightly check, a schedule: GitHub's webhook, below)
+    const rules = (Object.values(web.findResources('AWS::Events::Rule')) as Res[]).filter((r) => r.Properties.EventPattern)
+    expect(rules).toHaveLength(1)
+    const rule = rules[0]!.Properties as { Name: string; EventPattern: unknown; Targets: { Arn: unknown; RetryPolicy: unknown }[] }
     expect(rule.Name).toBe('trace-journey-events')
     expect(rule.EventPattern).toEqual({
       source: ['aws.s3'], 'detail-type': ['Object Created'],
@@ -414,11 +418,20 @@ describe('GitHub\'s webhook (web.hooks)', () => {
     expect(JSON.stringify(header?.[0]?.HeaderValue)).toMatch(/resolve:secretsmanager:.*HooksOrigin/)
     web.hasResourceProperties('AWS::SecretsManager::Secret', { Name: 'trace/web/hooks-origin', GenerateSecretString: Match.objectLike({ PasswordLength: 48, ExcludePunctuation: true }) })
     const fn = (Object.values(web.findResources('AWS::Lambda::Function')) as Res[]).find((f) => f.Properties.FunctionName === 'trace-web-hooks')
-    expect(fn?.Properties).toMatchObject({ Runtime: 'nodejs22.x', Architectures: ['arm64'], Handler: 'hooks.handler', Timeout: 60, ReservedConcurrentExecutions: HOOKS_CONCURRENCY, Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config' } } })
+    expect(fn?.Properties).toMatchObject({ Runtime: 'nodejs22.x', Architectures: ['arm64'], Handler: 'hooks.handler', Timeout: 300, ReservedConcurrentExecutions: HOOKS_CONCURRENCY, Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config' } } })
     expect(HOOKS_CONCURRENCY).toBe(10)
     expect(JSON.stringify((fn?.Properties.Environment as { Variables: Record<string, unknown> }).Variables.TRACE_HOOKS_ORIGIN)).toMatch(/resolve:secretsmanager:.*HooksOrigin/)
     const urls = (Object.values(web.findResources('AWS::Lambda::Url')) as Res[]).map((u) => u.Properties)
     expect(urls.find((u) => JSON.stringify(u.TargetFunctionArn).includes('Hooks'))).toMatchObject({ AuthType: 'NONE', InvokeMode: 'RESPONSE_STREAM' })
+  })
+
+  it('runs the documents\' nightly drift check on its function, invoked directly with the schedule\'s own event', () => {
+    const rule = (Object.values(web.findResources('AWS::Events::Rule')) as Res[]).find((r) => r.Properties.Name === 'trace-docs-drift')?.Properties as { ScheduleExpression: string; Targets: { Arn: unknown; Input: string }[] }
+    expect(rule.ScheduleExpression).toBe(`cron(0 ${DRIFT_HOUR_UTC} * * ? *)`)
+    expect(rule.Targets).toHaveLength(1)
+    expect(JSON.stringify(rule.Targets[0]!.Arn)).toMatch(/Hooks/)
+    expect(JSON.parse(rule.Targets[0]!.Input)).toEqual(DRIFT_EVENT)
+    web.hasResourceProperties('AWS::Lambda::Permission', { Action: 'lambda:InvokeFunction', Principal: 'events.amazonaws.com' })
   })
 
   it('gives its function only its settings, the hooks secret (read), its debounce table and publishing; the backend gains nothing', () => {

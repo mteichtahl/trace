@@ -35,7 +35,7 @@ export const LIFECYCLE_ACTIONS: ReadonlySet<string> = new Set(['project.lifecycl
 export const CHANGES_THOUGH_NOT_WRITE: ReadonlySet<string> = new Set([
   'journey.criterion.open', 'memory.deactivate', 'memory.reactivate', 'order.check_now', 'tools.check_now', 'job.check_now',
   'gate.sign', 'journey.snapshot', 'project.update', 'repo.rules.fix', 'prompts.set', 'prompts.reset', 'prompts.revert',
-  'hook.apply', 'hook.conflicts', 'hook.docs',
+  'hook.apply', 'hook.conflicts', 'hook.docs', 'hook.drift',
 ])
 
 /** Whether the action, with these arguments, changes the project or starts work on it. */

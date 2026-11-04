@@ -56,7 +56,7 @@ export { PROJECTS_PREFIX }
 
 /**
  * Keep a tool's output in its run: in the bucket when this is a job on an installation and the output is large
- * (Work.storeArtifact), else in the run record. What render.*, docs.publish and other tools with large outputs call.
+ * (Work.storeArtifact), else in the run record. What render.* and other tools with large outputs call.
  */
 export function keepOutput(work: import('./store.js').Work, id: string, name: string, data: Uint8Array, mime: string, store: ArtifactStore | null = artifactStoreFromEnv()): Promise<'stored' | 'kept'> {
   return work.storeArtifact(id, name, data, mime, store ? (sha, bytes, m) => putStored(store, sha, bytes, m) : null, STORE_OVER)

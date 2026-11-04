@@ -14,6 +14,8 @@ import { FUNCTION_KINDS } from '../../../src/gpu/jobs.js'
 import { PY_DIR } from '../../../src/tools/mech/engine.js'
 import { imagesOf } from '../../../src/tools/docs/tools.js'
 import { allTools } from '../../../src/tools/index.js'
+import { backendFor } from '../../../src/core/central.js'
+import { readPrinted, releasesOf } from '../../../src/docs/printed.js'
 
 type Dict = Record<string, any>
 const reg = allTools()
@@ -81,6 +83,38 @@ describe.skipIf(!programs)('docs.publish, with pandoc, Mermaid and Typst here', 
     expect(run.status).toBe('pass')
     expect(run.artifacts.map((x: Dict) => x.name)).toEqual(['hld.pdf'])
   }, 180_000)
+
+  it('on a worker, keeps the PDF in the central bucket and the run only where; a release\'s copies once', async () => {
+    const projects = join(dir, 'bucket', 'projects')
+    const env = { home: process.env.TRACE_PROJECT_HOME, project: process.env.TRACE_PROJECT }
+    process.env.TRACE_PROJECT_HOME = join(projects, 'acme', 'printed')
+    process.env.TRACE_PROJECT = 'acme/printed'
+    try {
+      const r = repo('bucket-print', { 'docs/design/high-level-design.md': skeleton('hld', CTX) })
+      const out = await inRepo(r, () => call('docs.publish', { release: 'A' }))
+      const d = out.documents[0]
+      expect(d.sha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(out.release).toEqual({ revision: 'A', added: ['hld'], kept: [] })
+      const store = backendFor(projects)
+      expect(Buffer.from((await readPrinted(store, 'acme/printed', d.sha256))!).subarray(0, 5).toString()).toBe('%PDF-')
+      const run = await inRepo(r, () => call('trace.run', { id: d.run_id }))
+      // the run record keeps where, never the PDF
+      expect(run.artifacts.map((x: Dict) => x.name)).toEqual(['hld.pdf.json'])
+      expect((await releasesOf(store, 'acme/printed'))[0]!.documents).toMatchObject([{ kind: 'hld', sha256: d.sha256, run: d.run_id }])
+      // printed again for the same revision: the first copy stands
+      const again = await inRepo(r, () => call('docs.publish', { release: 'A' }))
+      expect(again.release).toEqual({ revision: 'A', added: [], kept: ['hld'] })
+      expect(again.note).toMatch(/kept as they were/)
+    } finally {
+      if (env.home === undefined) delete process.env.TRACE_PROJECT_HOME; else process.env.TRACE_PROJECT_HOME = env.home
+      if (env.project === undefined) delete process.env.TRACE_PROJECT; else process.env.TRACE_PROJECT = env.project
+    }
+  }, 180_000)
+
+  it('release copies need the central bucket', async () => {
+    const r = repo('no-bucket', { 'docs/design/high-level-design.md': skeleton('hld', CTX) })
+    await expect(inRepo(r, () => call('docs.publish', { release: 'A' }))).rejects.toThrow(/central bucket/)
+  })
 
   it('a diagram that does not draw fails the run, naming it', async () => {
     const md = replaceSection(skeleton('hld', CTX), 'data-flow', '## Data flow\n\n<!-- scribe:figure kind="data-flow" source="x" -->\n```mermaid\nflowchart LR\n  A --> \n  ((((\n```\n_Broken._')
