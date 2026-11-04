@@ -265,7 +265,14 @@ export interface ChangeSummary {
   verdict: ChangeVerdict
   /** the gate criteria it says it waits on a person's approval of ("layout.renders") */
   awaiting?: string[]
+  /** a stacked change: the open change it builds on, which is accepted first (docs/stacked-changes.md) */
+  builds_on?: ChangeLink
+  /** the open changes built on this one, which follow it into the design */
+  built_on_by?: ChangeLink[]
 }
+
+/** One change of a stack, as another names it. */
+export interface ChangeLink { number: number; title: string }
 
 export interface ChangeFile {
   path: string

@@ -19,7 +19,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { CHECK_LOG_MAX, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
-  readySince, CHECK_TEXT_MAX, checkLines, checkText,
+  readySince, CHECK_TEXT_MAX, checkLines, checkText, stacksOf,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -36,6 +36,32 @@ import { FakeCognito, FakeGitHub } from './fixtures.js'
 
 const checks = (o: Partial<NonNullable<PullStatus['checks']>> = {}): NonNullable<PullStatus['checks']> => ({ total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [], ...o })
 const facts = (o: Partial<ChangeFacts> = {}): ChangeFacts => ({ state: 'open', draft: false, mergeable: 'clean', checks: checks(), ...o })
+
+describe('stacked changes (docs/stacked-changes.md)', () => {
+  const pull = (number: number, head: string, base: string, headRepo = 'acme/board') => ({ number, title: `change ${number}`, head, base, headRepo })
+
+  it('finds what each open change builds on and what builds on it; a fork never counts', () => {
+    const m = stacksOf([
+      pull(1, 'claude/a', 'main'), pull(2, 'claude/b', 'claude/a'), pull(3, 'claude/c', 'claude/b'), pull(4, 'claude/d', 'claude/a'),
+      pull(5, 'claude/a', 'main', 'fork/board'), pull(6, 'claude/e', 'release/1'),
+    ], 'acme/board', 'main')
+    expect(m.get(1)).toEqual({ built_on_by: [{ number: 2, title: 'change 2' }, { number: 4, title: 'change 4' }] })
+    expect(m.get(2)).toEqual({ stacked: { base: 'claude/a', on: { number: 1, title: 'change 1' } }, built_on_by: [{ number: 3, title: 'change 3' }] })
+    expect(m.get(6)).toEqual({ stacked: { base: 'release/1', on: null }, built_on_by: [] })
+    expect(m.has(5)).toBe(false)
+  })
+
+  it('waits for the change below: never "ready", never accepted, with the change to accept first', () => {
+    const stacked = facts({ stacked: { base: 'claude/a', on: { number: 1, title: 'Pin plan for the OLED' } } })
+    expect(verdictOf(stacked)).toBe('blocked')
+    expect(recommendationOf(stacked)).toEqual({ verdict: 'wait', why: expect.stringMatching(/builds on "Pin plan for the OLED" \(change 1\).*follows that change into the design/) })
+    expect(acceptance(stacked, true)).toEqual({ may_accept: false, blockers: ['It builds on "Pin plan for the OLED" (change 1), which is not accepted yet. Accept that one first.'] })
+    // its own problems still come first
+    expect(verdictOf({ ...stacked, checks: checks({ failed: 1, passed: 1, failing: ['erc'] }) })).toBe('failing')
+    // a change on a branch with no open change below it cannot be accepted into the design either
+    expect(acceptance(facts({ stacked: { base: 'release/1', on: null } }), true).blockers.join()).toMatch(/built on release\/1, not on the design/)
+  })
+})
 
 describe('the rules: verdict, recommendation, may_accept', () => {
   it('ready: every check passed and it can merge → accept, naming the checks and the requirements', () => {
@@ -289,12 +315,12 @@ class ChangesGitHub extends FakeGitHub {
   reads = new Map<string, number>()
   vars = new Map<string, string>()
   private read(k: string): void { this.reads.set(k, (this.reads.get(k) ?? 0) + 1) }
-  add(number: number, head: string, o: { mergeable?: string; checks?: PullStatus['checks']; checks_denied?: boolean; labels?: string[]; title?: string; body?: string; headRepo?: string | null; author?: string | null } = {}): void {
+  add(number: number, head: string, o: { mergeable?: string; checks?: PullStatus['checks']; checks_denied?: boolean; labels?: string[]; title?: string; body?: string; headRepo?: string | null; author?: string | null; base?: string } = {}): void {
     const title = o.title ?? `Change ${number}`
     const detail: PullDetail = {
       number, title, url: `https://github.com/${REPO}/pull/${number}`, state: 'open', draft: false, mergeable: o.mergeable ?? 'clean', body: o.body ?? '',
       labels: o.labels ?? [], created_at: `2026-10-3${number % 10}T00:00:00Z`, updated_at: '2026-11-01T00:00:00Z',
-      head: { ref: head, sha: sha(number), repo: o.headRepo === undefined ? REPO : o.headRepo }, base: { ref: 'main', sha: 'base-sha' }, author: o.author === undefined ? 'trace-bot' : o.author,
+      head: { ref: head, sha: sha(number), repo: o.headRepo === undefined ? REPO : o.headRepo }, base: { ref: o.base ?? 'main', sha: 'base-sha' }, author: o.author === undefined ? 'trace-bot' : o.author,
     }
     const c = o.checks === undefined ? { total: 1, passed: 1, failed: 0, running: 0, skipped: 0, failing: [] } : o.checks
     this.pulls.set(number, {
@@ -309,7 +335,7 @@ class ChangesGitHub extends FakeGitHub {
     this.read('pulls')
     return [...this.pulls.values()].filter((p) => p.detail.state === 'open').map((p): PullSummary => ({
       number: p.detail.number, title: p.detail.title, head: p.detail.head.ref, draft: false, labels: p.detail.labels, url: p.detail.url, updated_at: p.detail.updated_at, created_at: p.detail.created_at,
-      headRepo: p.detail.head.repo, author: p.detail.author, sha: p.detail.head.sha,
+      headRepo: p.detail.head.repo, author: p.detail.author, sha: p.detail.head.sha, base: p.detail.base.ref,
     })) as never[]
   }
   async pullStatus(_r: string, n: number): Promise<PullStatus | null> { this.live(); this.read(`status ${n}`); const p = this.pulls.get(n); return p ? { ...p.status, state: p.detail.state, sha: p.detail.head.sha } : null }
@@ -601,6 +627,23 @@ describe('change.check', () => {
     const c: Context = { principal: USER, deps: { ...deps, githubBudget: new GitHubBudget(1) } }
     await perform('change.check', { repo: REPO, number: 1, id: 'cr:100' }, c)
     await expect(perform('change.check', { repo: REPO, number: 1, id: 'cr:100' }, c)).rejects.toThrow(/more than 1 times in a minute/)
+  })
+})
+
+describe('a stack of changes', () => {
+  it('lists what each builds on, and accepts the bottom first: the one above waits with the change to accept first', async () => {
+    github.pulls.delete(2)
+    github.add(2, 'claude/task-sch', { title: 'Schematic for the OLED', base: 'claude/task-reqs' })
+    const list = (await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]
+    const one = list.find((c) => c.number === 1)!
+    const two = list.find((c) => c.number === 2)!
+    expect(two).toMatchObject({ builds_on: { number: 1, title: 'Project purpose and requirements R1-R4' }, verdict: 'blocked' })
+    expect(one).toMatchObject({ built_on_by: [{ number: 2, title: 'Schematic for the OLED' }] })
+    const detail = await run(USER, 'change.get', { repo: REPO, number: 2 })
+    expect(detail).toMatchObject({ may_accept: false, builds_on: { number: 1 }, recommendation: { verdict: 'wait' } })
+    expect((detail.blockers as string[]).join()).toMatch(/Accept that one first/)
+    await expect(run(USER, 'change.accept', { repo: REPO, number: 2, head_sha: sha(2) })).rejects.toThrow(/builds on "Project purpose/)
+    expect(github.did.filter((d) => d.startsWith('merge'))).toEqual([])
   })
 })
 

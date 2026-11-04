@@ -68,7 +68,13 @@ export interface ChangeSummary {
   verdict: Verdict
   /** the gate criteria it says it waits on a person's approval of (ChangeFacts.awaiting) */
   awaiting?: string[]
+  /** a stacked change (docs/stacked-changes.md): the open change it builds on, which is accepted first */
+  builds_on?: StackLink
+  /** the open changes stacked on this one, which follow it into the design */
+  built_on_by?: StackLink[]
 }
+/** One change of a stack, as another change names it. */
+export interface StackLink { number: number; title: string }
 /**
  * One check of a change's head commit. `id` opens it with change.check: `cr:<check run id>` for a check run,
  * `job:<Actions job id>` for a workflow run's job, null for a commit status (nothing more to open).
@@ -153,6 +159,11 @@ export interface ChangeFacts {
    * is approved"). With `unfinished`: still waiting on them. Without: they were approved since, which settled it.
    */
   awaiting?: string[]
+  /**
+   * It targets a branch other than the default branch (`base`): a stacked change, built on the open change `on` (null
+   * when no open change has that branch). Accepting it would merge it into that branch, not into the design.
+   */
+  stacked?: { base: string; on: StackLink | null }
 }
 
 // a specialist that says its work is not ready for a person, in its title (each clause) or in its summary or the pull
@@ -410,6 +421,12 @@ const CAN_MERGE = new Set(['clean', 'has_hooks'])
 
 /** One word for the list's pill. */
 export function verdictOf(f: ChangeFacts): Verdict {
+  const v = verdictOfOwn(f)
+  // a stacked change waits for the one it builds on: "ready" only once it targets the design (docs/stacked-changes.md)
+  return v === 'ready' && f.stacked ? 'blocked' : v
+}
+
+function verdictOfOwn(f: ChangeFacts): Verdict {
   if (f.state !== 'open' || f.draft) return 'blocked'
   if (f.mergeable === 'dirty') return 'conflict'
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
@@ -456,6 +473,7 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
   if (f.checks === null) return f.checks_denied ? { verdict: 'none', why: CHECKS_DENIED } : { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
+  if (f.stacked) return { verdict: 'wait', why: `${stackedWords(f.stacked)} Its checks passed: it follows that change into the design once it is accepted.` }
   const reqs = o.requirements?.length ? ` It covers ${list([...o.requirements].slice(0, 8))}${o.requirements.length > 8 ? ` and ${plural(o.requirements.length - 8, 'more requirement')}` : ''}.` : ''
   const total = f.checks.passed
   const checks = o.passed?.length ? `${total === 1 ? 'Its check' : `All ${total} checks`} passed (${list(o.passed.slice(0, 5))}${o.passed.length > 5 ? ' and others' : ''}), and it can be merged.`
@@ -487,8 +505,36 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
     else if (f.mergeable === 'unknown') out.push('GitHub is still working out whether it can be merged.')
     if (f.checks === null) out.push(f.checks_denied ? CHECKS_DENIED : 'trace could not read its checks.')
     else if (f.checks.total === 0) out.push('No checks have run on it yet.')
+    // accepting would merge it into the change below, not into the design
+    if (f.stacked) out.push(stackedWords(f.stacked))
   }
   return { may_accept: out.length === 0, blockers: out }
+}
+
+/** Why a stacked change waits, in plain words. */
+export function stackedWords(s: NonNullable<ChangeFacts['stacked']>): string {
+  return s.on
+    ? `It builds on "${s.on.title}" (change ${s.on.number}), which is not accepted yet. Accept that one first.`
+    : `It is built on ${s.base}, not on the design itself, so it cannot be accepted into the design. Ask for changes to rebuild it on the design, or discard it.`
+}
+
+/**
+ * The stacks among a repository's open pull requests (docs/stacked-changes.md): for each pull request that targets
+ * another open one's branch, the one it builds on, and for each, the ones built on it. Only pull requests whose head is
+ * in the repository itself count, so a fork's branch never stands for a trace change.
+ */
+export function stacksOf(pulls: readonly Pick<PullSummary, 'number' | 'title' | 'head' | 'base' | 'headRepo'>[], repo: string, defaultBranch: string): Map<number, { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] }> {
+  const own = pulls.filter((p) => !p.headRepo || p.headRepo.toLowerCase() === repo.toLowerCase())
+  const byHead = new Map(own.map((p) => [p.head, p]))
+  const out = new Map<number, { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] }>()
+  const at = (n: number) => { let e = out.get(n); if (!e) { e = { built_on_by: [] }; out.set(n, e) } return e }
+  for (const p of pulls) {
+    if (!p.base || !defaultBranch || p.base === defaultBranch) continue
+    const below = byHead.get(p.base)
+    at(p.number).stacked = { base: p.base, on: below ? { number: below.number, title: below.title } : null }
+    if (below) at(below.number).built_on_by.push({ number: p.number, title: p.title })
+  }
+  return out
 }
 
 /** A check run's state in the review page's four words. */
@@ -620,9 +666,12 @@ export function changeSummary(o: {
   hold: string; agentWords: Readonly<Record<string, string>>
   /** the gate criteria a person has approved (approvalsGiven): settles a change that waited on one */
   given?: ReadonlySet<string> | undefined
+  /** where it sits in a stack (stacksOf) */
+  stack?: { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] } | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
+  if (o.stack?.stacked) facts.stacked = o.stack.stacked
   const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary, request: jobRequest(o.job) })
   if (unfinished) facts.unfinished = unfinished
   settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
@@ -633,5 +682,7 @@ export function changeSummary(o: {
     opened_at: o.pull.created_at ?? o.pull.updated_at, updated_at: s?.updated_at ?? o.pull.updated_at,
     state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}), verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
+    ...(o.stack?.stacked?.on ? { builds_on: o.stack.stacked.on } : {}),
+    ...(o.stack?.built_on_by.length ? { built_on_by: o.stack.built_on_by } : {}),
   }
 }

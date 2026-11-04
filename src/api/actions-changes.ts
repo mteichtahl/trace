@@ -59,7 +59,7 @@ import { Composer, NO_LAYERS } from '../prompts/resolve.js'
 import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
-  CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
+  CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
   editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, jobRequest, jobsByBranch, readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
   traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
@@ -178,14 +178,14 @@ export const projectEdits = async (ctx: Context, repo: string): Promise<AppEdit[
  * The open pull requests that are trace's changes, each with its job, oldest first; the open pull requests that are
  * people's app edits, each with its record; and the project's rule.
  */
-export async function tracePulls(ctx: Context, repo: string): Promise<{ changes: { pull: PullSummary; job: JobRow }[]; edits: { pull: PullSummary; edit: AppEdit }[]; rule: ProjectRule }> {
+export async function tracePulls(ctx: Context, repo: string): Promise<{ changes: { pull: PullSummary; job: JobRow }[]; edits: { pull: PullSummary; edit: AppEdit }[]; rule: ProjectRule; pulls: PullSummary[] }> {
   const [pulls, rows] = await Promise.all([openPulls(ctx, repo), jobRows(ctx, repo)])
   // no open pull request: nothing to tell apart, so the settings are not read for it
-  if (!pulls.length) return { changes: [], edits: [], rule: { repo, defaultBranch: '', prefix: 'claude/', agentLogin: null, hold: 'no-automerge' } }
+  if (!pulls.length) return { changes: [], edits: [], rule: { repo, defaultBranch: '', prefix: 'claude/', agentLogin: null, hold: 'no-automerge' }, pulls }
   const [rule, recorded] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo)])
   const byBranch = editsByBranch(recorded)
   const edits = pulls.flatMap((pull) => { const edit = editOf(pull, byBranch, repo); return edit ? [{ pull, edit }] : [] })
-  return { changes: traceChanges(pulls, rows, rule), edits, rule }
+  return { changes: traceChanges(pulls, rows, rule), edits, rule, pulls }
 }
 
 /** Whether this person may change the project: an admin, or the Contributor part on it. */
@@ -216,7 +216,8 @@ const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: P
  */
 export async function openChanges(ctx: Context, repo: string, o: { max?: number } = {}): Promise<{ change: ChangeSummary; criteria: string[] }[]> {
   const gh = await ctx.deps.github()
-  const { changes: mine, edits, rule } = await tracePulls(ctx, repo)
+  const { changes: mine, edits, rule, pulls } = await tracePulls(ctx, repo)
+  const stacks = stacksOf(pulls, repo, rule.defaultBranch)
   const max = o.max ?? MAX_STATUS
   const [status, editStatus, given] = await Promise.all([
     Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
@@ -224,7 +225,7 @@ export async function openChanges(ctx: Context, repo: string, o: { max?: number 
     mine.length ? projectApprovals(ctx, repo) : Promise.resolve(new Set<string>()),
   ])
   const works = mine.map(({ pull, job }, i) => ({
-    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given }),
+    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number) }),
     criteria: criteriaNamed(jobRequest(job), job.title),
   }))
   const own = edits.map(({ pull, edit }, i) => ({
@@ -258,8 +259,11 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     projectApprovals(ctx, repo),
   ])
   const hold = rule.hold
-  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given })
+  // where it sits in a stack: its base read now (accepting decides on it), the changes above it from the kept list
+  const stack = await stackFor(ctx, repo, pull, rule)
+  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
+  if (stack.stacked) facts.stacked = stack.stacked
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
   const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body, request: jobRequest(job) })
   if (unfinished) facts.unfinished = unfinished
@@ -281,6 +285,18 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     ready_since: readySince(runs, pull.created_at),
     rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
   }
+}
+
+/**
+ * Change `pull`'s place in a stack (docs/stacked-changes.md): stacked when its base, as read now, is not the default
+ * branch, on the open change whose branch that is; and the open changes built on it, from the kept list.
+ */
+async function stackFor(ctx: Context, repo: string, pull: Pick<PullDetail, 'number' | 'base'>, rule: ProjectRule): Promise<{ stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] }> {
+  const pulls = await openPulls(ctx, repo).catch(() => [] as PullSummary[])
+  const built_on_by = stacksOf(pulls, repo, rule.defaultBranch).get(pull.number)?.built_on_by ?? []
+  if (!rule.defaultBranch || pull.base.ref === rule.defaultBranch) return { built_on_by }
+  const below = pulls.find((p) => p.head === pull.base.ref && (!p.headRepo || p.headRepo.toLowerCase() === repo.toLowerCase()))
+  return { stacked: { base: pull.base.ref, on: below ? { number: below.number, title: below.title } : null }, built_on_by }
 }
 
 /** How much of an Actions job's log end change.check answers. */
