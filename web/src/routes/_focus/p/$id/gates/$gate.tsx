@@ -47,6 +47,9 @@ import { useLiveStatus } from '@/lib/live'
 import { q, useCall, useJourney } from '@/lib/queries'
 import type { Criterion, Journey } from '@/lib/types'
 import type { GateMore } from '@/lib/types-s1'
+
+/** A shape's findings shown under its criterion; the run the evidence opens lists them all. */
+const FINDINGS_SHOWN = 5
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_focus/p/$id/gates/$gate')({ component: GatePage })
@@ -203,10 +206,23 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
   const columns = useMemo<ColumnDef<Criterion, any>[]>(() => [
     {
       accessorKey: 'text', header: 'Criterion', size: 260, meta: { label: 'Criterion', kind: 'text' },
-      // evidence gone out of date since it was checked: the reason under the criterion, so the person sees why it is not met
-      cell: ({ row }) => (row.original.stale
-        ? <div><div>{row.original.text}</div><div className="mt-0.5 text-xs text-muted-foreground">{row.original.stale}</div></div>
-        : row.original.text),
+      // why it is not met, under the criterion: evidence gone out of date since it was checked, or what its shape found
+      cell: ({ row }) => {
+        const { text, stale, findings } = row.original
+        if (!stale && !findings?.length) return text
+        return (
+          <div>
+            <div>{text}</div>
+            {stale && <div className="mt-0.5 text-xs text-muted-foreground">{stale}</div>}
+            {findings?.length ? (
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground" aria-label="Still needed">
+                {findings.slice(0, FINDINGS_SHOWN).map((f) => <li key={f}>{f}</li>)}
+                {findings.length > FINDINGS_SHOWN && <li className="list-none">and {findings.length - FINDINGS_SHOWN} more: open the evidence for all of them</li>}
+              </ul>
+            ) : null}
+          </div>
+        )
+      },
     },
     {
       accessorKey: 'status', header: 'Status', size: 130, meta: { label: 'Status', kind: 'enum' },

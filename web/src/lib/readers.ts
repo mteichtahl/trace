@@ -225,11 +225,14 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       state: (state === 'queued' ? 'locked' : returned && state !== 'signed' ? 'returned' : state) as Gate['state'],
       criteria: arr(g.criteria).map((c) => {
         const ev = arr(c.evidence)[0]
+        // a shape's findings ride as evidence of kind finding, after the run that found them (src/tools/shape/tools.ts)
+        const findings = c.status === 'not_met' ? arr(c.evidence).filter((e) => isObj(e) && e.kind === 'finding' && str(e.label)).map((e) => String((e as Record<string, unknown>).label)) : []
         return {
           id: String(c.id), text: String(c.text), status: (c.status === 'met' || c.status === 'waived' ? c.status : 'not_met') as 'met' | 'waived' | 'not_met',
           ...(ev ? { evidence: readEvidence(ev, repo) } : str(c.evidence_label) ? { evidence: { kind: 'record' as const, label: String(c.evidence_label) } } : {}),
           opened: Boolean(c.opened_by_you),
           ...(str(c.stale) ? { stale: String(c.stale) } : {}),
+          ...(findings.length ? { findings } : {}),
         }
       }),
       waivers: (Array.isArray(g.waivers) ? g.waivers : []).map((id) => waiverById.get(String(id))).filter((w): w is Waiver => !!w),
