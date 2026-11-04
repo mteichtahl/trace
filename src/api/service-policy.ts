@@ -59,6 +59,11 @@ export const SERVICE_ACTIONS: Readonly<Record<string, ServiceScope | 'tool'>> = 
   'files.list': 'read',
   'files.url': 'read',
   'graph.neighbourhood': 'read',
+  // the ontology (src/api/actions-ontology.ts): its terms, one record as JSON-LD, a run's lineage and what is stale
+  'ontology.describe': 'read',
+  'record.get': 'read',
+  'artifact.lineage': 'read',
+  'artifact.stale': 'read',
   'kb.search': 'read',
   'tools.list': 'read',
   'tools.waits': 'read',
