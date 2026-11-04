@@ -10,9 +10,9 @@ import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { CAD_SCRIPT_OUTPUTS, FUNCTION_KINDS, GpuJobSchema, backendFor } from '../../../src/gpu/jobs.js'
 import { boardFacts } from '../../../src/tools/mech/board.js'
-import { PY_DIR, caseJob, engineAvailable, engineOutputs, mechSkipReason, pyDir, scriptIsTemplate, scriptJob, templatePath } from '../../../src/tools/mech/engine.js'
-import { CASE_TEMPLATE } from '../../../src/tools/mech/tools.js'
-import { CaseSettingsSchema, defaults } from '../../../src/tools/mech/settings.js'
+import { ALL_ENGINE_FILES, PY_DIR, caseJob, engineAvailable, engineOutputs, mechSkipReason, pyDir, scriptIsTemplate, scriptJob, templatePath } from '../../../src/tools/mech/engine.js'
+import { CASE_TEMPLATE, CASE_TEMPLATES } from '../../../src/tools/mech/tools.js'
+import { CaseSettingsSchema, TEMPLATE_IDS, defaults } from '../../../src/tools/mech/settings.js'
 import { allTools } from '../../../src/tools/index.js'
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..')
@@ -86,8 +86,18 @@ describe('the job spec', () => {
     expect(scriptIsTemplate(join(d, 'missing.py'), {})).toBe(false)
     // and without the template to compare with, a script is user code
     expect(scriptIsTemplate(join(d, 'same.py'), { TRACE_MECH_PYTHONPATH: d })).toBe(false)
-    // what mech.init writes is the packaged template
+    // what mech.init writes is the packaged template, for each case design
     expect(CASE_TEMPLATE).toBe(readFileSync(templatePath({}), 'utf8'))
+    for (const t of TEMPLATE_IDS) expect(CASE_TEMPLATES[t], t).toBe(readFileSync(templatePath({}, t), 'utf8'))
+    writeFileSync(join(d, 'box.py'), CASE_TEMPLATES['extruded-box'])
+    expect(scriptIsTemplate(join(d, 'box.py'), {}, 'extruded-box')).toBe(true)
+    expect(scriptIsTemplate(join(d, 'box.py'), {}, 'printed-shell')).toBe(false)
+  })
+
+  it('writes each template\'s parts: the extruded box a tube and two end plates', () => {
+    expect(engineOutputs('script', ['stl'], 'extruded-box')).toEqual(['case-tube.stl', 'case-end-west.stl', 'case-end-east.stl', 'fit.json', 'case.jsonld', 'result.json'])
+    expect(engineOutputs('script', ['stl'], 'din-rail')).toEqual(['case-base.stl', 'case-lid.stl', 'fit.json', 'case.jsonld', 'result.json'])
+    expect(ALL_ENGINE_FILES).toEqual(expect.arrayContaining(['case-tube.3mf', 'case-end-east.step', 'case-lid.stl', 'case-case.step']))
   })
 
   it('on the function: python3 from the image\'s venv, no PYTHONPATH; a handed-in STEP is its one part', () => {
@@ -212,6 +222,32 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
       await expect(call('mech.order', {})).rejects.toThrow(/does not pass/)
       const o = await call('mech.order', { waiver: 'a first print to check the header heights', format: 'step' })
       expect(o.order).toMatchObject({ service: 'jlc3dp', process: 'MJF', material: 'PA12-HP', quantity: 5, files: ['mechanical/out/case-base.step', 'mechanical/out/case-lid.step'] })
+    } finally {
+      process.chdir(cwd)
+    }
+  }, 240_000)
+
+  it('builds the extruded box and the DIN rail enclosure from their templates, each in-process', async () => {
+    process.chdir(repo)
+    try {
+      await expect(call('mech.init', { replace: true, template: 'extruded-box' })).rejects.toThrow(/give the reason/)
+      const init = await call('mech.init', { replace: true, template: 'extruded-box', reason: 'it goes in a cable duct' })
+      expect(init.settings).toMatchObject({ template: 'extruded-box', reasons: { template: 'it goes in a cable duct' } })
+      expect(readFileSync(join(repo, 'mechanical', 'case.py'), 'utf8')).toBe(CASE_TEMPLATES['extruded-box'])
+      const b = await call('mech.build', { formats: ['step'] })
+      expect(b.fit_status, b.fit_summary).toBe('pass')
+      expect(b.passed, JSON.stringify(b.rules_failing)).toBe(true)
+      expect(b.case.parts.map((p: Dict) => p.name).sort()).toEqual(['end-east', 'end-west', 'tube'])
+      expect(b.files).toEqual(expect.arrayContaining(['mechanical/out/case-tube.step', 'mechanical/out/case-end-west.step']))
+      expect(b.stages).toHaveLength(1)
+      expect((await call('mech.order', { format: 'step' })).order.files).toEqual(['mechanical/out/case-tube.step', 'mechanical/out/case-end-west.step', 'mechanical/out/case-end-east.step'])
+
+      await call('mech.init', { replace: true, template: 'din-rail', reason: 'it mounts in the control cabinet' })
+      const d = await call('mech.build', { formats: ['step'] })
+      expect(d.passed, d.fit_summary).toBe(true)
+      expect(d.rules.map((r: Dict) => r.rule)).toContain('rail_hook')
+      // back to the printed shell for what follows
+      await call('mech.init', { replace: true })
     } finally {
       process.chdir(cwd)
     }

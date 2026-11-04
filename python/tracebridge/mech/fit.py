@@ -158,7 +158,9 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
         things.append((ref, board.parts[ref]))
         if ref in board.leads:
             things.append((ref, board.leads[ref]))
-    heads = screw_heads(board)
+    # the extruded box holds the board in guides, with no screws in its mounting holes: no screw heads on the board
+    # (by the settings' template, not anything a case script claims)
+    heads = {} if settings.get("template") == "extruded-box" else screw_heads(board)
     things += sorted(heads.items())
     found: dict[tuple[str, str], float] = {}
     for ref, solid in things:

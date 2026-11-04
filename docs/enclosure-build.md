@@ -71,7 +71,7 @@ a reference that is not on the board is kept, with a warning in mech.settings' a
 {
   "version": 1,
   "board": "hardware/x.kicad_pcb",
-  "template": "printed-shell",              // the only template in this build
+  "template": "printed-shell",              // printed-shell (recommended) | extruded-box | din-rail
   "source": "script" | "file",              // file: the case body is the handed-in STEP named by `file`
   "file": "mechanical/my-case.step",        // when source = file
   "process": { "service": "jlc3dp", "process": "MJF", "material": "PA12-HP" },  // see capabilities
@@ -159,6 +159,25 @@ def build(board, settings):
     # Your changes go here: case.parts["lid"] = case.parts["lid"] - …  (build123d)
     return case
 ```
+
+The other two templates are the same script calling `boxes.extruded_box` or `boxes.din_rail`
+(`python/tracebridge/mech/templates/<template>.py`; `mech.init` writes the one `template` names, and a template other
+than the printed shell needs a reason):
+
+- **extruded-box**: a tube along the board's x, open at both ends, and two end plates (parts `tube`, `end-west`,
+  `end-east`). The board slides in along two guides on each side wall, one under its edge and one over it (1.5 mm tall,
+  reaching 1 mm over the board, the assembly clearance above and below); each end plate has a skirt (`lip_mm` thick,
+  `lip_h_mm` deep) that presses over the tube's end. A connector at the west or east edge gets its opening in that end
+  plate, at the north or south edge in the tube's wall. The board's mounting holes are not used, so no screw heads
+  stand on it. Joints: the end plates press-fit, the board sliding. Built sections: `tube_wall`, `tube_floor`,
+  `tube_top`, `end_wall`, `skirt`.
+- **din-rail**: the printed shell with a foot under the base for a 35 mm top-hat rail (EN 60715) along x: a 2 mm
+  spacer, a slot for the rail's 1 mm flanges with the assembly clearance, and a 2 mm hook under each flange. Its
+  sections are the shell's plus `rail_hook`; on a board narrower than the rail the foot is wider than the case, and a
+  note says so.
+
+The rays each template's sections are measured on are placed by `boxes.section_probes` from the board and the
+settings, in the parent, never from what a script claims; the fit check reads the template from the settings too.
 
 API in `tracebridge.mech` (public, documented in its module docstring):
 
