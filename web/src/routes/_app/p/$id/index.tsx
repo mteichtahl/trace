@@ -209,7 +209,7 @@ function Overview() {
       <div className="space-y-3 pb-28 pt-3">
         <StageCelebration shown={celebrate} />
         <StageChip j={d} admin={admin} onOpen={(s) => setSheet(s)} />
-        <StageSheet j={d} stage={sheet} admin={admin} onOpenChange={(o) => !o && setSheet(null)} />
+        <StageSheet j={d} stage={sheet} admin={admin} held={held} onOpenChange={(o) => !o && setSheet(null)} />
         {nextCard}
         {outOfDate}
         <FoldRows label="Around this project">
@@ -247,9 +247,9 @@ function Overview() {
         <div className="p-5 md:px-6 md:pt-6 md:pb-4">
           <StageRail stages={d.stages} gates={d.gates} onSelect={(s) => setSheet(s)} />
         </div>
-        <StageGuidePanel j={d} admin={admin} onWhat={(s) => setSheet(s)} />
+        <StageGuidePanel j={d} admin={admin} held={held} onWhat={(s) => setSheet(s)} />
       </div>
-      <StageSheet j={d} stage={sheet} admin={admin} onOpenChange={(o) => !o && setSheet(null)} />
+      <StageSheet j={d} stage={sheet} admin={admin} held={held} onOpenChange={(o) => !o && setSheet(null)} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">

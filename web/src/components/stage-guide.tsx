@@ -28,22 +28,33 @@ function StepIcon({ s }: { s: StageStep }) {
 const STATE_WORD: Record<StageStep['state'], string> = { done: 'done', waived: 'waived', now: 'now', next: 'next', later: 'later' }
 
 /** A stage's steps as a list: done ones struck through, the reader's own step on the accent. */
-export function StepList({ steps, links, className }: { steps: StageStep[]; links?: { projectId: string; jobs?: RunSummary[] }; className?: string }) {
+/**
+ * A step's right-hand words: who does it and when, or "On hold" for a step not yet done while the project is paused or
+ * retired (nobody can do it until it is resumed). Pure.
+ */
+export function stepWords(steps: StageStep[], i: number, held = false): string {
+  const s = steps[i]!
+  return held && s.state !== 'done' && s.state !== 'waived' ? 'On hold' : stepLabel(steps, i)
+}
+
+/** `held`: the project is paused or retired, so steps not yet done are greyed, unlinked and "On hold". */
+export function StepList({ steps, links, held = false, className }: { steps: StageStep[]; links?: { projectId: string; jobs?: RunSummary[] }; held?: boolean; className?: string }) {
   return (
     <ol className={cn('space-y-0.5', className)}>
       {steps.map((s, i) => {
-        const mine = s.owner === 'you' && s.state === 'now'
         const done = s.state === 'done' || s.state === 'waived'
-        const skill = links ? stepLink(s, links) : undefined
+        const waiting = held && !done
+        const mine = !held && s.owner === 'you' && s.state === 'now'
+        const skill = links && !waiting ? stepLink(s, links) : undefined
         return (
           <li
             key={s.id}
             className={cn('-mx-2 flex items-center gap-3 rounded-md px-2 py-1.5 text-sm', mine && 'bg-primary-soft font-medium')}
-            aria-label={`${s.text}: ${ownerWord(s)}, ${STATE_WORD[s.state]}`}
+            aria-label={`${s.text}: ${waiting ? 'on hold while the project is paused' : `${ownerWord(s)}, ${STATE_WORD[s.state]}`}`}
           >
-            <StepIcon s={s} />
-            <span className={cn('min-w-0 flex-1', done && 'text-muted-foreground line-through decoration-muted-foreground/50')}>
-              {s.to && !done && !links ? <Link to={s.to} className="hover:underline">{s.text}</Link> : s.text}
+            <span className={cn('contents', waiting && '[&>*]:opacity-50')}><StepIcon s={s} /></span>
+            <span className={cn('min-w-0 flex-1', done && 'text-muted-foreground line-through decoration-muted-foreground/50', waiting && 'text-muted-foreground')}>
+              {s.to && !done && !links && !waiting ? <Link to={s.to} className="hover:underline">{s.text}</Link> : s.text}
               {skill && !done && (
                 <>
                   <span className="text-muted-foreground"> · </span>
@@ -51,7 +62,7 @@ export function StepList({ steps, links, className }: { steps: StageStep[]; link
                 </>
               )}
             </span>
-            <span className={cn('shrink-0 text-xs', mine ? 'font-medium text-primary' : 'text-muted-foreground')}>{stepLabel(steps, i)}</span>
+            <span className={cn('shrink-0 text-xs', mine ? 'font-medium text-primary' : 'text-muted-foreground')}>{stepWords(steps, i, held)}</span>
           </li>
         )
       })}
@@ -60,7 +71,7 @@ export function StepList({ steps, links, className }: { steps: StageStep[]; link
 }
 
 /** The overview's guide: two panels on desktop. */
-export function StageGuidePanel({ j, admin, onWhat, className }: { j: Journey; admin?: boolean; onWhat: (s: Stage) => void; className?: string }) {
+export function StageGuidePanel({ j, admin, held, onWhat, className }: { j: Journey; admin?: boolean; held?: boolean; onWhat: (s: Stage) => void; className?: string }) {
   const c = currentStage(j)
   if (!c) return null
   const gate = gateOf(j.gates, c.stage)
@@ -71,7 +82,7 @@ export function StageGuidePanel({ j, admin, onWhat, className }: { j: Journey; a
       <div className="p-5 md:border-r">
         <p className="section-label">Stage {c.index + 1} of {c.total} · {c.stage.name}</p>
         {c.stage.guide && <p className="mt-1.5 text-sm">{c.stage.guide.purpose}</p>}
-        {steps.length > 0 ? <StepList steps={steps} className="mt-3" /> : <p className="mt-3 text-sm text-muted-foreground">trace has not set out this stage's steps yet.</p>}
+        {steps.length > 0 ? <StepList steps={steps} held={held} className="mt-3" /> : <p className="mt-3 text-sm text-muted-foreground">trace has not set out this stage's steps yet.</p>}
       </div>
       <GatePanel gate={gate} stage={c.stage} meter={meter} onWhat={() => onWhat(c.stage)} />
     </div>
@@ -168,7 +179,7 @@ export function StageChip({ j, admin, onOpen, className }: { j: Journey; admin?:
 }
 
 /** The stage sheet: any stage, from the rail or "What happens in …". */
-export function StageSheet({ j, stage, admin, onOpenChange }: { j: Journey; stage: Stage | null; admin?: boolean; onOpenChange: (open: boolean) => void }) {
+export function StageSheet({ j, stage, admin, held, onOpenChange }: { j: Journey; stage: Stage | null; admin?: boolean; held?: boolean; onOpenChange: (open: boolean) => void }) {
   const visible = j.stages.filter((s) => !(s.optional && s.state === 'skipped'))
   const i = stage ? visible.findIndex((s) => s.id === stage.id) : -1
   const g = stage?.guide
@@ -199,7 +210,7 @@ export function StageSheet({ j, stage, admin, onOpenChange }: { j: Journey; stag
           {steps.length > 0 && (
             <section>
               <h3 className="section-label mb-2">Steps</h3>
-              <StepList steps={steps} links={{ projectId: j.repo.replace('/', '~'), jobs: j.jobs }} />
+              <StepList steps={steps} held={held} links={{ projectId: j.repo.replace('/', '~'), jobs: j.jobs }} />
             </section>
           )}
           {skills.length > 0 && (
