@@ -30,7 +30,9 @@ describe('stack.yml', () => {
     const { core, done } = run(f, 'closed', pr(1, 'claude/a', 'main', { merged: true }))
     await done
     expect(f.called('pulls.update')[0]!.args).toMatchObject({ pull_number: 2, base: 'main' })
-    expect(f.called('pulls.updateBranch')[0]!.args).toMatchObject({ pull_number: 2 })
+    // the merges API, not "Update branch", which GitHub refuses for a stacked pull request
+    expect(f.called('repos.merge')[0]!.args).toMatchObject({ base: 'claude/b', head: 'main' })
+    expect(f.called('pulls.updateBranch')).toHaveLength(0)
     expect(core.text).toMatch(/#2: #1 merged, so it now targets `main` and is up to date/)
   })
 
@@ -42,17 +44,18 @@ describe('stack.yml', () => {
     const { core, done } = run(f, 'closed', pr(1, 'claude/a', 'main', { merged: true }))
     await done
     expect(f.called('pulls.update')).toHaveLength(0)
-    expect(f.called('pulls.updateBranch').map((c) => c.args.pull_number)).toEqual([2])
+    expect(f.called('repos.merge').map((c) => [c.args.base, c.args.head])).toEqual([['claude/b', 'main']])
     expect(core.text).toMatch(/GitHub moved it onto `main`/)
   })
 
   it('merges new commits into the ones built on a pushed pull request, and says when that conflicts', async () => {
     const f = fakeGithub({
       'pulls.list': [pr(2, 'claude/b', 'claude/a'), pr(3, 'claude/c', 'claude/a')],
-      'pulls.updateBranch': (a: Record<string, unknown>) => (a.pull_number === 3 ? Object.assign(new Error('conflict'), { status: 422 }) : {}),
+      'repos.merge': (a: Record<string, unknown>) => (a.base === 'claude/c' ? Object.assign(new Error('Merge conflict'), { status: 409 }) : {}),
     })
     const { core, done } = run(f, 'synchronize', pr(1, 'claude/a', 'main'))
     await done
+    expect(f.called('repos.merge').map((c) => [c.args.base, c.args.head])).toEqual([['claude/b', 'claude/a'], ['claude/c', 'claude/a']])
     expect(core.text).toMatch(/#2: merged #1's new commits in/)
     expect(core.text).toMatch(/#3 conflicts with #1/)
   })
