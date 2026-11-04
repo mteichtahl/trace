@@ -4,12 +4,13 @@
  * kind, Related by meaning, Show failing chains, "How is this connected to…" (the shortest path in words), a side
  * sheet for the selected item, hover summaries, grouping beyond about 150 items into "+N more", a mini-map, Pin layout,
  * Ask trace about this view, and the List switch (a Data table; the default on phones and what screen readers get).
+ * Replay (?replay=1): the project's record played back, the graph growing as it was made (components/graph/replay.tsx).
  * Keyboard: Tab moves between items in order of distance from the focus, Enter opens, E expands, Escape closes.
  */
 import { useQueries } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { ArrowRight, ChevronDown, Eye, Minus, Pin, PinOff, Plus, Search, Sparkles, X } from 'lucide-react'
+import { ArrowRight, ChevronDown, Eye, Minus, Pin, PinOff, Play, Plus, Search, Sparkles, X } from 'lucide-react'
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -37,6 +38,7 @@ import {
 import { q } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import type { CanvasHandle } from '@/components/graph/graph-canvas'
+import { ReplayPlayer } from '@/components/graph/replay'
 
 const GraphCanvas = lazy(() => import('@/components/graph/graph-canvas'))
 
@@ -150,8 +152,18 @@ function GraphView() {
     if (id) canvas.current?.focusNode(id)
   }
 
+  const replayRepo = view.scope === 'project' && view.repo ? view.repo : all[0]
+  if (search.replay && replayRepo) return <ReplayPlayer repo={replayRepo} onExit={() => setSearch({ replay: undefined })} />
+
   return (
     <div className="mt-4">
+      {replayRepo && (
+        <div className="mb-2 flex justify-end">
+          <Button size="sm" variant="outline" onClick={() => setSearch({ replay: 1 })}>
+            <Play /> Replay {projectName(replayRepo)}'s record
+          </Button>
+        </div>
+      )}
       <StartFrom
         focus={focus}
         focusNode={byId.get(focus)}
