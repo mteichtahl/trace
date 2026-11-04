@@ -11,7 +11,7 @@
 import type { Vocabulary } from './vocab.js'
 
 export const ORDER = [
-  'intent', 'requirement', 'block', 'part', 'datasheet', 'component', 'net', 'run', 'artifact', 'gate', 'criterion', 'waiver', 'decision',
+  'intent', 'requirement', 'block', 'part', 'datasheet', 'component', 'net', 'case', 'run', 'artifact', 'gate', 'criterion', 'waiver', 'decision',
   'memory', 'document', 'person',
 ] as const
 

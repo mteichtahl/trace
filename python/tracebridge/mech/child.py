@@ -131,7 +131,7 @@ def _joints(v: list[dict[str, Any]], notes: list[str]) -> list[dict[str, Any]]:
             notes.append("a joint claimed by the case script has no id: ignored")
         elif j.get("type") == "fastened" and isinstance(j.get("fastener"), str):
             out.append(j)
-        elif j.get("type") == "press_fit" and (j.get("clearance_mm") is None or (
+        elif j.get("type") in ("press_fit", "sliding", "snap_fit") and (j.get("clearance_mm") is None or (
                 isinstance(j["clearance_mm"], (int, float)) and not isinstance(j["clearance_mm"], bool))):
             out.append(j)
         else:

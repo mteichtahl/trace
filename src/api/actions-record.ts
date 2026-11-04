@@ -16,13 +16,15 @@
  *                               picture; the architecture (every option with blocks, connections and scores; the
  *                               criteria; the chosen option, else trace's recommendation, drawn); the pin plan, each
  *                               pin with its status from the pin plan check against the newest netlist in the record,
- *                               and which parts' plans a person agreed (stale when the plan changed since). `notes`
- *                               says what is still not recorded
+ *                               and which parts' plans a person agreed (stale when the plan changed since); the case
+ *                               (case-read.ts): the newest case build with each problem by its part, and why it is out
+ *                               of date when it is. `notes` says what is still not recorded
  *
  * build.get, order.record and the rest of the Build tab's record are in actions-build.ts; cost.get in actions-cost.ts.
  */
 import { loadJourney } from '../core/journey.js'
 import { type Context, Repo, def, withRecordDb } from './action-kit.js'
+import { caseStaleness, caseView } from './case-read.js'
 import { standing } from '../tools/design/decisions.js'
 import { TOPIC_NAMES } from '../tools/design/db.js'
 import { type ArchitectureView, architectureView, intentView, linksView, pinCheck, pinPlanPrint } from '../tools/design/record.js'
@@ -85,7 +87,7 @@ export const RECORD_ACTIONS = {
 
   'design.get': def('read', Repo, async ({ repo }, ctx) => {
     const files = await kicadFiles(ctx, repo)
-    return withRecordDb(ctx, repo, (db) => {
+    return withRecordDb(ctx, repo, async (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
       const erc = checkFindings(db, 'erc', r)
@@ -169,10 +171,15 @@ export const RECORD_ACTIONS = {
         findings: pinFindings.map((f) => ({ ...f, severity: waived.has(f.id) ? 'waived' as const : f.severity })),
       } : undefined
       if (!pins.length) notes.push('No pin plan is recorded yet: the firmware track proposes it with design.pins, and a person agrees it in Pin plan review.')
-      else if (!net) notes.push('The pin plan has not been checked against the schematic yet: design.pins check (or kicad.netlist) stores the netlist it is compared with.')
+      // the case: the newest build, its problems by part, and whether it still stands for the default branch
+      const cv = caseView(db, r, { installation: process.env.TRACE_PREFIX ?? 'trace', project: repo })
+      const { inputs: built, ...caseOut } = cv ?? { inputs: null }
+      const stale = cv ? await caseStaleness(ctx, repo, built) : null
+      if (pins.length && !net) notes.push('The pin plan has not been checked against the schematic yet: design.pins check (or kicad.netlist) stores the netlist it is compared with.')
       return {
         repo, ref: files.ref, sheets, ...(board ? { board } : {}), ...(architecture ? { architecture } : {}),
         ...(pins.length ? { pins, pin_plan: pinPlan } : {}),
+        ...(cv ? { case: { ...caseOut, stale } } : {}),
         ...(drawn ? { drawings: { run: drawn.run.id, at: iso(drawn.run.started) } } : {}),
         checks: {
           erc: erc.run ? { run: erc.run.id, at: iso(erc.run.started), status: erc.run.status, summary: erc.run.summary } : null,

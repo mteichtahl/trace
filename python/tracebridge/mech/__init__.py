@@ -33,6 +33,8 @@ Public API:
       .fasteners   [{id, ref, size: "M2.5", length_mm, pilot_d_mm, ...}]
       .notes       what the engine changed or could not do, for a person
   shell.two_part(board, settings) -> Case        the printed two-part shell (see tracebridge.mech.shell)
+  boxes.extruded_box, boxes.din_rail             the extruded box and the DIN rail enclosure (tracebridge.mech.boxes);
+                                                 settings["template"] picks which one the built-in template builds
   fit_check(case, board, settings) -> dict       clashes, gaps, openings, assumed heights, summary
   rules_check(case, settings, capabilities)      rule rows against the process's published limits
   export(case, out_dir, formats) -> [names]      case.step, case-<part>.step/.stl/.3mf
@@ -61,7 +63,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from . import child, shell
+from . import boxes, child, shell
 from .board import Board, load_board
 from .export import FORMATS, export, import_case
 from .fit import fit_check
@@ -76,6 +78,8 @@ __all__ = ["Board", "Case", "InputError", "export", "fit_check", "import_case", 
            "rules_check", "run", "shell"]
 
 TEMPLATE = Path(__file__).parent / "templates" / "printed-shell.py"
+# each case template's script, as mech.init writes it (src/tools/mech/tools.ts CASE_TEMPLATES)
+TEMPLATES = {t: Path(__file__).parent / "templates" / f"{t}.py" for t in ("printed-shell", "extruded-box", "din-rail")}
 
 
 def _read_json(path: str | Path, what: str) -> Any:
@@ -142,7 +146,7 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
         raise InputError(f"unknown format(s) {', '.join(bad)} (known: {', '.join(FORMATS)})")
     res = resolve(settings, capabilities)
     board = load_board(facts)
-    if settings["source"] == "script":
+    if settings["source"] == "script" and settings["template"] in ("printed-shell", "din-rail"):
         shell.check_lip(board, settings)  # before any script runs: a lip deeper than the base cuts its floor away
 
     notes: list[str] = unknown_refs(settings, facts)
@@ -162,7 +166,8 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
     elif script is None:
         # The built-in template: the engine's own code, built in-process on copies so nothing it does to them
         # reaches the checks.
-        case = shell.two_part(load_board(copy.deepcopy(facts)), copy.deepcopy(settings))
+        build = boxes.BUILDERS.get(settings["template"], shell.two_part)
+        case = build(load_board(copy.deepcopy(facts)), copy.deepcopy(settings))
         case.source = "script"
     else:
         if not Path(script).is_file():

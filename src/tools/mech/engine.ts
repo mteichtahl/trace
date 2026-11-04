@@ -34,7 +34,7 @@ import { reportLine, reportOutput } from '../../core/progress.js'
 import { type Backend, CAD_SCRIPT_OUTPUTS, backendFor, type GpuJob, type JobResult, runJob } from '../../gpu/jobs.js'
 import type { BoardFacts } from './board.js'
 import { CAPABILITIES, engineCapabilities } from './capabilities.js'
-import type { CaseSettings } from './settings.js'
+import { type CaseSettings, type CaseTemplate, TEMPLATE_IDS } from './settings.js'
 
 /** This repository's Python folder (as src/core/bridge.ts finds it), from src/tools/mech or dist/tools/mech. */
 export const PY_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'python')
@@ -42,8 +42,8 @@ export const PY_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 
 /** The engine's Python folder: TRACE_MECH_PYTHONPATH when set (an engine checked out elsewhere), else PY_DIR. */
 export const pyDir = (env: NodeJS.ProcessEnv = process.env): string => env.TRACE_MECH_PYTHONPATH || PY_DIR
 
-/** The packaged case template (what mech.init writes), as the engine ships it. */
-export const templatePath = (env: NodeJS.ProcessEnv = process.env): string => join(pyDir(env), 'tracebridge', 'mech', 'templates', 'printed-shell.py')
+/** A packaged case template (what mech.init writes for it), as the engine ships it. */
+export const templatePath = (env: NodeJS.ProcessEnv = process.env, template: CaseTemplate = 'printed-shell'): string => join(pyDir(env), 'tracebridge', 'mech', 'templates', `${template}.py`)
 
 const sha256 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex')
 
@@ -52,8 +52,8 @@ const sha256 = (b: Uint8Array): string => createHash('sha256').update(b).digest(
  * runs anywhere, and the engine builds its own template in-process. A missing template file counts as "not the
  * template" (the script runs as user code: the safe side).
  */
-export function scriptIsTemplate(script: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const t = templatePath(env)
+export function scriptIsTemplate(script: string, env: NodeJS.ProcessEnv = process.env, template: CaseTemplate = 'printed-shell'): boolean {
+  const t = templatePath(env, template)
   if (!existsSync(script) || !existsSync(t)) return false
   return sha256(readFileSync(script)) === sha256(readFileSync(t))
 }
@@ -61,19 +61,24 @@ export function scriptIsTemplate(script: string, env: NodeJS.ProcessEnv = proces
 export const FORMATS = ['step', 'stl', '3mf'] as const
 export type Format = (typeof FORMATS)[number]
 
-/** The case parts the engine writes files for: base and lid from a script, the one `case` from a handed-in STEP. */
-export const partsFor = (source: CaseSettings['source']): string[] => (source === 'file' ? ['case'] : ['base', 'lid'])
+/** The case parts each template builds (python/tracebridge/mech: shell.py, boxes.py). */
+export const TEMPLATE_PARTS: Readonly<Record<CaseTemplate, readonly string[]>> = {
+  'printed-shell': ['base', 'lid'], 'din-rail': ['base', 'lid'], 'extruded-box': ['tube', 'end-west', 'end-east'],
+}
+
+/** The case parts the engine writes files for: the template's from a script, the one `case` from a handed-in STEP. */
+export const partsFor = (source: CaseSettings['source'], template: CaseTemplate = 'printed-shell'): string[] => (source === 'file' ? ['case'] : [...TEMPLATE_PARTS[template]])
 
 /** Every file the engine may write for these settings, result.json last (what the job brings back). */
-export function engineOutputs(source: CaseSettings['source'], formats: readonly Format[] = FORMATS): string[] {
+export function engineOutputs(source: CaseSettings['source'], formats: readonly Format[] = FORMATS, template: CaseTemplate = 'printed-shell'): string[] {
   const out: string[] = []
   if (formats.includes('step')) out.push('case.step')
-  for (const p of partsFor(source)) for (const f of FORMATS) if (formats.includes(f)) out.push(`case-${p}.${f}`)
+  for (const p of partsFor(source, template)) for (const f of FORMATS) if (formats.includes(f)) out.push(`case-${p}.${f}`)
   return [...out, 'fit.json', 'case.jsonld', 'result.json']
 }
 
 /** Every file name the engine can write, for clearing an old build out of mechanical/out. */
-export const ALL_ENGINE_FILES = [...new Set([...engineOutputs('script'), ...engineOutputs('file')])]
+export const ALL_ENGINE_FILES = [...new Set([...engineOutputs('file'), ...TEMPLATE_IDS.flatMap((t) => engineOutputs('script', FORMATS, t))])]
 
 export interface CaseInput {
   facts: BoardFacts
@@ -147,7 +152,7 @@ export function caseJob(input: CaseInput, dir: string, env: NodeJS.ProcessEnv = 
   argv.push('--out', '{dir}/out', '--formats', formats.join(','))
   return {
     // isolate all the same (no credentials, its own process group): tidiness on the tools function, not the boundary
-    job: { kind: 'cad', argv, inputs: files, outputs: engineOutputs(input.settings.source, formats), timeoutSeconds: input.timeoutSeconds ?? 600, env: jobEnv, isolate: true },
+    job: { kind: 'cad', argv, inputs: files, outputs: engineOutputs(input.settings.source, formats, input.settings.template), timeoutSeconds: input.timeoutSeconds ?? 600, env: jobEnv, isolate: true },
     where,
   }
 }
@@ -229,7 +234,7 @@ export async function runCase(input: CaseInput): Promise<CaseRun> {
   try {
     const stages: BuildStage[] = []
     let built: Record<string, string> | undefined
-    if (input.settings.source !== 'file' && input.script && !scriptIsTemplate(input.script)) {
+    if (input.settings.source !== 'file' && input.script && !scriptIsTemplate(input.script, process.env, input.settings.template)) {
       const s = await runScript({ ...input, script: input.script }, join(dir, 'script'))
       built = s.built
       stages.push(s.stage)

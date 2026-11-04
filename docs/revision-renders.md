@@ -1,7 +1,8 @@
 # Revision renders
 
-Status: design, 4 November 2026. Not built yet. It waits for the ontology to land: phase 7, the mechanical module, and
-the additions listed under [What the ontology needs](#what-the-ontology-needs).
+Status: building, 5 November 2026, as a stack of pull requests. The mechanical module landed in #243 and #245, and the
+ontology additions are layer 1 of the stack. The documentation stream (docs/scribe.md) owns the project logo's upload;
+these renders read the logo it saves and are the Blender engine its document renders use.
 
 ## What it does
 
@@ -62,10 +63,10 @@ When the project has a logo, trace takes its colours from it.
 
 ### The logo
 
-Nothing in trace stores a logo yet: the project icon's upload is dropped before it is saved. This feature adds a
-project logo. The documentation agent needs it too, for the logo in each document.
+The logo is the documentation module's (`trace:projectLogo`, docs/scribe.md "Project logo"), uploaded in Scribe's layer 3.
+These renders only read it, so there is one logo for the documents and the pictures.
 
-- **Upload.** A person uploads the logo in the project's settings, as PNG, JPEG, WebP or SVG.
+- **Upload.** A person uploads the logo when creating the project or in its settings, as PNG or SVG (Scribe, layer 3).
 - **Where it is kept.** It is committed to the repository as `.trace/brand/logo.<ext>`, with the palette in
   `.trace/brand/palette.json`.
 - **SVG.** An SVG is turned into a 1024-pixel PNG for the palette.
@@ -80,9 +81,7 @@ test-esp32_rev-B_2026-11-04_exploded.png
 ```
 
 - **The date** is the day of the `journey.snapshot` decision, in the installation's time zone (UTC when none is set).
-- **In the repository**, the images are committed under `renders/rev-<revision>/`. They go on the release branch, as
-  an app edit like the record itself, so the person sees them in trace and never in GitHub.
-- **In the run record**, they are also kept as artifacts of one `render.showcase` run, with the device, the time each
+- **In the run record**, they are kept as artifacts of one `render.showcase` run, with the device, the time each
   shot took, and the commits of the board and the case.
 
 ## How it is built
@@ -112,10 +111,12 @@ test-esp32_rev-B_2026-11-04_exploded.png
 
 | Class or property | Module | Meaning |
 | --- | --- | --- |
-| `trace:ProjectLogo` | core | The project's logo, a `FileArtifact` with its format |
-| `trace:BrandPalette` | core | The colours taken from a logo version: `baseColour`, `accentColour`, `neutralColour`, `madeFrom` the logo version |
-| `trace:RenderSet` | board | The images made for one revision: `ofRevision`, `renderedAt`, `madeFrom` the board version, the enclosure version and the palette version |
-| `trace:Render` | board | One image of a set, a `RunArtifact`: `shotKind` (board, board-top, board-bottom, case, board-in-case, exploded), `inSet` |
+| `trace:RenderSet` | board | A `render.showcase` run: `ofRevision`, `revisionDate`, `usedPalette` |
+| `trace:Render` | board | One picture, a `RunArtifact`: `shotKind` (board, board-top, board-bottom, case, board-in-case, exploded), `inRenderSet` |
+| `trace:BrandPalette` | board | The colours used: `paletteSource` (logo or neutral), `baseColour`, `accentColour`, `neutralColour`, `backgroundColours`, `paletteFromLogo` |
+
+The logo itself is the documentation module's `trace:projectLogo`, so no logo class is added. `src/ontology/renders.ts`
+reads these from each showcase run's result when the graph is built.
 
 With `madeFrom` recorded, a set reads as out of date when its board, case or logo changes. The freshness rules from
 phase 4 cover this with no new code.

@@ -4,7 +4,7 @@
  * folder because the specialists' prompt names them and the harness bundle (CommonJS, no import.meta) cannot find the
  * folder; test/ontology/shapes.test.ts holds the two the same.
  */
-export const SHAPED_CRITERIA: readonly string[] = ['architect.mapped', 'architect.stock', 'capture.stock', 'fabricate.order.stock', 'signoff.bom']
+export const SHAPED_CRITERIA: readonly string[] = ['architect.mapped', 'architect.stock', 'capture.stock', 'fabricate.order.stock', 'layout.fit', 'signoff.bom']
 
 /** The criteria that have a shape. */
 export const shapedCriteria = (): string[] => [...SHAPED_CRITERIA].sort()
