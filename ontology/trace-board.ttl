@@ -14,7 +14,7 @@
     rdfs:label "trace board" ;
     rdfs:comment "Intent, requirements, architecture, the pin plan, tests and runs, parts and offers, and the board's components, pads and nets." ;
     owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/journey> ;
-    owl:versionInfo "0.1.0" .
+    owl:versionInfo "0.2.0" .
 
 # ================================================================== intent and requirements
 
@@ -366,6 +366,20 @@ trace:servesRequirement a owl:ObjectProperty ;
     rdfs:label "serves" ;
     rdfs:comment "A requirement a block, a sheet or a test serves." ;
     rdfs:range trace:Requirement .
+
+trace:isLive a owl:DatatypeProperty ;
+    rdfs:label "live" ;
+    rdfs:comment "Whether the requirement still stands: no person struck it, and no agent rejected it or marked it obsolete. Worked out when it is read, from the requirement and the decisions about it." ;
+    trace:derived true ;
+    rdfs:domain trace:Requirement ;
+    rdfs:range xsd:boolean .
+
+trace:isCurrentOption a owl:DatatypeProperty ;
+    rdfs:label "current option" ;
+    rdfs:comment "Whether the design goes ahead with this option: the one a person chose, else the one trace recommends. Worked out when it is read." ;
+    trace:derived true ;
+    rdfs:domain trace:ArchitectureOption ;
+    rdfs:range xsd:boolean .
 
 trace:fromBlock a owl:ObjectProperty ;
     rdfs:label "from block" ;

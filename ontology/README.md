@@ -12,8 +12,9 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
 | `trace-si2-align.ttl` | How trace's terms relate to the Si2 EDA ontology's; the only file that names Si2 |
 | `si2/terms.txt` | The terms Si2 defines at the pinned commit, which every alignment is checked against |
 | `context.jsonld` | The JSON-LD context, written from the ontology by `scripts/ontology-context.mjs` |
+| `shapes/<criterion>.ttl` | The SHACL shape behind a gate criterion trace owns, each naming its criterion (`tsh:criterion`) |
 
-The mechanical module and the SHACL shapes behind criteria come in later phases.
+The mechanical module comes in a later phase.
 
 ## Conventions
 
@@ -35,11 +36,18 @@ The mechanical module and the SHACL shapes behind criteria come in later phases.
 - `src/ontology/graph.ts` builds a project's graph in memory through the mapping, and checks records against the
   ontology.
 - `src/ontology/jsonld.ts` gives the JSON-LD context and one record as JSON-LD.
+- `src/ontology/derived.ts` adds, for the shapes only, the facts no column stores (a requirement still live, the
+  architecture option the design goes ahead with), worked out by the same code the app shows them with.
+- `shape.check` (`src/tools/shape/tools.ts`) runs a criterion's shape over the project's graph with pySHACL on the
+  Python bridge (`python/tracebridge/shapes.py`) and records the result as that criterion's check: met with the run as
+  evidence, or not met with each finding. A finding's message names the thing and what to do, in plain words.
 
 ## Changing it
 
 - A new column or table in a mapped database fails `test/ontology/mapping.test.ts` until the mapping says what it
   becomes, or why it is left out.
+- A new shape names a criterion trace owns and speaks in plain words (`test/ontology/shapes.test.ts`); its cases run
+  against pySHACL there and in `python/tests/test_shapes.py`.
 - A new term needs a label and a comment (`test/ontology/vocabulary.test.ts`), and the JSON-LD context written again:
   `npm run build && node scripts/ontology-context.mjs`.
 - Each file's `owl:versionInfo` follows semantic versioning: adding a class or an optional property is a minor change;

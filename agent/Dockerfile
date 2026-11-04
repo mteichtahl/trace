@@ -78,7 +78,7 @@ RUN npm run build:image \
  && test -x node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude \
  && chmod +x /app/dist/cli.js \
  && python3 -m venv /opt/trace-venv \
- && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]'
+ && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf,shapes]'
 
 # ------------------------------------------------------------------ final: what AgentCore runs
 FROM tools
