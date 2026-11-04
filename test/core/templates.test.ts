@@ -56,7 +56,7 @@ describe('what an admin may not change', () => {
     expect(problem((d) => { d.stages = d.stages.filter((s) => s.id !== 'define') })).toContain('Every template starts at Define.')
     expect(problem((d) => { d.stages = d.stages.filter((s) => s.id !== 'sustain') })).toContain('Sustain stays in every template: each project chooses whether to use it.')
     expect(problem((d) => { d.stages.reverse() }).join(' ')).toMatch(/not in order/)
-    expect(problem((d) => { d.stages[2] = copy(d.stages[1]!) })).toContain('A stage is listed twice.')
+    expect(problem((d) => { d.stages[2] = structuredClone(d.stages[1]!) })).toContain('A stage is listed twice.')
     expect(problem((d) => { d.stages = d.stages.filter((s) => s.id === 'define' || (LATER_STAGES as readonly string[]).includes(s.id)) })).toContain('A template needs at least one stage after Define.')
     expect(problem((d) => { d.stages.find((s) => s.id === 'fabricate')!.gates.pop() }).join(' ')).toMatch(/Fabricate ends at its gates fabricate\.order and fabricate\.received/)
     expect(problem((d) => { d.stages[0]!.gates[0]!.criteria = [] })).toContain('The gate define needs at least one criterion.')
