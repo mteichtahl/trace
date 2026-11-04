@@ -89,6 +89,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { Construct } from 'constructs'
 import { BENCH_DB } from '../core/bench.js'
+import { DRIFT_EVENT, DRIFT_HOUR_UTC } from '../docs/drift.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
@@ -568,8 +569,9 @@ export class WebStack extends NestedStack {
       code: bundle ? code : lambda.Code.fromAsset(placeholder('hooks.mjs', 'export const handler = async () => ({ statusCode: 204 })\n')),
       role,
       memorySize: 512,
-      // a holder of the debounce's window publishes for up to MAX_ROUNDS windows after answering GitHub
-      timeout: Duration.seconds(60),
+      // a holder of the debounce's window publishes for up to MAX_ROUNDS windows after answering GitHub; the nightly
+      // drift check goes through every project, DRIFT_CONCURRENCY at a time
+      timeout: Duration.seconds(300),
       // its URL is open (see the file's comment): a flood is turned away by Lambda once this many run, rather than
       // costing money or the account's concurrency. A busy repository's push is a few dozen deliveries, debounced
       reservedConcurrentExecutions: HOOKS_CONCURRENCY,
@@ -577,6 +579,14 @@ export class WebStack extends NestedStack {
       environment: { TRACE_WEB_CONFIG_PARAM: webConfigParameter(p.prefix), TRACE_HOOKS_ORIGIN: origin.secretValue.unsafeUnwrap(), NODE_OPTIONS: '--enable-source-maps' },
     })
     const url = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE, invokeMode: lambda.InvokeMode.RESPONSE_STREAM })
+    // the nightly drift check of the projects' documents (docs/scribe.md "Publishing"): invoked directly, never
+    // through the URL, with DRIFT_EVENT at DRIFT_HOUR_UTC (src/docs/printed.ts nextDriftCheck says the same time)
+    new events.Rule(this, 'DocsDrift', {
+      ruleName: `${p.prefix}-docs-drift`,
+      description: 'trace: the nightly check that every project\'s documents are current (src/web/hooks.ts hooksSchedule)',
+      schedule: events.Schedule.cron({ minute: '0', hour: String(DRIFT_HOUR_UTC) }),
+      targets: [new targets.LambdaFunction(fn, { event: events.RuleTargetInput.fromObject(DRIFT_EVENT), retryAttempts: 1 })],
+    })
     return { fn, url, table, role, origin }
   }
 

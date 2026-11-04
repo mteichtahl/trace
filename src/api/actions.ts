@@ -125,7 +125,10 @@
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
  *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
- *   actions-hooks.ts     hook.members (the web backend's own identity only: who to tell when GitHub says a change moved)
+ *   actions-hooks.ts     hook.members, hook.apply, hook.conflicts, hook.docs, hook.projects, hook.drift (the web
+ *                        backend's own identity only: who to tell when GitHub says a change moved, and what follows)
+ *   actions-documents.ts documents.get, documents.pdf (read): the project's documents, their release copies and the
+ *                        next drift check (docs/scribe.md "Publishing")
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
  *   actions-changes.ts   changes.list, change.get, change.check, change.diff (read); change.accept, change.ask, change.discard (write,
@@ -171,6 +174,7 @@ import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
 import { LOGO_ACTIONS } from './actions-logo.js'
+import { DOCUMENT_ACTIONS } from './actions-documents.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
 import { JOB_ACTIONS, withControls } from './actions-jobs.js'
@@ -893,6 +897,7 @@ export const ACTIONS = {
   ...DESIGN_ACTIONS,
   ...HANDIN_ACTIONS,
   ...LOGO_ACTIONS,
+  ...DOCUMENT_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,

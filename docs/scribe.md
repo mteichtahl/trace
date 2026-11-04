@@ -77,9 +77,28 @@ Two rules keep it trustworthy:
    on the project's tools function, where KiCad and Blender already run (`agent/Dockerfile.tools`): Mermaid draws each
    diagram as SVG with its labels as text, pandoc writes Typst through `python/tracebridge/docs/template.typ`, and Typst
    makes the PDF: a cover (logo, project, document, revision, commit), a revision table, contents, numbered figures with
-   their captions, and a header and footer on every page. Each PDF is kept as the publish run's artifact, so it opens in
-   the app's run viewer at once. Layer 7 moves the published copies to the central bucket and attaches them to each
-   release with the journey record, so they stop growing the repository's run record.
+   their captions, and a header and footer on every page. Each PDF goes to the central bucket (below), and the publish
+   run keeps where it is.
+7. **Publishing.** Printed copies never grow the repository's run record (`src/docs/printed.ts`):
+   - **Where.** Each PDF goes to the central bucket under the project, named by its content
+     (`projects/<slug>/journey-agent/documents/printed/<sha256>.pdf`); the publish run keeps only that name, its hash
+     and size (`<kind>.pdf.json`). That prefix is the agents' own: the worker's role writes it only with a conditional
+     put and never deletes it, so a released copy cannot be replaced or removed. Printed on a laptop or in CI, with no
+     bucket, the PDF is the run's artifact as before.
+   - **Releases.** When a revision is cut (the release approval gate signed, or `journey.snapshot`), trace starts
+     Scribe beside the renders: it brings the documents up to date, makes any draft figure again at release quality,
+     checks them, and prints each with `docs.publish release=<revision>`, the revision ending the revision table. Those
+     are the revision's release copies (`documents/releases/<revision>.json`): one per document, written once, kept as
+     they were if printed again. That job is queued behind a Scribe already working, so a release is never skipped.
+   - **With the journey record.** `documents.get` shows each document (its revision and the commit it was last written
+     at), each revision's release copies beside the record copied into the repository for it (the `journey.snapshot`
+     decision: commit and branch), and when the nightly check next runs; `documents.pdf` opens a copy by its hash.
+   - **The nightly drift check.** At 17:00 UTC (03:00 in Melbourne in winter, 04:00 in summer; `src/docs/drift.ts`)
+     the hooks function's schedule asks the API for the projects (`hook.projects`) and checks each (`hook.drift`):
+     anything that changed a record since each document's front-matter commit (GitHub's comparison, with the project
+     database compared table by table), or a document the stage needs that is missing, starts Scribe. It catches a
+     missed delivery, a push while Scribe was busy, and a stage whose document never got written. It runs where the
+     webhook does (`web.hooks`, on by default).
 
 ## Models
 
@@ -136,12 +155,14 @@ Each layer is one pull request that builds and passes on its own.
    `docs.stale` names the sections a change touched (its files, and the project database compared table by table),
    `docs.write_section` writes one section between its markers only when it passes the quality bar. As a specialist it
    has no file tools of its own; the worker commits its documents as a change stacked on the one documented.
-7. **Events and gates**: Scribe started by a push that changed a record (`hook.docs`) and by a gate opening a stage
+7. **Events and gates** (#267): Scribe started by a push that changed a record (`hook.docs`) and by a gate opening a stage
    that needs documents (`gate.sign`); `docs.stale` compares with the documents' own last commit; `docs.check` recorded
    as a run and the release gate's documents criterion (`signoff.docs`).
-7b. **Publishing**: printed copies to the central bucket and attached to each release with the journey record, and a
-   nightly drift check with its next time shown in the app.
-8. **Docs tab** in the web app: each document with a freshness badge, the PDF viewer, and when it next checks.
+7b. **Publishing** (this layer): `docs.publish` keeps PDFs in the central bucket (`src/docs/printed.ts`) and, with
+   `release`, a revision's release copies; a revision cut starts Scribe on them (`docsReleaseRequest`); `documents.get`
+   and `documents.pdf`; the nightly drift check (`hook.projects`, `hook.drift`, the hooks function's schedule).
+8. **Docs tab** in the web app (from `documents.get` and `documents.pdf`): each document with a freshness badge, the
+   PDF viewer, each revision's release copies, and when it next checks.
 9. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
    exercises the protocol specification).
 

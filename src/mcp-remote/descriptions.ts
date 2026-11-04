@@ -24,6 +24,8 @@ export const DESCRIPTIONS: Readonly<Record<string, string>> = {
   'cost.get': 'A project\'s stage timeline: when each stage started and finished. Money is shown to admins only.',
   'files.list': 'A project\'s files at a ref (the default branch unless named), grouped by kind: design, fabrication, firmware, documents, models, evidence.',
   'files.url': 'One file of a project by path (optionally at an earlier commit): its bytes as base64 up to 8 MB, else a short-lived download link.',
+  'documents.get': 'A project\'s documents (high level design, low level design, protocol specification, user guide): each one\'s revision and the commit it was last written at, each revision\'s printed release copies, and when the nightly check next runs.',
+  'documents.pdf': 'One printed copy of a project document, by the hash documents.get gives: its PDF as base64, up to 8 MB.',
   'graph.neighbourhood': 'What trace knows around one item of a project (a requirement id such as REQ-001, a run, a part, a gate, a placed part such as U1): linked requirements, runs and their outputs, gates and criteria, waivers, decisions, blocks, parts, placed parts and nets, as nodes and links. A run made from something that changed since is marked stale.',
   'ontology.describe': 'trace\'s ontology: every class and property of its records with a plain-words label and comment, parents, domain and range, and its links to the Si2 EDA ontology. With term, one term and the tables that store it.',
   'record.get': 'One record of a project as JSON-LD, by its identifier (urn:trace:…) or as <kind>:<key> (requirement:REQ-001, run:<id>, criterion:capture.erc, gate:capture). Its links are identifiers you can get in turn.',

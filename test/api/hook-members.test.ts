@@ -85,8 +85,10 @@ describe('hook.members', () => {
     expect(isAdmin(BACKEND)).toBe(false)
     expect(who(BACKEND)).toBe('backend:web-hooks')
     // hook.apply is the backend's too (docs/stay-in-trace.md "Applying"): it applies people's edits, nothing else; and
-    // hook.conflicts (src/api/conflicts.ts): it brings changes in conflict up to date after a push, nothing else
-    for (const a of ACTION_NAMES.filter((x) => x !== 'hook.members' && x !== 'hook.apply' && x !== 'hook.conflicts' && x !== 'hook.docs')) {
+    // hook.conflicts (src/api/conflicts.ts): it brings changes in conflict up to date after a push, nothing else; and
+    // hook.docs, hook.projects and hook.drift (src/api/docs-follow.ts): Scribe after a push and the nightly check
+    const own = new Set(['hook.members', 'hook.apply', 'hook.conflicts', 'hook.docs', 'hook.projects', 'hook.drift'])
+    for (const a of ACTION_NAMES.filter((x) => !own.has(x))) {
       await expect(run(BACKEND, a, { repo: 'acme/board' }), a).rejects.toBeInstanceOf(AccessDenied)
     }
   })

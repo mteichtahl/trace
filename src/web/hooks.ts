@@ -33,6 +33,9 @@
  *            remade, resolving }` (numbers only), and the app says which changes trace is bringing up to date
  *   docs     the same push also asks `hook.docs { repo }` (src/api/docs-follow.ts): when it changed a record the
  *            project's documents are written from, the API starts Scribe on them (docs/scribe.md "Event driven")
+ *   drift    once a night (the function's schedule, DRIFT_EVENT at DRIFT_HOUR_UTC; hooksSchedule), not a delivery: each
+ *            project is asked `hook.drift { repo }`, which starts Scribe where the documents fell behind the default
+ *            branch (a missed delivery, a push while Scribe was busy, a document the stage needs that is missing)
  *   publish  `record.changed { repo, kind: 'change', number? }` to each person's channel (src/web/events.ts), naming no
  *            content, as every live event. One push sets off dozens of check_run and status deliveries, each its own
  *            invocation and often its own container, so the debounce is shared (Debounce over a DebounceStore: the
@@ -51,6 +54,7 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
+import { DRIFT_EVENT } from '../docs/drift.js'
 import { callApi } from './call.js'
 import type { WebConfig } from './config.js'
 import type { WebDeps } from './deps.js'
@@ -270,6 +274,28 @@ interface Members { at: number; project: boolean; subs: string[] }
 
 /** The route, and what it keeps between deliveries in this container. */
 export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
+  return hooksCore(deps, o).routes
+}
+
+/**
+ * The nightly drift check (docs/scribe.md "Publishing"): the hooks function's schedule (src/infra/web.ts, at
+ * DRIFT_HOUR_UTC) asks the API for the projects (hook.projects) and checks each (hook.drift, DRIFT_CONCURRENCY at a
+ * time), which starts Scribe on a project whose documents fell behind. Answers what it did, repository names and
+ * counts only; one project's failure is logged and the rest go on.
+ */
+export function hooksSchedule(deps: WebDeps, o: HooksOptions = {}): () => Promise<{ checked: number; started: string[]; failed: string[] }> {
+  return hooksCore(deps, o).drift
+}
+
+/** Projects the nightly check asks about at once. */
+export const DRIFT_CONCURRENCY = 4
+export { DRIFT_EVENT }
+/** Whether a Lambda invocation is the schedule's (an object with exactly DRIFT_EVENT's key and value), not a request. */
+export const isDriftEvent = (e: unknown): boolean =>
+  Boolean(e) && typeof e === 'object' && Object.keys(e as object).length === 1 && (e as Record<string, unknown>)['trace-schedule'] === DRIFT_EVENT['trace-schedule']
+const ProjectsAnswer = z.object({ result: z.object({ projects: z.array(z.string()) }).loose() })
+
+function hooksCore(deps: WebDeps, o: HooksOptions) {
   let debounce = o.debounce ?? null
   let secret: { at: number; value: z.output<typeof HooksSecret> } | null = null
   let token: { value: string; until: number } | null = null
@@ -416,7 +442,36 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
     }
   }
 
-  return [
+  /** The nightly drift check of every project (hooksSchedule). */
+  async function drift(): Promise<{ checked: number; started: string[]; failed: string[] }> {
+    const cfg = await deps.config()
+    const t = await backendToken(cfg)
+    const who = { config: cfg, token: t, sub: 'backend:web-hooks' }
+    const listed = ProjectsAnswer.safeParse((await callApi(deps, who, 'hook.projects', {})).json)
+    if (!listed.success) throw new Error('the API did not list the projects')
+    const queue = [...listed.data.result.projects]
+    const started: string[] = []
+    const failed: string[] = []
+    const one = async (): Promise<void> => {
+      for (let repo = queue.shift(); repo; repo = queue.shift()) {
+        try {
+          const a = await callApi(deps, { ...who, token: await backendToken(cfg) }, 'hook.drift', { repo })
+          const r = DocsAnswer.safeParse(a.json)
+          if (!r.success) { failed.push(repo); deps.log({ hook: 'drift failed', repo, status: a.status }); continue }
+          if (r.data.result.started) started.push(repo)
+          if (r.data.result.started || r.data.result.records.length) deps.log({ hook: 'drift', repo, records: r.data.result.records, started: Boolean(r.data.result.started) })
+        } catch (e) {
+          failed.push(repo)
+          deps.log({ hook: 'drift failed', repo, error: e instanceof Error ? e.message.slice(0, 200) : 'error' })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: DRIFT_CONCURRENCY }, one))
+    deps.log({ hook: 'drift done', checked: listed.data.result.projects.length, started: started.length, failed: failed.length })
+    return { checked: listed.data.result.projects.length, started: started.sort(), failed: failed.sort() }
+  }
+
+  const routes = [
     route('POST', '/api/hooks/github', async (req) => {
       // before anything else (the body, the settings, a secret): only CloudFront's hooks path carries this
       if (!sameSecret(o.origin ?? '', req.headers[ORIGIN_HEADER])) return drop('not through CloudFront', req)
@@ -481,4 +536,5 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
       }
     }),
   ]
+  return { routes, drift }
 }
