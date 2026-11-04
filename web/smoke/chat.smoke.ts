@@ -4,16 +4,17 @@ import { expect, test } from './fixtures'
 
 test('a message is sent, recalled with the up key, and the reply renders markdown @phone', async ({ app, page }) => {
   await app.open(projectPath())
-  const chat = await app.openChat()
+  // a conversation of its own: the project's last one can hold anything, and is not what this checks
+  const chat = await app.newChat()
   const box = chat.getByRole('textbox', { name: 'Message to trace' })
   const message = 'Smoke check: what is the next step? Answer in one line.'
   const replies = chat.getByRole('button', { name: 'Copy as markdown' })
-  const before = await replies.count()
+  await expect(replies).toHaveCount(0)
   await box.fill(message)
   await box.press('Enter')
-  // the message is in the conversation, and a new reply from trace follows it with its own controls
+  // the message is in the conversation, and a reply from trace follows it with its own controls
   await expect(chat.getByText(message).first()).toBeVisible()
-  await expect.poll(() => replies.count(), { timeout: 60_000 }).toBeGreaterThan(before)
+  await expect(replies.first()).toBeVisible({ timeout: 60_000 })
   await expect(chat.locator('p, li, strong').filter({ visible: true }).last()).toBeVisible()
   await box.focus()
   await page.keyboard.press('ArrowUp')
