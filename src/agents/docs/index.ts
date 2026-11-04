@@ -28,7 +28,8 @@ export const docs: Specialist = {
     'Recall earlier documentation sessions (memory_recall): terms the project uses, figures that needed care, what'
       + ' people asked to change in the documents. Read the stage (journey_status).',
     'Find what to write: docs_init for any document the stage needs that does not exist yet; then docs_stale with'
-      + ' base set to the change you document (a stacked change: its base branch; after a merge: the commit before it).'
+      + ' base set to the change you document (a stacked change: its base branch; after a merge: the commit before it),'
+      + ' and also set to the records your request says changed outside the repository (a gate signed: journey).'
       + ' Write only the sections it names, plus every pending section now due by the stage (docs_check says which).',
     'Read the records each section is written from, never your memory of the project: requirements and the test plan'
       + ' (verify_requirements, verify_plan), intent, architecture, pin plan and sheets (design_*), parts'

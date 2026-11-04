@@ -62,8 +62,10 @@ export const WRITING_RULES: readonly string[] = [
   'No source, no number. A value not worked out yet is "pending", never a guess.',
   'Every figure has a marker naming its kind and source, and an italic caption saying what it shows.',
   'Diagrams are generated from trace\'s records, not drawn freehand: the same records the app\'s views are drawn from.',
+  'A diagram must read on a printed page: more than five boxes run top to bottom (flowchart TB), labels stay short (the detail goes in the table beside it), and one diagram shows one idea.',
   'A section with nothing to say yet holds one line: "_Pending: <what it needs>._"',
   'Say what changed and why in the pull request, not in the document; the revision table records the release.',
+  'Only the Journey section says where the project is (its stage, its gates); every other section describes the design as it is, so a gate signed never leaves it out of date.',
 ]
 
 const S = (id: string, title: string, due: StageId, sources: readonly SourceKind[], brief: string, extra: Partial<SectionDef> = {}): SectionDef =>
@@ -75,7 +77,7 @@ export const DOCS: Readonly<Record<DocKind, DocDef>> = {
     audience: 'an engineer or reviewer new to the project, who needs the whole picture in ten minutes',
     rules: ['Explain what and why; leave how to the low level design.', 'Every requirement appears in the traceability table.'],
     sections: [
-      S('overview', 'Overview', 'architect', ['intent'], 'What the product is, who it is for and what it must do, in one paragraph, with the hero render once there is a board.', { figures: [{ kind: 'render-iso' }] }),
+      S('overview', 'Overview', 'architect', ['intent', 'board'], 'What the product is, who it is for and what it must do, in one paragraph, with the hero render once there is a board.', { figures: [{ kind: 'render-iso' }] }),
       S('context', 'System context', 'architect', ['intent', 'architecture'], 'The product and everything it connects to: power, people, other systems.', { figures: [{ kind: 'system-context', required: true }] }),
       S('requirements', 'Requirements', 'architect', ['requirements'], 'The requirements grouped by kind, each with its testable criterion, and the traceability from requirement to block.'),
       S('architecture', 'Architecture', 'architect', ['architecture', 'decisions'], 'The blocks and how they connect, and the architecture chosen against the options compared.', { figures: [{ kind: 'block-diagram', required: true }] }),
@@ -101,7 +103,7 @@ export const DOCS: Readonly<Record<DocKind, DocDef>> = {
       S('thermal', 'Thermal', 'prove', ['thermal'], 'The hottest parts, temperature rise and margin to each part\'s rating.', { values: ['thermal'] }),
       S('loads', 'Loads and ratings', 'layout', ['load', 'board'], 'Connector and track current against ratings, bus loading.', { values: ['load'] }),
       S('interfaces', 'Interfaces', 'capture', ['schematic', 'protocol-specs'], 'Each interface: connector, signals, levels and the protocol specification section that covers it.', { figures: [{ kind: 'data-flow' }] }),
-      S('firmware', 'Firmware', 'capture', ['firmware'], 'Structure, start-up and main loop, and how each interface is driven.', { figures: [{ kind: 'firmware-flow' }] }),
+      S('firmware', 'Firmware', 'capture', ['firmware', 'pin-plan', 'protocol-specs'], 'Structure, start-up and main loop, and how each interface is driven.', { figures: [{ kind: 'firmware-flow' }] }),
       S('board', 'Board', 'layout', ['board', 'fabrication'], 'Stackup, placement, routing rules and the fabrication choices, with the board renders.', { figures: [{ kind: 'render-top', required: true }, { kind: 'render-bottom', required: true }, { kind: 'render-iso' }] }),
       S('mechanical', 'Mechanical', 'layout', ['enclosure', 'board'], 'The case: dimensions, clearances, mounting and cut-outs, and how it assembles.', { figures: [{ kind: 'mech-drawing', required: true }, { kind: 'render-exploded' }, { kind: 'render-in-case' }] }),
       S('verification', 'Verification', 'prove', ['tests', 'requirements'], 'What was simulated and tested, the results, and which requirement each proves.'),

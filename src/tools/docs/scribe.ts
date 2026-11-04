@@ -19,7 +19,7 @@ import { z } from 'zod'
 import { STAGE_IDS, type StageId } from '../../core/journey-catalog.js'
 import { type AnyTool, defineTool, ToolError } from '../../core/registry.js'
 import { openProject } from '../../core/store.js'
-import { DOC_KINDS, DOCS, docsFor, type DocKind, skeleton } from '../../docs/catalog.js'
+import { DOC_KINDS, DOCS, docsFor, type DocKind, skeleton, SOURCE_KINDS } from '../../docs/catalog.js'
 import { checkDoc } from '../../docs/checks.js'
 import { parseDoc, replaceSection, setFront } from '../../docs/markers.js'
 import { sourcesOfDatabases, sourcesOfPaths, staleSections } from '../../docs/stale.js'
@@ -79,6 +79,7 @@ const stale = defineTool({
     base: z.string().regex(commitOk).optional().describe('the commit to compare with (a stacked change: its base branch); default: the commit the documents were last written at (their front matter), so every change since, missed or not, is seen'),
     head: z.string().regex(commitOk).default('HEAD'),
     stage: z.enum(STAGE_IDS).describe('the project\'s current stage: which documents it needs'),
+    also: z.array(z.enum(SOURCE_KINDS)).max(SOURCE_KINDS.length).default([]).describe('records that changed outside the repository, as your request names them (a gate signed changes the journey): their sections are written again too'),
   }),
   run: (a) => {
     const root = process.cwd()
@@ -86,6 +87,7 @@ const stale = defineTool({
     let paths: string[] = []
     try { paths = git(root, ['diff', '--name-only', base, a.head]).split('\n').filter(Boolean) } catch { throw new ToolError(`cannot compare ${base} with ${a.head}: is ${base} in this checkout?`) }
     const sources = sourcesOfPaths(paths)
+    for (const r of a.also) sources.add(r)
     if (paths.includes(DB)) {
       const before = dbAt(root, base)
       const after = dbAt(root, a.head)
