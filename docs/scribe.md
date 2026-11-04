@@ -73,8 +73,12 @@ Two rules keep it trustworthy:
 
 ## Models
 
-Sonnet writes every section. Haiku does the light work: which sections a change touched, freshness, the glossary. Both
-are settings (`agents.docs.model`, `docs.triage_model`), so either can be changed without code.
+Sonnet writes every section: Scribe runs on `agents.docs.model`, else the installation's model, which the installer
+picks as the newest Sonnet the region offers. Set `agents.docs.model` to a Sonnet model if the installation's model is
+changed to another. Working out which sections a change touched asks no model at all: it is a fixed mapping from the
+files and database tables a change made to the records each section is written from (`src/docs/stale.ts`), so the same
+change always marks the same sections, a person can see why, and it costs nothing. (The plan had Haiku doing this; a
+fixed mapping does it better.)
 
 ## Project logo
 
@@ -108,7 +112,7 @@ Each layer is one pull request that builds and passes on its own.
    (`src/api/actions-logo.ts`), and Settings › Documents with the sample cover (`web/src/components/project/project-logo.tsx`).
 4. **Render pipeline** (merged, #254): `docs.check` and `docs.publish`, the `docs` job kind on the tools function, and
    `python/tracebridge/docs` (Mermaid to SVG, pandoc to Typst, Typst to PDF with the cover).
-5. **Figures and values**: `docs.values` (`src/docs/values.ts`: the power budget per rail, junction temperatures
+5. **Figures and values** (merged, #257): `docs.values` (`src/docs/values.ts`: the power budget per rail, junction temperatures
    from thermal.check with their margins, bench readings from thermal.measure, each with its basis and source, as
    ready tables; nothing records loads yet, so load rows stay pending) and `docs.figures` (`src/tools/docs/figures.ts`):
    the photographic renders from `render.showcase` (docs/revision-renders.md: the board from above, below and
@@ -117,7 +121,11 @@ Each layer is one pull request that builds and passes on its own.
    drawing`, a cad job); a timing diagram per protocol modelled. Figures go to `docs/design/figures` with stable names
    and `figures.json` (each one's run, inputs hash and quality), so an unchanged figure is never made again and a draft
    is replaced only by a release. Blender renders with Cycles: Eevee cannot run on the tools function (no display).
-6. **Scribe**: the `docs` specialist (Sonnet writes, Haiku triages), its prompt in the catalog, stacked pull requests.
+6. **Scribe**: the `docs` specialist (`src/agents/docs`: label `agent:docs`, its prompt in the catalog from its
+   definition) and its tools (`src/tools/docs/scribe.ts`): `docs.init` starts the documents a stage needs,
+   `docs.stale` names the sections a change touched (its files, and the project database compared table by table),
+   `docs.write_section` writes one section between its markers only when it passes the quality bar. As a specialist it
+   has no file tools of its own; the worker commits its documents as a change stacked on the one documented.
 7. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
    current" SHACL shape, run over the graph with the documents read in; published copies to the central bucket and
    attached to each release.
