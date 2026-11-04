@@ -18,6 +18,7 @@ import { type ColumnRule, type DbName, type FieldMap, type LiteralAs, type Table
 import { NS, RDF, XSD, type Vocabulary, isA, local } from './vocab.js'
 import type { Board } from '../tools/kicad/pcb.js'
 import { addBoard } from './board.js'
+import { addDocuments } from './docs.js'
 import { addDerived } from './derived.js'
 
 const { namedNode, literal, quad } = DataFactory
@@ -32,6 +33,8 @@ export interface GraphSources {
   central?: DatabaseSync | null
   /** the boards, read from their .kicad_pcb (src/tools/kicad/pcb.ts loadBoard), by their path in the repository */
   boards?: readonly { path: string; board: Board }[]
+  /** the project's documents (docs/scribe.md), each docs/design file's repository path and text */
+  documents?: readonly { path: string; text: string }[]
 }
 export interface GraphOptions {
   /** the installation's name (its prefix): identifiers are unique across installations */
@@ -163,6 +166,7 @@ export function buildGraph(src: GraphSources, o: GraphOptions): { store: Store; 
     if (db) rows[`${t.db}.${t.table}`] = table(c, db, t)
   }
   for (const b of src.boards ?? []) addBoard(c.store, o, b.path, b.board)
+  if (src.documents?.length && addDocuments(c.store, o, src.documents)) link(c, 'project', o.project, 'Project')
   // for the shapes, what no column stores, worked out as the app reads it: people's decisions are the journey's, or the
   // project database's copy of them (a release, the API's record copy)
   if (o.derived && src.project) addDerived(c.store, o, src.project, src.journey ?? src.project)

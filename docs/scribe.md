@@ -83,19 +83,22 @@ does not change.
 
 Each layer is one pull request that builds and passes on its own.
 
-1. **Foundations** (this layer): this note; `src/docs/catalog.ts` (documents, sections, sources, figure and value
+1. **Foundations** (merged, #242): this note; `src/docs/catalog.ts` (documents, sections, sources, figure and value
    kinds, writing rules, the skeleton each document starts from); `src/docs/markers.ts` (section, figure and value
    markers: read, replace one section); `src/docs/diagrams.ts` (which diagrams each document allows and how each is
    made); `src/docs/checks.ts` (the quality bar). Pure functions, no I/O.
-2. **Logo**: upload, checks and the sample cover page (API and app).
-3. **Render pipeline**: Mermaid to SVG, Pandoc and Typst to PDF with the cover, on CodeBuild; PDFs to the central bucket.
-4. **Figures and values**: mechanical drawings from build123d, Blender document renders (Eevee drafts, Cycles
+2. **Ontology**: the documentation module (`ontology/trace-docs.ttl`, `src/ontology/docs.ts`; docs/ontology.md
+   "Documentation module"): document, section, figure, stated value with its basis, published copy and logo, read from
+   the documents' markers into the project's graph, so they go stale through the same lineage as everything else.
+3. **Logo**: upload, checks and the sample cover page (API and app).
+4. **Render pipeline**: Mermaid to SVG, Pandoc and Typst to PDF with the cover, on CodeBuild; PDFs to the central bucket.
+5. **Figures and values**: mechanical drawings from build123d, Blender document renders (Eevee drafts, Cycles
    releases, cache), protocol traces, and the power, thermal and load tables from their runs.
-5. **Scribe**: the `docs` specialist (Sonnet writes, Haiku triages), its prompt in the catalog, stacked pull requests.
-6. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
-   current" SHACL shape.
-7. **Docs tab** in the web app: each document with a freshness badge, the PDF viewer, and when it next checks.
-8. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
+6. **Scribe**: the `docs` specialist (Sonnet writes, Haiku triages), its prompt in the catalog, stacked pull requests.
+7. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
+   current" SHACL shape, run over the graph with the documents read in.
+8. **Docs tab** in the web app: each document with a freshness badge, the PDF viewer, and when it next checks.
+9. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
    exercises the protocol specification).
 
 ### Markers

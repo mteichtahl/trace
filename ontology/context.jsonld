@@ -124,6 +124,10 @@
       "@id": "trace:expects",
       "@type": "@json"
     },
+    "figureFromRun": {
+      "@id": "trace:figureFromRun",
+      "@type": "@id"
+    },
     "forCriterion": {
       "@id": "trace:forCriterion",
       "@type": "@id"
@@ -164,8 +168,16 @@
       "@id": "trace:hasEvidence",
       "@type": "@id"
     },
+    "hasFigure": {
+      "@id": "trace:hasFigure",
+      "@type": "@id"
+    },
     "hasOption": {
       "@id": "trace:hasOption",
+      "@type": "@id"
+    },
+    "hasSection": {
+      "@id": "trace:hasSection",
       "@type": "@id"
     },
     "hasStage": {
@@ -284,6 +296,22 @@
       "@id": "trace:priceBreaks",
       "@type": "@json"
     },
+    "projectLogo": {
+      "@id": "trace:projectLogo",
+      "@type": "@id"
+    },
+    "projectLogoDark": {
+      "@id": "trace:projectLogoDark",
+      "@type": "@id"
+    },
+    "publishedFor": {
+      "@id": "trace:publishedFor",
+      "@type": "@id"
+    },
+    "publishedFrom": {
+      "@id": "trace:publishedFrom",
+      "@type": "@id"
+    },
     "queuedAt": {
       "@id": "trace:queuedAt",
       "@type": "xsd:dateTime"
@@ -356,6 +384,10 @@
       "@id": "trace:startsJob",
       "@type": "@id"
     },
+    "statesValue": {
+      "@id": "trace:statesValue",
+      "@type": "@id"
+    },
     "supersededAt": {
       "@id": "trace:supersededAt",
       "@type": "xsd:dateTime"
@@ -378,6 +410,10 @@
     },
     "usesPart": {
       "@id": "trace:usesPart",
+      "@type": "@id"
+    },
+    "valueFromRun": {
+      "@id": "trace:valueFromRun",
       "@type": "@id"
     },
     "versionOf": {

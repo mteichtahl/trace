@@ -12,6 +12,7 @@ import { ONTOLOGY_DIR, readVocabulary, turtleFiles } from '../../src/ontology/vo
 import { jsonLdContext } from '../../src/ontology/jsonld.js'
 import { TABLES, type ColumnRule, type FieldMap } from '../../src/ontology/mapping.js'
 import { BOARD_CLASSES, BOARD_PROPERTIES } from '../../src/ontology/board.js'
+import { DOCS_CLASSES, DOCS_PROPERTIES } from '../../src/ontology/docs.js'
 
 const v = readVocabulary()
 
@@ -21,8 +22,8 @@ const acronyms = (s: string): string[] => (s.match(/\b[A-Z]{2,}\b/g) ?? []).filt
 
 /** Classes and properties the mapping names: a table's class, each column's property and link type, each object's. */
 function mapped(): { classes: Set<string>; props: Set<string> } {
-  const classes = new Set<string>(['Project', ...BOARD_CLASSES])
-  const props = new Set<string>(['inProject', ...BOARD_PROPERTIES])
+  const classes = new Set<string>(['Project', ...BOARD_CLASSES, ...DOCS_CLASSES])
+  const props = new Set<string>(['inProject', ...BOARD_PROPERTIES, ...DOCS_PROPERTIES])
   const rule = (r: ColumnRule): void => {
     if ('ignore' in r) return
     props.add(r.prop)
@@ -45,7 +46,9 @@ function mapped(): { classes: Set<string>; props: Set<string> } {
 }
 
 /** Core properties lineage (phase 4) fills; nothing maps them yet. */
-const FOR_LATER = new Set(['isInputTo', 'isOutputOf', 'derivedFromVersion', 'supersedes', 'versionOf', 'versionNumber'])
+const FOR_LATER = new Set(['isInputTo', 'isOutputOf', 'derivedFromVersion', 'supersedes', 'versionOf', 'versionNumber',
+  // the documentation module's: written when a document is published and when a logo is uploaded (docs/scribe.md, layers 2 and 3)
+  'publishedFrom', 'publishedFor', 'projectLogo', 'projectLogoDark'])
 
 describe('the ontology files', () => {
   it('every Turtle file parses', () => {
@@ -56,7 +59,7 @@ describe('the ontology files', () => {
 
   it('every module carries a version', () => {
     const semver = expect.stringMatching(/^\d+\.\d+\.\d+$/)
-    expect(v.versions).toEqual({ 'trace-core.ttl': semver, 'trace-journey.ttl': semver, 'trace-board.ttl': semver })
+    expect(v.versions).toEqual({ 'trace-core.ttl': semver, 'trace-journey.ttl': semver, 'trace-board.ttl': semver, 'trace-docs.ttl': semver })
   })
 
   it('every term has a label and a comment in plain words, acronyms only as other names', () => {
