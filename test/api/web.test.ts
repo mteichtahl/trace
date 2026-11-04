@@ -722,8 +722,12 @@ describe('the release copy', () => {
     expect(await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'a check', time_zone: 'not a zone' })).toMatchObject({ branch: expect.stringMatching(/^trace\/release-/), revision: 'A', version: expect.any(Number), renders: { jobId: 'j' } })
     // a time zone that is not one is dropped: the day is UTC's
     expect(startedJobs.find((p) => p.agent === 'render')?.request).toContain(`date=${cutDay(new Date())}`)
+    // and the documents' release copies (docs/scribe.md "Publishing")
+    expect(startedJobs.find((p) => p.agent === 'docs')?.request).toMatch(/docs_publish release=A/)
     startedJobs.length = 0
-    expect(await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'no pictures', renders: false })).not.toHaveProperty('renders')
+    const bare = await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'no pictures', renders: false, documents: false })
+    expect(bare).not.toHaveProperty('renders')
+    expect(bare).not.toHaveProperty('documents')
     expect(startedJobs).toEqual([])
     await expect(run(ADMIN, 'journey.snapshot', { repo: 'acme/fresh2' })).rejects.toThrow()
   })

@@ -22,6 +22,13 @@
  *                            a document is written from, Scribe brings the documents up to date (src/api/docs-follow.ts);
  *                            a commit of only the documents, or only Scribe's own runs, starts nothing
  *
+ *   hook.projects  backend   {} → { projects }: the projects the nightly drift check goes through (not paused, not
+ *                            retired), repository names only
+ *
+ *   hook.drift     backend   { repo } → what it found: the nightly drift check of one project (src/api/docs-follow.ts
+ *                            driftOf): the records changed since the documents were last written, a document the stage
+ *                            needs that is missing, and whether Scribe was started on them
+ *
  * Only the web backend's own identity reaches it (need 'backend', src/api/backend-auth.ts), and that identity reaches
  * nothing else (perform). The API runtime still decides who is on a project, as it does for project.members; the
  * backend still never reads the access store.
@@ -33,7 +40,7 @@ import { z } from 'zod'
 import { def } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
 import { type ConflictReport, resolveConflicts } from './conflicts.js'
-import { docsRequest, recordsOfCommit, startScribe } from './docs-follow.js'
+import { docsRequest, driftOf, recordsOfCommit, startScribe } from './docs-follow.js'
 import { journeyStore } from './action-kit.js'
 import { loadJourney } from '../core/journey.js'
 
@@ -71,5 +78,26 @@ export const HOOK_ACTIONS = {
     if (!records.length) return { repo, commit: sha, records, started: null, why: 'the push changed no record a document is written from' }
     const r = await startScribe(ctx, repo, docsRequest(`The default branch moved to ${sha.slice(0, 12)}.`, { stage: rec.journey.currentStage, records }))
     return { repo, commit: sha, records, started: r.started ?? null, ...(r.jobId ? { job: r.jobId } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.jobError ? { error: r.jobError } : {}) }
+  }),
+
+  'hook.projects': def('backend', z.object({}), async () => {
+    const all = await projects()
+    const live: string[] = []
+    for (const repo of all) {
+      const l = await lifecycleOf(repo)
+      if (!l.paused && !l.retired) live.push(repo)
+    }
+    return { projects: live.sort() }
+  }),
+
+  'hook.drift': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx) => {
+    if (!(await projects()).includes(repo) || (await lifecycleOf(repo)).paused) return { repo, records: [], missing: [], started: null }
+    const rec = (await journeyStore(ctx, repo).read((db) => loadJourney(db))).result
+    if (!rec || rec.journey.currentStage === 'define') return { repo, records: [], missing: [], started: null, why: 'no documents before Architect' }
+    const d = await driftOf(ctx, repo, rec.journey.currentStage)
+    return {
+      repo, commit: d.head, records: d.records, missing: d.missing, since: d.since, started: d.started ?? null,
+      ...(d.jobId ? { job: d.jobId } : {}), ...(d.skipped ? { skipped: d.skipped } : {}), ...(d.jobError ? { error: d.jobError } : {}),
+    }
   }),
 }

@@ -42,7 +42,9 @@
  *                                    its pull request opens at once and trace applies it; `change`), and log the
  *                                    commit in the decisions. Signing the gate that cuts a
  *                                    release (the release approval gate; Prove's in the Firmware template) takes it
- *                                    on its own: a failed copy is reported with the signature and never undoes it
+ *                                    on its own: a failed copy is reported with the signature and never undoes it.
+ *                                    Either way the revision's renders (renders: false skips them) and its documents'
+ *                                    release copies (documents: false; docs/scribe.md "Publishing") are started
  *
  * The record lives in the central bucket (src/core/journey-store.ts): every write is a conditional put of the
  * project's journey database, re-run on a lost race, and answers the record's `version`. The agents' facts
@@ -73,7 +75,7 @@ import { loadJobs } from '../core/job-index.js'
 import { evidenceStaleness } from './evidence-freshness.js'
 import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { docsFor } from '../docs/catalog.js'
-import { docsRequest, startScribe } from './docs-follow.js'
+import { docsReleaseRequest, docsRequest, startScribe } from './docs-follow.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
@@ -234,6 +236,19 @@ async function startRenders(ctx: Context, repo: string, revision: string, timeZo
   } catch (e) {
     return { jobError: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/**
+ * Start Scribe on a revision that was just cut: its documents brought up to date and printed as its release copies
+ * (docs/scribe.md "Publishing"). Queued behind a Scribe job already working, since only this one prints them. `stage`:
+ * the stage the signature opened, else Scribe reads it.
+ */
+async function startReleaseDocs(ctx: Context, repo: string, revision: string, timeZone: string | null | undefined, stage: StageId | null | undefined): Promise<{ jobId?: string; started?: string; jobError?: string }> {
+  const day = cutDay(new Date(), timeZone)
+  const r = await startScribe(ctx, repo, docsReleaseRequest(revision, day, { stage: stage ?? null }), { queue: true })
+  return r.started
+    ? { ...(r.jobId ? { jobId: r.jobId } : {}), started: `The Documentation agent prints revision ${revision}'s documents.` }
+    : { jobError: r.jobError ?? r.skipped ?? 'trace did not accept the job.' }
 }
 
 /**
@@ -467,31 +482,44 @@ export const JOURNEY_ACTIONS = {
     }
     // the stage that opened may need new documents or sections: Scribe brings them up to date (docs/scribe.md); a
     // stage that needs none starts nothing, and the signature stands whatever happens here
-    if (signed.advanced_to && docsFor(signed.advanced_to, true).length) {
+    // (a signature that cuts a release asks for the release copies instead, below: one Scribe job does both)
+    const stageDocs = async (): Promise<void> => {
+      if (!signed.advanced_to || !docsFor(signed.advanced_to, true).length) return
       const d = await startScribe(ctx, a.repo, docsRequest(`The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { stage: signed.advanced_to }))
       if (d.started) kickoff = { ...kickoff, started: [...(kickoff.started ?? []), d.started] }
     }
-    if (!signed.released) return { ...signed, ...kickoff, snapshot: null }
+    if (!signed.released) {
+      await stageDocs()
+      return { ...signed, ...kickoff, snapshot: null }
+    }
     // the signature cut a release: the record goes into the repository with it
     try {
       const s = await snapshot(ctx, a.repo, `${a.gate} signed`)
       // the revision's renders, made by the rendering agent from what was released (docs/revision-renders.md)
       const renders = await startRenders(ctx, a.repo, s.revision, a.time_zone)
+      // and its documents, brought up to date and printed as its release copies (docs/scribe.md "Publishing")
+      const documents = await startReleaseDocs(ctx, a.repo, s.revision, a.time_zone, signed.advanced_to)
       const said = renders.started ? ` ${renders.started}` : ` Its renders could not be started: ${renders.jobError ?? 'trace did not accept the job'}.`
+      const docSaid = documents.started ? ` ${documents.started}` : ` Its documents could not be printed: ${documents.jobError ?? 'trace did not accept the job'}.`
       return {
-        ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit, change: s.change }, renders,
-        started: [...(kickoff.started ?? []), ...(renders.started ? [renders.started] : [])],
-        summary: `${signed.summary} The record was copied into the repository.${said}`,
+        ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit, change: s.change }, renders, documents,
+        started: [...(kickoff.started ?? []), ...(renders.started ? [renders.started] : []), ...(documents.started ? [documents.started] : [])],
+        summary: `${signed.summary} The record was copied into the repository.${said}${docSaid}`,
       }
     } catch (e) {
+      await stageDocs()
       return { ...signed, ...kickoff, snapshot: { error: `The gate is signed, but the record could not be copied into the repository: ${e instanceof Error ? e.message : String(e)}. An admin can copy it with journey.snapshot.` } }
     }
   }),
 
-  'journey.snapshot': def('admin', Repo.extend({ reason: z.string().trim().max(300).default('copied by an admin'), renders: z.boolean().default(true), time_zone: TimeZone }), async (a, ctx) => {
+  'journey.snapshot': def('admin', Repo.extend({ reason: z.string().trim().max(300).default('copied by an admin'), renders: z.boolean().default(true), documents: z.boolean().default(true), time_zone: TimeZone }), async (a, ctx) => {
     const s = await snapshot(ctx, a.repo, a.reason)
     // a revision copied by hand gets its renders too, unless the admin says not to
-    return { repo: a.repo, ...s, ...(a.renders ? { renders: await startRenders(ctx, a.repo, s.revision, a.time_zone) } : {}) }
+    // and its documents' release copies, unless the admin says not to
+    return {
+      repo: a.repo, ...s, ...(a.renders ? { renders: await startRenders(ctx, a.repo, s.revision, a.time_zone) } : {}),
+      ...(a.documents ? { documents: await startReleaseDocs(ctx, a.repo, s.revision, a.time_zone, null) } : {}),
+    }
   }),
 
   'gate.return': def('write', Repo.extend({ gate: Id, reason: z.string().trim().min(1).max(4000), reopen: z.enum(STAGE_IDS).optional() }), async (a, ctx) =>

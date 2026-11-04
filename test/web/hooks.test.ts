@@ -7,7 +7,7 @@
  */
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { DEBOUNCE_MS, Debounce, type DebounceStore, MAX_BODY, MemoryDebounceStore, ORIGIN_HEADER, readDelivery, sameSecret, signatureOk } from '../../src/web/hooks.js'
+import { DEBOUNCE_MS, DRIFT_EVENT, Debounce, type DebounceStore, MAX_BODY, MemoryDebounceStore, ORIGIN_HEADER, hooksSchedule, isDriftEvent, readDelivery, sameSecret, signatureOk } from '../../src/web/hooks.js'
 import { toRequest } from '../../src/web/event.js'
 import { DynamoDebounceStore } from '../../src/web/hooks-store.js'
 import type { WebConfig } from '../../src/web/config.js'
@@ -309,6 +309,27 @@ describe('the documents after a push to the default branch', () => {
     w.runtime.answers.set('hook.docs', () => ({ status: 500, body: { ok: false, error: 'boom' } }))
     expect((await w.deliver('push', push('acme/board', 'refs/heads/main'))).status).toBe(202)
     expect(w.logs.find((l) => l.hook === 'docs failed')).toMatchObject({ repo: 'acme/board' })
+  })
+})
+
+describe('the nightly drift check', () => {
+  it('asks the API for the projects, checks each, and says which it started Scribe on', async () => {
+    const w = hooksWorld()
+    w.runtime.answers.set('hook.projects', () => ({ body: { ok: true, result: { projects: ['acme/a', 'acme/b', 'acme/c'] } } }))
+    w.runtime.answers.set('hook.drift', (a) => a.repo === 'acme/c'
+      ? { status: 500, body: { ok: false, error: 'boom' } }
+      : { body: { ok: true, result: { repo: a.repo, records: a.repo === 'acme/a' ? ['schematic'] : [], started: a.repo === 'acme/a' ? 'The Documentation agent brings the project\'s documents up to date.' : null } } })
+    const r = await hooksSchedule(w.deps)()
+    expect(r).toEqual({ checked: 3, started: ['acme/a'], failed: ['acme/c'] })
+    expect(w.runtime.calls.filter((c) => c.action === 'hook.drift').map((c) => c.args.repo).sort()).toEqual(['acme/a', 'acme/b', 'acme/c'])
+    expect(w.logs.find((l) => l.hook === 'drift done')).toMatchObject({ checked: 3, started: 1, failed: 1 })
+  })
+
+  it('only the schedule\'s own event is taken for it, never a request through the URL', () => {
+    expect(isDriftEvent(DRIFT_EVENT)).toBe(true)
+    expect(isDriftEvent({ ...DRIFT_EVENT, rawPath: '/api/hooks/github' })).toBe(false)
+    expect(isDriftEvent({ version: '2.0', rawPath: '/api/hooks/github', body: JSON.stringify(DRIFT_EVENT) })).toBe(false)
+    expect(isDriftEvent(null)).toBe(false)
   })
 })
 

@@ -44,7 +44,9 @@ export const docs: Specialist = {
       + ' out where it first appears or put in the glossary section; part numbers, pins and nets in `code`. If it is'
       + ' refused, fix what the findings say and write it again. Then docs_check at the stage: no errors left.',
     'Print the documents you changed with docs_publish and look at the result (trace_run on its run): every diagram'
-      + ' drew, the cover carries the logo or the project icon. From Sign-off on, record the documents criterion:'
+      + ' drew, the cover carries the logo or the project icon. When a revision was cut, print every document with'
+      + ' release set to it, as the request says: those are the revision\'s release copies, kept for good, so check'
+      + ' first and print once. From Sign-off on, record the documents criterion:'
       + ' journey_check signoff.docs, met with the docs_check run as evidence when it passes, not met with its findings'
       + ' when it does not.',
     'Delivery: delegate (DELIVERY) to the worker to commit docs/design (and .trace/project.db for the runs you made)'
@@ -54,7 +56,8 @@ export const docs: Specialist = {
   done: [
     'docs_check at the stage reports no errors for every document you touched;',
     'every section docs_stale named was written again, or you said why it still stands;',
-    'the documents you changed are printed (docs_publish runs passed), and the worker committed them in a stacked change.',
+    'the documents you changed are printed (docs_publish runs passed), and the worker committed them in a stacked change;',
+    'for a revision cut: every document has its release copy (docs_publish with release, every one in its answer).',
   ],
   escalate: [
     'a section needs a fact no record holds (an intent nobody stated, a requirement with no source): ask with journey_ask, and leave it pending;',
