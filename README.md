@@ -3,7 +3,8 @@
 trace runs a repository by itself and gives Claude the tools to do electronics work in it. It is generalised from
 the loop that runs Potroller.
 
-- **The loop.** A pushed branch gets its pull request. A PR merges itself when its required check passes, and open
+- **The loop.** A pushed branch gets its pull request, stacked on the open pull request it builds on when it builds on
+  one (docs/stacked-changes.md). A PR merges itself when its required check passes, bottom of a stack first, and open
   PRs are brought up to date one at a time. A failing build is triaged: flaky failures are re-run, and real ones go to
   Claude, which fixes them. Deploys run behind a risk check, a smoke test and an automatic rollback. A person is asked
   only when a project's rules say so, or when the loop is stuck.
