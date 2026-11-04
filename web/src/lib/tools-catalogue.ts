@@ -86,6 +86,10 @@ const PLAIN: Record<string, string> = {
   'render.model': 'Render a 3D model',
   'render.turntable': 'Render a turntable',
   'render.status': 'Rendering status',
+  'docs.check': 'Check the project documents',
+  'docs.publish': 'Print the project documents to PDF',
+  'docs.values': 'Power, heat and load values for the documents',
+  'docs.figures': 'Make the documents\' figures',
   'sim.spice': 'Run a SPICE simulation',
   'sim.sweep': 'Sweep a simulation',
   'sim.montecarlo': 'Monte Carlo simulation',
@@ -118,7 +122,7 @@ export type RunsOn = 'agent' | 'gpu' | 'cpu' | 'bench'
 export function runsOn(name: string): RunsOn {
   if (name.startsWith('hil.')) return 'bench'
   if (name === 'pcb.autoroute' || name.startsWith('render.') && name !== 'render.status') return 'gpu'
-  if (name === 'thermal.solve' || name === 'thermal.check' || name.startsWith('emc.') && name.includes('sim')) return 'cpu'
+  if (name === 'docs.publish' || name === 'docs.figures' || name === 'thermal.solve' || name === 'thermal.check' || name.startsWith('emc.') && name.includes('sim')) return 'cpu'
   return 'agent'
 }
 

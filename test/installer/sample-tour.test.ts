@@ -11,7 +11,7 @@ import { allTools } from '../../src/tools/index.js'
 
 /** Which tool, with what said in the task, makes each kind of remote job run. */
 const JOB_REACH: Record<JobKind, { tools: string[]; says: RegExp }> = {
-  blender: { tools: ['render.board', 'render.model', 'render.turntable', 'thermal.render'], says: /render|blender|turntable/i },
+  blender: { tools: ['render.board', 'render.model', 'render.turntable', 'render.showcase', 'thermal.render'], says: /render|blender|turntable/i },
   freerouting: { tools: ['pcb.autoroute'], says: /freerouting|strategy[^.]*both/i },
   orthoroute: { tools: ['pcb.autoroute'], says: /orthoroute|strategy[^.]*both/i },
   verilator: { tools: ['verify.verilator'], says: /verilator/i },
@@ -31,8 +31,10 @@ const JOB_REACH: Record<JobKind, { tools: string[]; says: RegExp }> = {
   cad: { tools: ['mech.build', 'mech.hand_in'], says: /enclosure|build123d|cad job/i },
   // the case script's own kind: the project's cad function (docs/enclosure-build.md "Trust"), never the queue
   'cad-script': { tools: ['mech.build', 'mech.hand_in'], says: /cad-script|case script/i },
+  // printing the project's documents (src/tools/docs/tools.ts): on the tools function, never the queue
+  docs: { tools: ['docs.publish'], says: /docs job|print/i },
 }
-const TOOLS_FUNCTION_ONLY: ReadonlySet<JobKind> = new Set<JobKind>(['kicad', 'ffmpeg', 'cad', 'cad-script'])
+const TOOLS_FUNCTION_ONLY: ReadonlySet<JobKind> = new Set<JobKind>(['kicad', 'ffmpeg', 'cad', 'cad-script', 'docs'])
 
 describe('the sample project\'s tour', () => {
   const tasks = tour()

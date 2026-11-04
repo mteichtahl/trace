@@ -21,8 +21,10 @@ import { scratchDir } from '../../core/store.js'
 import { type Backend, backendFor, runJob, type JobResult } from '../../gpu/jobs.js'
 
 export const RESULT_PREFIX = 'TRACE_RESULT '
-export const SCRIPTS = ['render_board.py', 'render_model.py', 'probe.py'] as const
+export const SCRIPTS = ['render_board.py', 'render_model.py', 'render_showcase.py', 'probe.py'] as const
 export type Script = (typeof SCRIPTS)[number]
+/** The other scripts a script imports, sent with it (common.py always goes) */
+export const SCRIPT_MODULES: Partial<Record<Script, readonly Script[]>> = { 'render_showcase.py': ['render_board.py'] }
 
 const INSTALL_PATHS = [
   '/usr/bin/blender',
@@ -161,7 +163,7 @@ export async function runBlender<T>(call: BlenderCall<T>): Promise<BlenderRun<T>
       gpu,
       timeoutSeconds,
       argv: [bin, '-b', '--factory-startup', '--python-exit-code', '1', '-P', `{in:${call.script}}`, '--', '{in:job.json}', '{out:result.json}', ...(call.args ?? [])],
-      inputs: { [call.script]: script, 'common.py': join(dir, 'common.py'), 'job.json': jobPath, ...(call.inputs ?? {}) },
+      inputs: { [call.script]: script, 'common.py': join(dir, 'common.py'), ...Object.fromEntries((SCRIPT_MODULES[call.script] ?? []).map((m) => [m, join(dir, m)])), 'job.json': jobPath, ...(call.inputs ?? {}) },
       outputs: ['result.json', ...(call.outputs ?? [])],
       env: { PYTHONDONTWRITEBYTECODE: '1' },
     })

@@ -63,9 +63,13 @@ Two rules keep it trustworthy:
    only the diagram kinds that document allows, every value with a basis and a source. A failed check, or a diagram
    that does not render, blocks the change.
 5. **Gates.** A SHACL shape marks the documents current; a stage's gate cannot be signed while its documents are stale.
-6. **Rendering.** Pandoc with Typst on CodeBuild: Mermaid to SVG, then a PDF with a cover page (logo, project, revision,
-   commit), a revision table and contents. PDFs go to the central bucket, are attached to each release with the journey
-   record, and open in the app's file viewer. They are not committed, so the repository does not bloat.
+6. **Rendering.** `docs.publish` (`src/tools/docs/tools.ts`) runs `python -m tracebridge.docs` as the `docs` job kind
+   on the project's tools function, where KiCad and Blender already run (`agent/Dockerfile.tools`): Mermaid draws each
+   diagram as SVG with its labels as text, pandoc writes Typst through `python/tracebridge/docs/template.typ`, and Typst
+   makes the PDF: a cover (logo, project, document, revision, commit), a revision table, contents, numbered figures with
+   their captions, and a header and footer on every page. Each PDF is kept as the publish run's artifact, so it opens in
+   the app's run viewer at once. Layer 7 moves the published copies to the central bucket and attaches them to each
+   release with the journey record, so they stop growing the repository's run record.
 
 ## Models
 
@@ -100,14 +104,23 @@ Each layer is one pull request that builds and passes on its own.
 2. **Ontology** (merged, #244): the documentation module (`ontology/trace-docs.ttl`, `src/ontology/docs.ts`; docs/ontology.md
    "Documentation module"): document, section, figure, stated value with its basis, published copy and logo, read from
    the documents' markers into the project's graph, so they go stale through the same lineage as everything else.
-3. **Logo**: the checks (`src/docs/logo.ts`), `project.logo`, `project.logo_check` and `project.logo_set`
+3. **Logo** (merged, #246): the checks (`src/docs/logo.ts`), `project.logo`, `project.logo_check` and `project.logo_set`
    (`src/api/actions-logo.ts`), and Settings › Documents with the sample cover (`web/src/components/project/project-logo.tsx`).
-4. **Render pipeline**: Mermaid to SVG, Pandoc and Typst to PDF with the cover, on CodeBuild; PDFs to the central bucket.
-5. **Figures and values**: mechanical drawings from build123d, Blender document renders (Eevee drafts, Cycles
-   releases, cache), protocol traces, and the power, thermal and load tables from their runs.
+4. **Render pipeline** (merged, #254): `docs.check` and `docs.publish`, the `docs` job kind on the tools function, and
+   `python/tracebridge/docs` (Mermaid to SVG, pandoc to Typst, Typst to PDF with the cover).
+5. **Figures and values**: `docs.values` (`src/docs/values.ts`: the power budget per rail, junction temperatures
+   from thermal.check with their margins, bench readings from thermal.measure, each with its basis and source, as
+   ready tables; nothing records loads yet, so load rows stay pending) and `docs.figures` (`src/tools/docs/figures.ts`):
+   the photographic renders from `render.showcase` (docs/revision-renders.md: the board from above, below and
+   three-quarter, and in its case and exploded once mech.build made a case, coloured from the logo, draft or release
+   quality); the case's three dimensioned views and its parts drawn apart as line drawings (`python -m tracebridge.mech
+   drawing`, a cad job); a timing diagram per protocol modelled. Figures go to `docs/design/figures` with stable names
+   and `figures.json` (each one's run, inputs hash and quality), so an unchanged figure is never made again and a draft
+   is replaced only by a release. Blender renders with Cycles: Eevee cannot run on the tools function (no display).
 6. **Scribe**: the `docs` specialist (Sonnet writes, Haiku triages), its prompt in the catalog, stacked pull requests.
 7. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
-   current" SHACL shape, run over the graph with the documents read in.
+   current" SHACL shape, run over the graph with the documents read in; published copies to the central bucket and
+   attached to each release.
 8. **Docs tab** in the web app: each document with a freshness badge, the PDF viewer, and when it next checks.
 9. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
    exercises the protocol specification).
@@ -132,3 +145,21 @@ Each layer is one pull request that builds and passes on its own.
 
 A section whose body is only `_Pending: <what it needs>._` is pending. A figure marker is followed by its image or its
 ```` ```mermaid ```` block, then a caption line in italics.
+
+### A printed document
+
+The sample high level design printed by `docs.publish` (logo, a Mermaid data flow drawn as text, a stated-value table
+and a figure with its caption):
+
+| Cover | A page |
+|---|---|
+| ![](ui/screens/ScribePdfCover.png) | ![](ui/screens/ScribePdfPage.png) |
+
+### The case's drawings
+
+From the sample case the enclosure engine builds (`python -m tracebridge.mech drawing`): three views in third-angle
+projection with the overall size dimensioned, and the parts drawn apart.
+
+| Three views | Exploded |
+|---|---|
+| ![](ui/screens/ScribeMechDrawing.png) | ![](ui/screens/ScribeMechExploded.png) |

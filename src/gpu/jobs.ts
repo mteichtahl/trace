@@ -53,7 +53,9 @@ export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   //   cad-script  the case script (mechanical/case.py: user code, `python -m tracebridge.mech build-only`), the board
   //               facts and settings in, one STEP per part and claims.json out. On the project's cad function
   //               (TRACE_CAD_FUNCTION: no credentials, no S3), else a local child process; never the queue
-  'cad', 'cad-script'])
+  'cad', 'cad-script',
+  // printing a project's documents (src/tools/docs/tools.ts, python -m tracebridge.docs): pandoc, Mermaid and Typst
+  'docs'])
 export type JobKind = z.output<typeof JobKind>
 
 const SEGMENT = /^[\w.-]+$/
@@ -137,7 +139,7 @@ export type Backend = 'local' | 'function' | 'batch'
 
 /** The kinds the tools function runs: what the tools image has (agent/Dockerfile.tools). */
 export const FUNCTION_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
-  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix', 'cad',
+  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix', 'cad', 'docs',
 ])
 /** The longest a job runs on the function: Lambda ends a call at 900 s, and the runner still uploads after the program. */
 export const FUNCTION_MAX_SECONDS = 840
