@@ -1,7 +1,9 @@
 /**
  * Registers how tool calls draw in the conversation, and the human-in-the-loop tools: `ask_person` (a Decision card)
  * and `start_task` (trace offers to start work: the exact request and agent, and only the person's Confirm calls `task`
- * as them; the job, or Cancel, goes back to trace as the tool's result and shows as a Run card).
+ * as them; the job, or Cancel, goes back to trace as the tool's result and shows as a Run card), and `remember` (trace
+ * offers to remember something: the exact words and whose they are, and only the person's Confirm calls memory.remember
+ * as them).
  *
  * Tool calls are drawn by the shape of their result, so any tool that returns one of these shapes gets its card
  * without a registration per tool:
@@ -21,8 +23,8 @@ import { agentBlocked, useAgentSetup } from '@/components/project/agent-setup'
 import { call } from '@/lib/api'
 import { usePrefs } from '@/lib/prefs'
 import {
-  FileCard, FindingsCard, type FileData, type FindingsData, PartCard, type PartData, PlotCard, type PlotData, RunCard, type RunCardData, type TaskAnswer, TaskConfirmCard, ToolRow,
-  type ToolStatus, parseResult,
+  FileCard, FindingsCard, type FileData, type FindingsData, PartCard, type PartData, PlotCard, type PlotData, type RememberAnswer, RememberConfirmCard, RunCard, type RunCardData,
+  type TaskAnswer, TaskConfirmCard, ToolRow, type ToolStatus, parseResult,
 } from './cards'
 
 type Shape = { kind: 'plot'; data: PlotData } | { kind: 'findings'; data: FindingsData } | { kind: 'part'; data: PartData } | { kind: 'file'; data: FileData } | { kind: 'run'; data: RunCardData } | null
@@ -97,6 +99,16 @@ export function ChatRenderers() {
     },
     [],
   )
+  useHumanInTheLoop<RememberArgs>(
+    {
+      name: 'remember',
+      // the backend offers its own description and schema for this name; these only describe it to CopilotKit
+      description: 'Offer to remember something the person asked to remember. The person confirms or cancels.',
+      parameters: Remember,
+      render: ({ args, status, respond, result }) => <RememberCard args={args} status={status} respond={respond} result={result} />,
+    },
+    [],
+  )
   return null
 }
 
@@ -108,6 +120,9 @@ export const LiveCall = createContext(true)
 
 /** The project the conversation is on (chat-view.tsx sets it): the screen's notice already asks project.agent for it. */
 export const ChatRepo = createContext<string | undefined>(undefined)
+
+/** The stored conversation (chat-view.tsx sets it): what remember files its memory under (one session per thread). */
+export const ChatThread = createContext<string | undefined>(undefined)
 
 const StartTask = z.object({ repo: z.string(), request: z.string(), agent: z.string().optional(), branch: z.string().optional() })
 type TaskArgs = z.infer<typeof StartTask>
@@ -139,4 +154,33 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
     }
   }
   return <TaskConfirmCard task={args} busy={busy} readOnly={readOnly} blocked={blocked} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies TaskAnswer)} />
+}
+
+const Remember = z.object({ repo: z.string(), text: z.string(), scope: z.enum(['personal', 'project']) })
+type RememberArgs = z.infer<typeof Remember>
+
+/**
+ * remember's card: the person's Confirm calls memory.remember as them (the API takes who they are from their sign-in,
+ * never from these arguments, and records it in the conversation's session); the answer goes back to trace.
+ */
+export function RememberCard({ args, status, respond, result, readOnly, thread }: { args: Partial<RememberArgs>; status: string; respond?: (r: unknown) => unknown; result?: string; readOnly?: boolean; thread?: string }) {
+  const [busy, setBusy] = useState(false)
+  const live = useContext(LiveCall)
+  const chatThread = useContext(ChatThread) ?? thread
+  if (status === 'complete') return <RememberConfirmCard memory={args} answer={parseResult<RememberAnswer>(result)} />
+  if (!live && status !== 'executing') return <RememberConfirmCard memory={args} answer={{ confirmed: false, reason: 'not confirmed' }} />
+  if (status !== 'executing' || !respond) return <RememberConfirmCard memory={args} readOnly={readOnly} busy />
+  const confirm = async () => {
+    if (!args.repo || !args.text?.trim() || (args.scope !== 'personal' && args.scope !== 'project')) return
+    setBusy(true)
+    try {
+      const r = await call('memory.remember', { repo: args.repo, text: args.text, scope: args.scope, ...(chatThread ? { thread: chatThread } : {}) })
+      respond({ confirmed: true, recorded: r.recorded, note: r.note } satisfies RememberAnswer)
+    } catch (e) {
+      respond({ confirmed: true, recorded: false, reason: e instanceof Error ? e.message : 'it could not be recorded' } satisfies RememberAnswer)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <RememberConfirmCard memory={args} busy={busy} readOnly={readOnly} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies RememberAnswer)} />
 }

@@ -57,7 +57,7 @@ export function memoryRows(records: MemoryView[], o: { includeOff: boolean; rank
       text: m.text,
       kind: kindWord(m.kind),
       agent: agentName(m.actor),
-      learned: m.kind === 'sessions' ? 'Session' : 'Agent session',
+      learned: m.actor === 'chat' ? 'Chat' : m.kind === 'sessions' ? 'Session' : 'Agent session',
       at: m.createdAt ?? '',
       status: m.active ? 'Active' : 'Switched off',
       score: m.score ?? 0,
@@ -209,7 +209,7 @@ function LongTerm() {
             url={url}
             noun="memories"
             onRowClick={(r) => setOpen(r.m)}
-            empty={searching ? `Nothing the agents remember is close to “${query}”.` : 'The agents have not remembered anything here yet. Memories appear a few minutes after an agent session ends.'}
+            empty={searching ? `Nothing the agents remember is close to “${query}”.` : 'Nothing is remembered here yet. Memories appear a few minutes after an agent session or a chat, once they are extracted; ask trace to remember something in the chat and it is added the same way.'}
           />
         )}
       </div>
