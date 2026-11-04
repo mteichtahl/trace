@@ -15,6 +15,7 @@ import { normalisedHash } from '../../core/normalise.js'
 import { logoPath } from '../../docs/logo.js'
 import { defineTool, ToolError } from '../../core/registry.js'
 import { findRoot, scratchDir, Work, type RunInput } from '../../core/store.js'
+import { keepOutput } from '../../core/artifact-store.js'
 import { backendFor } from '../../gpu/jobs.js'
 import { needPcb, resolveProject } from '../kicad/project.js'
 import { boardFacts } from '../mech/board.js'
@@ -219,7 +220,8 @@ export const showcase = defineTool({
           if (!f) throw new ToolError(`Blender did not write ${names[s]}`)
           const data = readFileSync(f)
           if ((statOf.get(s)?.std ?? 1) < 0.002) blank++
-          work.artifact(id, names[s], data, 'image/png')
+          // release-quality pictures are large: the installation's storage, not the run record in git (src/core/artifact-store.ts)
+          await keepOutput(work, id, names[s], data, 'image/png')
           artifacts.push({ name: names[s], shot: s, bytes: data.length, ...(pngSize(data) ?? {}) })
         }
         if (blank) notes.push(`${blank} picture(s) look blank (almost no variation): check the board and case models`)

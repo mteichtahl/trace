@@ -16,6 +16,7 @@ import { extname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { scratchDir, Work } from '../../core/store.js'
+import { keepOutput } from '../../core/artifact-store.js'
 import { findKicadCli, kicadCliVersion, kicadWhere, needPcb, resolveProject, runProgram } from '../kicad/project.js'
 import { backendFor, runJob } from '../../gpu/jobs.js'
 import { findBlender, findFfmpeg, pngSize, runBlender, scriptsDir, type Script } from './blender.js'
@@ -212,8 +213,9 @@ async function renderRun(p: Plan): Promise<Record<string, unknown>> {
       const notes = [...(model.note ? [model.note] : []), ...r.notes]
       let blank = 0
       const statOf = new Map(r.images.map((im) => [im.view, im]))
-      const add = (name: string, data: Uint8Array, mime: string, st?: z.output<typeof ImageStat>): void => {
-        work.artifact(id, name, data, mime)
+      // large pictures and movies go to the installation's storage, not the run record in git (src/core/artifact-store.ts)
+      const add = async (name: string, data: Uint8Array, mime: string, st?: z.output<typeof ImageStat>): Promise<void> => {
+        await keepOutput(work, id, name, data, mime)
         const size = mime === 'image/png' ? pngSize(data) : null
         artifacts.push({ name, bytes: data.length, ...(size ?? {}), ...(st ? { mean: st.mean, std: st.std } : {}) })
         files.push({ name, data })
@@ -223,18 +225,18 @@ async function renderRun(p: Plan): Promise<Record<string, unknown>> {
         if (!f) throw new ToolError(`Blender did not write ${viewOuts[i]}`)
         const st = statOf.get(v)
         if (st && st.std < 0.002) blank++
-        add(`${v}.png`, readFileSync(f), 'image/png', st)
+        await add(`${v}.png`, readFileSync(f), 'image/png', st)
       }
       if (tt) {
         const framePaths = frameOuts.map((n) => run.outputs[n]).filter((x): x is string => typeof x === 'string')
         if (framePaths.length !== p.frames) throw new ToolError(`Blender wrote ${framePaths.length} of ${p.frames} turntable frames`)
         const mp4 = await encodeMp4(framePaths, p.fps, tmp)
-        if (mp4) add('turntable.mp4', mp4, 'video/mp4')
+        if (mp4) await add('turntable.mp4', mp4, 'video/mp4')
         else notes.push('ffmpeg is not installed: the turntable is stored as PNG frames')
         if (!mp4 || p.keepFrames) {
-          framePaths.forEach((f, i) => add(frameOuts[i] as string, readFileSync(f), 'image/png', statOf.get(`frame_${String(i + 1).padStart(4, '0')}`)))
+          for (const [i, f] of framePaths.entries()) await add(frameOuts[i] as string, readFileSync(f), 'image/png', statOf.get(`frame_${String(i + 1).padStart(4, '0')}`))
         } else {
-          add('poster.png', readFileSync(framePaths[0] as string), 'image/png', statOf.get('frame_0001'))
+          await add('poster.png', readFileSync(framePaths[0] as string), 'image/png', statOf.get('frame_0001'))
         }
         for (const im of r.images) if (im.view.startsWith('frame_') && im.std < 0.002) blank++
       }

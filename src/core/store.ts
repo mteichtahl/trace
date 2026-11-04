@@ -15,7 +15,7 @@
  * a column: an encoding, not a file.
  */
 import { normalisedHash } from './normalise.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, parse, resolve } from 'node:path'
@@ -355,15 +355,30 @@ export class Work {
     this.db.prepare('INSERT OR REPLACE INTO artifact_hashes (run_id, name, sha256) VALUES (?,?,?)').run(id, name, normalisedHash(name, bytes))
   }
 
+  /**
+   * A large output kept outside the run record (src/core/artifact-store.ts): with `put` (the bucket's writer) and over
+   * `over` bytes, the bytes are written there under their SHA-256 and the row names them; else as artifact().
+   */
+  async storeArtifact(id: string, name: string, data: Uint8Array, mime: string, put: ((sha256: string, bytes: Uint8Array, mime: string) => Promise<void>) | null, over = 512 * 1024): Promise<'stored' | 'kept'> {
+    if (!put || data.length <= over) { this.artifact(id, name, data, mime); return 'kept' }
+    const sha = createHash('sha256').update(data).digest('hex')
+    await put(sha, data, mime)
+    this.db.prepare('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?)').run(id, name, storedMime(mime, sha, data.length), new Uint8Array())
+    this.db.prepare('INSERT OR REPLACE INTO artifact_hashes (run_id, name, sha256) VALUES (?,?,?)').run(id, name, normalisedHash(name, data))
+    return 'stored'
+  }
+
   /** Record what a run was made from (lineage): once, in order. */
   inputs(id: string, inputs: readonly RunInput[]): void {
     const add = this.db.prepare('INSERT OR IGNORE INTO run_inputs (run_id, ord, kind, ref, name, sha256) VALUES (?,?,?,?,?,?)')
     inputs.forEach((x, i) => add.run(id, i, x.kind, x.ref, x.name ?? null, x.sha256))
   }
 
+  /** An artifact's bytes from the run record; null when there is none, or when it is stored in the bucket (storedRef). */
   getArtifact(id: string, name: string): Uint8Array | null {
     const row = this.db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(id, name)
-    return row ? unpackArtifact(row.mime as string | null, row.bytes as Uint8Array).bytes : null
+    if (!row || storedRef(row.mime as string | null)) return null
+    return unpackArtifact(row.mime as string | null, row.bytes as Uint8Array).bytes
   }
 
   /** The newest runs: of a kind (a prefix), and of one agent's sessions (`agent`), when given. */
@@ -378,7 +393,9 @@ export class Work {
     const r = this.db.prepare('SELECT * FROM runs WHERE id=?').get(id)
     if (!r) return null
     const measurements = this.db.prepare('SELECT name, value, unit FROM measurements WHERE run_id=? ORDER BY name').all(id) as unknown as Measurement[]
+    // a stored output's size is the one its row names (src/core/artifact-store.ts); its own bytes are empty
     const artifacts = (this.db.prepare('SELECT name, mime, length(bytes) AS size FROM artifacts WHERE run_id=? ORDER BY name').all(id) as unknown as RunRecord['artifacts'])
+      .map((x) => ({ ...x, size: storedRef(x.mime)?.size ?? x.size }))
       .map((a) => ({ ...a, mime: artifactMime(a.mime) }))
     return { ...(r as unknown as RunRecord), args: dec(r.args), result: dec(r.result), measurements, artifacts }
   }
@@ -496,8 +513,32 @@ export function unpackArtifact(mime: string | null, bytes: Uint8Array): { mime: 
   return { mime: mime.slice(0, -PACKED.length), bytes: new Uint8Array(gunzipSync(bytes)) }
 }
 
-/** An artifact's mime as its readers see it (without the packing marker). */
-export const artifactMime = (mime: string | null): string | null => (mime?.endsWith(PACKED) ? mime.slice(0, -PACKED.length) : mime)
+/** An artifact's mime as its readers see it (without the packing or stored marker). */
+export const artifactMime = (mime: string | null): string | null => {
+  const m = withoutStored(mime)
+  return m?.endsWith(PACKED) ? m.slice(0, -PACKED.length) : m
+}
+
+// ------------------------------------------------------------------ stored artifacts (src/core/artifact-store.ts)
+
+const STORED = '; trace-stored='
+
+/** An artifact row's mime for an output kept in the bucket: its own mime, then its SHA-256 and size. */
+export const storedMime = (mime: string, sha256: string, size: number): string => `${mime}${STORED}${sha256}:${size}`
+
+/** The stored output a row names, or null when the row holds its bytes. */
+export function storedRef(mime: string | null | undefined): { sha256: string; size: number; mime: string } | null {
+  const at = mime?.indexOf(STORED) ?? -1
+  if (!mime || at < 0) return null
+  const m = /^([0-9a-f]{64}):(\d+)$/.exec(mime.slice(at + STORED.length))
+  return m ? { sha256: m[1] as string, size: Number(m[2]), mime: mime.slice(0, at) } : null
+}
+
+/** The mime without the stored marker. */
+export const withoutStored = (mime: string | null): string | null => {
+  const at = mime?.indexOf(STORED) ?? -1
+  return mime && at >= 0 ? mime.slice(0, at) : mime
+}
 
 /** Pack every large artifact already in a database (tracectl db pack). Returns how many and the bytes before/after. */
 export function packArtifacts(db: DatabaseSync): { packed: number; before: number; after: number } {

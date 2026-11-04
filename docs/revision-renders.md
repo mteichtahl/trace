@@ -83,7 +83,9 @@ test-esp32_rev-B_2026-11-04_exploded.png
 
 - **The date** is the day of the `journey.snapshot` decision, in the installation's time zone (UTC when none is set).
 - **In the run record**, they are kept as artifacts of one `render.showcase` run, with the device, the time each
-  shot took, and the commits of the board and the case.
+  shot took, and the commits of the board and the case. On an installation the pictures themselves (about 5 MB each)
+  are kept in the project's folder in the installation's bucket, and the run record holds only a reference to each, so
+  renders do not grow the repository (docs/artifact-store.md).
 
 ## How it is built
 

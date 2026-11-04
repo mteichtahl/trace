@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 /** The web app's actions: parts, the journey, inbox, chats, preferences, graph, files and creating a project. */
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
@@ -23,7 +24,8 @@ import { projectHash } from '../../src/core/project.js'
 import { askQuestion, loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
 import { allTools } from '../../src/tools/index.js'
 import { Registry } from '../../src/core/registry.js'
-import { openProject } from '../../src/core/store.js'
+import { openProject, storedMime } from '../../src/core/store.js'
+import { artifactKey } from '../../src/core/artifact-store.js'
 import { cutDay } from '../../src/api/actions-journey.js'
 import '../../src/tools/verify/db.js'
 import { FakeCognito, FakeGitHub, accessToken, verifier } from './fixtures.js'
@@ -672,6 +674,27 @@ describe('the central bucket beside TRACE_HOME', () => {
     const d = mkdtempSync(join(tmpdir(), 'trace-bs-'))
     writeFileSync(join(d, 'x'), '')
     expect(bucketStore('projects', d).url).toBe(join(d, 'projects'))
+  })
+})
+
+describe('large outputs kept in the bucket', () => {
+  it('artifact and files.url read a stored output from the project\'s artifacts folder, and say when it is gone', async () => {
+    const png = new Uint8Array(600 * 1024).map((_, i) => i % 251)
+    const sha = createHash('sha256').update(png).digest('hex')
+    const runId = 'rndstored0001'
+    seedProject('acme/web', (db) => {
+      db.prepare("INSERT INTO runs (id, kind, started, status) VALUES (?, 'render.showcase', 1, 'pass')").run(runId)
+      // as Work.storeArtifact writes them: the row names the stored bytes and holds none
+      db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)').run(runId, 'web_rev-A_2026-11-05_board.png', storedMime('image/png', sha, png.length), new Uint8Array())
+      db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)').run(runId, 'gone.png', storedMime('image/png', 'f'.repeat(64), 10), new Uint8Array())
+    })
+    await backendFor(join(bucket, 'projects')).put(artifactKey('acme/web', sha), png)
+    const a = await run(ADMIN, 'artifact', { repo: 'acme/web', id: runId, name: 'web_rev-A_2026-11-05_board.png' }) as { mime: string; size: number; base64: string }
+    expect(a).toMatchObject({ mime: 'image/png', size: png.length })
+    expect(Buffer.from(a.base64, 'base64')).toEqual(Buffer.from(png))
+    const f = await run(ADMIN, 'files.url', { repo: 'acme/web', path: `runs/${runId}/web_rev-A_2026-11-05_board.png` }) as { mime: string; size: number; base64: string }
+    expect(f).toMatchObject({ mime: 'image/png', size: png.length, base64: a.base64 })
+    await expect(run(ADMIN, 'artifact', { repo: 'acme/web', id: runId, name: 'gone.png' })).rejects.toThrow(/no longer has it/)
   })
 })
 

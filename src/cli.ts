@@ -71,6 +71,7 @@ import { join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ConfigError, changed, leaves, load, parseCliValue, resolve, setValue, unset } from './core/config.js'
 import { mergeMain } from './core/dbmerge.js'
+import { readOutput } from './core/artifact-store.js'
 // registers the prompts tables of .trace/project.db, so `tracectl db merge` merges them by their rule
 import './prompts/store.js'
 import { workerPrompt } from './core/cloudworker.js'
@@ -374,8 +375,12 @@ async function main(argv: string[]): Promise<number> {
     case 'artifact': {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { out: { type: 'string' } } })
       const [id, name] = positionals
-      const data = id && name ? new Work().getArtifact(id, name) : null
-      if (!data) { err(`no artifact ${name ?? ''} on run ${id ?? ''}`); return 1 }
+      const data = id && name ? await readOutput(new Work(), id, name) : null
+      if (!data) {
+        const listed = id && name && new Work().run(id)?.artifacts.some((a) => a.name === name)
+        err(listed ? `${name} of run ${id} is kept in the installation's storage, which cannot be reached from here` : `no artifact ${name ?? ''} on run ${id ?? ''}`)
+        return 1
+      }
       if (values.out) { writeFileSync(values.out, data); out(`wrote ${values.out} (${data.length} bytes)`) } else process.stdout.write(data)
       return 0
     }
