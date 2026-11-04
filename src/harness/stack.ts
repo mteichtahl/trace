@@ -14,7 +14,7 @@
  * change at a time, each with its own passing checks.
  */
 import { commentOnce } from './util.js'
-import { type GitHub, errorMessage, errorStatus, labelNames } from './types.js'
+import { type GitHub, errorStatus, labelNames } from './types.js'
 
 /** At most this many stacked pull requests are pushed to (retargeted, or their base merged in) per run: each push
  * starts a build. */
@@ -97,9 +97,9 @@ export async function restack({ github, owner, repo, defaultBranch, hold, canPus
       if (!cmp || cmp.data.behind_by === 0) continue
       if (labelNames(pr.labels).includes(hold)) { lines.push(`#${pr.number} is behind #${below.number} but held: left alone.`); continue }
       if (!canPush) { lines.push(`#${pr.number} would get #${below.number}'s new commits, but there is no TRACE_TOKEN secret.`); continue }
-      const r = await update(github, owner, repo, pr)
+      const r = await update(github, owner, repo, pr, base)
       lines.push(r === 'done' ? `#${pr.number}: merged ${base} (#${below.number}) in, so it builds on #${below.number}'s latest.`
-        : r === 'conflict' ? `#${pr.number} has a conflict with #${below.number}: left for the worker.` : `#${pr.number} moved while it was looked at: the next run looks again.`)
+        : `#${pr.number} has a conflict with #${below.number}: left for the worker.`)
       if (r === 'done') pushed.add(pr.number)
       continue
     }
@@ -113,9 +113,9 @@ export async function restack({ github, owner, repo, defaultBranch, hold, canPus
       const wasHeld = labelNames(pr.labels).includes(hold)
       if (!wasHeld) await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: [hold] })
       await github.rest.pulls.update({ owner, repo, pull_number: pr.number, base: to })
-      const r = await update(github, owner, repo, pr)
+      const r = await update(github, owner, repo, pr, to)
       if (!wasHeld) await github.rest.issues.removeLabel({ owner, repo, issue_number: pr.number, name: hold }).catch(() => undefined)
-      lines.push(`#${pr.number}: #${last.number} merged, so it now targets ${to}${r === 'done' ? ' and is up to date' : r === 'conflict' ? ' (it has a conflict there: left for the worker)' : ' (it moved meanwhile: the next run brings it up to date)'}.`)
+      lines.push(`#${pr.number}: #${last.number} merged, so it now targets ${to}${r === 'done' ? ' and is up to date' : ' (it has a conflict there: left for the worker)'}.`)
       pushed.add(pr.number)
       continue
     }
@@ -144,15 +144,19 @@ async function closedBase(github: GitHub, owner: string, repo: string, base: str
   return tip === null || tip === last.head.sha ? last : null
 }
 
-/** Merge the pull request's base into its head (GitHub's "Update branch"). */
-async function update(github: GitHub, owner: string, repo: string, pr: { number: number; head: { sha: string } }): Promise<'done' | 'conflict' | 'moved'> {
+/**
+ * Merge `from` (the pull request's base, as it now is) into its head branch, with a merge commit. Not GitHub's "Update
+ * branch" (pulls.updateBranch): GitHub refuses that for a stacked pull request, one whose base is not the default
+ * branch ("Updating a stacked PR's branch via this endpoint is not supported", 403). The merges API does the same merge
+ * on any branch: 201 merged, 204 already up to date, 409 a conflict.
+ */
+async function update(github: GitHub, owner: string, repo: string, pr: { number: number; head: { ref: string } }, from: string): Promise<'done' | 'conflict'> {
   try {
-    await github.rest.pulls.updateBranch({ owner, repo, pull_number: pr.number, expected_head_sha: pr.head.sha })
+    await github.rest.repos.merge({ owner, repo, base: pr.head.ref, head: from, commit_message: `Merge ${from} into ${pr.head.ref} (stacked on it)` })
     return 'done'
   } catch (e) {
-    if (errorStatus(e) !== 422) throw e
-    // GitHub answers 422 both for a conflict and for a head that moved since it was listed
-    return /expected head sha|head ref/i.test(errorMessage(e)) ? 'moved' : 'conflict'
+    if (errorStatus(e) !== 409) throw e
+    return 'conflict'
   }
 }
 
