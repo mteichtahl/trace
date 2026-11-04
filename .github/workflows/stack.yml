@@ -55,22 +55,24 @@ jobs:
               }
             }
             if (!above.length && !moved.length) return core.info(`Nothing is built on #${pr.number}.`)
-            const update = async (p) => {
+            // merge `from` into the pull request's branch with a merge commit (the merges API: 201 merged, 204 already
+            // there, 409 a conflict). Not pulls.updateBranch: GitHub refuses it for a stacked pull request (403)
+            const update = async (p, from) => {
               try {
-                await github.rest.pulls.updateBranch({ owner, repo, pull_number: p.number, expected_head_sha: p.head.sha })
+                await github.rest.repos.merge({ owner, repo, base: p.head.ref, head: from, commit_message: `Merge ${from} into ${p.head.ref} (stacked on it)` })
                 return true
               } catch (e) {
-                if (e.status !== 422) throw e
+                if (e.status !== 409) throw e
                 return false // a conflict: whoever owns the branch merges it by hand
               }
             }
             const lines = []
             for (const p of above) {
               if (context.payload.action === 'synchronize') {
-                lines.push(await update(p) ? `#${p.number}: merged #${pr.number}'s new commits in.` : `#${p.number} conflicts with #${pr.number}: merge \`${pr.head.ref}\` into \`${p.head.ref}\` by hand.`)
+                lines.push(await update(p, pr.head.ref) ? `#${p.number}: merged #${pr.number}'s new commits in.` : `#${p.number} conflicts with #${pr.number}: merge \`${pr.head.ref}\` into \`${p.head.ref}\` by hand.`)
               } else if (pr.merged) {
                 await github.rest.pulls.update({ owner, repo, pull_number: p.number, base: pr.base.ref })
-                const done = await update(p)
+                const done = await update(p, pr.base.ref)
                 lines.push(`#${p.number}: #${pr.number} merged, so it now targets \`${pr.base.ref}\`${done ? ' and is up to date' : ` (it conflicts there: merge \`${pr.base.ref}\` into \`${p.head.ref}\` by hand)`}.`)
               } else {
                 // once per base: a pull request closed and reopened, then closed again, does not say it twice
@@ -84,7 +86,7 @@ jobs:
               }
             }
             for (const p of moved) {
-              lines.push(await update(p) ? `#${p.number}: #${pr.number} merged and GitHub moved it onto \`${pr.base.ref}\`; now up to date.` : `#${p.number} conflicts with \`${pr.base.ref}\`: merge it in by hand.`)
+              lines.push(await update(p, pr.base.ref) ? `#${p.number}: #${pr.number} merged and GitHub moved it onto \`${pr.base.ref}\`; now up to date.` : `#${p.number} conflicts with \`${pr.base.ref}\`: merge it in by hand.`)
             }
             for (const l of lines) core.info(l)
             await core.summary.addRaw(lines.map((l) => `- ${l}`).join('\n') + '\n').write()
