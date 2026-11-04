@@ -72,6 +72,13 @@ describe('reading the guided flow from journey.get', () => {
     expect(readJourney(raw).changesUnavailable).toBeUndefined()
   })
 
+  it('reads the criteria whose evidence went out of date, for the main screen', () => {
+    const why = 'Its evidence is out of date: hw/board.kicad_sch changed since kicad.erc ran. trace checks it again.'
+    expect(readJourney({ ...raw, stale_evidence: [{ criterion: 'capture.erc', gate: 'capture', text: 'The schematic passes its rule check.', why }] }).staleEvidence)
+      .toEqual([{ criterion: 'capture.erc', gate: 'capture', text: 'The schematic passes its rule check.', why }])
+    expect(readJourney(raw).staleEvidence).toBeUndefined()
+  })
+
   it('a guide needs its purpose; steps need their text', () => {
     expect(readGuide({ you_do: 'x' })).toBeUndefined()
     expect(readGuide({ purpose: 'P' })).toEqual({ purpose: 'P', you_do: '', trace_does: '', you_get: '', typical_time: '', next: null })

@@ -42,6 +42,28 @@ describe('change request impact', () => {
     expect(changeImpact(rec(), 'part')).toBeNull()
   })
 
+  it('lineage narrows the stale evidence to the runs the change can touch, and keeps what it cannot rule out', () => {
+    for (const g of ['define', 'architect', 'capture']) pass(g)
+    const files = new Map<string, string[]>([
+      ['run-capture.erc', ['hw/board.kicad_pro', 'hw/board.kicad_sch']],
+      ['run-capture.datasheets', ['docs/datasheets/U1.pdf']],
+    ])
+    const all = changeImpact(rec(), 'part')!
+    const narrow = changeImpact(rec(), 'part', files)!
+    expect(narrow.stale).toContain('run for capture.erc')
+    expect(narrow.stale).not.toContain('run for capture.datasheets')
+    // a run whose inputs are not known (from before lineage) stays in
+    expect(narrow.stale).toContain('run for capture.pins')
+    expect(narrow.narrowed).toBe(1)
+    expect(narrow.stale).toHaveLength(all.stale.length - 1)
+    expect(all.narrowed).toBeUndefined()
+    // firmware: the schematic's rule check is left out, the datasheet run is not
+    const fw = changeImpact(rec(), 'firmware', files)
+    expect(fw?.stages).toEqual(['Prove'])
+    // a requirement change is not narrowed by files: the design record is not a file
+    expect(changeImpact(rec(), 'requirement', files)?.narrowed).toBeUndefined()
+  })
+
   it('nothing to trace until the kind of change is chosen', () => {
     expect(changeImpact(rec(), '')).toBeNull()
     expect(changeImpact(rec(), undefined)).toBeNull()

@@ -64,6 +64,8 @@ export interface CheckInput {
   /** why that build no longer stands for the default branch (src/tools/mech/stale.ts staleReasons; empty: current;
    * absent: not compared) */
   caseStale?: string[] | null
+  /** Change request: the repository files each run cited as evidence was made from (lineage), to narrow the impact */
+  evidenceFiles?: ReadonlyMap<string, readonly string[]> | null
   /** settings: hil.instruments */
   instruments: { name: string; kind: string; limits?: { max_voltage_v?: number; max_current_a?: number } }[]
   /** the orders recorded (journey.orders) */

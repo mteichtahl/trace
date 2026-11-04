@@ -26,6 +26,7 @@
  *                         design decisions, as design.decide records them: src/api/actions-design.ts), a decision
  *                         logged for every skill, and the draft discarded
  */
+import { filesRead } from '../ontology/lineage.js'
 import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
@@ -33,7 +34,7 @@ import {
   STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
-import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
 import { type Lasts, askedBy, carryOn, viewerOf } from './actions-journey.js'
 import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
@@ -160,7 +161,23 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
   })
   // Case design's fit: the build's recorded inputs against the default branch's files now
   if (skill === 'case-design' && input.caseBuild?.result) input.caseStale = await caseStaleness(ctx, repo, input.caseBuild.result.inputs)
+  // Change request: what each cited run was made from, so the impact leaves out what the change cannot touch
+  if (skill === 'change-request' && input.r) input.evidenceFiles = await evidenceFiles(ctx, repo, input.r)
   return input
+}
+
+/** The files each run the journey cites as evidence was made from (lineage); null when the run record cannot be read. */
+async function evidenceFiles(ctx: Context, repo: string, r: JourneyRecord): Promise<Map<string, string[]> | null> {
+  const runs = [...new Set(r.criteria.flatMap((c) => c.evidence.filter((e) => e.kind === 'run').map((e) => e.ref)))]
+  if (!runs.length) return null
+  try {
+    return await withProjectDb(ctx, repo, (path) => {
+      const db = openProjectDb(path)
+      try { return new Map(runs.map((id) => [id, filesRead(db, [id])])) } finally { db.close() }
+    })
+  } catch {
+    return null
+  }
 }
 
 /** Why the latest case build no longer stands for the default branch (src/tools/mech/stale.ts); null when the files
@@ -314,7 +331,7 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       return { case: { run: b.id, status: b.status, summary: b.summary, process: x.process ?? null, fit: x.fit_status ?? null, problems: x.problems ?? [], rules_failing: x.rules_failing ?? [], files: x.files ?? [], case: x.case ?? null } }
     }
     case 'change-request': {
-      const impact = changeImpact(i.r, i.draft?.what)
+      const impact = changeImpact(i.r, i.draft?.what, i.evidenceFiles)
       return impact ? { impact } : {}
     }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}

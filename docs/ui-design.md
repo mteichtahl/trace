@@ -342,7 +342,13 @@ There is one chat, Ask trace, and it appears in three places: docked beside any 
 - GitHub-flavoured markdown: headings, bold and italic, lists, task lists, tables (scrolling sideways inside their own frame on a phone), block quotes, links and images.
 - Code blocks with syntax highlighting for the languages trace uses (C, C++, Rust, Python, TypeScript, Verilog, SPICE, KiCad's S-expressions, shell), a language label, and a Copy button.
 - Formulas typeset with KaTeX, inline and as blocks, because component maths lives in chat ("R1 = (Vout / Vref − 1) × R2").
-- Mermaid diagrams drawn as pictures, with "Show source" beside them.
+- Pictures, each in one frame with Full screen (pan and zoom), Download (SVG or PNG, or a plot's numbers as CSV) and Source; while a reply is still streaming the frame shows a quiet "Drawing…" placeholder, and a picture that cannot be drawn shows its source with a one-line reason:
+  - ` ```mermaid ` diagrams: block diagrams and signal paths, sequences, state machines, schedules, simple charts. A `%% title: …` first line names it.
+  - ` ```wavedrom ` timing diagrams (also `wavejson`, `timing`), written as WaveJSON.
+  - ` ```plot ` charts (also `chart`): trace's plot shape (title, axes with units, series, a limit line, a verdict) as line, step, bar, scatter or area; words on the x axis make a bar chart.
+  - ` ```svg ` drawings (a pinout, a connector), cleaned like any SVG file.
+  - Images, tapped to open full screen.
+  The chat agent is told which of these it may use, and when, by the locked prompt part `chat.visuals`.
 - Links to anything in the record (a requirement, a run, a part, a file) become chips that open in place: a requirement opens its side sheet, a run its card, a file its viewer.
 - Raw HTML is never rendered, only shown as text, and every link to outside trace shows its domain.
 
