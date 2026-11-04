@@ -1,0 +1,93 @@
+# The Layout review gate's criterion layout.fit: "the board fits its enclosure, or each clash is waived" (docs/ontology.md
+# "The fit check"). Over the project's graph, which carries the newest case build (src/ontology/mech.ts): its fit check,
+# each problem it found (a clash, a gap under its clearance, an opening not made) and each of the process's rules.
+#
+#   met only when there is a build, it still stands (nothing it was made from changed since: isCurrentBuild, worked out
+#   from its lineage against the repository's files), the case closes around the board, and every problem and every
+#   failing rule is gone or waived on its own
+#
+# A problem is named by what it is about (case-finding:clash/J1/lid), so a waiver of it (a waiver of kind finding on
+# layout.fit@<its identifier>) outlasts a rebuild that finds the same problem; a different problem needs its own.
+# Each finding names the part and says what to do next, in plain words (no acronyms).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix tsh:   <https://trace-eda.com/ns/trace/shapes#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+tsh: a owl:Ontology ;
+    rdfs:label "trace shapes" ;
+    sh:declare [ sh:prefix "trace" ; sh:namespace "https://trace-eda.com/ns/trace#"^^xsd:anyURI ] .
+
+tsh:LayoutFitProblem a sh:NodeShape ;
+    rdfs:label "Each fit problem is fixed or waived" ;
+    rdfs:comment "Backs the criterion layout.fit." ;
+    tsh:criterion "layout.fit" ;
+    sh:targetClass trace:FitFinding ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "{?text}. Fix it with the case settings or the case script and build again, or waive this one problem." ;
+        sh:select """
+            SELECT $this ?text WHERE { $this trace:text ?text . }
+        """ ;
+    ] .
+
+tsh:LayoutFitRule a sh:NodeShape ;
+    rdfs:label "The case is within the process's rules" ;
+    rdfs:comment "Backs the criterion layout.fit." ;
+    tsh:criterion "layout.fit" ;
+    sh:targetClass trace:RuleResult ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "Outside the process's rules: {?text}. Change the case or the process and build again, or waive this rule." ;
+        sh:select """
+            SELECT $this ?text WHERE { $this trace:status "fail" . OPTIONAL { $this trace:text ?t } BIND (COALESCE(?t, "a rule") AS ?text) }
+        """ ;
+    ] .
+
+tsh:LayoutFitBuild a sh:NodeShape ;
+    rdfs:label "The case build still stands and closes around the board" ;
+    rdfs:comment "Backs the criterion layout.fit." ;
+    tsh:criterion "layout.fit" ;
+    sh:targetClass trace:FitCheck ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The case build is out of date: {?why}. Run mech.build again." ;
+        sh:select """
+            SELECT $this ?why WHERE { $this trace:isCurrentBuild false . OPTIONAL { $this trace:staleBecause ?w } BIND (COALESCE(?w, "something it was made from changed") AS ?why) }
+        """ ;
+    ] , [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "trace could not tell whether the case build still stands: check layout.fit where the project's files are." ;
+        sh:select """
+            SELECT $this WHERE { FILTER NOT EXISTS { $this trace:isCurrentBuild ?any } }
+        """ ;
+    ] , [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The case does not close around the whole board: change the case and build again." ;
+        sh:select """
+            SELECT $this WHERE { $this trace:enclosed false }
+        """ ;
+    ] .
+
+# Nothing built is not "the board fits": checked once, on the journey.
+tsh:LayoutFitHasBuild a sh:NodeShape ;
+    rdfs:label "There is a case build to check" ;
+    rdfs:comment "Backs the criterion layout.fit." ;
+    tsh:criterion "layout.fit" ;
+    sh:targetClass trace:Journey ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "No case is built yet: run mech.build, then check layout.fit again." ;
+        sh:select """
+            SELECT $this WHERE { FILTER NOT EXISTS { ?f a trace:FitCheck } }
+        """ ;
+    ] .

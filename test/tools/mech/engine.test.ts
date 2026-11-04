@@ -170,7 +170,7 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
         expect(b.files, f).toContain(`mechanical/out/${f}`)
         expect(readFileSync(join(repo, 'mechanical', 'out', f)).length, f).toBeGreaterThan(0)
       }
-      expect(b.next).toMatch(/journey\.check criterion "layout\.fit"/)
+      expect(b.next).toMatch(/shape\.check with criterion "layout\.fit"/)
       expect(b.problems).toEqual([])
       // the template byte for byte: one cad job, no script run anywhere
       expect(b.stages).toHaveLength(1)

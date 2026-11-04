@@ -156,7 +156,7 @@ export function addCase(store: Store, o: GraphOptions, project: DatabaseSync, fi
     return n
   }
   for (const c of f.clashes ?? []) {
-    const n = finding(findingKey({ kind: 'clash', ref: c.ref, at: c.case_part }), 'clash', c.ref, `${c.ref} clashes with the ${c.case_part} (${fmt(c.volume_mm3)} mm³)`)
+    const n = finding(findingKey({ kind: 'clash', ref: c.ref, at: c.case_part }), 'clash', c.ref, `${c.ref === 'board' ? 'The board' : c.ref} clashes with the ${c.case_part} (${fmt(c.volume_mm3)} mm³)`)
     add(n, 'casePart', literal(c.case_part))
     add(n, 'volume', dec(c.volume_mm3))
   }
