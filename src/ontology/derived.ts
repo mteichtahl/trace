@@ -6,9 +6,11 @@
  *                    agents' row (src/tools/design/record.ts requirementDecisions, as the requirements list reads it)
  *   isCurrentOption  on each ArchitectureOption: the option the design goes ahead with (architectureView's `current`:
  *                    the chosen one, else the recommended one, else the first)
+ *   buildQuantity    on the journey: how many boards the build plan makes (the stock checks are read at it)
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { DataFactory, type Store } from 'n3'
+import { loadJourney } from '../core/journey.js'
 import { loadDesignDecisions } from '../tools/design/decisions.js'
 import { readDesignRows } from '../tools/design/db.js'
 import { architectureView, requirementDecisions, requirementsNow } from '../tools/design/record.js'
@@ -17,11 +19,14 @@ import { nodeIri, type GraphOptions } from './graph.js'
 
 const { namedNode, literal, quad } = DataFactory
 const BOOL = namedNode('http://www.w3.org/2001/XMLSchema#boolean')
+const INT = namedNode('http://www.w3.org/2001/XMLSchema#integer')
 const has = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
 
 /** Add the derived facts of `project` (the design rows) and `decisions` (the database holding people's decisions). */
 export function addDerived(store: Store, o: GraphOptions, project: DatabaseSync, decisions: DatabaseSync | null): void {
   const ds = decisions ? loadDesignDecisions(decisions) : []
+  const j = decisions ? loadJourney(decisions) : null
+  if (j) store.addQuad(quad(namedNode(nodeIri(o, 'journey', 'current')), namedNode(`${NS}buildQuantity`), literal(String(j.journey.build.quantity), INT)))
   if (has(project, 'requirements')) {
     const all = project.prepare('SELECT * FROM requirements ORDER BY id').all() as Record<string, unknown>[]
     const decided = requirementDecisions(ds, requirementsNow(all))

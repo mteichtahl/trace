@@ -14,7 +14,7 @@
     rdfs:label "trace board" ;
     rdfs:comment "Intent, requirements, architecture, the pin plan, tests and runs, parts and offers, and the board's components, pads and nets." ;
     owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/journey> ;
-    owl:versionInfo "0.2.0" .
+    owl:versionInfo "0.3.0" .
 
 # ================================================================== intent and requirements
 
@@ -118,6 +118,10 @@ trace:RunArtifact a owl:Class ;
 trace:RunInput a owl:Class ;
     rdfs:label "Input of a run" ;
     rdfs:comment "One thing a run was made from: a file of the repository, or another run's output, with its content hash when read." .
+
+trace:PartsListLine a owl:Class ;
+    rdfs:label "Parts list line" ;
+    rdfs:comment "One line of the parts list as a stock check read it: the part, how many the boards checked need, and the best offer's stock and price." .
 
 trace:ProjectSetting a owl:Class ;
     rdfs:label "Project setting" ;
@@ -702,9 +706,58 @@ trace:sku a owl:DatatypeProperty ;
 
 trace:stock a owl:DatatypeProperty ;
     rdfs:label "stock" ;
-    rdfs:comment "How many the seller had." ;
-    rdfs:domain trace:SupplierOffer ;
+    rdfs:comment "How many the seller had: on an offer, or on a parts list line, the best offer when the list was checked." ;
     rdfs:range xsd:integer .
+
+# ------------------------------------------------------------------ a parts list line (parts.bom_check)
+
+trace:lineNumber a owl:DatatypeProperty ;
+    rdfs:label "line" ;
+    rdfs:comment "Where the line sits in the parts list, counting from one." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:integer .
+
+trace:orderCode a owl:DatatypeProperty ;
+    rdfs:label "order code" ;
+    rdfs:comment "The supplier's own code the line is pinned to, when it names one." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:string .
+
+trace:designators a owl:DatatypeProperty ;
+    rdfs:label "designators" ;
+    rdfs:comment "The places on the board the line fits, such as R1, R2." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:string .
+
+trace:perBoard a owl:DatatypeProperty ;
+    rdfs:label "per board" ;
+    rdfs:comment "How many one board takes." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:decimal .
+
+trace:quantityNeeded a owl:DatatypeProperty ;
+    rdfs:label "needed" ;
+    rdfs:comment "How many the boards checked take: per board times the boards." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:decimal .
+
+trace:flag a owl:DatatypeProperty ;
+    rdfs:label "flag" ;
+    rdfs:comment "Something the check noticed about the line, such as end of life or not fitted." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:string .
+
+trace:unitPrice a owl:DatatypeProperty ;
+    rdfs:label "unit price" ;
+    rdfs:comment "The price of one, at the quantity bought." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:decimal .
+
+trace:lineTotal a owl:DatatypeProperty ;
+    rdfs:label "line total" ;
+    rdfs:comment "What the line costs for the boards checked." ;
+    rdfs:domain trace:PartsListLine ;
+    rdfs:range xsd:decimal .
 
 trace:minimumOrder a owl:DatatypeProperty ;
     rdfs:label "minimum order" ;

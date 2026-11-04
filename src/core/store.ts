@@ -201,6 +201,31 @@ CREATE TABLE IF NOT EXISTS artifact_hashes (
   PRIMARY KEY (run_id, name)
 );` })
 
+/**
+ * A parts list stock check, line by line (parts.bom_check; the stock shapes, ontology/shapes/*.stock.ttl and
+ * signoff.bom.ttl): what each line needs for the boards checked, the best offer's stock and price, and the line's
+ * standing. Written once, with the run, and merged as a union.
+ */
+ensureProjectSchema({ table: 'parts_list_lines', sql: `
+CREATE TABLE IF NOT EXISTS parts_list_lines (
+  run_id TEXT NOT NULL,
+  line INTEGER NOT NULL,          -- 1-based, in the parts list's order
+  mpn TEXT,                       -- the manufacturer's part number on the line
+  part_key TEXT,                  -- that number as trace compares it (mpnKey): the part it names
+  order_code TEXT,                -- the supplier's code the line is pinned to (an LCSC number)
+  refs TEXT,                      -- the designators it fits: R1, R2, …
+  per_board REAL NOT NULL,
+  need REAL NOT NULL,             -- per_board × the boards checked
+  status TEXT NOT NULL,           -- ok | low | short | out | not-found | error
+  flags TEXT NOT NULL,            -- JSON list: end-of-life, not-fitted, no-part-number, …
+  stock INTEGER,                  -- the best offer's stock, when one was found
+  unit_price REAL,                -- at the quantity bought
+  line_total REAL,
+  currency TEXT,
+  note TEXT,
+  PRIMARY KEY (run_id, line)
+);` })
+
 export interface RunInput { kind: 'file' | 'artifact'; ref: string; name?: string | null; sha256: string | null }
 
 /**

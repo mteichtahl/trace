@@ -1,0 +1,92 @@
+# The Schematic review gate's criterion capture.stock: "Every part is in stock for the build quantity, or its exception is signed." (src/core/journey.ts).
+# Over the project's graph (src/ontology/graph.ts): the newest parts.bom_check run of the parts list (a file, not lines
+# given inline; a run that failed does not count) is for at least the build quantity the journey's build plan names,
+# and none of its lines is out of stock, short, not found or unchecked. A part trace cannot get is signed as an
+# exception on the criterion, at the gate.
+#
+# Each finding names the part and says what to do next, in plain words (no acronyms).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix tsh:   <https://trace-eda.com/ns/trace/shapes#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+tsh: a owl:Ontology ;
+    rdfs:label "trace shapes" ;
+    sh:declare [ sh:prefix "trace" ; sh:namespace "https://trace-eda.com/ns/trace#"^^xsd:anyURI ] ,
+               [ sh:prefix "xsd" ; sh:namespace "http://www.w3.org/2001/XMLSchema#"^^xsd:anyURI ] .
+
+tsh:CaptureStock a sh:NodeShape ;
+    rdfs:label "The parts list is in stock for the build" ;
+    rdfs:comment "Backs the criterion capture.stock: the newest parts list check, at the build quantity." ;
+    tsh:criterion "capture.stock" ;
+    sh:targetClass trace:Journey ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "No parts list is checked for stock yet: run parts.bom_check on the parts list at the build quantity." ;
+        sh:select """
+            SELECT $this WHERE { FILTER NOT EXISTS { ?run trace:runKind "parts.bom_check" ; trace:subject ?listFile ; trace:startedAt ?t .
+                FILTER (?listFile != "rows")
+                FILTER NOT EXISTS { ?run trace:status "error" }
+                FILTER NOT EXISTS {
+                    ?later trace:runKind "parts.bom_check" ; trace:subject ?laterFile ; trace:startedAt ?laterT .
+                    FILTER (?laterFile != "rows" && ?laterT > ?t)
+                    FILTER NOT EXISTS { ?later trace:status "error" }
+                } } }
+        """ ;
+    ] , [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The newest parts list check is for {?boards} boards, fewer than the {?n} the project builds: check it again at {?n}." ;
+        sh:select """
+            SELECT $this ?boards ?n WHERE {
+                $this trace:buildQuantity ?n .
+                ?run trace:runKind "parts.bom_check" ; trace:subject ?listFile ; trace:startedAt ?t .
+                FILTER (?listFile != "rows")
+                FILTER NOT EXISTS { ?run trace:status "error" }
+                FILTER NOT EXISTS {
+                    ?later trace:runKind "parts.bom_check" ; trace:subject ?laterFile ; trace:startedAt ?laterT .
+                    FILTER (?laterFile != "rows" && ?laterT > ?t)
+                    FILTER NOT EXISTS { ?later trace:status "error" }
+                }
+                ?m trace:ofRun ?run ; trace:name "boards" ; trace:value ?b .
+                FILTER (?b < ?n)
+                BIND (STR(xsd:integer(?b)) AS ?boards)
+            }
+        """ ;
+    ] .
+
+tsh:CaptureStockLines a sh:NodeShape ;
+    rdfs:label "Every line of the newest parts list check is available" ;
+    rdfs:comment "Backs the criterion capture.stock." ;
+    tsh:criterion "capture.stock" ;
+    sh:targetClass trace:PartsListLine ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "{?part}{?why}. Propose an in-stock alternative, or sign an exception for it." ;
+        sh:select """
+            SELECT $this ?part ?why WHERE {
+                $this trace:ofRun ?run ; trace:status ?st .
+                FILTER (?st IN ("out", "short", "not-found", "error"))
+                ?run trace:runKind "parts.bom_check" ; trace:subject ?listFile ; trace:startedAt ?t .
+                FILTER (?listFile != "rows")
+                FILTER NOT EXISTS { ?run trace:status "error" }
+                FILTER NOT EXISTS {
+                    ?later trace:runKind "parts.bom_check" ; trace:subject ?laterFile ; trace:startedAt ?laterT .
+                    FILTER (?laterFile != "rows" && ?laterT > ?t)
+                    FILTER NOT EXISTS { ?later trace:status "error" }
+                }
+                OPTIONAL { $this trace:mpn ?mpn } OPTIONAL { $this trace:orderCode ?code } OPTIONAL { $this trace:lineNumber ?ln }
+                OPTIONAL { $this trace:quantityNeeded ?q } OPTIONAL { $this trace:stock ?s }
+                BIND (COALESCE(?mpn, ?code, CONCAT("line ", STR(?ln))) AS ?part)
+                BIND (STR(xsd:integer(?q)) AS ?need)
+                BIND (IF(?st = "out", CONCAT(" is out of stock: ", ?need, " needed"),
+                      IF(?st = "short", CONCAT(" is short: ", ?need, " needed, ", STR(?s), " in stock"),
+                      IF(?st = "not-found", " was not found at any supplier", " could not be checked"))) AS ?why)
+            }
+        """ ;
+    ] .

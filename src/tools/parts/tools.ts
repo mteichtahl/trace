@@ -3,13 +3,18 @@
  * in what order), BOM checks, alternatives, and fetching a part's datasheet into the shared library. Answers are kept
  * in the central parts database for 6 h, so every project shares them and providers' rate limits are spent once.
  */
+import { isAbsolute, relative, resolve } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { load } from '../../core/config.js'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
+import { findRoot } from '../../core/store.js'
+import { recorded } from '../kicad/record.js'
+import { mpnKey } from '../datasheets/mpn.js'
 import type { ResolveHost } from '../datasheets/download.js'
 import { DatasheetLibrary, library } from '../datasheets/library.js'
 import { PartsDb } from './db.js'
-import { alternatives as findAlternatives, bomCheck, lookup, readBom, search as providerSearch, type LookupOptions } from './lookup.js'
+import { alternatives as findAlternatives, type BomLine, bomCheck, lookup, readBom, search as providerSearch, type LookupOptions } from './lookup.js'
 import type { PartOffer, ProviderName } from './types.js'
 
 const ProviderEnum = z.enum(['lcsc', 'mouser', 'digikey', 'nexar'])
@@ -71,9 +76,23 @@ export const partsSearch = defineTool({
 
 const BomRowArg = z.object({ mpn: z.string().optional(), qty: z.number().min(0), lcsc: z.string().optional(), refs: z.string().optional() })
 
+/** The parts list as the record names it: its path in the repository, or `rows` for lines given inline. */
+function bomSubject(path: string | undefined): string {
+  if (path === undefined) return 'rows'
+  const root = findRoot()
+  const rel = root ? relative(root, resolve(path)) : path
+  return root && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path
+}
+
+/** Keep every line of a check with its run (parts_list_lines), for the stock shapes to read. */
+function keepLines(db: DatabaseSync, run: string, lines: readonly BomLine[]): void {
+  const add = db.prepare('INSERT OR IGNORE INTO parts_list_lines (run_id, line, mpn, part_key, order_code, refs, per_board, need, status, flags, stock, unit_price, line_total, currency, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+  for (const l of lines) add.run(run, l.line, l.mpn, l.mpn ? mpnKey(l.mpn) : null, l.lcsc, l.refs, l.qty_per_board, l.need, l.status, JSON.stringify(l.flags), l.offer?.stock ?? null, l.unit_price, l.line_total, l.currency, l.note || null)
+}
+
 export const partsBomCheck = defineTool({
   name: 'parts.bom_check',
-  description: 'Check a BOM (a CSV path with MPN/Qty/LCSC columns, or rows) for a build of N boards: per line the best offer, stock, unit price at the quantity bought (qty × boards, at least the MOQ), flags (out of stock, short, low, not found, end of life) and the total.',
+  description: 'Check a BOM (a CSV path with MPN/Qty/LCSC columns, or rows) for a build of N boards: per line the best offer, stock, unit price at the quantity bought (qty × boards, at least the MOQ), flags (out of stock, short, low, not found, end of life) and the total. Recorded with every line, so the stock criteria (shape.check) read it; returns run_id. Check at the project\'s build quantity.',
   input: z.object({
     path: z.string().optional(), rows: z.array(BomRowArg).max(2000).optional(), boards: z.number().int().min(1).default(1),
     providers: providersArg, fresh: z.boolean().default(false), limit: z.number().int().min(1).max(2000).default(200),
@@ -83,9 +102,19 @@ export const partsBomCheck = defineTool({
   run: async (a) => {
     if ((a.path === undefined) === (a.rows === undefined)) throw new ToolError('give a BOM path or rows (one of them)')
     const rows = a.path !== undefined ? readBom(a.path) : (a.rows ?? []).map((r) => ({ ...r, ...(r.lcsc ? { lcsc: r.lcsc.toUpperCase() } : {}) }))
-    const r = await bomCheck(rows, a.boards, options(a.providers, a.fresh, a.currency))
-    const shown = (a.only_problems ? r.lines.filter((l) => l.status !== 'ok' || l.flags.includes('end-of-life')) : r.lines).slice(0, a.limit)
-    return { ...r, lines: shown, line_count: r.lines.length }
+    return recorded('parts.bom_check', bomSubject(a.path), a, async (run) => {
+      const r = await bomCheck(rows, a.boards, options(a.providers, a.fresh, a.currency))
+      keepLines(run.db, run.id, r.lines)
+      run.measure('boards', r.boards)
+      run.measure('blocking', r.blocking)
+      run.measure('total', r.total, r.currency)
+      const shown = (a.only_problems ? r.lines.filter((l) => l.status !== 'ok' || l.flags.includes('end-of-life')) : r.lines).slice(0, a.limit)
+      return {
+        status: r.blocking ? 'fail' as const : 'pass' as const,
+        summary: `${r.lines.length} line${r.lines.length === 1 ? '' : 's'} for ${r.boards} board${r.boards === 1 ? '' : 's'}: ${r.blocking ? `${r.blocking} out, short or not found` : 'every line in stock'}; ${r.total} ${r.currency}`,
+        result: { ...r, lines: shown, line_count: r.lines.length },
+      }
+    })
   },
 })
 
