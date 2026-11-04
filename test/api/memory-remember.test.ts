@@ -2,7 +2,8 @@
  * memory.remember through the API: a person's explicit "remember this", recorded as one short-term user event under
  * their own person actor (personal) or the project's chat actor (project), always as the signed-in caller. Write
  * access is needed (a guest is refused), the access check comes before any AWS call, and only the project's own
- * memory is written.
+ * memory is written. A named thread must be the caller's own on that project, and the chat's soft limit on writes
+ * applies.
  */
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -12,6 +13,8 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { AGENTS, AgentMemory, type ProjectMemories, type SendClient, chatActor, chatSession, parseActor, personActor } from '../../src/agents/runtime/memory.js'
 import { type ActionDeps, type Context, REMEMBER_NOTE, needOf, perform, rememberText } from '../../src/api/actions.js'
 import { AccessDenied, assign } from '../../src/core/access.js'
+import { backendFor } from '../../src/core/central.js'
+import { CHAT_WRITES } from '../../src/api/actions-chats.js'
 import { Registry } from '../../src/core/registry.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
 
@@ -40,6 +43,7 @@ const memories: ProjectMemories = {
     return id ? new AgentMemory(id, clientFor(id)) : null
   },
 }
+const bucket = mkdtempSync(join(tmpdir(), 'trace-api-remember-bucket-'))
 const deps = (memory: ProjectMemories | null = memories): ActionDeps => ({
   github: async () => new FakeGitHub([BOARD, 'acme/secret']),
   cognito: () => new FakeCognito(),
@@ -47,12 +51,18 @@ const deps = (memory: ProjectMemories | null = memories): ActionDeps => ({
   tools: () => new Registry([]),
   scratch: mkdtempSync(join(tmpdir(), 'trace-api-remember-')),
   memory: () => memory,
+  store: (p) => backendFor(join(bucket, p)),
 })
 const ctx = (principal: Context['principal'], memory: ProjectMemories | null = memories): Context => ({ principal, deps: deps(memory) })
+/** A conversation `who` starts on `repo`: its id. */
+async function threadOf(who: Context['principal'], repo = BOARD): Promise<string> {
+  const r = await perform('chats.append', { repo, messages: [{ text: 'Hello trace.' }] }, ctx(who))
+  return (r.result as { thread: { id: string } }).thread.id
+}
 const events = () => sent.filter((s) => s.cmd instanceof CreateEventCommand).map((s) => ({ ...(s.cmd as CreateEventCommand).input, memoryId: s.memoryId }))
 
 beforeAll(async () => {
-  for (const [sub, email] of [['user-1', USER.email], ['guest-1', GUEST.email]] as const) await assign(ADMIN, { sub, email }, BOARD)
+  for (const [sub, email] of [['user-1', USER.email], ['guest-1', GUEST.email], ['user-3', 'user-3@example.com'], ['user-burst', 'burst@example.com']] as const) await assign(ADMIN, { sub, email }, BOARD)
   await assign(ADMIN, { sub: 'user-2', email: OUTSIDER.email }, 'acme/secret')
 })
 beforeEach(() => { sent.length = 0 })
@@ -63,11 +73,13 @@ describe('memory.remember', () => {
   })
 
   it('records a project fact under the project\'s chat actor, marked as asked for, in the thread\'s session', async () => {
-    const r = await perform('memory.remember', { repo: BOARD, text: 'The board ships in a 3D-printed case.', thread: 'abcdefgh12' }, ctx(USER))
-    expect(r.result).toMatchObject({ repo: BOARD, recorded: true, scope: 'project', actor: 'chat', session: chatSession('abcdefgh12'), note: REMEMBER_NOTE })
+    const thread = await threadOf(USER)
+    sent.length = 0
+    const r = await perform('memory.remember', { repo: BOARD, text: 'The board ships in a 3D-printed case.', thread }, ctx(USER))
+    expect(r.result).toMatchObject({ repo: BOARD, recorded: true, scope: 'project', actor: 'chat', session: chatSession(thread), note: REMEMBER_NOTE })
     const [e, ...rest] = events()
     expect(rest).toEqual([])
-    expect(e).toMatchObject({ memoryId: BOARD_MEMORY, actorId: chatActor(BOARD).id, sessionId: 'chat-abcdefgh12' })
+    expect(e).toMatchObject({ memoryId: BOARD_MEMORY, actorId: chatActor(BOARD).id, sessionId: `chat-${thread}` })
     expect(e?.actorId).toBe('acme/board/chat')
     expect(e?.payload).toEqual([{ conversational: { role: 'USER', content: { text: rememberText('project', 'The board ships in a 3D-printed case.') } } }])
     expect(rememberText('project', 'x')).toMatch(/asked trace to remember/)
@@ -91,6 +103,29 @@ describe('memory.remember', () => {
     await expect(perform('memory.remember', { repo: BOARD, text: 'x', scope: 'personal' }, ctx(GUEST))).rejects.toThrow(AccessDenied)
     await expect(perform('memory.remember', { repo: 'acme/secret', text: 'x' }, ctx(USER))).rejects.toThrow(AccessDenied)
     expect(sent).toHaveLength(0)
+  })
+
+  it('takes a thread only when it is the caller\'s own on that project: none, another person\'s or another project\'s is refused', async () => {
+    const mine = await threadOf(USER)
+    const theirs = await threadOf({ sub: 'user-3', email: 'user-3@example.com', groups: ['trace-users'] })
+    const elsewhere = await threadOf(ADMIN, 'acme/secret')
+    sent.length = 0
+    for (const thread of ['zzzzzzzz99', theirs, elsewhere]) {
+      await expect(perform('memory.remember', { repo: BOARD, text: 'x', thread }, ctx(USER))).rejects.toThrow(/no conversation .* of yours on this project/)
+    }
+    expect(events()).toHaveLength(0)
+    // one the caller wrote in counts as theirs, though someone else started it
+    await perform('chats.append', { repo: BOARD, thread: theirs, messages: [{ text: 'Me too.' }] }, ctx(USER))
+    await perform('memory.remember', { repo: BOARD, text: 'x', scope: 'personal', thread: theirs }, ctx(USER))
+    await perform('memory.remember', { repo: BOARD, text: 'y', thread: mine }, ctx(USER))
+    expect(events().map((e) => e.sessionId)).toEqual([chatSession(theirs), chatSession(mine)])
+  })
+
+  it('is held to the chat\'s soft limit on writes', async () => {
+    const who = { sub: 'user-burst', email: 'burst@example.com', groups: ['trace-users'] }
+    for (let i = 0; i < CHAT_WRITES.burst; i++) await perform('memory.remember', { repo: BOARD, text: `fact ${i}`, scope: 'personal' }, ctx(who))
+    await expect(perform('memory.remember', { repo: BOARD, text: 'one more', scope: 'personal' }, ctx(who))).rejects.toThrow(/Too many messages at once/)
+    expect(events()).toHaveLength(CHAT_WRITES.burst)
   })
 
   it('writes only the project\'s own memory', async () => {

@@ -159,6 +159,40 @@ describe('the nested layout', () => {
     }
   }, 900_000)
 
+  it("fits the API role's chat statements under IAM's ten managed policies with the longest GitHub names", () => {
+    // GitHub's longest: a 39-character owner and a 100-character repository, here full of '.' and '_' (each encoded as
+    // two characters in an actor id: src/agents/runtime/memory.ts projectId), so the chat statements are their largest
+    const name = (i: number, repoLength: number, ownerLength = 39): string =>
+      `${`o${String(i).padStart(2, '0')}-`.padEnd(ownerLength, 'x')}/${`r${String(i).padStart(2, '0')}`.padEnd(repoLength, '._').replace(/\.$/, '_')}`
+    const longest = Array.from({ length: 60 }, (_, i) => name(i, 100))
+    for (const r of longest) expect(r.split('/').map((x) => x.length)).toEqual([39, 100])
+    const cfg = (repositories: string[]) => InfraPropsSchema.parse({ ...base, repositories, memory: { legacySharedMemory: true } })
+    // sixty of them never reach IAM: the API's list of worker runtimes (one AgentCore environment value) refuses them first
+    expect(() => synth(cfg(longest), 'Count60Longest')).toThrow(/too many repositories for one installation: the API's list of worker runtimes would be \d+ characters \(AgentCore allows 5000\)/)
+    const check = (repositories: string[], id: string): void => {
+      const s = synth(cfg(repositories), id)
+      const api = Object.entries(json(s.parent).Resources).filter(([k, r]) => r.Type === 'AWS::IAM::ManagedPolicy' && k.startsWith('ApiRuntimeRoleOverflowPolicy'))
+      // IAM's default quota of managed policies per role (CDK keeps each one under IAM's 6,144 characters itself)
+      expect(api.length).toBeLessThanOrEqual(10)
+      // every project's chat statement is still its own: that project's memory, its chat and person actors only
+      type St = { Action: unknown; Resource: unknown; Condition?: Record<string, Record<string, unknown>> }
+      const role = Object.values(json(s.parent).Resources).filter((r) => r.Type === 'AWS::IAM::ManagedPolicy' || r.Type === 'AWS::IAM::Policy')
+      const chat = role.flatMap((r) => (r.Properties?.PolicyDocument as { Statement: St[] }).Statement).filter((st) => JSON.stringify(st.Action) === '"bedrock-agentcore:CreateEvent"')
+      expect(chat).toHaveLength(repositories.length)
+      for (const st of chat) {
+        const actors = Object.values(st.Condition ?? {}).flatMap((c) => Object.values(c)).flat().map(String)
+        expect(actors.length).toBeGreaterThan(0)
+        for (const a of actors) expect(a).toMatch(/^[^*]+\/(?:chat|person\/\*)$/)
+        expect(JSON.stringify(st.Resource)).toMatch(/memory\/[a-z0-9_]+_m_[0-9a-f]+-\*"$/)
+      }
+    }
+    // as many of the longest as the worker list allows (seven overflow policies)
+    check(longest.slice(0, 29), 'Count29Longest')
+    // and sixty with the longest repository names the worker list allows them, a 39-character owner (eight: the most,
+    // as what else the role names grows with the number of projects)
+    check(Array.from({ length: 60 }, (_, i) => name(i, 14)), 'Count60Long')
+  }, 900_000)
+
   it('refuses at synth time a flat stack CloudFormation would refuse, and says why', () => {
     // each flat project is 20 resources (its runner's three among them) and 8 outputs: 20 fit, 21 do not
     expect(() => synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: repos(20) }), 'Flat20')).not.toThrow()

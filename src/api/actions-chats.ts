@@ -33,8 +33,8 @@ import { type Actor, type Role as TurnRole, chatActor, chatSession, personActor 
 import { isAdmin, require_ } from '../core/access.js'
 import { ActionError, type Context, Repo, def, hashOf, hashesOf, label, plainly, projectMemory, storeAt } from './action-kit.js'
 
-const store = (ctx: Context, repo: string): ChatStore => new ChatStore(storeAt(ctx, PROJECTS_PREFIX), repo)
-const author = (ctx: Context): Author => ({ label: label(ctx.principal), hash: hashOf(ctx.principal), also: hashesOf(ctx.principal) })
+export const store = (ctx: Context, repo: string): ChatStore => new ChatStore(storeAt(ctx, PROJECTS_PREFIX), repo)
+export const author = (ctx: Context): Author => ({ label: label(ctx.principal), hash: hashOf(ctx.principal), also: hashesOf(ctx.principal) })
 
 /**
  * A soft limit on writes per person (per API runtime instance; AgentCore keeps one per session, and the web backend
@@ -52,7 +52,8 @@ export function takeChatWrite(sub: string, now: number = Date.now()): boolean {
   b.tokens -= 1
   return true
 }
-const limited = (ctx: Context): void => {
+/** Refuse the caller's write when they are over CHAT_WRITES (chats.append, chats.reply, memory.remember). */
+export const limited = (ctx: Context): void => {
   if (!takeChatWrite(ctx.principal.sub)) throw new ActionError('Too many messages at once: wait a moment and try again.')
 }
 
