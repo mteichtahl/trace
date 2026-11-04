@@ -349,7 +349,20 @@ describe('the trace stack', () => {
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('/prompts/')
     expect(read?.Resource).toEqual(expect.arrayContaining([HA, HB].map((h) => parentRef(syn, h, memoryIdOf(h), 'MemoryArn'))))
     expect(read?.Resource).toHaveLength(2)
-    expect(text).not.toContain('CreateEvent')
+    // one write of memory: CreateEvent for the chat (Ask trace's conversations, memory.remember), on each project's own
+    // memory, for that project's chat actor and person actors only; nothing else of events or records
+    const chat = s.filter((x) => actionsOf(x).includes('bedrock-agentcore:CreateEvent'))
+    expect(chat).toHaveLength(2)
+    for (const [repo, h] of [[A, HA], [B, HB]] as const) {
+      const id = repo.toLowerCase()
+      const st = chat.find((x) => JSON.stringify(x.Condition).includes(`"${id}/chat"`))
+      expect(st, repo).toMatchObject({ Effect: 'Allow', Action: 'bedrock-agentcore:CreateEvent', Condition: { StringLike: { 'bedrock-agentcore:actorId': [`${id}/chat`, `${id}/person/*`] } } })
+      expect(JSON.stringify(st?.Resource)).toContain(`:memory/trace_m_${h}-*`)
+      // its own project's memory only
+      const other = h === HA ? HB : HA
+      expect(JSON.stringify(st?.Resource)).not.toContain(other)
+    }
+    expect(s.filter((x) => actionsOf(x).some((a) => /CreateEvent|DeleteEvent|BatchCreate|BatchUpdate|DeleteMemoryRecord/.test(a))).flatMap(actionsOf)).toEqual(['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:CreateEvent'])
     // no GPU, no project data, no project tokens (but each project's chats, kept outside its repository, and the projects
     // waiting to be created: conditional writes, as above)
     const rest = text.replaceAll('/projects/*/chats/*', '').replaceAll('projects/*/chats/*', '').replaceAll('/projects/*/journey/*', '').replaceAll('projects/*/journey/*', '')

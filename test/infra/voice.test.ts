@@ -9,7 +9,8 @@ const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
 const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 type Statement = { Sid?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
-const statements = (t: Template, prefix: string): Statement[] => Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))
+// a role's inline policy and, once CDK splits a long one, its overflow managed policies
+const statements = (t: Template, prefix: string): Statement[] => Object.entries({ ...t.findResources('AWS::IAM::Policy'), ...t.findResources('AWS::IAM::ManagedPolicy') }).filter(([id]) => id.startsWith(prefix))
   .flatMap(([, p]) => (p as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties.PolicyDocument.Statement)
 const actions = (s: Statement): string[] => [s.Action].flat()
 const transcribe = (ss: Statement[]): Statement[] => ss.filter((s) => actions(s).some((a) => a.startsWith('transcribe:')))
