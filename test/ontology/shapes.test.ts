@@ -5,7 +5,7 @@
  * can break it, naming the requirement.
  */
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { Parser } from 'n3'
@@ -15,8 +15,8 @@ import { Bridge } from '../../src/core/bridge.js'
 import { GATES, applyJourneySchema, startJourney } from '../../src/core/journey.js'
 import { recordDesignDecision } from '../../src/tools/design/decisions.js'
 import { buildGraph, nodeIri } from '../../src/ontology/graph.js'
-import { SHAPES_DIR, shapedCriteria } from '../../src/ontology/shapes.js'
-import { graphQuads, runShape, turtle } from '../../src/tools/shape/tools.js'
+import { shapedCriteria } from '../../src/ontology/shapes.js'
+import { SHAPES_DIR, graphQuads, runShape, turtle } from '../../src/tools/shape/tools.js'
 import { ADMIN, projectDb } from './fixture.js'
 
 const O = { installation: 'test', project: 'acme/sensor' }
@@ -66,6 +66,10 @@ describe('the shape files', () => {
   })
 
   const criteria = new Set(GATES.flatMap((g) => g.criteria.filter((c) => c.owner === 'trace').map((c) => `${g.id}.${c.key}`)))
+
+  it('the list the prompts name is the folder\'s', () => {
+    expect(shapedCriteria()).toEqual(readdirSync(SHAPES_DIR).filter((f) => f.endsWith('.ttl')).map((f) => f.slice(0, -4)).sort())
+  })
 
   it('each parses, backs a criterion trace owns, and speaks in plain words', () => {
     expect(shapedCriteria()).toContain('architect.mapped')

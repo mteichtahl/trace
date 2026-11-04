@@ -25,7 +25,8 @@ import { Work } from '../../core/store.js'
 import { AgentFactError, addCriterionCheck } from '../../core/agent-facts.js'
 import { type JourneyRecord, copyJourneyTables, loadJourney } from '../../core/journey.js'
 import { buildGraph, type GraphSources } from '../../ontology/graph.js'
-import { SHAPES_DIR, shapedCriteria } from '../../ontology/shapes.js'
+import { shapedCriteria } from '../../ontology/shapes.js'
+import { ONTOLOGY_DIR } from '../../ontology/vocab.js'
 import { recorded } from '../kicad/record.js'
 import { journeyScope } from '../journey/tools.js'
 
@@ -35,6 +36,9 @@ type Scope = ReturnType<typeof journeyScope>
 const Finding = z.object({ focus: z.string().nullable(), path: z.string().nullable(), value: z.string().nullable(), message: z.string(), severity: z.string(), shape: z.string().nullable() })
 const Result = z.object({ conforms: z.boolean(), findings: z.array(Finding) })
 export type ShapeFinding = z.infer<typeof Finding>
+
+/** ontology/shapes: one file per criterion */
+export const SHAPES_DIR = join(ONTOLOGY_DIR, 'shapes')
 
 type Quads = ReturnType<Store['getQuads']>
 /** The quads of the records in some of the project's databases (records link across databases by name). */
