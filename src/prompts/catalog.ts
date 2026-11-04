@@ -466,7 +466,7 @@ add({ id: 'worker.item.not-own', mode: 'locked', prompt: 'worker.item', vars: {}
   default: 'This branch belongs to a person: push only merge commits on top of it, never rewrite it.' })
 add({ id: 'worker.item.conflict', mode: 'editable', prompt: 'worker.item', vars: ITEM_VARS, description: 'How the worker resolves a merge conflict.',
   default: [
-    "You are on the PR's branch. `git fetch origin {{base}} && git merge origin/{{base}}` (its base: {{base}}); resolve keeping the intent of both sides (read both",
+    "You are on the PR's branch. `git fetch origin +refs/heads/{{base}}:refs/remotes/origin/{{base}} && git merge origin/{{base}}` (its base: {{base}}); resolve keeping the intent of both sides (read both",
     "histories with git log/show); regenerate lockfiles with the repository's own tooling, never by hand; `.trace/project.db`",
     'merges itself through the trace-db merge driver; validate; commit the merge; `git push`. Never rebase or force-push. If',
     'the two sides need a decision only a person can make, `git merge --abort` and escalate.',

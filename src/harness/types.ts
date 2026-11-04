@@ -81,7 +81,7 @@ export const PullRequestPayload = z.object({
   node_id: z.string(),
   draft: z.boolean().optional().default(false),
   base: z.object({ ref: z.string() }).loose(),
-  head: z.object({ sha: z.string() }).loose(),
+  head: z.object({ sha: z.string(), ref: z.string().optional() }).loose(),
   labels: z.array(Label).default([]),
 }).loose()
 

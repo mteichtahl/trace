@@ -45,7 +45,7 @@ export const WorkItemSchema = z.object({
   title: z.string(),
   /** A pull request's base, when it is not the default branch: a stacked change (docs/stacked-changes.md), which is
    * brought up to date from its base, not from the default branch. */
-  base: z.string().optional(),
+  base: z.string().max(200).regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, 'not a valid branch name').optional(),
   /** The specialist it goes to and why (worker-pick routes it; the runtime routes an item without one). */
   route: RouteSchema.optional(),
 }).strict()
@@ -192,7 +192,8 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
     known.set(p.number, { labels: labelNames(p.labels), body: p.body })
     await askAgain(p.number, p.head.sha)
     await consider({ kind, number: p.number, sha: p.head.sha, ref: p.head.ref, own, title: p.title.slice(0, 200),
-      ...(p.base?.ref && p.base.ref !== cfg.branch ? { base: p.base.ref } : {}) })
+      // a base that is not a plain branch name (it goes into a git command) leaves the item on the default branch
+      ...(p.base?.ref && p.base.ref !== cfg.branch && /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(p.base.ref) ? { base: p.base.ref } : {}) })
   }
   const issues = (await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'open', labels: cfg.labels.agent_fix, per_page: 100 }))
     .filter((i) => !i.pull_request)
