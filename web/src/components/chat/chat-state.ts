@@ -14,6 +14,12 @@ export interface PanelState {
   width: number
   /** the thread open per project */
   threads: Record<string, string | undefined>
+  /**
+   * per project, bumped each time a person opens a thread or a new conversation (or the last one is reopened): the
+   * conversation view is rebuilt then, and only then. A first message that creates its thread keeps the view it was
+   * typed in, so a reply already streaming into it is not thrown away.
+   */
+  opened: Record<string, number>
   /** the history list is showing */
   history: boolean
 }
@@ -28,7 +34,7 @@ const readWidth = (): number => {
   }
 }
 
-export const panel = createStore<PanelState>({ open: false, width: typeof window === 'undefined' ? 380 : readWidth(), threads: {}, history: false })
+export const panel = createStore<PanelState>({ open: false, width: typeof window === 'undefined' ? 380 : readWidth(), threads: {}, opened: {}, history: false })
 export const usePanel = () => useStore(panel)
 
 export const openPanel = (open?: boolean) => panel.set((s) => ({ ...s, open: open ?? !s.open }))
@@ -48,7 +54,20 @@ export function setPanelWidth(width: number) {
     // per device only
   }
 }
-export const setThread = (repo: string, id: string | undefined) => panel.set((s) => ({ ...s, threads: { ...s.threads, [repo]: id }, history: false }))
+/** Open thread `id` (undefined: a new conversation) on the project, rebuilding the conversation view. */
+export const setThread = (repo: string, id: string | undefined) =>
+  panel.set((s) => ({ ...s, threads: { ...s.threads, [repo]: id }, opened: { ...s.opened, [repo]: (s.opened[repo] ?? 0) + 1 }, history: false }))
+/** The conversation being shown just got its thread (its first message was kept): record it, keeping the view. */
+export const threadCreated = (repo: string, id: string) => panel.set((s) => ({ ...s, threads: { ...s.threads, [repo]: id } }))
+/**
+ * Reopen the project's last thread, found by a lookup started when the panel opened: only when nothing has been chosen
+ * or started on the project since. The lookup can answer after a person has already sent a message in the new
+ * conversation the panel showed meanwhile; switching then would hide that message behind an older conversation.
+ */
+export const reopenLast = (repo: string, id: string | undefined) => {
+  if (repo in panel.get().threads) return
+  setThread(repo, id)
+}
 export const showHistory = (history: boolean) => panel.set((s) => ({ ...s, history }))
 
 export const useThreads = (repo: string | undefined) => useQuery({ ...q('chats.list', { repo: repo ?? '' }), enabled: !!repo })

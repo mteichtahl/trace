@@ -26,7 +26,7 @@ import { usePrefs } from '@/lib/prefs'
 import { cn } from '@/lib/utils'
 import { ChatInput } from './chat-input'
 import { AGENT_ID, resetWire, setWire } from './agent'
-import { pendingAsk, setThread, useRecallHistory } from './chat-state'
+import { pendingAsk, threadCreated, useRecallHistory } from './chat-state'
 import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
 import { ChatRepo, LiveCall } from './renderers'
@@ -82,6 +82,8 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   const [loaded, setLoaded] = useState<string | undefined>()
   /** messages by other people on the project, shown but never sent to trace as the viewer's */
   const [foreign, setForeign] = useState<Map<string, string>>(new Map())
+  /** a stored thread still loading: sending now would be overwritten when it lands (it was read before the message) */
+  const opening = !!repo && !!threadId && loaded !== threadId
 
   // open a stored thread: the viewer's own turns (and trace's replies to them) are the conversation; other people's
   // are quoted to trace as data, and make the thread read-only for trace
@@ -124,7 +126,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
         thread.current = r.id
         agent.threadId = r.id
         setLoaded(r.id)
-        setThread(repo, r.id)
+        threadCreated(repo, r.id)
       }
       return true
     } catch (e) {
@@ -223,7 +225,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
 
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col', className)}>
-      <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 [overflow-anchor:none]" aria-live="polite" aria-busy={running}>
+      <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 [overflow-anchor:none]" aria-live="polite" aria-busy={running || opening}>
         {messages.length === 0 && intro}
         {messages.map((m, i) => {
           if (m.role === 'user') {
@@ -305,11 +307,12 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
       </div>
       <div className="border-t p-3">
         <ChatInput
+          disabled={opening}
           onSend={send}
           onStop={() => copilotkit.stopAgent({ agent })}
           running={running}
           history={history}
-          placeholder={placeholder}
+          placeholder={opening ? 'Opening the conversation…' : placeholder}
           repo={repo}
           onReadAgain={prefs.voice.speech === false ? undefined : () => {
             const last = [...messages].reverse().find((m) => m.role === 'assistant' && textOf(m))

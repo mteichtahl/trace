@@ -15,7 +15,7 @@ import { useProjects } from '@/lib/queries'
 import { AgentSetupNotice } from '@/components/project/agent-setup'
 import { cn } from '@/lib/utils'
 import { AGENT_ID } from './agent'
-import { openPanel, setPanelWidth, setThread, showHistory, usePanel, useThreads } from './chat-state'
+import { openPanel, reopenLast, setPanelWidth, setThread, showHistory, usePanel, useThreads } from './chat-state'
 import { ChatView } from './chat-view'
 import { removeContext, restoreContext, useContextEntries } from './context'
 import { PlayerBar, VoiceControls } from './voice/voice-controls'
@@ -94,12 +94,21 @@ export function AskTrace({ onClose, className }: { onClose?: () => void; classNa
     enabled: !!repo && !(repo in p.threads),
     queryFn: async () => {
       const { call } = await import('@/lib/api')
-      const ts = await call('chats.list', { repo: repo! })
-      const last = [...ts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
-      setThread(repo!, last?.id)
-      return ts
+      try {
+        const ts = await call('chats.list', { repo: repo! })
+        const last = [...ts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+        reopenLast(repo!, last?.id)
+        return ts
+      } catch (e) {
+        // the list could not be read: a new conversation, rather than a panel waiting for an answer that never comes
+        reopenLast(repo!, undefined)
+        throw e
+      }
     },
   })
+  // until the last thread is known the conversation is not shown: typing into a new one that is then swapped for the
+  // last one would lose what was typed or sent
+  const deciding = !!repo && !(repo in p.threads)
   return (
     <section className={cn('flex h-full min-h-0 flex-col bg-background', className)} aria-label="Ask trace">
       <header className="space-y-3 border-b px-4 py-3">
@@ -123,7 +132,11 @@ export function AskTrace({ onClose, className }: { onClose?: () => void; classNa
       ) : (
         <>
           {repo && <AgentSetupNotice repo={repo} compact className="mx-3 mt-3" />}
-          <ChatView key={`${repo}:${thread ?? 'new'}`} agentId={AGENT_ID} repo={repo} threadId={thread} intro={<p className="text-sm text-muted-foreground">Ask anything about {repo ? projectName(repo) : 'your projects'}. trace sees the screen you are on.</p>} />
+          {deciding ? (
+            <p className="flex-1 px-4 py-4 text-sm text-muted-foreground" aria-busy="true">Opening your last conversation…</p>
+          ) : (
+          <ChatView key={`${repo}:${p.opened[repo ?? ''] ?? 0}`} agentId={AGENT_ID} repo={repo} threadId={thread} intro={<p className="text-sm text-muted-foreground">Ask anything about {repo ? projectName(repo) : 'your projects'}. trace sees the screen you are on.</p>} />
+          )}
           <div className="px-3 pb-2">
             <PlayerBar />
           </div>
