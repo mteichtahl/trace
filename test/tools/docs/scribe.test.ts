@@ -92,5 +92,10 @@ describe('Scribe\'s tools', () => {
     const lld = r.documents.find((d: Dict) => d.kind === 'lld')
     expect(lld.sections.find((s: Dict) => s.id === 'modules').because).toEqual(['schematic'])
     expect(r.missing).toEqual([])
+    // a gate signed changes the journey, which is not in the repository: the request names it, and the Journey
+    // section is written again (the test-esp32 proof run found it left at the stage before)
+    const signed = await call('docs.stale', { stage: 'capture', also: ['journey'] })
+    expect(signed.documents.find((d: Dict) => d.kind === 'hld').sections.find((s: Dict) => s.id === 'journey').because).toEqual(['journey'])
+    expect(hld.sections.map((s: Dict) => s.id)).not.toContain('journey')
   })
 })

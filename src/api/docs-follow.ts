@@ -29,11 +29,12 @@ import { sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
 import { type Context, label, PROJECT_DB_PATH } from './action-kit.js'
 
 /** What Scribe is asked. `why`: what happened, in a person's words. Pure. */
-export function docsRequest(why: string, o: { stage?: StageId | null; records?: readonly SourceKind[] } = {}): string {
+export function docsRequest(why: string, o: { stage?: StageId | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): string {
   return [
     `${why} Bring the project's documents up to date.`,
     o.stage ? `The project is at ${STAGE_NAMES[o.stage]} (stage ${o.stage}): start any document it needs that is missing (docs_init), and write every section due by it.` : 'Read the stage with journey_status first.',
     o.records?.length ? `The records that changed: ${o.records.join(', ')}.` : '',
+    o.also?.length ? `Records that changed outside the repository: ${o.also.join(', ')}; pass them to docs_stale as also.` : '',
     'Find the sections to write with docs_stale, leaving base unset so it compares with the commit the documents were last written at. Write only those sections and the pending ones now due; check, print and deliver as your instructions say. If nothing needs writing, say so and stop without a change.',
   ].filter(Boolean).join('\n')
 }
@@ -44,7 +45,7 @@ export function docsRequest(why: string, o: { stage?: StageId | null; records?: 
  */
 export function docsReleaseRequest(revision: string, day: string, o: { stage?: StageId | null } = {}): string {
   return [
-    docsRequest(`Revision ${revision} was cut on ${day}.`, o),
+    docsRequest(`Revision ${revision} was cut on ${day}.`, { ...o, also: ['journey'] }),
     `Then print the revision's release copies: make any figure still at draft quality again at release quality (docs_figures quality=release), check every document (docs_check), and print them all with docs_publish release=${revision}, its revision table ending with revision ${revision}, ${day}, at the commit you print, "Released". A document the revision already has a copy of is kept as it was.`,
   ].join('\n')
 }

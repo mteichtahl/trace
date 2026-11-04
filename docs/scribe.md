@@ -164,8 +164,23 @@ Each layer is one pull request that builds and passes on its own.
 8. **Documents tab** (this layer): `/p/:id/docs` from Architect on (`web/src/routes/_app/p/$id/docs.tsx`,
    `web/src/components/docs`), shown below. `documents.get` now says how current each document is and why, and each
    document's newest print (`documents/latest.json`, which `docs.publish` keeps).
-9. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
-   exercises the protocol specification).
+9. **Proof** (in progress): `test-esp32` through every stage on the live installation, checking each document and
+   figure as it appears (the I2C display exercises the protocol specification). What it found so far, and fixed in
+   this layer:
+   - **Architect, Capture, Prove**: Scribe started on its own at each gate and each merged change, and wrote the high
+     and low level design from the records with sources on every table; `docs.check` passes at each stage.
+   - **Printing failed on the tools function**: Mermaid's browser died there on every diagram (Chromium on Lambda,
+     arm64), and the run blamed the first diagram. Now the browser is tried again with a second set of flags that
+     leaves out single-process mode, its own error reaches the run (`dumpio`, never just the last stack frame), and a
+     browser that never draws is said to be the browser, not the diagram (`python/tracebridge/docs/publish.py`).
+     The same documents print here.
+   - **Sections left at the stage before**: a gate signed changes the journey, which is not in the repository, so no
+     comparison saw it. `docs.stale` takes `also` (the records the request says changed outside the repository), and
+     a gate signed or a revision cut names the journey. Only the Journey section says where the project is (a new
+     writing rule); the Overview follows the board (its hero render) and the Firmware section the pin plan and
+     protocol specs.
+   - **Diagrams too small to read when printed**: a writing rule keeps diagrams of more than five boxes top to
+     bottom with short labels.
 
 ### The Documents tab
 

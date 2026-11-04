@@ -485,7 +485,7 @@ export const JOURNEY_ACTIONS = {
     // (a signature that cuts a release asks for the release copies instead, below: one Scribe job does both)
     const stageDocs = async (): Promise<void> => {
       if (!signed.advanced_to || !docsFor(signed.advanced_to, true).length) return
-      const d = await startScribe(ctx, a.repo, docsRequest(`The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { stage: signed.advanced_to }))
+      const d = await startScribe(ctx, a.repo, docsRequest(`The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { stage: signed.advanced_to, also: ['journey'] }))
       if (d.started) kickoff = { ...kickoff, started: [...(kickoff.started ?? []), d.started] }
     }
     if (!signed.released) {

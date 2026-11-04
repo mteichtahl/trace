@@ -184,6 +184,8 @@ describe('a revision cut', () => {
     expect(q).toMatch(/Revision B was cut on 2026-11-05/)
     expect(q).toMatch(/docs_publish release=B/)
     expect(q).toMatch(/quality=release/)
+    // a revision cut is a gate signed: the journey changed outside the repository
+    expect(q).toMatch(/outside the repository: journey; pass them to docs_stale as also/)
   })
 })
 

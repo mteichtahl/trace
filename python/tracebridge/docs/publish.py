@@ -85,25 +85,55 @@ def prepare(text: str) -> Prepared:
     return Prepared(meta, body, diagrams)
 
 
-def draw_diagrams(diagrams: list[str], work: Path, mmdc: str = "mmdc") -> None:
+# Chromium's flags for Mermaid, tried in order until one draws: the tools function (AWS Lambda) has no /dev/shm and no
+# user namespaces, and some Chromium builds crash there in single-process mode, so a second set leaves that out
+BROWSER_FLAGS: tuple[tuple[str, ...], ...] = (
+    ("--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--single-process", "--no-zygote"),
+    ("--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-setuid-sandbox", "--no-first-run",
+     "--disable-crash-reporter", "--disable-breakpad", "--disable-extensions", "--use-gl=swiftshader"),
+)
+# Mermaid's own words for a diagram it cannot read: that is the diagram's fault, and no other browser helps
+SYNTAX = re.compile(r"(Parse|Lexical|Syntax) error|No diagram type detected|UnknownDiagramError", re.I)
+
+
+def _reason(text: str, limit: int = 900) -> str:
+    """The lines that say why: errors and Chromium's own complaints first, then the head; never the stack frames."""
+    lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("at ")]
+    told = [l for l in lines if re.search(r"error|fail|fatal|crash|closed|killed|denied|cannot|unable", l, re.I)]
+    out = " | ".join(dict.fromkeys(told[:6] or lines[:6]))
+    return out[:limit] or "Mermaid gave no reason"
+
+
+def draw_diagrams(diagrams: list[str], work: Path, mmdc: str = "mmdc") -> dict[str, object]:
+    """Draw each diagram as SVG. Returns which browser flags drew them (0 the first set) and why earlier sets failed."""
     if not diagrams:
-        return
+        return {"flags": None, "tried": []}
     cfg = work / "mermaid.json"
     cfg.write_text(json.dumps(MERMAID_CONFIG))
-    pup = work / "puppeteer.json"
-    pup.write_text(json.dumps({
-        "args": ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--single-process", "--no-zygote"],
-        **({"executablePath": os.environ["TRACE_CHROMIUM"]} if os.environ.get("TRACE_CHROMIUM") else {}),
-    }))
+    exe = {"executablePath": os.environ["TRACE_CHROMIUM"]} if os.environ.get("TRACE_CHROMIUM") else {}
+    tried: list[str] = []
+    k = 0
     for i, code in enumerate(diagrams, 1):
         src = work / f"diagram-{i}.mmd"
         src.write_text(code)
-        r = subprocess.run([mmdc, "-q", "-i", str(src), "-o", str(work / f"diagram-{i}.svg"), "-c", str(cfg), "-p", str(pup), "-b", "white"],
-                           capture_output=True, text=True, timeout=120)
-        if r.returncode != 0 or not (work / f"diagram-{i}.svg").exists():
-            first = (code.strip().splitlines() or [""])[0]
-            why = (r.stderr or r.stdout).strip().splitlines()
-            raise PublishError(f"diagram {i} ({first}) does not draw: {why[-1] if why else 'Mermaid gave no reason'}")
+        out = work / f"diagram-{i}.svg"
+        first = (code.strip().splitlines() or [""])[0]
+        while True:
+            pup = work / f"puppeteer-{k}.json"
+            # dumpio: Chromium's own stderr reaches ours, so a browser that dies says why
+            pup.write_text(json.dumps({"args": list(BROWSER_FLAGS[k]), "dumpio": True, **exe}))
+            r = subprocess.run([mmdc, "-q", "-i", str(src), "-o", str(out), "-c", str(cfg), "-p", str(pup), "-b", "white"],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode == 0 and out.exists():
+                break
+            why = _reason(f"{r.stderr}\n{r.stdout}")
+            if SYNTAX.search(r.stderr or "") or SYNTAX.search(r.stdout or ""):
+                raise PublishError(f"diagram {i} ({first}) does not draw: {why}")
+            tried.append(f"browser flags {k + 1}: {why}")
+            if k + 1 >= len(BROWSER_FLAGS):
+                raise PublishError(f"the browser that draws diagrams failed on diagram {i} ({first}), not the diagram: " + " / ".join(tried))
+            k += 1
+    return {"flags": k, "tried": tried}
 
 
 def pandoc_typst(body: str, meta: dict[str, str], work: Path, logo: str | None, revisions: list[dict[str, str]], pandoc: str = "pandoc") -> Path:
@@ -150,11 +180,12 @@ def publish(doc: Path, out: Path, work: Path, logo: Path | None = None, revision
         dst = work / ref
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
-    draw_diagrams(p.diagrams, work)
+    drew = draw_diagrams(p.diagrams, work)
     logo_name = None
     if logo:
         logo_name = "logo" + logo.suffix.lower()
         shutil.copyfile(logo, work / logo_name)
     typ = pandoc_typst(p.body, p.meta, work, logo_name, revisions or [])
     compile_pdf(typ, out)
-    return {"pdf": str(out), "bytes": out.stat().st_size, "diagrams": len(p.diagrams), "project": p.meta["project"], "document": p.meta["document"], "revision": p.meta["revision"], "commit": p.meta["commit"]}
+    return {"pdf": str(out), "bytes": out.stat().st_size, "diagrams": len(p.diagrams), "project": p.meta["project"], "document": p.meta["document"], "revision": p.meta["revision"], "commit": p.meta["commit"],
+            **({"browser": drew} if drew.get("tried") else {})}

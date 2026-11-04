@@ -133,7 +133,7 @@ const check = defineTool({
             argv: [python, '-m', 'tracebridge.docs', 'publish', '--doc', `{in:${file}}`, '--out', `{out:${pdf}}`,
               '--revisions', '{in:revisions.json}', ...(logo ? ['--logo', `{in:${logo}}`] : [])],
           })
-          let said: { error?: string; bytes?: number; diagrams?: number } = {}
+          let said: { error?: string; bytes?: number; diagrams?: number; browser?: { flags: number | null; tried: string[] } } = {}
           try { said = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '{}') } catch { /* a crash: stderr says why */ }
           const got = r.outputs[pdf]
           if (r.exitCode !== 0 || !got) {
@@ -158,7 +158,7 @@ const check = defineTool({
             written = target
           }
           const summary = `${DOCS[k].title}: ${(bytes.length / 1024).toFixed(0)} KB, ${said.diagrams ?? 0} diagram(s)${logo ? '' : ', no logo (the project icon is used)'}`
-          const result = { kind: k, file, run_id: id, pdf, bytes: bytes.length, diagrams: said.diagrams ?? 0, logo: logo ?? null, commit, where: r.where, ...(kept ? { sha256: kept.sha256 } : {}), ...(written ? { written } : {}) }
+          const result = { kind: k, file, run_id: id, pdf, bytes: bytes.length, diagrams: said.diagrams ?? 0, logo: logo ?? null, commit, where: r.where, ...(said.browser ? { browser: said.browser } : {}), ...(kept ? { sha256: kept.sha256 } : {}), ...(written ? { written } : {}) }
           work.finish(id, 'pass', summary, result)
           results.push(result)
           const entry: Printed | null = kept ? { kind: k, sha256: kept.sha256, bytes: bytes.length, commit, run: id, at: Date.now() } : null
