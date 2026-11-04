@@ -452,9 +452,11 @@
     ],
     "exercises": [
       "docs.check",
+      "docs.values",
+      "docs.figures",
       "docs.publish"
     ],
     "remote": null,
-    "body": "Release stage, documents. `docs/design/high-level-design.md` is the start of the board's high level design: its overview, context and data flow are written, the rest is pending.\n\n- docs.check at stage architect: list each error by section. Expect only pending sections; anything else is a finding.\n- docs.publish: print it to PDF (pandoc, Mermaid and Typst, a docs job on the tools function). It has two Mermaid diagrams and no logo yet, so the cover carries the project icon.\n- Read the run (trace.run): the PDF is its artifact; say its size and how many diagrams it drew.\n\nDone when: the check's findings are listed and the PDF is stored with its run id. Comment the numbers on this issue, then close it."
+    "body": "Release stage, documents. `docs/design/high-level-design.md` is the start of the board's high level design: its overview, context and data flow are written, the rest is pending.\n\n- docs.check at stage architect: list each error by section. Expect only pending sections; anything else is a finding.\n- docs.values: the power and thermal rows trace has recorded (from Tour 4's budget and Tour 14's thermal.check), each with its basis and source. Say which kinds have nothing yet.\n- docs.figures, quality draft: the board renders, the case's dimensioned and exploded drawings (when Tour 21 built the case) and a timing diagram for each protocol modelled. Run it twice: the second run keeps every figure.\n- docs.publish: print it to PDF (pandoc, Mermaid and Typst, a docs job on the tools function). It has two Mermaid diagrams and no logo yet, so the cover carries the project icon.\n- Read the run (trace.run): the PDF is its artifact; say its size and how many diagrams it drew.\n\nDone when: the check's findings, the values and the figures are listed and the PDF is stored with its run id. Comment the numbers on this issue, then close it."
   }
 ]

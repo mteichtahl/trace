@@ -41,7 +41,7 @@ export const FIGURES = {
   'render-iso': { maker: 'blender', what: 'the board at three-quarter view' },
   'render-in-case': { maker: 'blender', what: 'the board in its case' },
   'render-exploded': { maker: 'blender', what: 'the case and board taken apart' },
-  'mech-drawing': { maker: 'build123d', what: 'a dimensioned drawing of the case and board' },
+  'mech-drawing': { maker: 'build123d', what: 'a line drawing of the case: its dimensioned views, or its parts drawn apart' },
   'timing-diagram': { maker: 'protocol', what: 'signal timing against its limits' },
   'decoded-trace': { maker: 'protocol', what: 'a captured or simulated bus exchange, decoded' },
 } as const satisfies Record<string, FigureDef>

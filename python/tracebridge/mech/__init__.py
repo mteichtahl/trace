@@ -219,10 +219,21 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--capabilities", help="for the process's assembly clearance (settings['resolved']); without it, 0.2 mm")
     b.add_argument("--script", required=True)
     b.add_argument("--out", required=True)
+    d = sub.add_parser("drawing", help="dimensioned three-view and exploded drawings of a built case, for the documents")
+    d.add_argument("--step", required=True, help="the case the engine built (case.step)")
+    d.add_argument("--board", help="the board's 3D model (STEP), drawn inside the case when given")
+    d.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
     if args.cmd == "build-only":
         return child.main(args)
+    if args.cmd == "drawing":
+        from .drawing import drawing
+        if not Path(args.step).exists():
+            print(json.dumps({"error": f"no case at {args.step}: build it first (mech.build)"}))
+            return 2
+        print(json.dumps(drawing(Path(args.step), Path(args.out), Path(args.board) if args.board else None)))
+        return 0
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     try:

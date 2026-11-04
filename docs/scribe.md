@@ -106,10 +106,17 @@ Each layer is one pull request that builds and passes on its own.
    the documents' markers into the project's graph, so they go stale through the same lineage as everything else.
 3. **Logo** (merged, #246): the checks (`src/docs/logo.ts`), `project.logo`, `project.logo_check` and `project.logo_set`
    (`src/api/actions-logo.ts`), and Settings › Documents with the sample cover (`web/src/components/project/project-logo.tsx`).
-4. **Render pipeline**: `docs.check` and `docs.publish`, the `docs` job kind on the tools function, and
+4. **Render pipeline** (merged, #254): `docs.check` and `docs.publish`, the `docs` job kind on the tools function, and
    `python/tracebridge/docs` (Mermaid to SVG, pandoc to Typst, Typst to PDF with the cover).
-5. **Figures and values**: mechanical drawings from build123d, Blender document renders (Eevee drafts, Cycles
-   releases, cache), protocol traces, and the power, thermal and load tables from their runs.
+5. **Figures and values**: `docs.values` (`src/docs/values.ts`: the power budget per rail, junction temperatures
+   from thermal.check with their margins, bench readings from thermal.measure, each with its basis and source, as
+   ready tables; nothing records loads yet, so load rows stay pending) and `docs.figures` (`src/tools/docs/figures.ts`):
+   the photographic renders from `render.showcase` (docs/revision-renders.md: the board from above, below and
+   three-quarter, and in its case and exploded once mech.build made a case, coloured from the logo, draft or release
+   quality); the case's three dimensioned views and its parts drawn apart as line drawings (`python -m tracebridge.mech
+   drawing`, a cad job); a timing diagram per protocol modelled. Figures go to `docs/design/figures` with stable names
+   and `figures.json` (each one's run, inputs hash and quality), so an unchanged figure is never made again and a draft
+   is replaced only by a release. Blender renders with Cycles: Eevee cannot run on the tools function (no display).
 6. **Scribe**: the `docs` specialist (Sonnet writes, Haiku triages), its prompt in the catalog, stacked pull requests.
 7. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
    current" SHACL shape, run over the graph with the documents read in; published copies to the central bucket and
@@ -147,3 +154,12 @@ and a figure with its caption):
 | Cover | A page |
 |---|---|
 | ![](ui/screens/ScribePdfCover.png) | ![](ui/screens/ScribePdfPage.png) |
+
+### The case's drawings
+
+From the sample case the enclosure engine builds (`python -m tracebridge.mech drawing`): three views in third-angle
+projection with the overall size dimensioned, and the parts drawn apart.
+
+| Three views | Exploded |
+|---|---|
+| ![](ui/screens/ScribeMechDrawing.png) | ![](ui/screens/ScribeMechExploded.png) |
