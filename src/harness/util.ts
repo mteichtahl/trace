@@ -15,6 +15,7 @@ export const LABEL_STYLE: Record<LabelKey, readonly [string, string]> = {
   agent_emc: ['c2e0c6', 'trace: route to the EMC & Simulation specialist'],
   agent_render: ['bfdadc', 'trace: route to the Rendering specialist'],
   agent_thermal: ['d4380d', 'trace: route to the Thermal specialist'],
+  agent_docs: ['0b5cad', 'trace: route to the Documentation specialist (Scribe)'],
 }
 
 /** Create the label cfg.labels[key] if the repository lacks it. Returns its name. */

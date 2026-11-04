@@ -446,18 +446,21 @@
   {
     "id": "release-documents",
     "title": "Tour 22: check and print the project's documents",
-    "agent": "worker",
+    "agent": "docs",
     "labels": [
       "agent-fix",
-      "agent:render"
+      "agent:docs"
     ],
     "exercises": [
+      "docs.init",
+      "docs.stale",
+      "docs.write_section",
       "docs.check",
       "docs.values",
       "docs.figures",
       "docs.publish"
     ],
     "remote": null,
-    "body": "Release stage, documents. `docs/design/high-level-design.md` is the start of the board's high level design: its overview, context and data flow are written, the rest is pending.\n\n- docs.check at stage architect: list each error by section. Expect only pending sections; anything else is a finding.\n- docs.values: the power and thermal rows trace has recorded (from Tour 4's budget and Tour 14's thermal.check), each with its basis and source. Say which kinds have nothing yet.\n- docs.figures, quality draft: the board renders, the case's dimensioned and exploded drawings (when Tour 21 built the case) and a timing diagram for each protocol modelled. Run it twice: the second run keeps every figure.\n- docs.publish: print it to PDF (pandoc, Mermaid and Typst, a docs job on the tools function). It has two Mermaid diagrams and no logo yet, so the cover carries the project icon.\n- Read the run (trace.run): the PDF is its artifact; say its size and how many diagrams it drew.\n\nDone when: the check's findings, the values and the figures are listed and the PDF is stored with its run id. Comment the numbers on this issue, then close it."
+    "body": "Release stage, documents. `docs/design/high-level-design.md` is the start of the board's high level design: its overview, context and data flow are written, the rest is pending.\n\n- docs.init at stage release: start the low level design and user guide (and the protocol specification: the sample has I2C, UART and CAN specs).\n- docs.stale with base HEAD~5: which sections the recent tour work touched, and why.\n- docs.values and docs.figures (quality draft): the power and thermal rows from Tours 4 and 14, the renders, the case's drawings and the timing diagrams.\n- docs.write_section: write the high level design's requirements, architecture and power summary from the records, and the low level design's power budget with docs.values' table. Fix whatever a refusal names.\n- docs.check at stage release: list what is still pending.\n- docs.publish: print the documents and read the runs (trace.run): sizes and diagram counts.\n\nDone when: the sections are written and checked, the PDFs stored, and the worker committed docs/design in a change. Comment the numbers with run ids on this issue, then close it."
   }
 ]

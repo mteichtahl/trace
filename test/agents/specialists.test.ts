@@ -29,7 +29,7 @@ const TOKEN = 'ghs_TESTTOKEN1234567890abcdef'
 // ------------------------------------------------------------------ the definitions
 
 describe('specialists', () => {
-  it('cover verify, impl, ams, emc, render and thermal, each with a substantive definition', () => {
+  it('cover verify, impl, ams, emc, render, thermal and docs, each with a substantive definition', () => {
     expect(Object.keys(SPECIALISTS).sort()).toEqual([...SPECIALIST_KINDS].sort())
     for (const k of SPECIALIST_KINDS) {
       const s = SPECIALISTS[k]
@@ -87,6 +87,13 @@ describe('specialists', () => {
     // thermal.measure drives hardware, so it is offered only with hardware
     expect(allTools().get('thermal.measure')?.hardware).toBe(true)
     for (const t of SPECIALISTS.thermal.tools) expect(allTools().get(t)?.hardware, t).toBe(false)
+    // docs (Scribe): every documents tool, and only reading tools beside them; no hardware, no tool that changes the design
+    const docsTools = allTools().list().filter((t) => t.name.startsWith('docs.')).map((t) => t.name)
+    expect(docsTools.length).toBe(7)
+    expect(SPECIALISTS.docs.tools).toEqual(expect.arrayContaining(docsTools))
+    expect(new Set(area('docs'))).toEqual(new Set(['docs', 'verify', 'protocol', 'mech', 'thermal', 'parts']))
+    expect(toolsOf(SPECIALISTS.docs, { hardware: true }).some((t) => t.startsWith('hil.'))).toBe(false)
+    for (const t of ['mech.build', 'mech.init', 'mech.order', 'verify.run', 'protocol.capture', 'thermal.measure']) expect(toolsOf(SPECIALISTS.docs, { hardware: true })).not.toContain(t)
   })
 
   it('have read-only built-ins and MCP names as the SDK spells them', () => {

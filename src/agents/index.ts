@@ -14,6 +14,7 @@ import { ams } from './ams/index.js'
 import { emc } from './emc/index.js'
 import { impl } from './impl/index.js'
 import { render } from './render/index.js'
+import { docs } from './docs/index.js'
 import type { Specialist } from './specialist.js'
 import { thermal } from './thermal/index.js'
 import { verify } from './verify/index.js'
@@ -23,7 +24,7 @@ export {
   DELEGATE_TOOL, SHARED_TOOLS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, mcpToolName, specialistPrompt, toolsOf,
 } from './specialist.js'
 
-export const SPECIALISTS: Readonly<Record<SpecialistKind, Specialist>> = { verify, impl, ams, emc, render, thermal }
+export const SPECIALISTS: Readonly<Record<SpecialistKind, Specialist>> = { verify, impl, ams, emc, render, thermal, docs }
 
 export function specialist(kind: SpecialistKind): Specialist {
   return SPECIALISTS[kind]

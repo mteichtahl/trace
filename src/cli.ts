@@ -42,7 +42,7 @@
  *                 | diff ID [FROM [TO]] | preview TARGET [--marked]      this clone's .trace/project.db, or with
  *                                      --installation the installation's store (your own credentials)
  *
- *   Specialist agents (verify, impl, ams, emc, render, thermal)
+ *   Specialist agents (verify, impl, ams, emc, render, thermal, docs)
  *     tracectl agent list [--json]        each specialist, its settings and its tools
  *     tracectl agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
  *                                      a dry run of the router
