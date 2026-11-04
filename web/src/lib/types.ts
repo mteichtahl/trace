@@ -169,6 +169,9 @@ export interface Criterion {
   opened?: boolean
   /** met on evidence that has since gone out of date: why, in words (not met until trace checks it again) */
   stale?: string
+  /** not met by its shape (shape.check): each thing still needed, in words naming what to fix, with the id a waiver
+   *  of that one finding names */
+  findings?: { id: string; text: string }[]
 }
 
 export interface Waiver {

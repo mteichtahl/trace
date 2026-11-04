@@ -14,6 +14,23 @@ const read = <T>(action: keyof typeof answers): T => {
 }
 
 describe('reading the API\'s answers', () => {
+  it('journey.get: a criterion its shape finds not met carries each finding, under the run that found them', () => {
+    const a = answers['journey.get'] as { args: Record<string, unknown>; result: { gates: { id: string; criteria: Record<string, unknown>[] }[] } }
+    const result = structuredClone(a.result)
+    const c = result.gates.find((x) => x.id === 'define')!.criteria[0]!
+    Object.assign(c, { status: 'not_met', evidence: [
+      { kind: 'run', ref: 'run-9', label: 'the define.accepted shape: 2 finding(s)' },
+      { kind: 'finding', ref: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-1', label: 'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.' },
+      { kind: 'finding', ref: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-2', label: 'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.' },
+    ] })
+    const g = (READERS['journey.get']!(result, a.args) as JourneyMore).gates.find((x) => x.id === 'define')!
+    expect(g.criteria[0]).toMatchObject({ status: 'not_met', evidence: { kind: 'run', id: 'run-9' } })
+    expect(g.criteria[0]!.findings).toEqual([
+      { id: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-1', text: 'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.' },
+      { id: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-2', text: 'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.' },
+    ])
+  })
+
   it('journey.get: stages, gates with criteria and evidence, waivers, the next step, questions and decisions', () => {
     const j = read<JourneyMore>('journey.get')
     expect(j).toMatchObject({ repo: 'acme/answers', name: 'Answers', template: 'board', revision: 'Rev A', current: 'define', hasMemory: false })
@@ -26,6 +43,7 @@ describe('reading the API\'s answers', () => {
     expect(g.criteria.map((c) => [c.id, c.status])).toEqual([['define.accepted', 'met'], ['define.measurable', 'waived']])
     expect(g.criteria[0]!.evidence).toEqual({ kind: 'run', label: 'the requirements list', id: 'run-1', to: '/p/acme~answers/runs/run-1' })
     expect(g.waivers).toEqual([expect.objectContaining({ risk: 'degraded', caught: 'Bring up', reason: 'Two criteria wait for the bench.' })])
+    expect(g.criteria.every((c) => c.findings === undefined)).toBe(true)
     expect(j.gates.find((x) => x.id === 'capture')?.state).toBe('locked')
     expect(j.next).toMatchObject({ kind: 'task', owner: 'you', action: { label: 'Use 2.7 to 3.6 V', to: '/p/acme~answers/do/question-answer' } })
     expect(j.next.summary).toMatch(/\*\*trace recommends 2\.7 to 3\.6 V/)

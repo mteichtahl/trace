@@ -17,7 +17,7 @@ import { recordDesignDecision } from '../../src/tools/design/decisions.js'
 import { mpnKey } from '../../src/tools/datasheets/mpn.js'
 import { buildGraph, nodeIri } from '../../src/ontology/graph.js'
 import { shapedCriteria } from '../../src/ontology/shapes.js'
-import { SHAPES_DIR, graphQuads, runShape, turtle } from '../../src/tools/shape/tools.js'
+import { SHAPES_DIR, findingId, graphQuads, runShape, turtle, withWaivers } from '../../src/tools/shape/tools.js'
 import { ADMIN, projectDb } from './fixture.js'
 
 const O = { installation: 'test', project: 'acme/sensor' }
@@ -61,6 +61,16 @@ describe('facts worked out for the shapes', () => {
   })
 })
 
+describe('a finding waived on its own', () => {
+  it('is named by its criterion and the record it is about, and a waiver on that name excuses only it', () => {
+    const f = (focus: string | null) => ({ focus, path: null, value: null, message: `about ${focus}`, severity: 'violation', shape: null })
+    expect(findingId('architect.mapped', f('urn:r1'))).toBe('architect.mapped@urn:r1')
+    expect(findingId('capture.stock', f(null))).toBe('capture.stock@project')
+    expect(withWaivers('architect.mapped', [f('urn:r1'), f('urn:r2')], new Set(['architect.mapped@urn:r2', 'capture.stock@urn:r1'])).map((x) => [x.id, x.waived]))
+      .toEqual([['architect.mapped@urn:r1', false], ['architect.mapped@urn:r2', true]])
+  })
+})
+
 describe('the shape files', () => {
   it('a criterion with no shape is refused, naming the ones that have one', async () => {
     await expect(runShape('capture.erc', '')).rejects.toThrow(/no shape backs capture\.erc; shapes back .*architect\.mapped/)
@@ -81,6 +91,8 @@ describe('the shape files', () => {
       expect(named.length, c).toBeGreaterThan(0)
       expect(new Set(named), c).toEqual(new Set([c]))
       for (const q of quads.filter((x) => /shacl#message$|rdf-schema#(label|comment)$/.test(x.predicate.value))) expect(acronyms(q.object.value), `${c}: ${q.object.value}`).toEqual([])
+      // a message names the thing, the problem and the next step, briefly (plan P5.5): under 25 words as written
+      for (const q of quads.filter((x) => x.predicate.value.endsWith('shacl#message'))) expect(q.object.value.split(/\s+/).length, `${c}: ${q.object.value}`).toBeLessThan(25)
     }
   })
 })

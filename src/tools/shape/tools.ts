@@ -9,7 +9,8 @@
  *   3. pySHACL through the Python bridge (python/tracebridge/shapes.py `shapes.check`)
  *   4. recorded as a run (kind shape.check), its findings an artifact; and, when the journey is in scope, written as
  *      the criterion's check (criterion_checks): met with the run as evidence when the graph conforms, not met with
- *      each finding as evidence otherwise
+ *      each finding as evidence otherwise (its ref the finding's id, findingId). A finding waived on its own (an open
+ *      waiver of kind finding on that id) is listed as waived and no longer holds the criterion
  *
  * The shape decides; the agent does not. A criterion with no shape is refused, naming the ones that have one.
  */
@@ -50,6 +51,16 @@ export function turtle(quads: Quads): Promise<string> {
   w.addQuads(quads)
   return new Promise((res, rej) => w.end((e, out) => (e ? rej(e) : res(out as string))))
 }
+
+/**
+ * A finding's id, which a waiver of kind finding names to waive it on its own: the criterion and the record it is about
+ * (`architect.mapped@urn:trace:…:requirement:REQ-1`). A finding about the project as a whole is about its journey.
+ */
+export const findingId = (criterion: string, f: { focus: string | null }): string => `${criterion}@${f.focus ?? 'project'}`.slice(0, 300)
+
+/** Each finding with its id, and whether a waiver of that one finding (its id in `waived`) excuses it. */
+export const withWaivers = (criterion: string, findings: readonly ShapeFinding[], waived: ReadonlySet<string>): (ShapeFinding & { id: string; waived: boolean })[] =>
+  findings.map((f) => ({ ...f, id: findingId(criterion, f), waived: waived.has(findingId(criterion, f)) }))
 
 /** Run `criterion`'s shape over a graph given as Turtle. */
 export async function runShape(criterion: string, data: string, call = (m: string, p: Record<string, unknown>) => bridge().call(m, p, Result)): Promise<z.infer<typeof Result>> {
@@ -96,22 +107,29 @@ export const check = defineTool({
     const repo = scope?.repository ?? process.env.GITHUB_REPOSITORY ?? 'local/project'
     const { quads, rec } = await projectGraph(scope, { installation: process.env.TRACE_PREFIX ?? 'trace', project: repo })
     const data = await turtle(quads)
+    // a finding a person waived on its own (a waiver of kind finding, open, on its id) no longer holds the criterion
+    const waived = new Set((rec?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
     const out = await recorded('shape.check', a.criterion, a, async (run) => {
       const r = await runShape(a.criterion, data)
-      run.measure('findings', r.findings.length)
-      run.artifact('findings.json', JSON.stringify(r.findings, null, 1), 'application/json')
+      const all = withWaivers(a.criterion, r.findings, waived)
+      const open = all.filter((f) => !f.waived)
+      run.measure('findings', open.length)
+      run.measure('waived', all.length - open.length)
+      run.artifact('findings.json', JSON.stringify(all, null, 1), 'application/json')
+      const conforms = open.length === 0
+      const w = all.length - open.length
       return {
-        status: r.conforms ? 'pass' as const : 'fail' as const,
-        summary: r.conforms ? `${a.criterion}: every record keeps to its shape` : `${a.criterion}: ${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}`,
-        result: { criterion: a.criterion, conforms: r.conforms, findings: r.findings.slice(0, 50), omitted: Math.max(0, r.findings.length - 50) },
+        status: conforms ? 'pass' as const : 'fail' as const,
+        summary: `${a.criterion}: ${conforms ? 'every record keeps to its shape' : `${open.length} finding${open.length === 1 ? '' : 's'}`}${w ? `, ${w} waived` : ''}`,
+        result: { criterion: a.criterion, conforms, findings: open.slice(0, 50), omitted: Math.max(0, open.length - 50), waived: all.filter((f) => f.waived).map((f) => f.id) },
       }
     })
     if (!scope) return { ...out, recorded_check: false, next: `Not recorded as the criterion's check (no project in scope): journey.check ${a.criterion} ${out.conforms ? 'met' : 'not_met'} with evidence run ${out.run_id}.` }
     const s = scope
     const evidence = out.conforms
-      ? [{ kind: 'run', ref: out.run_id, label: `the ${a.criterion} shape over the project's records` }]
+      ? [{ kind: 'run', ref: out.run_id, label: `the ${a.criterion} shape over the project's records${out.waived.length ? `, ${out.waived.length} finding(s) waived` : ''}` }]
       : [{ kind: 'run', ref: out.run_id, label: `the ${a.criterion} shape: ${out.findings.length} finding(s)` },
-        ...out.findings.slice(0, 19).map((f) => ({ kind: 'finding', ref: (f.focus ?? a.criterion).slice(-300), label: f.message.slice(0, 300) }))]
+        ...out.findings.slice(0, 19).map((f) => ({ kind: 'finding', ref: f.id, label: f.message.slice(0, 300) }))]
     try {
       await s.facts.update((db) => ({ result: addCriterionCheck(db, s.asker, { criterion: a.criterion, status: out.conforms ? 'met' : 'not_met', evidence, note: out.conforms ? 'every record keeps to the shape' : `${out.findings.length} finding(s)` }, rec) }))
     } catch (e) {

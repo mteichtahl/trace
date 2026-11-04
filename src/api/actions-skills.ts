@@ -287,6 +287,15 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
           ...criteria.map((c) => ({ id: `criterion:${c.id}`, kind: 'requirement' as const, title: c.text, why: 'A gate criterion of the current stage that is not met.' })),
           ...i.requirements.filter((q) => q.evidence === 'failing' || q.evidence === 'untested').map((q) => ({ id: `requirement:${q.id}`, kind: 'requirement' as const, title: `${q.id}: ${q.text}`, why: q.why })),
           ...[...(i.erc?.findings ?? []), ...(i.drc?.findings ?? [])].filter((f) => f.severity !== 'waived').map((f) => ({ id: `finding:${f.id}`, kind: 'finding' as const, title: f.text, evidence: { kind: 'run' as const, id: f.run, label: `run ${f.run.slice(0, 8)}` } })),
+          // what a criterion's shape found (shape.check), each waivable on its own: the run that found it is its evidence
+          ...criteria.flatMap((c) => {
+            const run = c.evidence.find((e) => e.kind === 'run')
+            const waived = new Set((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
+            return c.evidence.filter((e) => e.kind === 'finding' && !waived.has(e.ref)).map((e) => ({
+              id: `finding:${e.ref}`, kind: 'finding' as const, title: e.label ?? e.ref, why: `What trace found for: ${c.text}`,
+              ...(run ? { evidence: { kind: 'run' as const, id: run.ref, label: `run ${run.ref.slice(0, 8)}` } } : {}),
+            }))
+          }),
         ],
       }
     }
