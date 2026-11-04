@@ -3,7 +3,8 @@
  * tools and records so nothing in a document is drawn or typed by hand.
  *
  *   docs.values   the power, thermal and load values as rows and as ready tables (src/docs/values.ts)
- *   docs.figures  the board renders (render.board: top, bottom, three-quarter, in the fabrication's colours), the case's
+ *   docs.figures  the photographic renders (render.showcase: the board from above, below and three-quarter, and in its
+ *                 case and exploded when mech.build made one, coloured from the project's logo), the case's
  *                 drawings (python -m tracebridge.mech drawing on the case mech.build made: three dimensioned views and
  *                 an exploded view, a cad job on the tools function) and a timing diagram per protocol (protocol.diagram
  *                 of the newest protocol.model run of each), written to docs/design/figures with stable names, each
@@ -13,8 +14,8 @@
  * figure marker), a hash of what it was made from and its quality. A figure whose inputs have not changed is not made
  * again; a draft is replaced by a release render, never the other way round.
  *
- * quality: draft (Cycles, few samples, quick: while the board is still changing) or release (Cycles, many samples,
- * larger, for the printed copies). The tools function has no display, so Eevee is not used there.
+ * quality: draft (a quick look while the board is still changing) or release (for the printed copies), as
+ * render.showcase takes it. The tools function has no display, so Blender renders with Cycles there.
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -28,12 +29,15 @@ import { recordedValues, valuesTable } from '../../docs/values.js'
 import { backendFor, runJob } from '../../gpu/jobs.js'
 import { pyDir } from '../mech/engine.js'
 import { tools as protocolTools } from '../protocol/tools.js'
-import { tools as renderTools } from '../render/tools.js'
+import { logoPaths } from '../../docs/logo.js'
+import { showcase } from '../render/showcase.js'
 
 export const FIGURES_DIR = 'docs/design/figures'
 export const MANIFEST = `${FIGURES_DIR}/figures.json`
-const QUALITY = { draft: { width: 1280, height: 800, samples: 16 }, release: { width: 2400, height: 1500, samples: 128 } } as const
-type Quality = keyof typeof QUALITY
+type Quality = 'draft' | 'release'
+/** render.showcase's shots and the figure each becomes (src/docs/diagrams.ts). */
+export const SHOT_FIGURE = { 'board-top': 'render-top', 'board-bottom': 'render-bottom', board: 'render-iso', 'board-in-case': 'render-in-case', exploded: 'render-exploded' } as const
+const CASE_FILES = ['mechanical/out/case-base.stl', 'mechanical/out/case-lid.stl']
 
 export interface FigureEntry { file: string; kind: string; source: string; inputs: string; quality?: Quality; made: string }
 export type Manifest = Record<string, FigureEntry>
@@ -87,8 +91,9 @@ const values = defineTool({
 
 const figures = defineTool({
   name: 'docs.figures',
-  description: 'Make the figures the project\'s documents carry, into docs/design/figures with stable names: the board renders (render.board top, bottom and three-quarter, in the fabrication\'s solder mask and silkscreen colours; quality draft or release) and a timing diagram for each protocol modelled (protocol.diagram). A figure whose inputs have not changed is kept. Returns each figure with the run that made it, for its marker\'s source.',
+  description: 'Make the figures the project\'s documents carry, into docs/design/figures with stable names: the photographic renders (render.showcase: the board from above, below and three-quarter, and in its case and exploded when mech.build made a case; coloured from the logo; quality draft or release), the case\'s dimensioned and exploded line drawings and a timing diagram for each protocol modelled (protocol.diagram). A figure whose inputs have not changed is kept. Returns each figure with the run that made it, for its marker\'s source.',
   input: z.object({
+    revision: z.string().regex(/^[A-Z]{1,3}$/).default('A').describe('the revision the renders are of'),
     quality: z.enum(['draft', 'release']).default('draft').describe('draft: quick, while the board changes; release: for the printed copies'),
     renders: z.boolean().default(true),
     timing: z.boolean().default(true),
@@ -107,22 +112,29 @@ const figures = defineTool({
     const now = new Date().toISOString()
 
     if (a.renders) {
-      const inputs = boardInputs(root, `${a.mask_color}${a.silk_color}`)
+      // render.showcase (docs/revision-renders.md): the board's shots, and the case's when mech.build made one;
+      // coloured from the project's logo. Its inputs are the board, the case and the logo, so are these figures'.
+      const hasCase = CASE_FILES.every((f) => existsSync(join(root, f)))
+      const inputs = boardInputs(root, [`${a.mask_color}${a.silk_color}`, ...(hasCase ? CASE_FILES : []), ...logoPaths('light')].map((f) => existsSync(join(root, f)) ? `${f}:${createHash('sha256').update(readFileSync(join(root, f))).digest('hex')}` : f).join('|'))
+      const shots = (Object.keys(SHOT_FIGURE) as (keyof typeof SHOT_FIGURE)[]).filter((s) => hasCase || !s.includes('case') && s !== 'exploded')
       if (!inputs) notes.push('No board yet: no renders.')
-      else if (['top', 'bottom', 'iso'].every((v) => !stale(manifest[`render-${v}`], inputs, a.quality))) kept.push('render-top', 'render-bottom', 'render-iso')
+      else if (shots.every((s) => !stale(manifest[SHOT_FIGURE[s]], inputs, a.quality))) kept.push(...shots.map((s) => SHOT_FIGURE[s]))
       else {
-        const q = QUALITY[a.quality]
-        const r = await call(renderTools, 'render.board', { ...(a.project ? { project: a.project } : {}), views: ['top', 'bottom', 'iso'], mask_color: a.mask_color, silk_color: a.silk_color, ...q, engine: 'cycles', background: 'light' }, ctx)
+        if (!hasCase) notes.push('No case built yet (mech.build): the board is rendered on its own.')
+        const r = await call([showcase], 'render.showcase', { revision: a.revision, ...(a.project ? { project: a.project } : {}), shots, quality: a.quality, mask_color: a.mask_color, silk_color: a.silk_color }, ctx)
         const run = String(r.run_id)
+        const byShot = new Map(Object.entries((r.shots ?? {}) as Record<string, string>).map(([name, shot]) => [shot, name]))
         const work = new Work()
         try {
-          for (const v of ['top', 'bottom', 'iso']) {
-            const bytes = work.getArtifact(run, `${v}.png`)
-            if (!bytes) throw new ToolError(`render.board made no ${v} view (run ${run})`)
-            const file = `${FIGURES_DIR}/render-${v}.png`
+          for (const s of shots) {
+            const name = byShot.get(s)
+            const bytes = name ? work.getArtifact(run, name) : null
+            if (!bytes) throw new ToolError(`render.showcase made no ${s} picture (run ${run})`)
+            const key = SHOT_FIGURE[s]
+            const file = `${FIGURES_DIR}/${key}.png`
             writeFileSync(join(root, file), bytes)
-            manifest[`render-${v}`] = { file, kind: `render-${v}`, source: `run:${run}`, inputs, quality: a.quality, made: now }
-            made.push(manifest[`render-${v}`]!)
+            manifest[key] = { file, kind: key, source: `run:${run}`, inputs, quality: a.quality, made: now }
+            made.push(manifest[key]!)
           }
         } finally {
           work.db.close()
@@ -155,7 +167,7 @@ const figures = defineTool({
               throw new ToolError(`the case could not be drawn: ${why}`)
             }
             const facts = r.outputs['drawing.json'] ? JSON.parse(readFileSync(r.outputs['drawing.json'], 'utf8')) as Record<string, unknown> : {}
-            for (const [key, path, kind] of [['mech-drawing', svg, 'mech-drawing'], ['mech-exploded', exploded, 'render-exploded']] as const) {
+            for (const [key, path, kind] of [['mech-drawing', svg, 'mech-drawing'], ['mech-exploded', exploded, 'mech-drawing']] as const) {
               const bytes = readFileSync(path)
               work.artifact(id, `${key}.svg`, bytes, 'image/svg+xml')
               const file = `${FIGURES_DIR}/${key}.svg`

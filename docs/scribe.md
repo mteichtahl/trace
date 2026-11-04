@@ -111,12 +111,12 @@ Each layer is one pull request that builds and passes on its own.
 5. **Figures and values**: `docs.values` (`src/docs/values.ts`: the power budget per rail, junction temperatures
    from thermal.check with their margins, bench readings from thermal.measure, each with its basis and source, as
    ready tables; nothing records loads yet, so load rows stay pending) and `docs.figures` (`src/tools/docs/figures.ts`):
-   the board renders from render.board in the fabrication's colours, draft or release quality; the case's three
-   dimensioned views and exploded view (`python -m tracebridge.mech drawing`, a cad job); a timing diagram per protocol
-   modelled. Figures go to `docs/design/figures` with stable names and `figures.json` (each one's run, inputs hash and
-   quality), so an unchanged figure is never made again and a draft is replaced only by a release. Draft renders use
-   Cycles at few samples rather than Eevee, which cannot run on the tools function (no display). The board in its case
-   as a photographic render is left for later: the exploded drawing shows how they go together.
+   the photographic renders from `render.showcase` (docs/revision-renders.md: the board from above, below and
+   three-quarter, and in its case and exploded once mech.build made a case, coloured from the logo, draft or release
+   quality); the case's three dimensioned views and its parts drawn apart as line drawings (`python -m tracebridge.mech
+   drawing`, a cad job); a timing diagram per protocol modelled. Figures go to `docs/design/figures` with stable names
+   and `figures.json` (each one's run, inputs hash and quality), so an unchanged figure is never made again and a draft
+   is replaced only by a release. Blender renders with Cycles: Eevee cannot run on the tools function (no display).
 6. **Scribe**: the `docs` specialist (Sonnet writes, Haiku triages), its prompt in the catalog, stacked pull requests.
 7. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
    current" SHACL shape, run over the graph with the documents read in; published copies to the central bucket and
