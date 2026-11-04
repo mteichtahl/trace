@@ -1426,7 +1426,8 @@ criterion's shape (`shape.check layout.fit`) over the newest build, each clash w
 moved in the middle of the board leaves it current, an edge connector moved does not. The design and the
 choice of build123d over FreeCAD are in [docs/enclosure-cad.md](docs/enclosure-cad.md); the build contract between the
 TypeScript tools and the Python engine is [docs/enclosure-build.md](docs/enclosure-build.md). The Implementation
-specialist runs the tools; a person works through the **Case design** skill.
+specialist runs the tools; a person works through the **Case design** skill. Three case designs are built in: a
+printed two-part shell (the recommendation), an extruded box the board slides into, and a DIN rail enclosure.
 
 A project's case lives in `mechanical/`:
 

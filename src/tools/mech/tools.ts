@@ -34,18 +34,43 @@ import { type BuildInputs, engineStamp, sha256, staleReasons } from './stale.js'
 import { CASE_VIEW, caseFactHashes, caseViewHashOf } from './case-facts.js'
 import { normalisedHash } from '../../core/normalise.js'
 import {
-  CASE_JSON, CASE_PY, type CaseSettings, MECH_DIR, OUT_DIR, SETTABLE, defaults, describe, missingReasons, needSettings, readSettings,
-  withClearance, withValue, writeSettings,
+  CASE_JSON, CASE_PY, type CaseSettings, type CaseTemplate, MECH_DIR, OUT_DIR, SETTABLE, TEMPLATE_IDS, defaults, describe, missingReasons,
+  needSettings, readSettings, withClearance, withValue, writeSettings,
 } from './settings.js'
 
-/** The case script mech.init writes (the engine's printed-shell template). */
-export const CASE_TEMPLATE = `from tracebridge.mech import shell
+/** The case script mech.init writes for each template (the engine's python/tracebridge/mech/templates/<id>.py). */
+export const CASE_TEMPLATES: Readonly<Record<CaseTemplate, string>> = {
+  'printed-shell': `from tracebridge.mech import shell
 
 def build(board, settings):
     case = shell.two_part(board, settings)
     # Your changes go here: case.parts["lid"] = case.parts["lid"] - ...  (build123d)
     return case
-`
+`,
+  'extruded-box': `from tracebridge.mech import boxes
+
+def build(board, settings):
+    case = boxes.extruded_box(board, settings)
+    # Your changes go here: case.parts["tube"] = case.parts["tube"] - ...  (build123d)
+    return case
+`,
+  'din-rail': `from tracebridge.mech import boxes
+
+def build(board, settings):
+    case = boxes.din_rail(board, settings)
+    # Your changes go here: case.parts["lid"] = case.parts["lid"] - ...  (build123d)
+    return case
+`,
+}
+/** The printed shell's script, the recommendation. */
+export const CASE_TEMPLATE = CASE_TEMPLATES['printed-shell']
+
+/** What each template is, for a person choosing one. */
+export const TEMPLATE_WORDS: Readonly<Record<CaseTemplate, string>> = {
+  'printed-shell': 'a printed two-part shell: a base the board screws into and a lid that drops onto it',
+  'extruded-box': 'an extruded box: a tube the board slides into along guides, closed by two end plates',
+  'din-rail': 'a DIN rail enclosure: the two-part shell with a foot that clips onto a 35 mm top-hat rail',
+}
 
 /** A repository file's sha256, null when it is not there (checked: no symbolic link, nothing outside the repository). */
 const sha = (r: string, p: string): string | null => (existsSync(join(r, p)) ? sha256(readRepoFile(r, p)) : null)
@@ -117,10 +142,11 @@ const ProcessIn = z.object({ service: z.string().min(1), process: z.string().min
 
 export const initTool = defineTool({
   name: 'mech.init',
-  description: `Start the project's case: writes ${CASE_JSON} (the recommended settings: walls, clearances 0.5 mm board edge to wall and 1.0 mm above the tallest part, openings for edge connectors; the board path; the process, default the recommendation ${RECOMMENDED.process} ${RECOMMENDED.material} at JLC3DP) and ${CASE_PY} (the printed two-part shell template, a build123d script a person or the worker edits). A process other than the recommendation needs a reason. Refuses to overwrite either file without replace: true. Then run mech.build. Recorded; returns run_id.`,
+  description: `Start the project's case: writes ${CASE_JSON} (the recommended settings: walls, clearances 0.5 mm board edge to wall and 1.0 mm above the tallest part, openings for edge connectors; the board path; the process, default the recommendation ${RECOMMENDED.process} ${RECOMMENDED.material} at JLC3DP) and ${CASE_PY} (the template's build123d script, which a person or the worker edits). template: ${TEMPLATE_IDS.map((t) => `${t} (${TEMPLATE_WORDS[t]})`).join('; ')}; default printed-shell. A process or template other than the recommendation needs a reason. Refuses to overwrite either file without replace: true. Then run mech.build. Recorded; returns run_id.`,
   input: z.object({
     board: boardArg,
     process: ProcessIn.optional().describe(`{service, process, material}; default ${JSON.stringify(RECOMMENDED)}`),
+    template: z.enum(TEMPLATE_IDS).optional().describe('the case design; default printed-shell'),
     reason: z.string().optional().describe('why, when the process is not the recommendation'),
     quantity: z.number().int().min(1).max(100_000).optional(),
     replace: z.boolean().default(false),
@@ -139,15 +165,19 @@ export const initTool = defineTool({
         for (const k of ['service', 'process', 'material'] as const) if (given[k] !== s.process[k]) s = withValue(s, `process.${k}`, given[k], a.reason)
       }
       if (a.quantity !== undefined && a.quantity !== s.quantity) s = withValue(s, 'quantity', a.quantity, a.reason ?? 'the build quantity')
+      if (a.template && a.template !== s.template) {
+        if (!a.reason || a.reason.trim().length < 3) throw new ToolError(`mech.init: template ${a.template} is not the recommendation (printed-shell): give the reason`)
+        s = { ...s, template: a.template, reasons: { ...s.reasons, template: a.reason.trim() } }
+      }
       // both checked before either is written: a symbolic link at either refuses the whole call
       repoFile(r, CASE_JSON)
       repoFile(r, CASE_PY)
       writeSettings(r, s)
-      writeRepoFile(r, CASE_PY, CASE_TEMPLATE)
+      writeRepoFile(r, CASE_PY, CASE_TEMPLATES[s.template])
       const p = s.process
       return {
         status: 'pass' as const,
-        summary: `wrote ${CASE_JSON} and ${CASE_PY} for ${board}: ${p.process} ${p.material} at ${p.service}, wall ${s.params.wall_mm} mm`,
+        summary: `wrote ${CASE_JSON} and ${CASE_PY} for ${board}: ${s.template}, ${p.process} ${p.material} at ${p.service}, wall ${s.params.wall_mm} mm`,
         result: {
           written: [CASE_JSON, CASE_PY], settings: s,
           recommendation: { ...RECOMMENDED, why: RECOMMENDED_WHY },
@@ -485,7 +515,7 @@ export const orderTool = defineTool({
       const stale = staleReasons(b.result.inputs as BuildInputs, currentInputs(r, s))
       if (stale.length) throw new ToolError(`the latest build (${b.id}) is stale: ${stale.join('; ')}. Run mech.build again`)
       if (b.status !== 'pass' && !a.waiver) throw new ToolError(`the latest build (${b.id}) does not pass: ${String(b.result.fit_summary ?? '')}. Fix it, or give the waiver`)
-      const files = partsFor(s.source).map((p) => `${OUT_DIR}/case-${p}.${a.format}`)
+      const files = partsFor(s.source, s.template).map((p) => `${OUT_DIR}/case-${p}.${a.format}`)
       const missing = files.filter((f) => !existsSync(join(r, f)))
       if (missing.length) throw new ToolError(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not in the working tree: run mech.build with formats including ${a.format}`)
       const service = isCnc(s.process) ? 'jlccnc' : 'jlc3dp'

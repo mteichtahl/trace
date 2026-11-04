@@ -10,10 +10,15 @@ where `basis` says what was measured: the case script's parameters, the bounding
 built model's own numbers (pilot holes, the lip gap, and the built sections below).
 
 Built sections (basis "model", for a script's case, given the board): the thinnest solid stretch that rays through
-the model cross, measured in this process on the solids it read, at a few points on each side: `base_wall` (the
-base's outer wall, at heights beside the lid's lip and below it), `lip_wall` (the lid's lip, halfway down it),
-`lid_wall` (the lid's wall above the split), `base_floor` (the base's floor, under the board) and `lid_top` (the lid's
-top over the board). Each must meet the same minimum as the wall parameter. A section a ray does not find (a
+the model cross, measured in this process on the solids it read, at a few points on each side. For the printed shell
+and the DIN rail enclosure (templates "printed-shell", "din-rail"): `base_wall` (the base's outer wall, at heights
+beside the lid's lip and below it), `lip_wall` (the lid's lip, halfway down it), `lid_wall` (the lid's wall above the
+split), `base_floor` (the base's floor, under the board: the first solid stretch below it, so a DIN rail foot under
+the floor is not counted as floor) and `lid_top` (the lid's top over the board); the DIN rail enclosure's `rail_hook`
+too, and the extruded box's `tube_wall`, `tube_floor`, `tube_top`, `end_wall` and `skirt`, on the rays
+boxes.section_probes places from the board and the settings. Each must meet the same minimum as the wall parameter.
+The shell's pilot holes, lip gap and inside corner radii are measured on its base and lid; the extruded box has no
+pilot holes, and its skirt's clearance is the settings' assembly clearance (basis "params"). A section a ray does not find (a
 script that removed it) is reported with `ok: false`. `ok: null` means the rule could not be checked (said in the
 detail), and it does not fail the build.
 """
@@ -27,6 +32,13 @@ from .probe import first_hit, intervals
 from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, find_process
 from .board import case_xy
 from .shell import Case, cavity_edge_mm, mounting_holes, screw_for, cnc_radius, convex_corners, grow, heights, is_cnc
+from .boxes import section_probes
+
+SHELLS = ("printed-shell", "din-rail")  # templates built on the shell: its base and lid, sections, lip and pilots
+
+
+def _shell(settings: dict[str, Any]) -> bool:
+    return settings.get("template", "printed-shell") in SHELLS
 
 METALS = ("alumin", "steel", "stainless", "brass", "copper", "titanium", "316l", "tc4", "6061", "7075", "magnesium")
 
@@ -97,7 +109,7 @@ def built_sections(case: Case, board: Any, settings: dict[str, Any]) -> dict[str
         # From inside the cavity outward, the lip is the lid's first solid stretch halfway down it.
         "lip_wall": first("lid", side_rays(lip_mid)),
         "lid_wall": outermost("lid", side_rays(t + min(1.0, (lid_in - t) / 2))),
-        "base_floor": outermost("base", [((x, y, floor_top + 0.05), (0, 0, -1)) for x, y in pts]),
+        "base_floor": first("base", [((x, y, floor_top + 0.05), (0, 0, -1)) for x, y in pts]),
         "lid_top": outermost("lid", [((x, y, lid_in - 0.05), (0, 0, 1)) for x, y in pts]),
     }
 
@@ -215,12 +227,26 @@ def _boss_row(case: Case, settings: dict[str, Any], wmin: float, who: str, src: 
                  "params")]
 
 
+def probed_sections(case: Case, board: Any, settings: dict[str, Any]) -> list[tuple[str, str, str, float | None]]:
+    """The template's own sections (boxes.section_probes): (rule, part, what, thinnest measured or None)."""
+    out = []
+    for p in section_probes(settings.get("template", "printed-shell"), board, settings):
+        shape = case.parts.get(p["part"])
+        ivs = [iv for o, d in p["rays"] if (iv := intervals(shape, tuple(o), tuple(d)))]
+        ds = [(iv[0] if p["pick"] == "first" else iv[-1]) for iv in ivs]
+        out.append((p["rule"], p["part"], p["what"], round(min(b - a for a, b in ds), 3) if ds else None))
+    return out
+
+
 def _section_rows(case: Case, board: Any, settings: dict[str, Any], wmin: float, who: str, src: str | None,
                   kind_note: str) -> list[dict[str, Any]]:
     rows = []
-    found = built_sections(case, board, settings)
-    for rule, part, what in SECTIONS:
-        v = found[rule]
+    sections: list[tuple[str, str, str, float | None]] = []
+    if _shell(settings):
+        found = built_sections(case, board, settings)
+        sections = [(rule, part, what, found[rule]) for rule, part, what in SECTIONS]
+    sections += probed_sections(case, board, settings)
+    for rule, part, what, v in sections:
         if v is None:
             rows.append(_row(rule, False, f"{what} was not found in the {part} (a ray through it met no solid)",
                              None, wmin, src, "model"))
@@ -267,9 +293,9 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
                 rows += _section_rows(case, board, settings, wmin, "CNC", src, f" minimum for {kind}")
             rows += _boss_row(case, settings, wmin, "CNC", src)
         if not from_file and cnc.get("corner_radius"):
-            if board is None:
-                rows.append(_row("corner_radius", None, "inside corner radius not measured (no board given)", None,
-                                 None, src, "model"))
+            if board is None or not _shell(settings):
+                rows.append(_row("corner_radius", None, "inside corner radius not measured (" + ("no board given" if board is None else
+                                 "measured only on the printed shell's base and lid") + ")", None, None, src, "model"))
             else:
                 for name, m in inner_radii(case, board, settings).items():
                     v, need = m["measured"], m["need"]
@@ -327,7 +353,7 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
 
     hmin = row.get("hole_min_d_mm")
     if hmin is not None:
-        if board is not None:
+        if board is not None and _shell(settings):
             pilots = measured_pilots(case, board, settings)
             if pilots:
                 ref, v = min(pilots.items(), key=lambda kv: kv[1] if kv[1] is not None else -1.0)
@@ -345,8 +371,11 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
 
     aclr = row.get("assembly_clearance_mm")
     if not from_file and aclr is not None:
-        gap = lip_gap(case, board, settings) if board is not None else case.meta.get("lip_gap_mm")
-        lbasis = "model" if board is not None else "params"
+        measured = board is not None and _shell(settings)
+        gap = lip_gap(case, board, settings) if measured else (
+            float((settings.get("resolved") or {}).get("assembly_clearance_mm", FALLBACK_ASSEMBLY_CLEARANCE_MM))
+            if not _shell(settings) else case.meta.get("lip_gap_mm"))
+        lbasis = "model" if measured else "params"
         if gap is None:
             rows.append(_row("lip", None, "no lip gap was found between the lid's lip and the base's wall", None,
                              aclr, src, lbasis))

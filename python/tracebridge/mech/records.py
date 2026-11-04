@@ -21,7 +21,7 @@ MECH = "https://trace-eda.com/ns/trace#"
 # lists of numbers are one value each (JSON), not several
 CONTEXT = {"tm": MECH, "@vocab": MECH, "boundingBox": {"@type": "@json"}, "outerSize": {"@type": "@json"}}
 # the ontology's closed list of joint kinds, from the shell's own names
-JOINT_KINDS = {"fastened": "fastened", "press_fit": "press-fit"}
+JOINT_KINDS = {"fastened": "fastened", "press_fit": "press-fit", "sliding": "sliding", "snap_fit": "snap-fit"}
 
 
 def records(case: Case, facts: dict[str, Any], fit: dict[str, Any], settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -52,26 +52,28 @@ def records(case: Case, facts: dict[str, Any], fit: dict[str, Any], settings: di
             node["hasStandoff"] = [{"@id": f"standoff:{f['ref']}"} for f in case.fasteners]
         graph.append(node)
     graph[0]["outerSize"] = [round(h - l, 3) for l, h in zip(lo, hi)] if case.parts else None
-    for f in case.fasteners:
+    for f in [f for f in case.fasteners if f.get("board", True)]:
         graph.append({"@id": f["id"], "@type": "Fastener", "fastenerKind": "screw", "size": f["size"], "length": f["length_mm"],
                       "pilotDiameter": f["pilot_d_mm"], "unit": "mm"})
         graph.append({"@id": f"mount:{f['ref']}", "@type": "MountingPoint", "reference": f["ref"], "positionX": f.get("x"),
                       "positionY": f.get("y"), "diameter": f.get("hole_d_mm"), "fastener": {"@id": f["id"]}, "unit": "mm"})
         graph.append({"@id": f"standoff:{f['ref']}", "@type": "Standoff", "atMountingPoint": {"@id": f"mount:{f['ref']}"}})
+    # which parts each opening is cut through: what the case says (its meta), else every part
+    cut = {o["ref"]: o.get("parts") for o in (case.meta or {}).get("openings") or [] if isinstance(o, dict) and o.get("ref")}
     for o in fit.get("openings") or []:
         if o.get("made"):
+            parts = [p for p in (cut.get(o["ref"]) or sorted(case.parts)) if p in case.parts]
             graph.append({"@id": f"opening:{o['ref']}", "@type": "Opening", "forComponent": {"@id": f"component:{o['ref']}"},
-                          "face": o.get("side"),
-                          "inPart": [{"@id": "case:base"}, {"@id": "case:lid"}]})
+                          "face": o.get("side"), "inPart": [{"@id": f"case:{p}"} for p in parts]})
     for j in case.joints:
         kind = JOINT_KINDS.get(j["type"])
         if kind is None:
             continue
-        joins = [{"@id": board_id}, {"@id": "case:base"}] if j["type"] == "fastened" else [{"@id": "case:lid"}, {"@id": "case:base"}]
+        joins = [{"@id": board_id if c == "board" else f"case:{c}"} for c in j.get("connects") or []]
         node = {"@id": j["id"], "@type": "Joint", "jointKind": kind, "joins": joins}
-        if j["type"] == "fastened":
+        if j.get("fastener"):
             node["usesFastener"] = {"@id": j["fastener"]}
-        else:
+        if j.get("clearance_mm") is not None:
             node["clearance"] = j.get("clearance_mm")
             node["unit"] = "mm"
         graph.append(node)
