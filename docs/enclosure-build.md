@@ -293,6 +293,16 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
     agree with mech.fit.
     mech.order and the Case design skill's `fit` check use the same function (the skill compares the files on the
     default branch).
+  - `mech.options` — the case designs that could work for the board, before any is built
+    (`python/tracebridge/case_options.py`, the bridge method `case.options`; no build123d needed): every combination of
+    template, how the board is held (screws, rests and lid posts, guides), how the case closes (lid, end plates) and
+    process (MJF, the recommendation; SLA; CNC aluminium) is tried against feasibility rules on the board's regions and
+    their relations only: the template's own closure and mounting, three free corners for rests, no part under the
+    extruded box's guides, no part sticking out past its long edges (the board slides in), and the case's estimated
+    size against the process's largest part. Feasible ones are ranked by the requirements' words (a DIN rail, a metal
+    or rugged case, a low-cost first build), each with why and what it gives up; pruned ones are kept with their rule.
+    With `ask: true` the feasible ones (up to six) are asked of a person as a journey question, recommended first; the
+    Case design skill's process step shows them, with each design not offered and why.
   - `mech.hand_in` — copies a STEP (or a `case.py`) from a path in the repository into `mechanical/`, sets
     `source`/`file` (or replaces the script), and runs `mech.build`.
   - `mech.capabilities` — the table, its sources and whether it is stale; `mech.capabilities_check` fetches each

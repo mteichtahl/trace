@@ -2,7 +2,8 @@
  * The case through the API (plan P7.7, P6.4): design.get's `case` (the newest case build with each problem by its part,
  * a waived one waived, and why it is out of date once the board's edge connector moves on the default branch), and the
  * graph's case node made by its build and failing each part that clashes. A real build of the sample board
- * (test/fixtures/case-build/clash: a case script that lowers the lid).
+ * (test/fixtures/case-build/clash: a case script that lowers the lid). And the Case design skill's process step: the
+ * designs mech.options found could work, recommended first, and each one not offered with why (P7.5).
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -51,6 +52,10 @@ beforeAll(async () => {
   const w = new Work(join(dir, '.trace', 'project.db'))
   build = w.start('mech.build', { subject: BOARD, args: {} })
   for (const f of ['result.json', 'facts.json', 'fit.json', 'case.json']) w.artifact(build, f, readFileSync(join(FIX, f), 'utf8'), 'application/json')
+  // the case options, as mech.options records them (the sample board with a connector past its south edge)
+  const opt = w.start('mech.options', { subject: BOARD, args: {} })
+  w.artifact(opt, 'options.json', readFileSync(join(FIX, '..', 'options.json'), 'utf8'), 'application/json')
+  w.finish(opt, 'pass', '6 case designs could work')
   w.inputs(build, [{ kind: 'file', ref: `${BOARD}#case`, sha256: caseViewHashOf(facts) }, { kind: 'file', ref: 'mechanical/case.json', sha256: normalisedHash('mechanical/case.json', enc(caseJson)) }])
   const r = JSON.parse(readFileSync(join(FIX, 'result.json'), 'utf8')) as { fit: { summary: string } }
   w.finish(build, 'fail', 'fit fail', {
@@ -95,5 +100,18 @@ describe('the case in design.get', () => {
       expect.objectContaining({ source: 'case:enclosure', target: 'component:J2', kind: 'fails' }),
     ]))
     github.files.set(`${REPO}:main:${BOARD}`, enc(PCB))
+  })
+})
+
+describe('the Case design skill\'s process step', () => {
+  it('asks which case to build: the designs that could work recommended first, with why, and why the rest were dropped', async () => {
+    const v = await run(USER, 'skill.get', { repo: REPO, skill: 'case-design' }) as { recommendation: { question: string; recommended: string; options: { id: string; label: string; detail: string }[]; why: string }; items: { title: string; detail: string; status: string }[] }
+    expect(v.recommendation.question).toBe('Which case should trace build?')
+    expect(v.recommendation.recommended).toBe(v.recommendation.options[0]!.id)
+    expect(v.recommendation.options.length).toBeGreaterThanOrEqual(2)
+    expect(v.recommendation.options[0]!.label).toMatch(/^DIN rail enclosure, MJF PA12-HP at JLC3DP/)
+    expect(v.recommendation.why).toMatch(/the requirements ask for a DIN rail mount/)
+    expect(v.recommendation.options.every((o) => /Gives up: /.test(o.detail))).toBe(true)
+    expect(v.items).toEqual(expect.arrayContaining([{ id: 'not-offered:extruded-box/mjf', title: 'Extruded box with end plates, MJF PA12-HP at JLC3DP', detail: "J9 sticks out past the board's long edge, so the board cannot slide into the tube", status: 'waived', label: 'Not offered' }]))
   })
 })

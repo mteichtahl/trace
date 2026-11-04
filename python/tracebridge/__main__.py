@@ -4,8 +4,8 @@
     response  {"id": 1, "ok": true, "result": {...}}  |  {"id": 1, "ok": false, "error": "...", "kind": "BridgeError"}
 
 The TypeScript side (src/core/bridge.ts) starts one process per session and keeps it, so a CAN bus or an instrument
-session opened by one call is still open for the next. Handlers live in tracebridge.pdf, tracebridge.visa and
-tracebridge.can; each registers its methods with `@method("area.name")`. A handler raises BridgeError for a problem
+session opened by one call is still open for the next. Handlers live in tracebridge.pdf, tracebridge.visa,
+tracebridge.can, tracebridge.shapes and tracebridge.case_options; each registers its methods with `@method("area.name")`. A handler raises BridgeError for a problem
 the caller should read; any other exception is reported with its traceback. Nothing here writes files unless the
 request names a path to write.
 """
@@ -19,7 +19,7 @@ import traceback
 
 from . import BridgeError, METHODS
 
-AREAS = ("tracebridge.pdf", "tracebridge.visa", "tracebridge.can", "tracebridge.shapes")
+AREAS = ("tracebridge.pdf", "tracebridge.visa", "tracebridge.can", "tracebridge.shapes", "tracebridge.case_options")
 
 
 def load() -> dict[str, str]:

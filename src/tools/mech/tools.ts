@@ -13,6 +13,11 @@
  *   mech.capabilities        JLC3DP's and JLCCNC's rules as stored, their sources and whether they are stale
  *   mech.capabilities_check  re-reads the source pages: each stored figure same, changed or unreadable
  *   mech.order               mechanical/out/order.json and order.md for a person to upload and pay; never orders
+ *   mech.options             the case designs that could work for the board (python/tracebridge/case_options.py):
+ *                            every combination of template, mounting, closure and process tried against
+ *                            feasibility rules on regions and relations, the feasible ones ranked with why and what
+ *                            each gives up, the pruned ones with the rule; with ask, the feasible ones asked of a
+ *                            person as a question (journey.ask's record), recommended first
  *
  * Paths are the repository's (relative to its root); the files written are in the working tree, for the person or the
  * worker to commit.
@@ -550,6 +555,96 @@ export const orderTool = defineTool({
   },
 })
 
+// ------------------------------------------------------------------ mech.options
+
+/** The processes the options are offered in: the recommendation, the first resin, and machined aluminium. */
+export function optionProcesses(): { id: string; label: string; service: string; process: string; material: string; max_mm?: readonly number[]; recommended?: boolean; why?: string }[] {
+  const mjf = processRow(RECOMMENDED)
+  const sla = CAPABILITIES.processes.find((r) => r.process === 'SLA')
+  return [
+    { id: 'mjf', label: `${RECOMMENDED.process} ${RECOMMENDED.material} at JLC3DP`, ...RECOMMENDED, ...(mjf ? { max_mm: mjf.max_mm } : {}), recommended: true, why: (RECOMMENDED_WHY.replace(/^[^:]*: /, '').split(/[;,]/)[0] ?? '').trim() },
+    ...(sla ? [{ id: 'sla', label: `SLA ${sla.materials[0]} at JLC3DP`, service: 'jlc3dp', process: 'SLA', material: sla.materials[0] as string, max_mm: sla.max_mm }] : []),
+    { id: 'cnc', label: 'CNC aluminium 6061 at JLCCNC', service: 'jlccnc', process: 'CNC', material: 'Aluminum 6061' },
+  ]
+}
+
+const OptionOut = z.object({
+  key: z.string(), label: z.string(), choices: z.record(z.string(), z.string()), feasible: z.boolean(),
+  pruned_by: z.object({ rule: z.string(), why: z.string() }).optional(),
+  score: z.number().optional(), why: z.array(z.string()).optional(), gives_up: z.string().optional(), size_mm: z.array(z.number()).optional(),
+  rank: z.number().optional(), recommended: z.boolean().optional(),
+})
+const OptionsOut = z.object({
+  options: z.array(OptionOut), feasible: z.number(), pruned: z.number(), recommended: z.string().nullable(),
+  not_offered: z.array(z.object({ label: z.string(), template: z.string(), process: z.string(), rule: z.string(), why: z.string() })),
+})
+export type CaseOptions = z.output<typeof OptionsOut>
+
+/** The live requirements' words, from the design record (none when it has none). */
+function requirementWords(): string[] {
+  const w = new Work()
+  try {
+    const has = w.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='requirements'").get()
+    return has ? (w.db.prepare("SELECT text FROM requirements WHERE status NOT IN ('rejected','obsolete')").all() as { text: string }[]).map((r) => r.text) : []
+  } finally {
+    w.close()
+  }
+}
+
+export const optionsTool = defineTool({
+  name: 'mech.options',
+  description: `The case designs that could work for the board, before any is built: every combination of template (printed-shell, extruded-box, din-rail), how the board is held (screws, rests and lid posts, guides), how the case closes (lid, end plates) and process (MJF at JLC3DP, the recommendation; SLA; CNC aluminium) is tried against feasibility rules on the board's regions (its box, parts at its edges, parts sticking out, free corners, mounting holes, size against the process): pruned ones are kept with the rule and why; the feasible ones are ranked by the requirements, each with why and what it gives up. With ask: true, the feasible ones (up to six, recommended first) are asked of a person as a question in the journey (the Case design skill's process step shows it); their answer is the template and process for mech.init. Recorded; returns run_id.`,
+  input: z.object({
+    board: boardArg,
+    ask: z.boolean().default(false).describe('ask a person which to build, as a journey question'),
+  }),
+  run: async (a) => {
+    const r = await root()
+    const s = readSettings(r)
+    const pcb = a.board ? await boardPath(r, a.board) : s ? inRepo(r, s.board, 'the case\'s board').abs : await boardPath(r, undefined)
+    const board = repoPath(pcb, r)
+    const out = await recorded('mech.options', board, a, async (run) => {
+      const facts = boardFacts(pcb, r)
+      const { bridge } = await import('../../core/bridge.js')
+      const res = await bridge().call('case.options', { facts, processes: optionProcesses(), requirements: requirementWords() }, OptionsOut)
+      run.artifact('options.json', JSON.stringify(res, null, 1), 'application/json')
+      run.measure('feasible', res.feasible)
+      run.measure('pruned', res.pruned)
+      const offered = res.options.filter((o) => o.feasible)
+      return {
+        status: offered.length ? 'pass' as const : 'fail' as const,
+        summary: `${plural(offered.length, 'case design')} could work for ${board}${offered[0] ? `; trace recommends ${offered[0].label}` : ''}; ${res.pruned} combinations pruned`,
+        result: {
+          offered: offered.map((o) => ({ key: o.key, rank: o.rank, label: o.label, recommended: o.recommended, why: o.why, gives_up: o.gives_up, size_mm: o.size_mm, choices: o.choices })),
+          not_offered: res.not_offered,
+          pruned: res.options.filter((o) => !o.feasible).map((o) => ({ key: o.key, rule: o.pruned_by?.rule, why: o.pruned_by?.why })),
+          recommended: res.recommended,
+          next: offered.length ? (a.ask ? 'Asked: the answer names the template and process for mech.init.' : 'mech.options with ask: true to put them to a person, or mech.init with the recommended template and process.') : 'No case design fits: the board needs mounting holes, or its parts moved off its edges.',
+        },
+      }
+    })
+    if (!a.ask || !out.offered.length) return out
+    // the question: the feasible options, recommended first, in the journey's questions record
+    const { journeyScope } = await import('../journey/tools.js')
+    const { addAgentQuestion } = await import('../../core/agent-facts.js')
+    const { loadJourney } = await import('../../core/journey.js')
+    let scope: ReturnType<typeof journeyScope>
+    try { scope = journeyScope() } catch { return { ...out, asked: null, next: 'Not asked: no project in scope here. Put the options to a person in your report.' } }
+    const rec = (await scope.journey.read((db) => loadJourney(db))).result
+    const shown = out.offered.slice(0, 6)
+    const dropped = out.not_offered.map((n) => `${n.label}: ${n.why}`)
+    const { result: id } = await scope.facts.update((db) => ({
+      result: addAgentQuestion(db, scope.asker, {
+        text: `Which case should trace build for ${board}?${dropped.length ? ` Not offered: ${dropped.join('; ')}.` : ''}`.slice(0, 2000),
+        blocks: 'building the case (mech.init, then mech.build)',
+        options: shown.map((o, i) => ({ id: `case-${i + 1}`, label: o.label, recommended: Boolean(o.recommended), why: (o.why ?? []).join('; ') || 'it fits the board and the process', ...(o.gives_up ? { gives_up: o.gives_up } : {}) })),
+        sources: [{ kind: 'run', ref: out.run_id, label: 'the case options and the rules that pruned the rest' }],
+      }, rec),
+    }))
+    return { ...out, asked: { question_id: id }, next: `Asked (question ${id}). Read the answer with journey.status, then mech.init with that template and process.` }
+  },
+})
+
 export const tools: AnyTool[] = [
-  boardTool, initTool, settingsTool, buildTool, fitTool, handInTool, capabilitiesTool, capabilitiesCheckTool, orderTool,
+  boardTool, initTool, settingsTool, buildTool, fitTool, handInTool, capabilitiesTool, capabilitiesCheckTool, orderTool, optionsTool,
 ] as unknown as AnyTool[]

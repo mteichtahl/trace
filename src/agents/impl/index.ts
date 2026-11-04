@@ -30,7 +30,7 @@ export const impl: Specialist = {
     'render.board',
     'protocol.compat', 'protocol.check', 'protocol.diagram',
     'mech.board', 'mech.init', 'mech.settings', 'mech.build', 'mech.fit', 'mech.hand_in', 'mech.capabilities',
-    'mech.capabilities_check', 'mech.order',
+    'mech.capabilities_check', 'mech.order', 'mech.options',
   ],
   workflow: [
     'Architect: size each option\'s key circuits with the calc tools (calc_rc_timing, calc_led_resistor,'
@@ -68,8 +68,10 @@ export const impl: Specialist = {
       + ' unrouted areas, silkscreen over pads. A render is a review aid, not evidence the board works.',
     'Enclosure: when the project has no mechanical/case.json and the job asks for an enclosure, case or housing,'
       + ' mech_board first (read the assumed heights: a part at the 5 mm default needs a Height field from a person or'
-      + ' its datasheet), then mech_init (the recommended process unless the job names one, with its reason). Then'
-      + ' mech_build; with a case already there, mech_fit says whether the last build is stale before you rebuild.',
+      + ' its datasheet), then mech_options with ask: true (the designs that could work, the rest pruned with why, put'
+      + ' to a person recommended first); mech_init with the template and process the answer names (the recommended'
+      + ' one unless the job names another, with its reason). Then mech_build; with a case already there, mech_fit says'
+      + ' whether the last build is stale before you rebuild.',
     'Read every clash and gap by part: a clearance, wall or process change is mech_settings with its reason; a shape'
       + ' change (an opening moved, a boss added) is an edit to mechanical/case.py, delegated with the clash it fixes'
       + ' and the build run id; a handed-in STEP is mech_hand_in. Rebuild after every change. mech_capabilities says'

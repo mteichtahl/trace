@@ -48,6 +48,8 @@ import { loadBoards } from '../core/boards.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { boardView, readingView } from './actions-build.js'
 import { caseStaleness } from './case-read.js'
+import { artifactJson } from '../ontology/mech.js'
+import type { CaseOptions } from '../tools/mech/tools.js'
 
 /** The skills that read the bench. */
 const HARDWARE_SKILLS = new Set(['bench-setup', 'bring-up-run', 'incoming-inspection'])
@@ -132,6 +134,9 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     // the newest build that finished with a fit (an errored or running one has no result to read)
     const caseRow = hasTable(db, 'runs') ? db.prepare("SELECT id, status, summary FROM runs WHERE kind='mech.build' AND status IN ('pass','fail') ORDER BY started DESC LIMIT 1").get() as { id: string; status: string; summary: string | null } | undefined : undefined
     const caseRun = caseRow ? { id: String(caseRow.id), status: String(caseRow.status), summary: caseRow.summary === null ? null : String(caseRow.summary) } : null
+    // the case designs that could work (mech.options), for the process step
+    const optRow = hasTable(db, 'runs') ? db.prepare("SELECT id FROM runs WHERE kind='mech.options' AND status IN ('pass','fail') ORDER BY started DESC LIMIT 1").get() as { id: string } | undefined : undefined
+    const optJson = optRow ? artifactJson(db, String(optRow.id), 'options.json') as CaseOptions | null : null
     let instruments: CheckInput['instruments'] = []
     try {
       const v = hasTable(db, 'settings') ? db.prepare("SELECT value FROM settings WHERE key='hil.instruments'").get() as { value?: string } | undefined : undefined
@@ -153,6 +158,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       bom: bomRun ? runResult(db, bomRun.id) : null, board: boardRun ? runResult(db, boardRun.id) : null,
       placement: placement ? { status: placement.status, summary: placement.summary } : null,
       caseBuild: caseRun ? { id: caseRun.id, status: caseRun.status, summary: caseRun.summary, result: runResult(db, caseRun.id) } : null,
+      caseOptions: optRow && optJson ? { id: String(optRow.id), options: optJson } : null,
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
       design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles,
       draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors,
@@ -321,9 +327,23 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }
     case 'case-design': {
       const b = i.caseBuild
-      if (!b?.result) return {}
-      const x = b.result
-      return { case: { run: b.id, status: b.status, summary: b.summary, process: x.process ?? null, fit: x.fit_status ?? null, problems: x.problems ?? [], rules_failing: x.rules_failing ?? [], files: x.files ?? [], case: x.case ?? null } }
+      const x = b?.result
+      // the designs that could work, recommended first (mech.options), and each one not offered with the rule's words
+      const o = i.caseOptions
+      const offered = o ? o.options.options.filter((c) => c.feasible) : []
+      const rec = offered.find((c) => c.recommended)
+      return {
+        ...(b && x ? { case: { run: b.id, status: b.status, summary: b.summary, process: x.process ?? null, fit: x.fit_status ?? null, problems: x.problems ?? [], rules_failing: x.rules_failing ?? [], files: x.files ?? [], case: x.case ?? null } } : {}),
+        ...(o && rec ? {
+          recommendation: {
+            question: 'Which case should trace build?', recommended: rec.key,
+            options: offered.slice(0, 6).map((c) => ({ id: c.key, label: c.label, detail: [...(c.why ?? []), ...(c.gives_up ? [`Gives up: ${c.gives_up}`] : [])].join('. ') })),
+            why: (rec.why ?? []).join('; '), ...(rec.gives_up ? { givesUp: rec.gives_up } : {}),
+            evidence: [{ kind: 'run' as const, id: o.id, label: 'the case options' }],
+          },
+          items: o.options.not_offered.map((n) => ({ id: `not-offered:${n.template}/${n.process}`, title: n.label, detail: n.why, status: 'waived' as const, label: 'Not offered' })),
+        } : {}),
+      }
     }
     case 'change-request': {
       const impact = changeImpact(i.r, i.draft?.what, i.evidenceFiles)

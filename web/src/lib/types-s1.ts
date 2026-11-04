@@ -83,6 +83,8 @@ export interface SkillItem {
   title: string
   detail?: string
   status: 'open' | 'done' | 'waived'
+  /** the badge's word, when the status's own word does not fit (a case design not offered) */
+  label?: string
   evidence?: EvidenceRef
 }
 
