@@ -24,6 +24,7 @@
  */
 import { GROUPS, RepoSlug, membersOf } from '../core/access.js'
 import { projects } from '../core/onboard.js'
+import { lifecycleOf } from '../core/lifecycle.js'
 import { z } from 'zod'
 import { def } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
@@ -34,7 +35,7 @@ export interface HookMembers { repo: string; project: boolean; subs: string[] }
 export const HOOK_ACTIONS = {
   'hook.members': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx): Promise<HookMembers> => {
     // not a project: nobody is told, and nothing says who is on anything
-    if (!(await projects()).includes(repo)) return { repo, project: false, subs: [] }
+    if (!(await projects()).includes(repo) || (await lifecycleOf(repo)).retired) return { repo, project: false, subs: [] }
     const [assigned, admins] = await Promise.all([membersOf(repo), ctx.deps.cognito().usersInGroup(GROUPS.admin)])
     // connected systems are assigned like people (their sub is their client id) but have no screen to tell
     const people = assigned.filter((m) => !(m.email ?? '').startsWith('service:'))

@@ -6,7 +6,7 @@
  */
 import { useQueries } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, PauseCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
@@ -26,7 +26,7 @@ import { call, projectId, projectName } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { firstName, greeting, plural } from '@/lib/format'
 import { q, useCall, useInbox, useProjects } from '@/lib/queries'
-import type { InboxItem, Journey, RunSummary, Wait } from '@/lib/types'
+import type { InboxItem, Journey, LifecycleMark, RunSummary, Wait } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/')({
@@ -119,7 +119,7 @@ function Home() {
         ) : (
           <ul className="divide-y overflow-hidden rounded-xl border">
             {repos.slice(0, 6).map((repo, i) => (
-              <ProjectRow key={repo} repo={repo} journey={journeys[i]?.data} loading={journeys[i]?.isLoading} phone={phone} />
+              <ProjectRow key={repo} repo={repo} journey={journeys[i]?.data} loading={journeys[i]?.isLoading} phone={phone} paused={projects.data?.[i]?.paused ?? null} />
             ))}
           </ul>
         )}
@@ -168,9 +168,10 @@ function InProgress({ running, waiting }: { running: { run: RunSummary; project:
   )
 }
 
-function ProjectRow({ repo, journey: j, loading, phone }: { repo: string; journey?: Journey; loading?: boolean; phone: boolean }) {
-  const yours = j?.next.owner === 'you'
-  const next = j ? `Next: ${j.next.short ?? j.next.summary.replace(/\*\*/g, '')}` : ''
+function ProjectRow({ repo, journey: j, loading, phone, paused }: { repo: string; journey?: Journey; loading?: boolean; phone: boolean; paused?: LifecycleMark | null }) {
+  // a paused project asks nothing of anyone: its line says who paused it, not what is next
+  const yours = !paused && j?.next.owner === 'you'
+  const next = paused ? `Paused by ${paused.by}${paused.reason ? `: ${paused.reason}` : ''}` : j ? `Next: ${j.next.short ?? j.next.summary.replace(/\*\*/g, '')}` : ''
   return (
     <li>
       <Link to="/p/$id" params={{ id: projectId(repo) }} className="grid gap-x-6 gap-y-2 px-6 py-4 hover:bg-muted/50 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1.4fr)] md:items-center" data-density-item>
@@ -179,7 +180,9 @@ function ProjectRow({ repo, journey: j, loading, phone }: { repo: string; journe
           {j ? <p className="text-xs text-muted-foreground">{j.revision} · {j.template === 'fpga' ? 'FPGA' : j.template.charAt(0).toUpperCase() + j.template.slice(1)}</p> : loading && <Skeleton className="mt-1 h-3 w-20" />}
         </div>
         {j ? <StageRail stages={j.stages} gates={j.gates} variant={phone ? 'bar' : 'compact'} /> : loading ? <Skeleton className="h-3 w-32" /> : <span />}
-        <p className={cn('text-sm', yours ? 'font-medium text-primary' : 'text-muted-foreground')}>{next}</p>
+        <p className={cn('text-sm', yours ? 'font-medium text-primary' : paused ? 'inline-flex items-center gap-1.5 text-warning-foreground' : 'text-muted-foreground')}>
+          {paused && <PauseCircle className="size-3.5 shrink-0" aria-hidden />}{next}
+        </p>
       </Link>
     </li>
   )
