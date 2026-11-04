@@ -40,7 +40,7 @@ export const FIGURES = {
   'render-bottom': { maker: 'blender', what: 'the underside of the board' },
   'render-iso': { maker: 'blender', what: 'the board at three-quarter view' },
   'render-in-case': { maker: 'blender', what: 'the board in its case' },
-  'render-exploded': { maker: 'blender', what: 'the case and board taken apart' },
+  'render-exploded': { maker: 'build123d', what: 'the case and board taken apart, as a line drawing' },
   'mech-drawing': { maker: 'build123d', what: 'a dimensioned drawing of the case and board' },
   'timing-diagram': { maker: 'protocol', what: 'signal timing against its limits' },
   'decoded-trace': { maker: 'protocol', what: 'a captured or simulated bus exchange, decoded' },
