@@ -107,6 +107,7 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       requirements: ['R-004', 'R-008'],
       recommendation: { verdict: 'accept', why: 'All 7 checks passed and it covers R-004 and R-008. The regulator swap gives twice the headroom for the same price, and the original part has no stock until February.' },
       may_accept: true,
+      built_on_by: [{ number: 15, title: 'Bring-up test points on the power sheet' }],
     }),
     summary(13, {
       title: 'Sensor front end sheet', from: 'the analog specialist', opened_at: ago(8 * MIN), updated_at: ago(2 * MIN), mergeable: 'unknown',
@@ -139,6 +140,19 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       checks_list: [{ name: 'build', state: 'passed', summary: 'Built.' }],
       recommendation: { verdict: 'accept', why: 'Its check passed, and it can be merged. Alex L. made it in trace; accepting applies it.' },
       may_accept: true, may_ask: false, may_discard: true, rule_blocks: false,
+    }),
+    // a stacked change (docs/stacked-changes.md): built on change 12, which is accepted first
+    summary(15, {
+      title: 'Bring-up test points on the power sheet', opened_at: ago(6 * MIN), updated_at: ago(4 * MIN),
+      base: { ref: 'claude/task-12', sha: BASE }, head: { ref: 'claude/task-15', sha: HEAD },
+      builds_on: { number: 12, title: 'Power and USB-C input sheet' },
+      checks: { total: 7, passed: 7, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'blocked',
+      summary: ['Added test points on 3V3, VBUS and the power-good line, as the bring-up plan asks.', 'Built on the power sheet change, so it uses its new regulator.'],
+      files: [{ path: 'hardware/power.kicad_sch', status: 'modified', additions: 6, deletions: 0, kind: 'schematic' }],
+      checks_list: [{ name: 'Electrical rules check', state: 'passed', summary: 'No errors', id: 'job:9301' }],
+      requirements: ['R-011'],
+      recommendation: { verdict: 'wait', why: 'It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Its checks passed: it follows that change into the design once it is accepted.' },
+      may_accept: false, blockers: ['It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Accept that one first.'],
     }),
   ],
 }
@@ -217,7 +231,7 @@ function checkDetail(c: ChangeDetail, id: string, admin: boolean) {
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
 const open = (repo: string) => (CHANGES[repo] ?? []).filter((c) => c.state === 'open')
-const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies'] as const
+const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by'] as const
 const toSummary = (c: ChangeDetail) => Object.fromEntries(SUMMARY_KEYS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]))
 
 /** After a change is accepted: Capture moves to step 4 and trace starts the stock check. */
@@ -270,6 +284,15 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
       if (a.head_sha !== c.head.sha) return fail('It changed since you looked at it. Look again before accepting.')
       if (!c.may_accept) return fail(c.blockers[0] ?? 'This change cannot be accepted yet.')
       c.state = 'merged'
+      // as the harness restacks: the changes built on it move onto the design, and can be accepted on their own checks
+      for (const up of CHANGES[repo] ?? []) {
+        if (up.builds_on?.number !== c.number) continue
+        delete up.builds_on
+        up.base = { ref: 'main', sha: BASE }
+        up.verdict = 'ready'; up.may_accept = true; up.blockers = []
+        up.recommendation = { verdict: 'accept', why: `All its checks passed and it is on the design now that "${c.title}" is accepted.` }
+      }
+      delete c.built_on_by
       accepted(JOURNEYS[repo]!, c.number)
       done(repo, c.number)
       return later(ok({ merged: true, sha: 'f00dfee', stage: 'capture', next: 'trace is checking stock for 10 boards, about 4 minutes.' }))

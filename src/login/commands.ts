@@ -7,7 +7,7 @@
  *   tracectl remote status OWNER/REPO
  *   tracectl remote settings OWNER/REPO [KEY [VALUE]]      (VALUE "--unset" removes the setting)
  *   tracectl remote runs OWNER/REPO [--kind K] [--limit N]
- *   tracectl remote task OWNER/REPO "request…"
+ *   tracectl remote task OWNER/REPO [--stack-on claude/BRANCH] "request…"   (--stack-on: a new change on top of that open one)
  *   tracectl remote job ID
  *   tracectl remote memory list OWNER/REPO [--all] | deactivate OWNER/REPO RECORD_ID --reason "…" | reactivate OWNER/REPO RECORD_ID
  *                                                       (src/login/memory.ts)
@@ -118,7 +118,7 @@ export async function cmdWhoami(_argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ remote
 
-const REMOTE_USAGE = 'usage: tracectl remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
+const REMOTE_USAGE = 'usage: tracectl remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] [--stack-on claude/BRANCH] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
 
 export async function cmdRemote(argv: string[]): Promise<number> {
   return guarded(async () => {
@@ -168,13 +168,13 @@ export async function cmdRemote(argv: string[]): Promise<number> {
         return 0
       }
       case 'task': {
-        const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { agent: { type: 'string' } } })
+        const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { agent: { type: 'string' }, 'stack-on': { type: 'string' } } })
         const [repo, ...words] = positionals
         if (!repo || !words.length) break
         // without --agent the runtime routes it to a specialist (tracectl agent route "<request>" shows where)
         const agent = values.agent === undefined ? undefined : SpecialistKindSchema.parse(values.agent)
         const r = z.object({ accepted: z.boolean(), jobId: z.string(), reason: z.string().optional() }).loose()
-          .parse(await invokeApi('task', { repo: Repo.parse(repo), request: words.join(' '), ...(agent ? { agent } : {}) }))
+          .parse(await invokeApi('task', { repo: Repo.parse(repo), request: words.join(' '), ...(agent ? { agent } : {}), ...(values['stack-on'] ? { stack_on: values['stack-on'] } : {}) }))
         out(r.accepted ? `Started ${r.jobId}. Follow it with: tracectl remote job ${r.jobId}` : `Not started (${r.reason ?? 'refused'}); the running job is ${r.jobId}.`)
         return 0
       }

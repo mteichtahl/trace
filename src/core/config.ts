@@ -152,6 +152,9 @@ export const ConfigSchema = z.object({
     auto_merge: z.boolean().default(true),
     merge_method: z.enum(['merge', 'squash', 'rebase']).default('merge'),
     update_queue: z.boolean().default(true),
+    /** Stacked PRs (docs/stacked-changes.md): a branch built on another open PR's branch gets a PR targeting that
+     * branch, and the stacks are kept in order (retargeted when their base merges, brought up to date when it moves). */
+    stack: z.boolean().default(true),
     skip_branches: z.array(z.string()).default(['dependabot/**', 'gh-readonly-queue/**']),
     wip_marker: z.string().default('wip'),
     /** A PR touching any of these never merges itself: a person reviews and merges it. They are the files that steer

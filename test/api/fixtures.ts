@@ -1,7 +1,7 @@
 /** Shared test fixtures: an RSA key, a fake JWKS, Cognito-shaped tokens, and fake GitHub/Cognito/jobs clients. */
 import { createHash, createSign, generateKeyPairSync, type KeyObject } from 'node:crypto'
 import type { ClientSecret, CognitoAdmin, CognitoUser, ServiceClientConfig } from '../../src/api/aws.js'
-import type { CommitSummary, GitHubApi, TreeEntry } from '../../src/api/github.js'
+import type { CommitSummary, GitHubApi, PullSummary, TreeEntry } from '../../src/api/github.js'
 import { Verifier } from '../../src/api/jwt.js'
 
 export const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TEST'
@@ -118,7 +118,9 @@ export class FakeGitHub implements GitHubApi {
   /** "repo:path" → the commits that changed it, newest first */
   history = new Map<string, CommitSummary[]>()
   async commits(repo: string, path: string, _ref: string, limit: number): Promise<CommitSummary[]> { return (this.history.get(`${repo}:${path}`) ?? []).slice(0, limit) }
-  async openPulls(): Promise<never[]> { return [] }
+  /** open pull requests, as the list gives them (none unless a test adds some) */
+  openList: PullSummary[] = []
+  async openPulls(): Promise<never[]> { return this.openList as never[] }
   async openIssues(): Promise<never[]> { return [] }
   async workflowRuns(): Promise<never[]> { return [] }
   dispatched: string[] = []

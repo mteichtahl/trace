@@ -44,7 +44,7 @@ import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
 import { KIND_TAG, changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
-import type { ChangeDetail, ChangeFile, CheckJob } from '@/lib/types'
+import type { ChangeDetail, ChangeFile, ChangeSummary, CheckJob } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/p/$id/changes/$number')({
@@ -119,6 +119,7 @@ function Review() {
             {edit ? `Made by ${d.mine ? 'you' : d.by_name ?? 'someone'}` : `From ${d.from}`} · {ago(d.opened_at)} · change {d.number}{d.draft ? ' · a draft' : ''}
           </p>
           {phone && <ChecksLine d={d} onOpen={() => setChecksOpen(true)} />}
+          {d.state === 'open' && <StackLine id={id} d={d} />}
         </div>
         <MoreForAdmins links={[d.url ? { label: 'This change on GitHub', href: d.url } : null]} />
       </div>
@@ -348,5 +349,27 @@ function RuleFix({ repo, change, note, onFixed }: { repo: string; change: Change
         <Button onClick={() => fix.mutate()} disabled={fix.isPending}>{fix.isPending && <Loader2 className="animate-spin" aria-hidden />}{acceptsAfter ? 'Fix the rule and accept' : 'Fix the rule'}</Button>
       )}
     </section>
+  )
+}
+
+/** Where a change sits in a stack: the change it builds on (accepted first), and the ones built on it (docs/stacked-changes.md). */
+function StackLine({ id, d }: { id: string; d: Pick<ChangeSummary, 'builds_on' | 'built_on_by'> }) {
+  const above = d.built_on_by ?? []
+  if (!d.builds_on && !above.length) return null
+  const link = (n: number, title: string) => (
+    <Link key={n} to="/p/$id/changes/$number" params={{ id, number: String(n) }} className="font-medium text-primary hover:underline">{title}</Link>
+  )
+  return (
+    <p className="mt-1 text-sm text-muted-foreground">
+      {d.builds_on && <span>Builds on {link(d.builds_on.number, d.builds_on.title)}, which is accepted first.</span>}
+      {d.builds_on && above.length ? ' ' : null}
+      {above.length > 0 && (
+        <span>
+          {above.length === 1 ? '1 change builds on this: ' : `${above.length} changes build on this: `}
+          {above.slice(0, 3).flatMap((c, i) => [i ? ', ' : null, link(c.number, c.title)])}
+          {above.length > 3 ? ` and ${above.length - 3} more` : ''}. {above.length === 1 ? 'It follows' : 'They follow'} this one into the design.
+        </span>
+      )}
+    </p>
   )
 }

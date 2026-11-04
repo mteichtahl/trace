@@ -7,7 +7,7 @@
  * answers in the app's shapes) and the tests keep working.
  */
 import type {
-  AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
+  AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeLink, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
   HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, Waiver,
 } from './types'
 import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
@@ -137,7 +137,14 @@ export function readChangeSummary(c: Obj): ChangeSummary {
     draft: Boolean(c.draft), held: Boolean(c.held), from: str(c.from) ?? 'a trace job', job_id: str(c.job_id) ?? null, stage: str(c.stage) ?? null,
     opened_at: str(c.opened_at) ?? '', updated_at: str(c.updated_at) ?? str(c.opened_at) ?? '', state, mergeable, checks,
     verdict: verdictOf({ checks, mergeable, verdict: c.verdict }),
+    ...(readLink(c.builds_on) ? { builds_on: readLink(c.builds_on)! } : {}),
+    ...(arr(c.built_on_by).length ? { built_on_by: arr(c.built_on_by).map(readLink).filter((l): l is ChangeLink => l !== null) } : {}),
   }
+}
+
+/** One change of a stack (builds_on, built_on_by): a number and a title, or nothing. */
+function readLink(v: unknown): ChangeLink | null {
+  return isObj(v) && Number.isInteger(v.number) && Number(v.number) > 0 ? { number: Number(v.number), title: str(v.title) ?? `Change ${String(v.number)}` } : null
 }
 
 /** changes.list: `{ repo, changes }`, oldest first. */

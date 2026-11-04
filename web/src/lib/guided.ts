@@ -122,6 +122,8 @@ export function checksWords(c: ChangeSummary['checks']): string {
 /** One line under a change's title: what it waits for, in plain words. */
 export function changeLine(c: ChangeSummary): string {
   if (c.checks_denied) return 'trace may not read its checks: an admin gives trace\'s GitHub token "Actions: read" and "Commit statuses: read".'
+  // a stacked change whose own checks are fine: it waits for the one below it
+  if (c.verdict === 'blocked' && c.state === 'open' && c.builds_on) return `Builds on "${c.builds_on.title}". Accept that one first; this one follows it.`
   switch (c.verdict) {
     case 'ready': return `Ready to review. ${checksWords(c.checks)}.`
     case 'checking': return `${checksWords(c.checks)}. Ready to review when the last one finishes.`
