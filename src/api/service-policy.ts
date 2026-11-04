@@ -55,6 +55,7 @@ export const SERVICE_ACTIONS: Readonly<Record<string, ServiceScope | 'tool'>> = 
   'requirements.trace': 'read',
   'design.get': 'read',
   'build.get': 'read',
+  'renders.list': 'read',
   'cost.get': 'read',
   'files.list': 'read',
   'files.url': 'read',
