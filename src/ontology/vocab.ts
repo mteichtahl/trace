@@ -31,7 +31,7 @@ export const iri = (term: string): string => `${NS}${term}`
 export const local = (full: string): string | null => (full.startsWith(NS) ? full.slice(NS.length) : null)
 
 /** The module files, in the order they build on each other. trace-si2-align.ttl is read for its alignments only. */
-export const MODULE_FILES = ['trace-core.ttl', 'trace-journey.ttl', 'trace-board.ttl', 'trace-docs.ttl'] as const
+export const MODULE_FILES = ['trace-core.ttl', 'trace-journey.ttl', 'trace-board.ttl', 'trace-mech.ttl', 'trace-docs.ttl'] as const
 export const ALIGN_FILE = 'trace-si2-align.ttl'
 
 export interface Term {

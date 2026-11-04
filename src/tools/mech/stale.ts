@@ -4,6 +4,9 @@
  * its fit no evidence until it is built again.
  *
  *   board, board_sha256           the board file
+ *   case_facts                    what of the board the case depends on (./case-facts.ts): its outline, holes, the
+ *                                 parts at its edge and the parts' heights. When both builds have it, it stands for
+ *                                 the board file and the facts: a change elsewhere on the board leaves the case current
  *   case_json_sha256              mechanical/case.json
  *   case_py_sha256                mechanical/case.py (a scripted case)
  *   case_file, case_file_sha256   the handed-in STEP (a case from a file)
@@ -22,6 +25,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { type CaseFactHashes, caseFactChanges, caseFactHashes, caseFactsOf } from './case-facts.js'
 import { CASE_JSON, CASE_PY } from './settings.js'
 
 /** The TypeScript side's engine contract version: bump it when what mech.build sends or reads changes. */
@@ -32,6 +36,7 @@ export interface EngineStamp { ts: string; py_version: string | null; py_sha256:
 export interface BuildInputs {
   board: string
   board_sha256: string
+  case_facts?: CaseFactHashes
   case_json_sha256: string | null
   case_py_sha256: string | null
   case_file: string | null
@@ -77,16 +82,21 @@ export function engineStamp(pyDir: string | null): EngineStamp {
 export function staleReasons(was: Partial<BuildInputs> | null | undefined, now: Partial<BuildInputs>): string[] {
   if (!was || typeof was !== 'object') return ['the build recorded no inputs']
   const out: string[] = []
-  const boardChanged = (now.board !== undefined && was.board !== now.board) || (now.board_sha256 !== undefined && was.board_sha256 !== now.board_sha256)
+  // what of the board the case depends on, when both builds know it: the rest of the board may change freely
+  const byFacts = Boolean(was.case_facts && now.case_facts)
+  const facts = byFacts && now.board === was.board ? caseFactChanges(was.case_facts as CaseFactHashes, now.case_facts as CaseFactHashes, now.board ?? was.board ?? 'the board') : []
+  const boardChanged = (now.board !== undefined && was.board !== now.board) || (byFacts ? facts.length > 0 : now.board_sha256 !== undefined && was.board_sha256 !== now.board_sha256)
   if (now.board !== undefined && was.board !== now.board) out.push(`the case's board is now ${now.board} (it was ${was.board ?? 'not recorded'})`)
+  else if (byFacts) out.push(...facts)
   else if (now.board_sha256 !== undefined && was.board_sha256 !== now.board_sha256) out.push(`${now.board ?? was.board ?? 'the board'} changed since the build`)
   if (now.case_json_sha256 !== undefined && was.case_json_sha256 !== now.case_json_sha256) out.push(`${CASE_JSON} changed since the build`)
   if (now.case_py_sha256 !== undefined && was.case_py_sha256 !== now.case_py_sha256) out.push(`${CASE_PY} changed since the build`)
   if ((now.case_file !== undefined && was.case_file !== now.case_file) || (now.case_file_sha256 !== undefined && was.case_file_sha256 !== now.case_file_sha256)) {
     out.push(`the handed-in case file ${now.case_file ?? was.case_file ?? ''} changed since the build`)
   }
-  // the facts follow the board; reported on their own only when the board did not change (trace's reader or heights did)
-  if (now.facts_sha256 !== undefined && was.facts_sha256 !== now.facts_sha256 && !boardChanged) {
+  // the facts follow the board; reported on their own only when the board did not change (trace's reader or heights did),
+  // and not at all when the case's facts were compared: they are the part of the facts the case depends on
+  if (!byFacts && now.facts_sha256 !== undefined && was.facts_sha256 !== now.facts_sha256 && !boardChanged) {
     out.push('the board facts trace reads from the board changed since the build (the facts reader or the height table)')
   }
   if (now.capabilities_sha256 !== undefined && was.capabilities_sha256 !== now.capabilities_sha256) {
@@ -112,9 +122,10 @@ export function staleSentence(reasons: readonly string[]): string {
 
 /**
  * The inputs as they are now, for the files a build recorded, read through `read` (repository path → bytes, null when
- * absent): the board, case.json, case.py and the handed-in file, plus the capabilities' stamp and date. The facts and the engine
- * are left undefined (not compared): a reader of files alone, such as the API reading the default branch from GitHub,
- * cannot compute them.
+ * absent): the board (and, for a build that recorded them, what of it the case depends on, read from its bytes),
+ * case.json, case.py and the handed-in file, plus the capabilities' stamp and date. The full facts and the engine are
+ * left undefined (not compared): a reader of files alone, such as the API reading the default branch from GitHub,
+ * has neither the facts the engine was given nor the engine.
  */
 export async function filesNow(was: Partial<BuildInputs>, read: (path: string) => Promise<Uint8Array | null>, capabilities?: { checked: string; sha256: string }): Promise<Partial<BuildInputs>> {
   const hash = async (p: string | null | undefined): Promise<string | null> => {
@@ -125,7 +136,12 @@ export async function filesNow(was: Partial<BuildInputs>, read: (path: string) =
   const now: Partial<BuildInputs> = {}
   if (was.board) {
     now.board = was.board
-    now.board_sha256 = (await hash(was.board)) ?? ''
+    const b = await read(was.board)
+    now.board_sha256 = b ? sha256(b) : ''
+    if (was.case_facts && b) {
+      const f = caseFactsOf(was.board, b)
+      if (!('error' in f)) now.case_facts = caseFactHashes(f)
+    }
   }
   now.case_json_sha256 = await hash(CASE_JSON)
   if (was.case_py_sha256 !== undefined) now.case_py_sha256 = was.case_py_sha256 === null ? null : await hash(CASE_PY)
