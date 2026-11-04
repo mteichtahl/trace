@@ -1420,10 +1420,14 @@ optional `pipeline: 'antmicro'` mode is left as future work. Enclosures use buil
 ## Enclosures
 
 A board's case is a build123d script in the project repository, rebuilt from the board, and its fit check is the
-layout gate's evidence for "The board fits its enclosure, or each clash is waived" (`layout.fit`). The design and the
+layout gate's evidence for "The board fits its enclosure, or each clash is waived" (`layout.fit`), decided by that
+criterion's shape (`shape.check layout.fit`) over the newest build, each clash waivable on its own. The Design tab's
+**Case** view pins each problem on its part of the board and says in plain words when the build is out of date: a part
+moved in the middle of the board leaves it current, an edge connector moved does not. The design and the
 choice of build123d over FreeCAD are in [docs/enclosure-cad.md](docs/enclosure-cad.md); the build contract between the
 TypeScript tools and the Python engine is [docs/enclosure-build.md](docs/enclosure-build.md). The Implementation
-specialist runs the tools; a person works through the **Case design** skill.
+specialist runs the tools; a person works through the **Case design** skill. Three case designs are built in: a
+printed two-part shell (the recommendation), an extruded box the board slides into, and a DIN rail enclosure.
 
 A project's case lives in `mechanical/`:
 
@@ -1745,7 +1749,8 @@ is kept, so every record still says whose it is, and the existing checks still h
 | Actor | Who |
 | --- | --- |
 | `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc`, `render` and `thermal` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. A specialist's recall (at the start of a job, and `memory_recall`) also searches `ci-doctor`, `conflict` and `worker`, read only, ranked after its own records and tagged `legacy` in the prompt block; nothing is migrated (AgentCore cannot copy records). |
-| `<owner>/<repo>/person/<hash>` | The person who started a task through the API: their own preferences, inside the project. The hash is part of the sha256 of their email, so the email itself never appears. |
+| `<owner>/<repo>/chat` | Ask trace, the web app's chat: only the project facts people confirmed it should remember (`memory.remember`, scope project). Conversations are never recorded here. Recalled in the project's chats (`memory_recall`) and shown as "Chat" on the Memory screen; no job's recall reads it. |
+| `<owner>/<repo>/person/<hash>` | The person who started a task through the API, or chatted with trace: their own preferences, inside the project. The hash is part of the sha256 of their Cognito sub (records from before carry their email's), so the email itself never appears. |
 
 | Strategy | Namespace |
 | --- | --- |
@@ -1765,6 +1770,22 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
 - **Inside a job:** Claude has the MCP tools `memory_recall` and `memory_remember`. They act only as the job's actor and
   session (`TRACE_MEMORY_ACTOR` and `TRACE_MEMORY_SESSION`, or `TRACE_MEMORY_REPOSITORY` and `TRACE_MEMORY_AGENT`), and
   they are offered only when `TRACE_MEMORY_ID` is set.
+- **In the chat:** the person's own messages (`chats.append`) are also recorded, best-effort, as short-term events in
+  session `chat-<thread>`, under their own person actor only, and only for people with write access (a guest's words
+  are not recorded at all). trace's replies and tool calls (`chats.reply`) are never recorded, so nothing the model
+  says, or that a tool result or document planted in its words, reaches memory on its own. The chat's recording never
+  writes the project's `chat` actor. A memory failure is logged and never breaks the chat.
+- **Remembering in the chat:** when a person asks trace to remember something, it offers a card (`remember`) with the
+  exact words and whether they are the person's own preference or a project fact; nothing is saved until they press
+  Confirm, which calls `memory.remember { repo, text, scope: personal | project, thread? }` as them (write access:
+  guests are refused; held to the chat's limit on writes). The card writes only to the conversation's own project:
+  one the model names that is not the chat's is refused on the card. The author is always the signed-in person, never
+  anything the model says, and `thread` must be a conversation of theirs on that project. A personal preference goes
+  under their person actor; a project fact under the project's `chat` actor, which nothing else writes, so a project
+  fact is always one a person confirmed (typing the same words in a message only ever reaches the person's own
+  records). Project facts are recalled in the project's chats and shown on its Memory screen; the agents' jobs do not
+  read them. Like start_task, the card is never offered in a read-only or shared conversation. Long-term records
+  appear a few minutes later, once AgentCore has extracted them.
 - **Through the API:** anyone who can read a project can see its memory with the read-only actions `memory.list` and
   `memory.recall` (optionally for one `agent`). The API learns every project's memory from `TRACE_PROJECT_MEMORIES`
   (`owner/repo=<memory id>`, separated by spaces, the same encoding as `TRACE_WORKER_RUNTIMES`). After the access
@@ -1774,7 +1795,10 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
 - **In IAM:** each project's worker role may use only its own memory's ARN: `CreateEvent` and `ListEvents` for its
   project's actors (`<owner>/<repo>/*`), and `RetrieveMemoryRecords` and `ListMemoryRecords` under its namespaces
   (`/trace/<owner>/<repo>/*`). The API role may only recall, list and get records under `/trace/`, on each
-  project's memory (it gets one to check it before marking it inactive, see below). Each project's GitHub OIDC role has
+  project's memory (it gets one to check it before marking it inactive, see below). Its one write is `CreateEvent`
+  for the chat: one statement per project, on that project's memory only (`memory/<prefix>_m_<hash>-*`), with
+  `bedrock-agentcore:actorId` limited to `<owner>/<repo>/chat` and `<owner>/<repo>/person/*`, so it can never write
+  as an agent or into another project. The connected systems' runtime gets none. Each project's GitHub OIDC role has
   its worker's grants on its own memory, for the `worker.runner = actions` fallback, which is told the memory by the
   repository variable `TRACE_MEMORY_ID` (set by the installer). The client draws the same lines as well (see
   [Project isolation](#project-isolation)).

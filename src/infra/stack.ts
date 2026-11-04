@@ -47,7 +47,8 @@
  *                       before the pool; what names the pool in this one, after it)
  *
  * The API runtime is the one component that spans projects: it reads every project's settings and status with the
- * shared GitHub token, reads (never writes) the records of every project's memory, keeps which of them people marked
+ * shared GitHub token, reads (never writes) the records of every project's memory (and records only the chat's events:
+ * each project's chat and person actors, src/infra/memory.ts grantChatEvents), keeps which of them people marked
  * inactive (projects/<slug>/memory-state), and hands tasks to each project's worker
  * runtime (InvokeAgentRuntime), always after its access check. It runs no model and gives nothing a shell.
  *
@@ -509,6 +510,7 @@ export class TraceStack extends Stack {
     const apiGrants = {
       scope: this, region: cfg.region, account: cfg.account, partition: this.partition, prefix: cfg.prefix, installationTag: INSTALLATION_TAG,
       images: repo, central, githubToken, workers: projects.map((p) => p.runtime.attrAgentRuntimeArn), memories,
+      chatMemories: refs.flatMap((r, i) => (projects[i]?.memory ? [{ repository: r.repository, name: memoryName(cfg.prefix, r.repository, projectSettings(cfg, r.repository).generation) }] : [])),
       knowledgeBases: kbs.map((k) => k.kb.knowledgeBaseId), orderWatchArn: orderWatch.function.functionArn,
     }
     grantApiRuntime(apiRole, { ...apiGrants, runtimeName: apiName }, { people: true })

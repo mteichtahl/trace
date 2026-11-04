@@ -149,9 +149,9 @@ export interface GitHubApi {
   resetBranch?(repo: string, branch: string, sha: string): Promise<void>
   /**
    * One commit of several files on a new branch made from `base` (blobs, a tree on the base commit's tree, a commit, the
-   * branch). Answers the commit. Throws when the branch already exists.
+   * branch). Answers the commit. Throws when the branch already exists. A file whose content is null is removed.
    */
-  commitFiles?(repo: string, o: { branch: string; base: string; message: string; files: { path: string; content: Uint8Array }[] }): Promise<{ commit: string }>
+  commitFiles?(repo: string, o: { branch: string; base: string; message: string; files: { path: string; content: Uint8Array | null }[] }): Promise<{ commit: string }>
   /** Start a workflow_dispatch run with inputs. Absent: dispatchWorkflow without inputs. */
   dispatchWorkflowWith?(repo: string, workflow: string, ref: string, inputs: Record<string, string>): Promise<void>
   /** Any other GitHub REST call, as JSON (rulesets, branch protection, issues, run jobs and logs). */
@@ -370,13 +370,15 @@ export class HttpGitHub implements GitHubApi {
     await this.json('PATCH', `${this.p(repo)}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, { sha, force: true })
   }
 
-  async commitFiles(repo: string, o: { branch: string; base: string; message: string; files: { path: string; content: Uint8Array }[] }): Promise<{ commit: string }> {
+  async commitFiles(repo: string, o: { branch: string; base: string; message: string; files: { path: string; content: Uint8Array | null }[] }): Promise<{ commit: string }> {
     const Sha = z.object({ sha: z.string() }).loose()
     const head = await this.branchSha(repo, o.base)
     if (!head) throw new GitHubError(404, `GitHub: no branch ${o.base}`)
     const baseTree = z.object({ tree: z.object({ sha: z.string() }).loose() }).loose().parse(await this.json('GET', `${this.p(repo)}/git/commits/${head}`)).tree.sha
-    const tree: { path: string; mode: '100644'; type: 'blob'; sha: string }[] = []
+    const tree: { path: string; mode: '100644'; type: 'blob'; sha: string | null }[] = []
     for (const f of o.files) {
+      // content null removes the file (a tree entry with a null sha)
+      if (f.content === null) { tree.push({ path: f.path, mode: '100644', type: 'blob', sha: null }); continue }
       const b = Sha.parse(await this.json('POST', `${this.p(repo)}/git/blobs`, { content: Buffer.from(f.content).toString('base64'), encoding: 'base64' }))
       tree.push({ path: f.path, mode: '100644', type: 'blob', sha: b.sha })
     }

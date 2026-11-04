@@ -71,12 +71,34 @@ describe('start_task: trace asks, the person confirms', () => {
       expect(fetch).not.toHaveBeenCalled()
     })
 
-    it('another project than the conversation\'s: asks for that project\'s agent, and Confirm waits for it', async () => {
+    it('a conversation on no project: asks for the named project\'s agent, and Confirm waits for it', async () => {
       const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(settingUp('acme/board')))
-      render(<ChatRepo.Provider value="acme/other"><StartTaskCard args={args} status="executing" respond={vi.fn()} /></ChatRepo.Provider>, { wrapper })
+      render(<StartTaskCard args={args} status="executing" respond={vi.fn()} />, { wrapper })
       await waitFor(() => expect(screen.getByRole('button', { name: /Confirm and start/ })).toBeDisabled())
       expect(screen.getByText(/trace is still setting up this project's agent/)).toBeInTheDocument()
       expect(fetch.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)) as unknown)).toContainEqual({ action: 'project.agent', repo: 'acme/board' })
+    })
+  })
+
+  describe('locked to the conversation\'s project', () => {
+    it('another project than the conversation\'s is refused on the card: no Confirm, nothing started or asked, Dismiss tells trace why', async () => {
+      const fetch = vi.spyOn(globalThis, 'fetch')
+      const respond = vi.fn()
+      render(<ChatRepo.Provider value="acme/other"><StartTaskCard args={args} status="executing" respond={respond} /></ChatRepo.Provider>, { wrapper })
+      expect(screen.getByRole('alert')).toHaveTextContent('trace named acme/board, but this conversation is on acme/other: nothing can be started on another project from here.')
+      expect(screen.queryByRole('button', { name: /Confirm and start/ })).toBeNull()
+      await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+      expect(respond).toHaveBeenCalledWith({ confirmed: false, reason: expect.stringMatching(/^trace named acme\/board/) as unknown as string })
+      expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('starts the work on the conversation\'s project, whatever spelling trace gave it', async () => {
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true, result: { accepted: true, jobId: 'j1' } }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      render(<ChatRepo.Provider value="acme/board"><StartTaskCard args={{ ...args, repo: 'Acme/Board' }} status="executing" respond={vi.fn()} /></ChatRepo.Provider>, { wrapper })
+      await userEvent.click(screen.getByRole('button', { name: /Confirm and start/ }))
+      await waitFor(() => expect(fetch).toHaveBeenCalled())
+      const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)) as { action: string; repo: string })
+      expect(bodies.find((b) => b.action === 'task')?.repo).toBe('acme/board')
     })
   })
 })

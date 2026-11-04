@@ -131,7 +131,10 @@ describe('the nested layout', () => {
     // src/infra/stack.ts) and one output (ToolsImageUri), whatever the number of projects.
     // The runs log group adds none here: it is in the web app's nested stack (src/infra/run-logs.ts; the API reads it
     // through its cost policy).
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:118/28:1', '24:144/28:4', '60:180/28:4'])
+    // The chat's events (src/infra/memory.ts grantChatEvents: CreateEvent on each project's memory, for its chat and
+    // person actors only) are one statement per project in the API role: three more overflow policies at 60 projects
+    // (seven in all, under IAM's ten managed policies per role).
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:118/28:1', '24:144/28:4', '60:183/28:7'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
@@ -154,6 +157,40 @@ describe('the nested layout', () => {
         expect(Object.keys(own)).toContain(o)
       }
     }
+  }, 900_000)
+
+  it("fits the API role's chat statements under IAM's ten managed policies with the longest GitHub names", () => {
+    // GitHub's longest: a 39-character owner and a 100-character repository, here full of '.' and '_' (each encoded as
+    // two characters in an actor id: src/agents/runtime/memory.ts projectId), so the chat statements are their largest
+    const name = (i: number, repoLength: number, ownerLength = 39): string =>
+      `${`o${String(i).padStart(2, '0')}-`.padEnd(ownerLength, 'x')}/${`r${String(i).padStart(2, '0')}`.padEnd(repoLength, '._').replace(/\.$/, '_')}`
+    const longest = Array.from({ length: 60 }, (_, i) => name(i, 100))
+    for (const r of longest) expect(r.split('/').map((x) => x.length)).toEqual([39, 100])
+    const cfg = (repositories: string[]) => InfraPropsSchema.parse({ ...base, repositories, memory: { legacySharedMemory: true } })
+    // sixty of them never reach IAM: the API's list of worker runtimes (one AgentCore environment value) refuses them first
+    expect(() => synth(cfg(longest), 'Count60Longest')).toThrow(/too many repositories for one installation: the API's list of worker runtimes would be \d+ characters \(AgentCore allows 5000\)/)
+    const check = (repositories: string[], id: string): void => {
+      const s = synth(cfg(repositories), id)
+      const api = Object.entries(json(s.parent).Resources).filter(([k, r]) => r.Type === 'AWS::IAM::ManagedPolicy' && k.startsWith('ApiRuntimeRoleOverflowPolicy'))
+      // IAM's default quota of managed policies per role (CDK keeps each one under IAM's 6,144 characters itself)
+      expect(api.length).toBeLessThanOrEqual(10)
+      // every project's chat statement is still its own: that project's memory, its chat and person actors only
+      type St = { Action: unknown; Resource: unknown; Condition?: Record<string, Record<string, unknown>> }
+      const role = Object.values(json(s.parent).Resources).filter((r) => r.Type === 'AWS::IAM::ManagedPolicy' || r.Type === 'AWS::IAM::Policy')
+      const chat = role.flatMap((r) => (r.Properties?.PolicyDocument as { Statement: St[] }).Statement).filter((st) => JSON.stringify(st.Action) === '"bedrock-agentcore:CreateEvent"')
+      expect(chat).toHaveLength(repositories.length)
+      for (const st of chat) {
+        const actors = Object.values(st.Condition ?? {}).flatMap((c) => Object.values(c)).flat().map(String)
+        expect(actors.length).toBeGreaterThan(0)
+        for (const a of actors) expect(a).toMatch(/^[^*]+\/(?:chat|person\/\*)$/)
+        expect(JSON.stringify(st.Resource)).toMatch(/memory\/[a-z0-9_]+_m_[0-9a-f]+-\*"$/)
+      }
+    }
+    // as many of the longest as the worker list allows (seven overflow policies)
+    check(longest.slice(0, 29), 'Count29Longest')
+    // and sixty with the longest repository names the worker list allows them, a 39-character owner (eight: the most,
+    // as what else the role names grows with the number of projects)
+    check(Array.from({ length: 60 }, (_, i) => name(i, 14)), 'Count60Long')
   }, 900_000)
 
   it('refuses at synth time a flat stack CloudFormation would refuse, and says why', () => {

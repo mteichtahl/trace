@@ -13,6 +13,11 @@
  *   mech.capabilities        JLC3DP's and JLCCNC's rules as stored, their sources and whether they are stale
  *   mech.capabilities_check  re-reads the source pages: each stored figure same, changed or unreadable
  *   mech.order               mechanical/out/order.json and order.md for a person to upload and pay; never orders
+ *   mech.options             the case designs that could work for the board (python/tracebridge/case_options.py):
+ *                            every combination of template, mounting, closure and process tried against
+ *                            feasibility rules on regions and relations, the feasible ones ranked with why and what
+ *                            each gives up, the pruned ones with the rule; with ask, the feasible ones asked of a
+ *                            person as a question (journey.ask's record), recommended first
  *
  * Paths are the repository's (relative to its root); the files written are in the working tree, for the person or the
  * worker to commit.
@@ -34,18 +39,43 @@ import { type BuildInputs, engineStamp, sha256, staleReasons } from './stale.js'
 import { CASE_VIEW, caseFactHashes, caseViewHashOf } from './case-facts.js'
 import { normalisedHash } from '../../core/normalise.js'
 import {
-  CASE_JSON, CASE_PY, type CaseSettings, MECH_DIR, OUT_DIR, SETTABLE, defaults, describe, missingReasons, needSettings, readSettings,
-  withClearance, withValue, writeSettings,
+  CASE_JSON, CASE_PY, type CaseSettings, type CaseTemplate, MECH_DIR, OUT_DIR, SETTABLE, TEMPLATE_IDS, defaults, describe, missingReasons,
+  needSettings, readSettings, withClearance, withValue, writeSettings,
 } from './settings.js'
 
-/** The case script mech.init writes (the engine's printed-shell template). */
-export const CASE_TEMPLATE = `from tracebridge.mech import shell
+/** The case script mech.init writes for each template (the engine's python/tracebridge/mech/templates/<id>.py). */
+export const CASE_TEMPLATES: Readonly<Record<CaseTemplate, string>> = {
+  'printed-shell': `from tracebridge.mech import shell
 
 def build(board, settings):
     case = shell.two_part(board, settings)
     # Your changes go here: case.parts["lid"] = case.parts["lid"] - ...  (build123d)
     return case
-`
+`,
+  'extruded-box': `from tracebridge.mech import boxes
+
+def build(board, settings):
+    case = boxes.extruded_box(board, settings)
+    # Your changes go here: case.parts["tube"] = case.parts["tube"] - ...  (build123d)
+    return case
+`,
+  'din-rail': `from tracebridge.mech import boxes
+
+def build(board, settings):
+    case = boxes.din_rail(board, settings)
+    # Your changes go here: case.parts["lid"] = case.parts["lid"] - ...  (build123d)
+    return case
+`,
+}
+/** The printed shell's script, the recommendation. */
+export const CASE_TEMPLATE = CASE_TEMPLATES['printed-shell']
+
+/** What each template is, for a person choosing one. */
+export const TEMPLATE_WORDS: Readonly<Record<CaseTemplate, string>> = {
+  'printed-shell': 'a printed two-part shell: a base the board screws into and a lid that drops onto it',
+  'extruded-box': 'an extruded box: a tube the board slides into along guides, closed by two end plates',
+  'din-rail': 'a DIN rail enclosure: the two-part shell with a foot that clips onto a 35 mm top-hat rail',
+}
 
 /** A repository file's sha256, null when it is not there (checked: no symbolic link, nothing outside the repository). */
 const sha = (r: string, p: string): string | null => (existsSync(join(r, p)) ? sha256(readRepoFile(r, p)) : null)
@@ -117,10 +147,11 @@ const ProcessIn = z.object({ service: z.string().min(1), process: z.string().min
 
 export const initTool = defineTool({
   name: 'mech.init',
-  description: `Start the project's case: writes ${CASE_JSON} (the recommended settings: walls, clearances 0.5 mm board edge to wall and 1.0 mm above the tallest part, openings for edge connectors; the board path; the process, default the recommendation ${RECOMMENDED.process} ${RECOMMENDED.material} at JLC3DP) and ${CASE_PY} (the printed two-part shell template, a build123d script a person or the worker edits). A process other than the recommendation needs a reason. Refuses to overwrite either file without replace: true. Then run mech.build. Recorded; returns run_id.`,
+  description: `Start the project's case: writes ${CASE_JSON} (the recommended settings: walls, clearances 0.5 mm board edge to wall and 1.0 mm above the tallest part, openings for edge connectors; the board path; the process, default the recommendation ${RECOMMENDED.process} ${RECOMMENDED.material} at JLC3DP) and ${CASE_PY} (the template's build123d script, which a person or the worker edits). template: ${TEMPLATE_IDS.map((t) => `${t} (${TEMPLATE_WORDS[t]})`).join('; ')}; default printed-shell. A process or template other than the recommendation needs a reason. Refuses to overwrite either file without replace: true. Then run mech.build. Recorded; returns run_id.`,
   input: z.object({
     board: boardArg,
     process: ProcessIn.optional().describe(`{service, process, material}; default ${JSON.stringify(RECOMMENDED)}`),
+    template: z.enum(TEMPLATE_IDS).optional().describe('the case design; default printed-shell'),
     reason: z.string().optional().describe('why, when the process is not the recommendation'),
     quantity: z.number().int().min(1).max(100_000).optional(),
     replace: z.boolean().default(false),
@@ -139,15 +170,19 @@ export const initTool = defineTool({
         for (const k of ['service', 'process', 'material'] as const) if (given[k] !== s.process[k]) s = withValue(s, `process.${k}`, given[k], a.reason)
       }
       if (a.quantity !== undefined && a.quantity !== s.quantity) s = withValue(s, 'quantity', a.quantity, a.reason ?? 'the build quantity')
+      if (a.template && a.template !== s.template) {
+        if (!a.reason || a.reason.trim().length < 3) throw new ToolError(`mech.init: template ${a.template} is not the recommendation (printed-shell): give the reason`)
+        s = { ...s, template: a.template, reasons: { ...s.reasons, template: a.reason.trim() } }
+      }
       // both checked before either is written: a symbolic link at either refuses the whole call
       repoFile(r, CASE_JSON)
       repoFile(r, CASE_PY)
       writeSettings(r, s)
-      writeRepoFile(r, CASE_PY, CASE_TEMPLATE)
+      writeRepoFile(r, CASE_PY, CASE_TEMPLATES[s.template])
       const p = s.process
       return {
         status: 'pass' as const,
-        summary: `wrote ${CASE_JSON} and ${CASE_PY} for ${board}: ${p.process} ${p.material} at ${p.service}, wall ${s.params.wall_mm} mm`,
+        summary: `wrote ${CASE_JSON} and ${CASE_PY} for ${board}: ${s.template}, ${p.process} ${p.material} at ${p.service}, wall ${s.params.wall_mm} mm`,
         result: {
           written: [CASE_JSON, CASE_PY], settings: s,
           recommendation: { ...RECOMMENDED, why: RECOMMENDED_WHY },
@@ -316,8 +351,8 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
         warnings: [...facts.warnings, ...unexplained.map((x) => `${x} differs from the recommendation without a reason in ${CASE_JSON} (set it with mech.settings)`)],
         inputs,
         next: passed
-          ? 'The case fits and is within the process\'s rules: record it with journey.check criterion "layout.fit", status "met", evidence [{"kind":"run","ref":"<this run_id>"}].'
-          : 'Read the clashes and gaps: a clearance or wall change is mech.settings; a shape change is an edit to mechanical/case.py (delegate it); a clash that needs the board outline or a part moved is for a person. Waive a clash only through the journey, never by recording layout.fit as met.',
+          ? 'The case fits and is within the process\'s rules: run shape.check with criterion "layout.fit", which reads this build and records the criterion.'
+          : 'Read the clashes and gaps: a clearance or wall change is mech.settings; a shape change is an edit to mechanical/case.py (delegate it); a clash that needs the board outline or a part moved is for a person, who may waive that one problem in the journey. shape.check layout.fit records the criterion from the newest build and its waivers.',
       },
     }
   })
@@ -325,7 +360,7 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
 
 export const buildTool = defineTool({
   name: 'mech.build',
-  description: `Build the case with the enclosure engine (build123d) from the board facts, ${CASE_JSON} and ${CASE_PY} (or the handed-in STEP), then check it. A ${CASE_PY} that differs from the template runs first as its own cad-script job (on the project's cad function, or locally; the cloud without one builds only the template or a handed-in STEP), then a cad job (the tools function, or locally) checks what it built; the answer's stages say where each ran. The check: clashes (part envelopes or the board against case parts, mm³), gaps (board edge to wall, each part to the lid or floor, against its clearance), openings for edge connectors, and the process's design rules (wall, size, hole, lip gap; JLC3DP or JLCCNC). Writes ${OUT_DIR}/ (case.step, case-<part>.step/.stl/.3mf, fit.json, case.jsonld). Measures clashes, gap_violations, assumed_heights; status pass only when the fit passes and no rule fails. When it passes, record layout.fit with journey.check and this run id. Recorded; returns run_id.`,
+  description: `Build the case with the enclosure engine (build123d) from the board facts, ${CASE_JSON} and ${CASE_PY} (or the handed-in STEP), then check it. A ${CASE_PY} that differs from the template runs first as its own cad-script job (on the project's cad function, or locally; the cloud without one builds only the template or a handed-in STEP), then a cad job (the tools function, or locally) checks what it built; the answer's stages say where each ran. The check: clashes (part envelopes or the board against case parts, mm³), gaps (board edge to wall, each part to the lid or floor, against its clearance), openings for edge connectors, and the process's design rules (wall, size, hole, lip gap; JLC3DP or JLCCNC). Writes ${OUT_DIR}/ (case.step, case-<part>.step/.stl/.3mf, fit.json, case.jsonld). Measures clashes, gap_violations, assumed_heights; status pass only when the fit passes and no rule fails. Then shape.check layout.fit records the layout gate's fit criterion from the newest build (its shape: met when the build still stands and every clash, gap and failing rule is fixed or waived on its own). Recorded; returns run_id.`,
   input: z.object({ formats: Formats.describe('files to write (default step, stl and 3mf)') }),
   run: async (a) => {
     const r = await root()
@@ -374,7 +409,7 @@ export const fitTool = defineTool({
           build_run: b.id, build_status: b.status, stale: reasons.length > 0, stale_reasons: reasons,
           fit_status: res.fit_status, fit_summary: res.fit_summary, problems: res.problems, clashes: res.clashes, gaps: res.gaps, openings: res.openings,
           assumptions: res.assumptions, rules_failing: res.rules_failing, rules_not_checked: res.rules_not_checked, case: res.case, files: res.files,
-          next: reasons.length ? 'mech.build: the fit is stale.' : b.status === 'pass' ? `journey.check layout.fit met with evidence run ${b.id}, if not recorded yet.` : 'Fix the clashes and gaps (mech.settings, or a delegated change to the case script), then mech.build.',
+          next: reasons.length ? 'mech.build: the fit is stale.' : b.status === 'pass' ? 'shape.check layout.fit, if not checked since this build.' : 'Fix the clashes and gaps (mech.settings, or a delegated change to the case script), then mech.build.',
         },
       }
     })
@@ -485,7 +520,7 @@ export const orderTool = defineTool({
       const stale = staleReasons(b.result.inputs as BuildInputs, currentInputs(r, s))
       if (stale.length) throw new ToolError(`the latest build (${b.id}) is stale: ${stale.join('; ')}. Run mech.build again`)
       if (b.status !== 'pass' && !a.waiver) throw new ToolError(`the latest build (${b.id}) does not pass: ${String(b.result.fit_summary ?? '')}. Fix it, or give the waiver`)
-      const files = partsFor(s.source).map((p) => `${OUT_DIR}/case-${p}.${a.format}`)
+      const files = partsFor(s.source, s.template).map((p) => `${OUT_DIR}/case-${p}.${a.format}`)
       const missing = files.filter((f) => !existsSync(join(r, f)))
       if (missing.length) throw new ToolError(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not in the working tree: run mech.build with formats including ${a.format}`)
       const service = isCnc(s.process) ? 'jlccnc' : 'jlc3dp'
@@ -520,6 +555,96 @@ export const orderTool = defineTool({
   },
 })
 
+// ------------------------------------------------------------------ mech.options
+
+/** The processes the options are offered in: the recommendation, the first resin, and machined aluminium. */
+export function optionProcesses(): { id: string; label: string; service: string; process: string; material: string; max_mm?: readonly number[]; recommended?: boolean; why?: string }[] {
+  const mjf = processRow(RECOMMENDED)
+  const sla = CAPABILITIES.processes.find((r) => r.process === 'SLA')
+  return [
+    { id: 'mjf', label: `${RECOMMENDED.process} ${RECOMMENDED.material} at JLC3DP`, ...RECOMMENDED, ...(mjf ? { max_mm: mjf.max_mm } : {}), recommended: true, why: (RECOMMENDED_WHY.replace(/^[^:]*: /, '').split(/[;,]/)[0] ?? '').trim() },
+    ...(sla ? [{ id: 'sla', label: `SLA ${sla.materials[0]} at JLC3DP`, service: 'jlc3dp', process: 'SLA', material: sla.materials[0] as string, max_mm: sla.max_mm }] : []),
+    { id: 'cnc', label: 'CNC aluminium 6061 at JLCCNC', service: 'jlccnc', process: 'CNC', material: 'Aluminum 6061' },
+  ]
+}
+
+const OptionOut = z.object({
+  key: z.string(), label: z.string(), choices: z.record(z.string(), z.string()), feasible: z.boolean(),
+  pruned_by: z.object({ rule: z.string(), why: z.string() }).optional(),
+  score: z.number().optional(), why: z.array(z.string()).optional(), gives_up: z.string().optional(), size_mm: z.array(z.number()).optional(),
+  rank: z.number().optional(), recommended: z.boolean().optional(),
+})
+const OptionsOut = z.object({
+  options: z.array(OptionOut), feasible: z.number(), pruned: z.number(), recommended: z.string().nullable(),
+  not_offered: z.array(z.object({ label: z.string(), template: z.string(), process: z.string(), rule: z.string(), why: z.string() })),
+})
+export type CaseOptions = z.output<typeof OptionsOut>
+
+/** The live requirements' words, from the design record (none when it has none). */
+function requirementWords(): string[] {
+  const w = new Work()
+  try {
+    const has = w.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='requirements'").get()
+    return has ? (w.db.prepare("SELECT text FROM requirements WHERE status NOT IN ('rejected','obsolete')").all() as { text: string }[]).map((r) => r.text) : []
+  } finally {
+    w.close()
+  }
+}
+
+export const optionsTool = defineTool({
+  name: 'mech.options',
+  description: `The case designs that could work for the board, before any is built: every combination of template (printed-shell, extruded-box, din-rail), how the board is held (screws, rests and lid posts, guides), how the case closes (lid, end plates) and process (MJF at JLC3DP, the recommendation; SLA; CNC aluminium) is tried against feasibility rules on the board's regions (its box, parts at its edges, parts sticking out, free corners, mounting holes, size against the process): pruned ones are kept with the rule and why; the feasible ones are ranked by the requirements, each with why and what it gives up. With ask: true, the feasible ones (up to six, recommended first) are asked of a person as a question in the journey (the Case design skill's process step shows it); their answer is the template and process for mech.init. Recorded; returns run_id.`,
+  input: z.object({
+    board: boardArg,
+    ask: z.boolean().default(false).describe('ask a person which to build, as a journey question'),
+  }),
+  run: async (a) => {
+    const r = await root()
+    const s = readSettings(r)
+    const pcb = a.board ? await boardPath(r, a.board) : s ? inRepo(r, s.board, 'the case\'s board').abs : await boardPath(r, undefined)
+    const board = repoPath(pcb, r)
+    const out = await recorded('mech.options', board, a, async (run) => {
+      const facts = boardFacts(pcb, r)
+      const { bridge } = await import('../../core/bridge.js')
+      const res = await bridge().call('case.options', { facts, processes: optionProcesses(), requirements: requirementWords() }, OptionsOut)
+      run.artifact('options.json', JSON.stringify(res, null, 1), 'application/json')
+      run.measure('feasible', res.feasible)
+      run.measure('pruned', res.pruned)
+      const offered = res.options.filter((o) => o.feasible)
+      return {
+        status: offered.length ? 'pass' as const : 'fail' as const,
+        summary: `${plural(offered.length, 'case design')} could work for ${board}${offered[0] ? `; trace recommends ${offered[0].label}` : ''}; ${res.pruned} combinations pruned`,
+        result: {
+          offered: offered.map((o) => ({ key: o.key, rank: o.rank, label: o.label, recommended: o.recommended, why: o.why, gives_up: o.gives_up, size_mm: o.size_mm, choices: o.choices })),
+          not_offered: res.not_offered,
+          pruned: res.options.filter((o) => !o.feasible).map((o) => ({ key: o.key, rule: o.pruned_by?.rule, why: o.pruned_by?.why })),
+          recommended: res.recommended,
+          next: offered.length ? (a.ask ? 'Asked: the answer names the template and process for mech.init.' : 'mech.options with ask: true to put them to a person, or mech.init with the recommended template and process.') : 'No case design fits: the board needs mounting holes, or its parts moved off its edges.',
+        },
+      }
+    })
+    if (!a.ask || !out.offered.length) return out
+    // the question: the feasible options, recommended first, in the journey's questions record
+    const { journeyScope } = await import('../journey/tools.js')
+    const { addAgentQuestion } = await import('../../core/agent-facts.js')
+    const { loadJourney } = await import('../../core/journey.js')
+    let scope: ReturnType<typeof journeyScope>
+    try { scope = journeyScope() } catch { return { ...out, asked: null, next: 'Not asked: no project in scope here. Put the options to a person in your report.' } }
+    const rec = (await scope.journey.read((db) => loadJourney(db))).result
+    const shown = out.offered.slice(0, 6)
+    const dropped = out.not_offered.map((n) => `${n.label}: ${n.why}`)
+    const { result: id } = await scope.facts.update((db) => ({
+      result: addAgentQuestion(db, scope.asker, {
+        text: `Which case should trace build for ${board}?${dropped.length ? ` Not offered: ${dropped.join('; ')}.` : ''}`.slice(0, 2000),
+        blocks: 'building the case (mech.init, then mech.build)',
+        options: shown.map((o, i) => ({ id: `case-${i + 1}`, label: o.label, recommended: Boolean(o.recommended), why: (o.why ?? []).join('; ') || 'it fits the board and the process', ...(o.gives_up ? { gives_up: o.gives_up } : {}) })),
+        sources: [{ kind: 'run', ref: out.run_id, label: 'the case options and the rules that pruned the rest' }],
+      }, rec),
+    }))
+    return { ...out, asked: { question_id: id }, next: `Asked (question ${id}). Read the answer with journey.status, then mech.init with that template and process.` }
+  },
+})
+
 export const tools: AnyTool[] = [
-  boardTool, initTool, settingsTool, buildTool, fitTool, handInTool, capabilitiesTool, capabilitiesCheckTool, orderTool,
+  boardTool, initTool, settingsTool, buildTool, fitTool, handInTool, capabilitiesTool, capabilitiesCheckTool, orderTool, optionsTool,
 ] as unknown as AnyTool[]

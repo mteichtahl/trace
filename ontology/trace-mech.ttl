@@ -24,7 +24,8 @@ trace:Enclosure a owl:Class ;
     rdfs:label "Case" ;
     skos:altLabel "Enclosure" ;
     rdfs:comment "The case a board goes in, as a whole, from its newest build." ;
-    trace:keptIn "the newest mech.build run's case records (mechanical/out/case.jsonld), in the run record" .
+    trace:keptIn "the newest mech.build run's case records (mechanical/out/case.jsonld), in the run record" ;
+    trace:graphKind "case" .
 
 trace:EnclosurePart a owl:Class ;
     rdfs:label "Case part" ;

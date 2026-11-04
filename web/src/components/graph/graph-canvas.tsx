@@ -32,6 +32,7 @@ const SHAPE: Record<NodeKind, string> = {
   datasheet: 'tag',
   component: 'cut-rectangle',
   net: 'barrel',
+  case: 'round-tag',
   run: 'diamond',
   artifact: 'rhomboid',
   gate: 'octagon',
@@ -42,7 +43,7 @@ const SHAPE: Record<NodeKind, string> = {
   document: 'rectangle',
   person: 'ellipse',
 }
-const SIZE: Partial<Record<NodeKind, [number, number]>> = { intent: [140, 34], memory: [16, 16], block: [34, 34], person: [30, 30], requirement: [44, 44], document: [26, 32], datasheet: [26, 32], gate: [36, 36], criterion: [22, 22], net: [34, 14], artifact: [26, 20] }
+const SIZE: Partial<Record<NodeKind, [number, number]>> = { intent: [140, 34], memory: [16, 16], block: [34, 34], person: [30, 30], requirement: [44, 44], document: [26, 32], datasheet: [26, 32], gate: [36, 36], criterion: [22, 22], net: [34, 14], artifact: [26, 20], case: [40, 32] }
 
 let probe: CanvasRenderingContext2D | null = null
 /** A theme token as rgb(): Cytoscape cannot read oklch(), and computed styles keep it, so paint one pixel and read it. */

@@ -71,7 +71,7 @@ a reference that is not on the board is kept, with a warning in mech.settings' a
 {
   "version": 1,
   "board": "hardware/x.kicad_pcb",
-  "template": "printed-shell",              // the only template in this build
+  "template": "printed-shell",              // printed-shell (recommended) | extruded-box | din-rail
   "source": "script" | "file",              // file: the case body is the handed-in STEP named by `file`
   "file": "mechanical/my-case.step",        // when source = file
   "process": { "service": "jlc3dp", "process": "MJF", "material": "PA12-HP" },  // see capabilities
@@ -159,6 +159,25 @@ def build(board, settings):
     # Your changes go here: case.parts["lid"] = case.parts["lid"] - …  (build123d)
     return case
 ```
+
+The other two templates are the same script calling `boxes.extruded_box` or `boxes.din_rail`
+(`python/tracebridge/mech/templates/<template>.py`; `mech.init` writes the one `template` names, and a template other
+than the printed shell needs a reason):
+
+- **extruded-box**: a tube along the board's x, open at both ends, and two end plates (parts `tube`, `end-west`,
+  `end-east`). The board slides in along two guides on each side wall, one under its edge and one over it (1.5 mm tall,
+  reaching 1 mm over the board, the assembly clearance above and below); each end plate has a skirt (`lip_mm` thick,
+  `lip_h_mm` deep) that presses over the tube's end. A connector at the west or east edge gets its opening in that end
+  plate, at the north or south edge in the tube's wall. The board's mounting holes are not used, so no screw heads
+  stand on it. Joints: the end plates press-fit, the board sliding. Built sections: `tube_wall`, `tube_floor`,
+  `tube_top`, `end_wall`, `skirt`.
+- **din-rail**: the printed shell with a foot under the base for a 35 mm top-hat rail (EN 60715) along x: a 2 mm
+  spacer, a slot for the rail's 1 mm flanges with the assembly clearance, and a 2 mm hook under each flange. Its
+  sections are the shell's plus `rail_hook`; on a board narrower than the rail the foot is wider than the case, and a
+  note says so.
+
+The rays each template's sections are measured on are placed by `boxes.section_probes` from the board and the
+settings, in the parent, never from what a script claims; the fit check reads the template from the settings too.
 
 API in `tracebridge.mech` (public, documented in its module docstring):
 
@@ -258,7 +277,10 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
     `clearance` (ref → mm, reason) change them, refusing a change from the recommendation without a reason.
   - `mech.build` — runs the engine, writes `mechanical/out/`, records `fit.json`, `result.json` and the STEP files as
     run artifacts, measures `clashes`, `gap_violations`, `assumed_heights`; run status `pass` / `fail` from the fit
-    and rules. Its answer says, when it passes, to record `layout.fit` with `journey.check` and this run id.
+    and rules. Its answer says to run `shape.check layout.fit`: the criterion's shape (`ontology/shapes/layout.fit.ttl`)
+    reads the newest build from the project's graph and records the criterion: met when the build still stands, the case
+    closes around the board, and every clash, gap, missing opening and failing rule is fixed or waived on its own (a
+    waiver of kind finding on `layout.fit@<the problem's record>`, which names the part, so it outlasts a rebuild).
   - `mech.fit` — the latest `mech.build` run's fit, and whether it is stale (`src/tools/mech/stale.ts`): the build
     records its `inputs` (the board and its sha256, what of the board the case depends on (`case_facts`,
     `src/tools/mech/case-facts.ts`: the outline, the mounting and unplated holes, the parts at the edge and every part's
@@ -271,6 +293,16 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
     agree with mech.fit.
     mech.order and the Case design skill's `fit` check use the same function (the skill compares the files on the
     default branch).
+  - `mech.options` — the case designs that could work for the board, before any is built
+    (`python/tracebridge/case_options.py`, the bridge method `case.options`; no build123d needed): every combination of
+    template, how the board is held (screws, rests and lid posts, guides), how the case closes (lid, end plates) and
+    process (MJF, the recommendation; SLA; CNC aluminium) is tried against feasibility rules on the board's regions and
+    their relations only: the template's own closure and mounting, three free corners for rests, no part under the
+    extruded box's guides, no part sticking out past its long edges (the board slides in), and the case's estimated
+    size against the process's largest part. Feasible ones are ranked by the requirements' words (a DIN rail, a metal
+    or rugged case, a low-cost first build), each with why and what it gives up; pruned ones are kept with their rule.
+    With `ask: true` the feasible ones (up to six) are asked of a person as a journey question, recommended first; the
+    Case design skill's process step shows them, with each design not offered and why.
   - `mech.hand_in` — copies a STEP (or a `case.py`) from a path in the repository into `mechanical/`, sets
     `source`/`file` (or replaces the script), and runs `mech.build`.
   - `mech.capabilities` — the table, its sources and whether it is stale; `mech.capabilities_check` fetches each
@@ -278,7 +310,7 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
   - `mech.order` — writes `mechanical/out/order.json` and `order.md` (service, process, material, finish, quantity,
     files to upload, the fit run id, and the upload page) for a person to submit and pay; it never places an order.
 - `src/agents/impl/index.ts`: the mech tools, workflow lines (init when the project has no case and the intent asks for
-  an enclosure; build; read clashes; delegate script changes; journey.check layout.fit with the build run), keywords
+  an enclosure; build; read clashes; delegate script changes; shape.check layout.fit after each build), keywords
   (enclosure, case, housing, fit check), escalation (a clash that needs the board outline or a part moved).
 - `tracectl check`: with `mechanical/case.json` present, runs `mech.build` and fails on a failing fit; when build123d
   is not importable it says so and skips (not a failure); with `TRACE_CHECK_MECH=0` it skips with

@@ -27,6 +27,9 @@ DEFAULTS: dict[str, Any] = {
     "reasons": {},
 }
 
+# The case designs this engine builds (template in case.json): the shell (shell.py), and the two in boxes.py.
+TEMPLATES = ("printed-shell", "extruded-box", "din-rail")
+
 # The assembly clearance used when the capabilities have no row for the chosen process (the engine says so in a note).
 FALLBACK_ASSEMBLY_CLEARANCE_MM = 0.2
 
@@ -59,8 +62,8 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
             s[k] = v
     if s.get("version") != 1:
         raise InputError(f"settings version must be 1, got {s.get('version')!r}")
-    if s["template"] != "printed-shell":
-        raise InputError(f"settings template {s['template']!r} is not known (this build has 'printed-shell')")
+    if s["template"] not in TEMPLATES:
+        raise InputError(f"settings template {s['template']!r} is not known (this build has {', '.join(repr(t) for t in TEMPLATES)})")
     if s["source"] not in ("script", "file"):
         raise InputError(f"settings source must be 'script' or 'file', got {s['source']!r}")
     p = s["process"]

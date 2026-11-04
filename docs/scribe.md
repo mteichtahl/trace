@@ -74,10 +74,20 @@ are settings (`agents.docs.model`, `docs.triage_model`), so either can be change
 
 ## Project logo
 
-Uploaded when creating a project or later in its settings: SVG or PNG, with an optional version for dark backgrounds.
-trace checks its size and format and shows a sample cover page before saving. It appears on every cover page and as a
-small mark in the page header; without one, the project icon is used. A new logo re-renders the PDFs; the markdown
-does not change.
+Settings › Documents, admins only; everyone else sees it. Two variants: for light backgrounds (covers and page headers)
+and, optionally, for dark ones. A chosen file is checked by trace at once (`project.logo_check`, `src/docs/logo.ts`):
+SVG or PNG by its content, at most 1 MB, a PNG at least 256 pixels on its shorter side, no more than six times wider
+than tall, and an SVG that only draws (no scripts, event handlers, outside links or entities). It shows on a sample
+cover only once it passes; a refused file says why. Save writes it beside the documents as one change
+(`project.logo_set`: `docs/design/logo.svg|png`, `logo-dark.svg|png`, the variant's other format removed), which
+applies once its checks pass. Without a logo the documents carry the project's icon. A new logo makes the printed copies
+stale, never the text.
+
+![Logo chosen, ready to save](ui/screens/LogoSettingsChosen.png)
+
+| No logo yet | A file trace refuses | Dark theme | Phone |
+|---|---|---|---|
+| ![](ui/screens/LogoSettingsEmpty.png) | ![](ui/screens/LogoSettingsRefused.png) | ![](ui/screens/LogoSettingsDark.png) | ![](ui/screens/LogoSettingsPhone.png) |
 
 ## Build contract (the stack)
 
@@ -87,10 +97,11 @@ Each layer is one pull request that builds and passes on its own.
    kinds, writing rules, the skeleton each document starts from); `src/docs/markers.ts` (section, figure and value
    markers: read, replace one section); `src/docs/diagrams.ts` (which diagrams each document allows and how each is
    made); `src/docs/checks.ts` (the quality bar). Pure functions, no I/O.
-2. **Ontology**: the documentation module (`ontology/trace-docs.ttl`, `src/ontology/docs.ts`; docs/ontology.md
+2. **Ontology** (merged, #244): the documentation module (`ontology/trace-docs.ttl`, `src/ontology/docs.ts`; docs/ontology.md
    "Documentation module"): document, section, figure, stated value with its basis, published copy and logo, read from
    the documents' markers into the project's graph, so they go stale through the same lineage as everything else.
-3. **Logo**: upload, checks and the sample cover page (API and app).
+3. **Logo**: the checks (`src/docs/logo.ts`), `project.logo`, `project.logo_check` and `project.logo_set`
+   (`src/api/actions-logo.ts`), and Settings › Documents with the sample cover (`web/src/components/project/project-logo.tsx`).
 4. **Render pipeline**: Mermaid to SVG, Pandoc and Typst to PDF with the cover, on CodeBuild; PDFs to the central bucket.
 5. **Figures and values**: mechanical drawings from build123d, Blender document renders (Eevee drafts, Cycles
    releases, cache), protocol traces, and the power, thermal and load tables from their runs.

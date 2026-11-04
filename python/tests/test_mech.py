@@ -652,3 +652,106 @@ def test_build_only_then_run_built(tmp_path):
     assert p.returncode == 2 and "no readable claims" in r["error"]
     p, r = _cli(tmp_path / "four", "--built", str(built), "--script", str(script), "--formats", "step")
     assert p.returncode == 2 and "not both" in r["error"]
+
+
+# ---------------------------------------------------------------- the extruded box and the DIN rail enclosure (P7.3)
+
+@pytest.fixture(scope="module")
+def boxed(tmp_path_factory):
+    out = tmp_path_factory.mktemp("boxed")
+    return run(board_facts(), settings(template="extruded-box"), CAPS, out, formats=["step"]), out
+
+
+def test_extruded_box_fits_and_meets_its_rules(boxed):
+    r, out = boxed
+    fit = r["fit"]
+    assert fit["status"] == "pass", fit["summary"]
+    assert fit["enclosed"] is True and fit["clashes"] == []
+    assert sorted(p["name"] for p in r["case"]["parts"]) == ["end-east", "end-west", "tube"]
+    assert abs(gap(r, "board", "edge")["measured_mm"] - 0.5) <= 0.01
+    assert abs(gap(r, "C1", "above")["measured_mm"] - 1.0) <= 0.01
+    # the guides hold the board: no screws in its mounting holes, so no screw heads to clear
+    assert not [g for g in fit["gaps"] if g["ref"].startswith("screw ")]
+    assert r["fasteners"] == []
+    # J1 at the south edge: its opening is through the tube's wall
+    assert fit["openings"] == [{"ref": "J1", "side": "south", "made": True}]
+    assert all(row["ok"] for row in r["rules"] if row["ok"] is not None), [x for x in r["rules"] if x["ok"] is False]
+    model = {(row["rule"], row["detail"].split(" as built")[0]): row for row in r["rules"] if row["basis"] == "model"}
+    assert {k[0] for k in model} == {"tube_wall", "tube_floor", "tube_top", "end_wall", "skirt"}
+    for row in model.values():
+        assert row["measured"] == pytest.approx(2.0, abs=0.01), row
+    # the records: the end plates pressed onto the tube, the board sliding in it, the opening in the tube
+    by_id = {n["@id"]: n for n in r["records"]["@graph"]}
+    assert by_id["joint:board-guides"] == {"@id": "joint:board-guides", "@type": "Joint", "jointKind": "sliding",
+                                           "joins": [{"@id": "board:hardware/test.kicad_pcb"}, {"@id": "case:tube"}],
+                                           "clearance": 0.2, "unit": "mm"}
+    assert by_id["joint:end-west"]["jointKind"] == "press-fit"
+    assert by_id["opening:J1"]["inPart"] == [{"@id": "case:tube"}]
+    assert not [n for n in r["records"]["@graph"] if n["@type"] in ("MountingPoint", "Standoff", "Fastener")]
+
+
+def test_extruded_box_guide_clashes_with_a_part_at_the_edge(tmp_path):
+    f = board_facts()
+    # a tall part right at the north edge, where the upper guide reaches over the board
+    f["parts"].append(part("U9", 130.0, 100.2, 134.0, 104.0, 2.0))
+    r = run(f, settings(template="extruded-box"), CAPS, tmp_path, formats=["step"])
+    assert {(c["ref"], c["case_part"]) for c in r["fit"]["clashes"]} == {("U9", "tube")}
+
+
+def test_extruded_box_thin_wall_fails_its_built_sections(tmp_path):
+    r = run(board_facts(), settings(template="extruded-box", params={"wall_mm": 1.2}), CAPS, tmp_path, formats=["step"])
+    bad = {row["rule"] for row in r["rules"] if row["ok"] is False}
+    assert {"wall", "tube_wall", "end_wall"} <= bad
+
+
+@pytest.fixture(scope="module")
+def railed(tmp_path_factory):
+    out = tmp_path_factory.mktemp("railed")
+    return run(board_facts(), settings(template="din-rail"), CAPS, out, formats=["step"]), out
+
+
+def test_din_rail_enclosure_fits_and_meets_its_rules(railed, built):
+    r, _ = railed
+    shell_r, _ = built
+    fit = r["fit"]
+    assert fit["status"] == "pass", fit["summary"]
+    assert sorted(p["name"] for p in r["case"]["parts"]) == ["base", "lid"]
+    # the shell's fit, unchanged: the foot is under the floor
+    assert [(g["ref"], g["where"], g["measured_mm"]) for g in fit["gaps"]] == [(g["ref"], g["where"], g["measured_mm"]) for g in shell_r["fit"]["gaps"]]
+    assert [f["size"] for f in r["fasteners"]] == ["M3"] * 4
+    assert all(row["ok"] for row in r["rules"] if row["ok"] is not None), [x for x in r["rules"] if x["ok"] is False]
+    model = {row["rule"]: row for row in r["rules"] if row["basis"] == "model"}
+    # the floor and the foot's spacer under it are one solid (4 mm); the hooks below the rail's slot are not counted
+    # as floor, and are measured on their own
+    assert model["base_floor"]["measured"] == pytest.approx(4.0, abs=0.01)
+    assert model["rail_hook"]["measured"] == pytest.approx(2.0, abs=0.01)
+    # the base is the shell's base and the foot: 2 mm spacer, 1.4 mm slot, 2 mm hook
+    base = next(p for p in r["case"]["parts"] if p["name"] == "base")
+    shell_base = next(p for p in shell_r["case"]["parts"] if p["name"] == "base")
+    assert base["bbox_mm"][2] == pytest.approx(shell_base["bbox_mm"][2] + 5.4, abs=0.01)
+
+
+def test_din_rail_foot_is_wider_than_a_narrow_case(tmp_path):
+    f = board_facts()
+    f["outline"] = [[100, 100], [150, 100], [150, 120], [100, 120]]
+    f["holes"] = []
+    f["parts"] = [p for p in f["parts"] if p["ref"] in ("U1",)]
+    for p in f["parts"]:
+        p["box"] = {"min_x": 130.0, "min_y": 105.0, "max_x": 140.0, "max_y": 115.0}
+    r = run(f, settings(template="din-rail"), CAPS, tmp_path, formats=["step"])
+    assert r["fit"]["status"] == "pass", r["fit"]["summary"]
+    assert any("rail foot is" in n for n in r["notes"])
+
+
+def test_template_scripts_match_the_built_in_templates(tmp_path):
+    for t in ("extruded-box", "din-rail"):
+        text = mech.TEMPLATES[t].read_text(encoding="utf-8")
+        assert text.startswith("from tracebridge.mech import boxes\n\ndef build(board, settings):\n")
+        a = run(board_facts(), settings(template=t), CAPS, tmp_path / f"{t}-a", formats=["step"])
+        b = run(board_facts(), settings(template=t), CAPS, tmp_path / f"{t}-b", script=mech.TEMPLATES[t], formats=["step"])
+        assert a["fit"] == b["fit"] and a["case"] == b["case"]
+
+
+def test_unknown_template_is_bad_input():
+    with pytest.raises(InputError, match="template 'clamshell' is not known"):
+        run(board_facts(), settings(template="clamshell"), CAPS, "unused")

@@ -22,6 +22,7 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   // it logs the retry in the journey record and starts a job: 'journey' refreshes the journey, the job list and the
   // inbox on the app (web/src/lib/live.ts); 'jobs' has no entry there and refreshed the journey alone
   ['requirements.draft', 'journey'],
+  ['memory.remember', 'memory'],
   ['memory.deactivate', 'memory'],
   ['memory.reactivate', 'memory'],
   ['kb.sync', 'kb'],
