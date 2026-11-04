@@ -150,6 +150,8 @@ export interface Criterion {
   status: CriterionStatus
   evidence?: EvidenceRef
   opened?: boolean
+  /** met on evidence that has since gone out of date: why, in words (not met until trace checks it again) */
+  stale?: string
 }
 
 export interface Waiver {

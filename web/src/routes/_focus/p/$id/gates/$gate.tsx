@@ -201,7 +201,13 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
   useTraceContext(shown ? { label: shown.evidence?.label ?? shown.text, description: 'The evidence the signer has open', value: { criterion: shown.text, evidence: shown.evidence ?? null }, mono: shown.evidence?.kind === 'run' } : null, 'gate-evidence')
 
   const columns = useMemo<ColumnDef<Criterion, any>[]>(() => [
-    { accessorKey: 'text', header: 'Criterion', size: 260, meta: { label: 'Criterion', kind: 'text' } },
+    {
+      accessorKey: 'text', header: 'Criterion', size: 260, meta: { label: 'Criterion', kind: 'text' },
+      // evidence gone out of date since it was checked: the reason under the criterion, so the person sees why it is not met
+      cell: ({ row }) => (row.original.stale
+        ? <div><div>{row.original.text}</div><div className="mt-0.5 text-xs text-muted-foreground">{row.original.stale}</div></div>
+        : row.original.text),
+    },
     {
       accessorKey: 'status', header: 'Status', size: 130, meta: { label: 'Status', kind: 'enum' },
       cell: ({ row }) => <StatusBadge status={row.original.status === 'not_met' ? 'not_met' : 'met'} label={row.original.status === 'waived' ? 'Met (waived)' : row.original.status === 'met' ? (g.waivers.length && row.index === 0 ? `Met (${g.waivers.length} waived)` : 'Met') : 'Not met'} />,

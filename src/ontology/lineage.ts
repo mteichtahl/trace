@@ -92,3 +92,39 @@ export function latestFreshness(db: DatabaseSync, read: (path: string) => Uint8A
   const memo = new Map<string, Freshness>()
   return rows.map((x) => freshness(db, x.id, read, memo))
 }
+
+/**
+ * Every repository file freshness will read for `runs`: their file inputs, and those of the runs whose outputs they
+ * were made from (and of the newest runs of those tools), so a caller that reads files over the network (the API,
+ * from the default branch) can fetch them first and answer `read` from what it fetched.
+ */
+export function filesRead(db: DatabaseSync, runs: readonly string[]): string[] {
+  if (!has(db, 'run_inputs')) return []
+  const files = new Set<string>()
+  const seen = new Set<string>()
+  const todo = [...runs]
+  while (todo.length) {
+    const id = todo.pop() as string
+    if (seen.has(id)) continue
+    seen.add(id)
+    for (const i of db.prepare('SELECT kind, ref, name FROM run_inputs WHERE run_id=?').all(id) as unknown as InputRow[]) {
+      if (i.kind === 'file') { files.add(i.ref); continue }
+      todo.push(i.ref)
+      const maker = runOf(db, i.ref)
+      const newest = maker && i.name ? newestMaker(db, maker, i.name) : undefined
+      if (newest) todo.push(newest.id)
+    }
+  }
+  return [...files].sort()
+}
+
+/** Why each of `runs` no longer stands, by run (stale runs only), reading the files from `files` (null: gone). */
+export function staleRuns(db: DatabaseSync, runs: readonly string[], files: ReadonlyMap<string, Uint8Array | null>): Map<string, string> {
+  const memo = new Map<string, Freshness>()
+  const out = new Map<string, string>()
+  for (const id of runs) {
+    const f = freshness(db, id, (p) => files.get(p) ?? null, memo)
+    if (f.state === 'stale') out.set(id, f.reasons[0] ?? 'what it was made from changed')
+  }
+  return out
+}
