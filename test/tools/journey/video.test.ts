@@ -57,7 +57,7 @@ describe('the replay film', () => {
   })
 
   it.skipIf(!findFfmpeg())('films the record as a two-minute MP4 that plays, stored as the run\'s artifact', async () => {
-    const r = await video.run({ seconds: 120, width: 640, height: 360, fps: 12 }) as { run_id: string; events: number; size: number }
+    const r = await video.run({ seconds: 120, width: 640, height: 360, fps: 12 }, { hardware: false, via: 'test' }) as { run_id: string; events: number; size: number }
     expect(r.events).toBeGreaterThan(3)
     const w = new Work(process.env.TRACE_PROJECT_DB)
     const mp4 = w.getArtifact(r.run_id, 'replay.mp4')
