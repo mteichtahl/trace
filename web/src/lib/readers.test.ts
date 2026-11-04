@@ -20,14 +20,14 @@ describe('reading the API\'s answers', () => {
     const c = result.gates.find((x) => x.id === 'define')!.criteria[0]!
     Object.assign(c, { status: 'not_met', evidence: [
       { kind: 'run', ref: 'run-9', label: 'the define.accepted shape: 2 finding(s)' },
-      { kind: 'finding', ref: 'urn:trace:acme:acme%2Fanswers:requirement:R-1', label: 'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.' },
-      { kind: 'finding', ref: 'urn:trace:acme:acme%2Fanswers:requirement:R-2', label: 'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.' },
+      { kind: 'finding', ref: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-1', label: 'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.' },
+      { kind: 'finding', ref: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-2', label: 'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.' },
     ] })
     const g = (READERS['journey.get']!(result, a.args) as JourneyMore).gates.find((x) => x.id === 'define')!
     expect(g.criteria[0]).toMatchObject({ status: 'not_met', evidence: { kind: 'run', id: 'run-9' } })
     expect(g.criteria[0]!.findings).toEqual([
-      'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.',
-      'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.',
+      { id: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-1', text: 'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.' },
+      { id: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-2', text: 'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.' },
     ])
   })
 

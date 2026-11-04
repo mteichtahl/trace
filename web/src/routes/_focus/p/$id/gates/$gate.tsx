@@ -216,7 +216,14 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
             {stale && <div className="mt-0.5 text-xs text-muted-foreground">{stale}</div>}
             {findings?.length ? (
               <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground" aria-label="Still needed">
-                {findings.slice(0, FINDINGS_SHOWN).map((f) => <li key={f}>{f}</li>)}
+                {findings.slice(0, FINDINGS_SHOWN).map((f) => (
+                  <li key={f.id}>
+                    {f.text}{' '}
+                    <Link to="/p/$id/do/$skill" params={{ id, skill: 'waiver' }} search={{ about: `finding:${f.id}` } as never} className="whitespace-nowrap text-primary underline-offset-2 hover:underline" onClick={(e) => e.stopPropagation()}>
+                      Waive this one…
+                    </Link>
+                  </li>
+                ))}
                 {findings.length > FINDINGS_SHOWN && <li className="list-none">and {findings.length - FINDINGS_SHOWN} more: open the evidence for all of them</li>}
               </ul>
             ) : null}
@@ -242,7 +249,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
       ),
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [opened, g])
+  ], [opened, g, id])
 
   const rec = g.recommendation
   const signers = admins.map((m) => m.name ?? m.email)

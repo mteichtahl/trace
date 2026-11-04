@@ -17,7 +17,7 @@ import { recordDesignDecision } from '../../src/tools/design/decisions.js'
 import { mpnKey } from '../../src/tools/datasheets/mpn.js'
 import { buildGraph, nodeIri } from '../../src/ontology/graph.js'
 import { shapedCriteria } from '../../src/ontology/shapes.js'
-import { SHAPES_DIR, graphQuads, runShape, turtle } from '../../src/tools/shape/tools.js'
+import { SHAPES_DIR, findingId, graphQuads, runShape, turtle, withWaivers } from '../../src/tools/shape/tools.js'
 import { ADMIN, projectDb } from './fixture.js'
 
 const O = { installation: 'test', project: 'acme/sensor' }
@@ -58,6 +58,16 @@ describe('facts worked out for the shapes', () => {
     expect([value(opt('A'), 'isCurrentOption'), value(opt('B'), 'isCurrentOption')]).toEqual(['true', 'false'])
     recordDesignDecision(db, { kind: 'architecture.choice', target: 'architecture', choice: 'chosen', detail: { option: 'B', reason: 'efficient', deciding: [] } }, ADMIN)
     expect([value(opt('A'), 'isCurrentOption'), value(opt('B'), 'isCurrentOption')]).toEqual(['false', 'true'])
+  })
+})
+
+describe('a finding waived on its own', () => {
+  it('is named by its criterion and the record it is about, and a waiver on that name excuses only it', () => {
+    const f = (focus: string | null) => ({ focus, path: null, value: null, message: `about ${focus}`, severity: 'violation', shape: null })
+    expect(findingId('architect.mapped', f('urn:r1'))).toBe('architect.mapped@urn:r1')
+    expect(findingId('capture.stock', f(null))).toBe('capture.stock@project')
+    expect(withWaivers('architect.mapped', [f('urn:r1'), f('urn:r2')], new Set(['architect.mapped@urn:r2', 'capture.stock@urn:r1'])).map((x) => [x.id, x.waived]))
+      .toEqual([['architect.mapped@urn:r1', false], ['architect.mapped@urn:r2', true]])
   })
 })
 
