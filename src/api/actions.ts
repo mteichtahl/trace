@@ -178,7 +178,7 @@ import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
-import { CHANGE_ACTIONS } from './actions-changes.js'
+import { CHANGE_ACTIONS, openPulls } from './actions-changes.js'
 import { HOOK_ACTIONS } from './actions-hooks.js'
 import { RULE_ACTIONS } from './actions-rules.js'
 import { DEPLOY_ACTIONS } from './actions-deploys.js'
@@ -581,6 +581,10 @@ export const ACTIONS = {
   }).refine((a) => !(a.branch && a.stack_on), 'give branch (carry on a change) or stack_on (a new change on top of one), not both'), async (a, ctx) => {
     // a connected system: at most three tasks queued or running on one project (src/api/service-policy.ts)
     await taskCap(ctx.principal, a.repo, ctx)
+    // only on an open change of the repository itself: a branch without one would carry unaccepted work along
+    if (a.stack_on && !(await openPulls(ctx, a.repo)).some((p) => p.head === a.stack_on && p.headRepo?.toLowerCase() === a.repo.toLowerCase())) {
+      throw new ActionError(`${a.stack_on} is not an open change of ${a.repo}: stack_on names the branch of one of trace's open changes.`)
+    }
     return (await ctx.deps.jobs()).startJob({
       kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
       ...(a.branch ? { branch: a.branch } : {}), ...(a.stack_on ? { stackOn: a.stack_on } : {}),

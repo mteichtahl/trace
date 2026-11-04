@@ -319,13 +319,15 @@ export async function cloneDefault(o: GitOpts & { repository: string; defaultBra
 
 /**
  * Check out `branch` in a clone made by cloneDefault: 'remote' = the existing remote branch (a PR's head, fetched),
- * 'maybe' = the remote branch when it exists, else a new branch. A new branch starts from `base` when given and it
- * exists (a stacked change, docs/stacked-changes.md: the open change it depends on; `baseLocal`: a branch of this
- * checkout, as a delegated worker's specialist's), else from the default branch. `started` is told what a new branch
- * started from.
+ * 'maybe' = the remote branch when it exists, else a new branch. A new branch starts from `base` (a stacked change,
+ * docs/stacked-changes.md) only when `isOpenChange` says that branch has an open pull request in the repository: a
+ * branch without one (not pushed, pushed without its PR, merged, closed) would let its unaccepted commits reach the
+ * default branch inside this branch's PR. Otherwise, and without `isOpenChange`, from the default branch. `started` is
+ * told what a new branch started from.
  */
 export async function checkoutBranch(o: GitOpts & {
-  defaultBranch: string; branch: string; from: 'remote' | 'maybe'; base?: string | undefined; baseLocal?: boolean; started?: (from: string) => void
+  defaultBranch: string; branch: string; from: 'remote' | 'maybe'; base?: string | undefined
+  isOpenChange?: (branch: string) => Promise<boolean>; started?: (from: string) => void
 }): Promise<string> {
   const git = gitIn(o)
   const branch = BranchSchema.parse(o.branch)
@@ -341,21 +343,32 @@ export async function checkoutBranch(o: GitOpts & {
   return branch
 }
 
-/** Where a new branch starts: its base when that exists (fetched, unless local), else the default branch. */
-async function stackBase(o: GitOpts & { defaultBranch: string; base?: string | undefined; baseLocal?: boolean }, branch: string): Promise<{ ref: string; name: string }> {
+/** Where a new branch starts: its base when that is an open change (fetched), else the default branch. */
+async function stackBase(o: GitOpts & { defaultBranch: string; base?: string | undefined; isOpenChange?: (branch: string) => Promise<boolean> }, branch: string): Promise<{ ref: string; name: string }> {
   const fallback = { ref: `origin/${o.defaultBranch}`, name: o.defaultBranch }
   const base = o.base && BranchSchema.safeParse(o.base).success ? o.base : null
   if (!base || base === o.defaultBranch || base === branch) return fallback
-  const git = gitIn(o)
-  if (o.baseLocal) return (await git(['rev-parse', '--verify', '--quiet', `refs/heads/${base}`]).then((r) => r.stdout.trim() !== '').catch(() => false)) ? { ref: base, name: base } : fallback
-  if ((await git(['ls-remote', '--heads', 'origin', `refs/heads/${base}`])).stdout.trim() === '') {
-    o.log(`${base} is not on GitHub (merged, or not pushed yet): starting ${branch} from ${o.defaultBranch}`)
+  const open = o.isOpenChange ? await o.isOpenChange(base).catch(() => false) : false
+  if (!open) {
+    o.log(`${base} has no open pull request (not pushed, not opened yet, merged or closed): starting ${branch} from ${o.defaultBranch}`)
     return fallback
   }
-  await git(['fetch', '--depth=300', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`])
+  // its pull request may have merged, and its branch been deleted, since GitHub was asked
+  if (!await gitIn(o)(['fetch', '--depth=300', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`]).then(() => true, () => false)) {
+    o.log(`${base} could not be fetched (merged and deleted just now?): starting ${branch} from ${o.defaultBranch}`)
+    return fallback
+  }
   o.log(`starting ${branch} from ${base}: stacked on that open change`)
   return { ref: `origin/${base}`, name: base }
 }
+
+/** Whether `branch` is the head of an open pull request in `repository` itself (not a fork's). */
+export const openChangeIn = (gh: { rest: { pulls: { list(a: { owner: string; repo: string; state: 'open'; head: string; per_page: number }): Promise<{ data: Array<{ head: { repo: { full_name: string } | null } }> }> } } }, repository: string) =>
+  async (branch: string): Promise<boolean> => {
+    const [owner = '', repo = ''] = repository.split('/')
+    const open = (await gh.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 5 })).data
+    return open.some((p) => p.head.repo?.full_name?.toLowerCase() === repository.toLowerCase())
+  }
 
 // ------------------------------------------------------------------ Claude
 
@@ -712,7 +725,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     // branch, a task on the change it was given
     const stackOn = isHandoff(p) ? p.handoff.base : p.kind === 'task' ? p.stackOn : undefined
     let startedFrom: string | undefined
-    if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from, base: stackOn, started: (f) => { startedFrom = f } })
+    if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from, base: stackOn, isOpenChange: openChangeIn(gh, p.repository), started: (f) => { startedFrom = f } })
     else branch = base.defaultBranch
     ctx.branch?.(branch)
     // a resumed task: the paused job it carries on (its branch is this one: the API resumes it with that branch)
@@ -858,11 +871,13 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
   let mem: JobMemory = NO_MEMORY
   try {
     const g: GitOpts = { exec: d.exec, dir: parent.dir, auth: gitAuthEnv(token), signal: ctx.signal, log }
-    // a branch of its own starts from the specialist's (its work so far, pushed or not): stacked on it
+    // a branch of its own starts from the specialist's when that is an open change (as it is on GitHub: stacked on it),
+    // else from the default branch as before: work the specialist has not pushed with a pull request never rides along
     let stackedOn: { ref: string; name: string } | undefined
+    const gh = d.github(token)
     const branch = p.branch && p.branch !== parent.branch
-      ? await checkoutBranch({ ...g, defaultBranch: parent.defaultBranch, branch: p.branch, from: 'maybe', base: parent.branch, baseLocal: true,
-        started: (f) => { if (f !== parent.defaultBranch) stackedOn = { ref: f, name: f } } })
+      ? await checkoutBranch({ ...g, defaultBranch: parent.defaultBranch, branch: p.branch, from: 'maybe', base: parent.branch, isOpenChange: openChangeIn(gh, p.repository),
+        started: (f) => { if (f !== parent.defaultBranch) stackedOn = { ref: `origin/${f}`, name: f } } })
       : parent.branch
     mem = await jobMemory(d, { repository: p.repository, agent: WORKER, session: parent.session, query: p.request.slice(0, 2000), request: p.request }, log, redact)
     const layers = parent.prompts ?? NO_LAYERS

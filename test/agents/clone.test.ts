@@ -132,33 +132,37 @@ describe('checkoutBranch with a stacked base', () => {
     try {
       const log: string[] = []
       let started = ''
-      await checkoutBranch({ ...opts(work, log), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base: 'claude/parent', started: (f) => { started = f } })
+      await checkoutBranch({ ...opts(work, log), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base: 'claude/parent', isOpenChange: async (b) => b === 'claude/parent', started: (f) => { started = f } })
       expect(existsSync(join(work, 'p.txt'))).toBe(true)
       expect(started).toBe('claude/parent')
       expect(log.join()).toMatch(/stacked on that open change/)
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 
-  it('starts from the default branch when the base is not on GitHub, is the default branch, or is not a branch name', async () => {
-    for (const base of ['claude/gone', 'main', '../etc']) {
+  it('starts from the default branch when the base has no open pull request, is the default branch, or is not a branch name', async () => {
+    // claude/parent is on GitHub but has no open pull request (pushed early, or merged): its commits must not ride along
+    for (const [base, open] of [['claude/parent', false], ['claude/gone', true], ['main', true], ['../etc', true]] as const) {
       const { ws, work } = await setup()
       try {
         let started = ''
-        await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base, started: (f) => { started = f } })
+        await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base, isOpenChange: async () => open, started: (f) => { started = f } })
         expect(existsSync(join(work, 'p.txt')), base).toBe(false)
         expect(started).toBe('main')
       } finally { rmSync(ws, { recursive: true, force: true }) }
     }
   })
 
-  it("starts from a local branch (a delegated worker on its specialist's unpushed work)", async () => {
+  it('starts from the default branch when it cannot tell whether the base is an open change', async () => {
     const { ws, work } = await setup()
     try {
-      await git(['checkout', '-qb', 'claude/spec'], work)
-      writeFileSync(join(work, 's.txt'), 'specialist\n')
-      await git(['add', '.'], work); await git(['commit', '-qm', 'unpushed'], work)
-      await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/worker', from: 'maybe', base: 'claude/spec', baseLocal: true })
-      expect(existsSync(join(work, 's.txt'))).toBe(true)
+      await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base: 'claude/parent', isOpenChange: async () => { throw new Error('GitHub 502') } })
+      expect(existsSync(join(work, 'p.txt'))).toBe(false)
+      const { ws: ws2, work: work2 } = await setup()
+      try {
+        // and with no way to ask at all
+        await checkoutBranch({ ...opts(work2), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base: 'claude/parent' })
+        expect(existsSync(join(work2, 'p.txt'))).toBe(false)
+      } finally { rmSync(ws2, { recursive: true, force: true }) }
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 

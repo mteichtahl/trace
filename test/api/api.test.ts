@@ -253,6 +253,10 @@ describe('the API server', () => {
 
   it('a task may start a new change stacked on one of trace\'s own open changes, never on main or a person\'s', async () => {
     started.length = 0
+    // not an open change (no pull request, or a fork's of the same name): refused
+    github.openList = [{ number: 8, title: 'x', head: 'claude/task-oled-pin-plan-1a2b3c', draft: false, labels: [], url: 'u', updated_at: '', headRepo: 'fork/board' }]
+    expect((await call(user, { action: 'task', repo: 'acme/board', request: 'x', agent: 'impl', stack_on: 'claude/task-oled-pin-plan-1a2b3c' })).body).toMatchObject({ ok: false, error: expect.stringMatching(/not an open change/) })
+    github.openList = [{ number: 7, title: 'Pin plan', head: 'claude/task-oled-pin-plan-1a2b3c', draft: false, labels: [], url: 'u', updated_at: '', headRepo: 'acme/board' }]
     const r = await call(user, { action: 'task', repo: 'acme/board', request: 'add test points to the OLED header', agent: 'impl', stack_on: 'claude/task-oled-pin-plan-1a2b3c' })
     expect(r.body).toMatchObject({ ok: true })
     expect(started).toEqual([expect.objectContaining({ stackOn: 'claude/task-oled-pin-plan-1a2b3c' })])
@@ -264,6 +268,7 @@ describe('the API server', () => {
     expect((await call(user, { action: 'task', repo: 'acme/board', request: 'x', agent: 'impl', branch: 'claude/a', stack_on: 'claude/b' })).body.ok).toBe(false)
     expect(started).toHaveLength(1)
     started.length = 0
+    github.openList = []
   })
 
   it('unassigned and nonexistent projects get the identical answer, before GitHub is touched', async () => {
