@@ -21,6 +21,7 @@ import { addBoard } from './board.js'
 import { addDocuments } from './docs.js'
 import { addDerived } from './derived.js'
 import { addCase } from './mech.js'
+import { rowsAsOf } from './as-of.js'
 import { addRenders } from './renders.js'
 
 const { namedNode, literal, quad } = DataFactory
@@ -49,6 +50,9 @@ export interface GraphOptions {
   /** the repository's files as they are now (path → bytes, null when gone): with `derived`, whether the newest case
    *  build still stands is worked out from its lineage (src/ontology/mech.ts) */
   files?: (path: string) => Uint8Array | null
+  /** the graph as it stood at this moment (seconds since 1970; ./as-of.ts): only rows that existed by then, each
+   *  time after it left out with what goes with it, and each criterion's status from its history */
+  asOf?: number
 }
 
 const enc = (s: string): string => encodeURIComponent(s)
@@ -148,7 +152,8 @@ function object(c: Ctx, node: NamedNode, m: FieldMap, item: Record<string, unkno
 
 function table(c: Ctx, db: DatabaseSync, t: TableMap): number {
   if (!hasTable(db, t.table)) return 0
-  const rows = db.prepare(`SELECT * FROM ${t.table}`).all() as Record<string, unknown>[]
+  const all = db.prepare(`SELECT * FROM ${t.table}`).all() as Record<string, unknown>[]
+  const rows = c.o.asOf === undefined ? all : rowsAsOf(db, t.table, all, c.o.asOf)
   const fixed = t.link ? link(c, t.link[0], t.link[1]) : null
   for (const row of rows) {
     const s = namedNode(nodeIri(c.o, t.kind, keyColumns(t).map((k) => String(row[k])).join('/')))
