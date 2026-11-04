@@ -491,6 +491,8 @@ export interface Journey {
   hasMemory?: boolean
   /** GitHub could not be reached, so open changes are left out (journey.get `changes_unavailable`) */
   changesUnavailable?: string
+  /** criteria met on evidence that has since gone out of date, each with its gate and why (journey.get `stale_evidence`) */
+  staleEvidence?: { criterion: string; gate: string; text: string; why: string }[]
   /**
    * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
    * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it

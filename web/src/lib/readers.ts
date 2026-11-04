@@ -291,6 +291,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
     ...(str(raw.changes_unavailable) ? { changesUnavailable: String(raw.changes_unavailable) } : {}),
+    ...(arr(raw.stale_evidence).length ? { staleEvidence: arr(raw.stale_evidence).map((x) => ({ criterion: String(x.criterion), gate: String(x.gate), text: String(x.text), why: String(x.why) })) } : {}),
     ...(isObj(raw.drafting) && DRAFTING.has(String(raw.drafting.state)) ? { drafting: {
       state: String(raw.drafting.state) as NonNullable<Journey['drafting']>['state'],
       ...(isObj(raw.drafting.job) && str(raw.drafting.job.id) ? { jobId: String(raw.drafting.job.id), jobState: String(raw.drafting.job.state) } : {}),
