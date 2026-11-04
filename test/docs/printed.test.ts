@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { backendFor } from '../../src/core/central.js'
-import { DRIFT_HOUR_UTC, nextDriftCheck, printedKey, readPrinted, recordRelease, releaseKey, releasesOf, storePrinted } from '../../src/docs/printed.js'
+import { DRIFT_HOUR_UTC, latestOf, nextDriftCheck, printedKey, readPrinted, recordLatest, recordRelease, releaseKey, releasesOf, storePrinted } from '../../src/docs/printed.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'trace-printed-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -44,6 +44,15 @@ describe('printed copies', () => {
     expect(a!.documents.map((d) => [d.kind, d.run])).toEqual([['hld', 'r-1'], ['lld', 'r-2']])
     expect(await store.get(releaseKey(REPO, 'A'))).not.toBeNull()
     await expect(recordRelease(store, REPO, 'a1', [])).rejects.toThrow(/not a revision/)
+  })
+
+  it('each document\'s newest print replaces the one before it, the others stay', async () => {
+    expect(await latestOf(store, 'acme/none')).toEqual({})
+    const e = (kind: 'hld' | 'lld', run: string) => ({ kind, sha256: 'a'.repeat(64), bytes: 1, commit: 'c', run, at: 0 })
+    await recordLatest(store, REPO, [e('hld', 'r-1'), e('lld', 'r-2')])
+    await recordLatest(store, REPO, [e('hld', 'r-3')])
+    const l = await latestOf(store, REPO)
+    expect([l.hld?.run, l.lld?.run]).toEqual(['r-3', 'r-2'])
   })
 
   it('lists revisions in order: A, B, … Z, AA', async () => {

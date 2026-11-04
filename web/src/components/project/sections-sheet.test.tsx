@@ -45,3 +45,12 @@ describe('the Renders tab', () => {
     expect(renders(journey(FIRMWARE, 'Release'))).toBe(true)
   })
 })
+
+describe('the Documents tab', () => {
+  const docs = (j: Journey) => visibleTabs(j, { admin: false }).some((t) => t.id === 'docs')
+  it('shows from Architect on', () => {
+    expect(docs(journey(BOARD, 'Define'))).toBe(false)
+    expect(docs(journey(BOARD, 'Architect'))).toBe(true)
+    expect(docs(journey(FIRMWARE, 'Prove'))).toBe(true)
+  })
+})

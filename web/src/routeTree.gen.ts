@@ -49,6 +49,7 @@ import { Route as AppPIdBuildRouteImport } from './routes/_app/p/$id/build'
 import { Route as AppPIdCostRouteImport } from './routes/_app/p/$id/cost'
 import { Route as AppPIdDecisionsRouteImport } from './routes/_app/p/$id/decisions'
 import { Route as AppPIdDesignRouteImport } from './routes/_app/p/$id/design'
+import { Route as AppPIdDocsRouteImport } from './routes/_app/p/$id/docs'
 import { Route as AppPIdEvidenceRouteImport } from './routes/_app/p/$id/evidence'
 import { Route as AppPIdMemoryRouteImport } from './routes/_app/p/$id/memory'
 import { Route as AppPIdRendersRouteImport } from './routes/_app/p/$id/renders'
@@ -266,6 +267,11 @@ const AppPIdDesignRoute = AppPIdDesignRouteImport.update({
   path: '/design',
   getParentRoute: () => AppPIdRoute,
 } as any)
+const AppPIdDocsRoute = AppPIdDocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
+  getParentRoute: () => AppPIdRoute,
+} as any)
 const AppPIdEvidenceRoute = AppPIdEvidenceRouteImport.update({
   id: '/evidence',
   path: '/evidence',
@@ -394,6 +400,7 @@ export interface FileRoutesByFullPath {
   '/p/$id/cost': typeof AppPIdCostRoute
   '/p/$id/decisions': typeof AppPIdDecisionsRoute
   '/p/$id/design': typeof AppPIdDesignRoute
+  '/p/$id/docs': typeof AppPIdDocsRoute
   '/p/$id/evidence': typeof AppPIdEvidenceRoute
   '/p/$id/memory': typeof AppPIdMemoryRouteWithChildren
   '/p/$id/renders': typeof AppPIdRendersRoute
@@ -449,6 +456,7 @@ export interface FileRoutesByTo {
   '/p/$id/cost': typeof AppPIdCostRoute
   '/p/$id/decisions': typeof AppPIdDecisionsRoute
   '/p/$id/design': typeof AppPIdDesignRoute
+  '/p/$id/docs': typeof AppPIdDocsRoute
   '/p/$id/evidence': typeof AppPIdEvidenceRoute
   '/p/$id/renders': typeof AppPIdRendersRoute
   '/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
@@ -509,6 +517,7 @@ export interface FileRoutesById {
   '/_app/p/$id/cost': typeof AppPIdCostRoute
   '/_app/p/$id/decisions': typeof AppPIdDecisionsRoute
   '/_app/p/$id/design': typeof AppPIdDesignRoute
+  '/_app/p/$id/docs': typeof AppPIdDocsRoute
   '/_app/p/$id/evidence': typeof AppPIdEvidenceRoute
   '/_app/p/$id/memory': typeof AppPIdMemoryRouteWithChildren
   '/_app/p/$id/renders': typeof AppPIdRendersRoute
@@ -569,6 +578,7 @@ export interface FileRouteTypes {
     | '/p/$id/cost'
     | '/p/$id/decisions'
     | '/p/$id/design'
+    | '/p/$id/docs'
     | '/p/$id/evidence'
     | '/p/$id/memory'
     | '/p/$id/renders'
@@ -624,6 +634,7 @@ export interface FileRouteTypes {
     | '/p/$id/cost'
     | '/p/$id/decisions'
     | '/p/$id/design'
+    | '/p/$id/docs'
     | '/p/$id/evidence'
     | '/p/$id/renders'
     | '/p/$id/requirements'
@@ -683,6 +694,7 @@ export interface FileRouteTypes {
     | '/_app/p/$id/cost'
     | '/_app/p/$id/decisions'
     | '/_app/p/$id/design'
+    | '/_app/p/$id/docs'
     | '/_app/p/$id/evidence'
     | '/_app/p/$id/memory'
     | '/_app/p/$id/renders'
@@ -998,6 +1010,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPIdDesignRouteImport
       parentRoute: typeof AppPIdRoute
     }
+    '/_app/p/$id/docs': {
+      id: '/_app/p/$id/docs'
+      path: '/docs'
+      fullPath: '/p/$id/docs'
+      preLoaderRoute: typeof AppPIdDocsRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
     '/_app/p/$id/evidence': {
       id: '/_app/p/$id/evidence'
       path: '/evidence'
@@ -1204,6 +1223,7 @@ interface AppPIdRouteChildren {
   AppPIdCostRoute: typeof AppPIdCostRoute
   AppPIdDecisionsRoute: typeof AppPIdDecisionsRoute
   AppPIdDesignRoute: typeof AppPIdDesignRoute
+  AppPIdDocsRoute: typeof AppPIdDocsRoute
   AppPIdEvidenceRoute: typeof AppPIdEvidenceRoute
   AppPIdMemoryRoute: typeof AppPIdMemoryRouteWithChildren
   AppPIdRendersRoute: typeof AppPIdRendersRoute
@@ -1223,6 +1243,7 @@ const AppPIdRouteChildren: AppPIdRouteChildren = {
   AppPIdCostRoute: AppPIdCostRoute,
   AppPIdDecisionsRoute: AppPIdDecisionsRoute,
   AppPIdDesignRoute: AppPIdDesignRoute,
+  AppPIdDocsRoute: AppPIdDocsRoute,
   AppPIdEvidenceRoute: AppPIdEvidenceRoute,
   AppPIdMemoryRoute: AppPIdMemoryRouteWithChildren,
   AppPIdRendersRoute: AppPIdRendersRoute,

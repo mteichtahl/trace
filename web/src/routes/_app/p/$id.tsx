@@ -52,6 +52,8 @@ export function visibleTabs(j: Journey, o: { admin: boolean }): ProjectTab[] {
     { id: 'overview', label: 'Overview', to: '', show: true },
     { id: 'requirements', label: 'Requirements', to: '/requirements', show: reached(j, ['define']) },
     { id: 'design', label: 'Design', to: '/design', show: reached(j, ['architect']) },
+    // the project's documents, which Scribe keeps from Architect on (docs/scribe.md)
+    { id: 'docs', label: 'Documents', to: '/docs', show: reached(j, ['architect']) },
     { id: 'changes', label: 'Changes', to: '/changes', show: true },
     // from the first run on: Capture where the template has it (checks start running there), else Prove
     { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['capture', 'prove']) },

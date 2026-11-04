@@ -27,7 +27,7 @@ import { logoPaths } from '../../docs/logo.js'
 import { PY_DIR } from '../mech/engine.js'
 import { commitOf } from '../render/model.js'
 import { projectsBackend, projectsFromEnv } from '../../core/agent-facts.js'
-import { type Printed, recordRelease, storePrinted } from '../../docs/printed.js'
+import { type Printed, recordLatest, recordRelease, storePrinted } from '../../docs/printed.js'
 import type { Backend } from '../../core/central.js'
 import { figureTools } from './figures.js'
 import { hasInterfaces, scribeTools } from './scribe.js'
@@ -99,6 +99,8 @@ const check = defineTool({
       const printed = printedStore()
       if (a.release && !printed) throw new ToolError('release copies are kept in the central bucket, which this session cannot reach (TRACE_PROJECT_HOME is not set): print them from the worker')
       const released: Printed[] = []
+    // every print on a worker, release or not: each document's newest (latest.json, the Docs tab's)
+    const newest: Printed[] = []
       const work = new Work()
       // here: this machine's Python with tracebridge; on the tools function: its venv's, first on its PATH
       const local = backendFor({ kind: 'docs' }) === 'local'
@@ -159,16 +161,20 @@ const check = defineTool({
           const result = { kind: k, file, run_id: id, pdf, bytes: bytes.length, diagrams: said.diagrams ?? 0, logo: logo ?? null, commit, where: r.where, ...(kept ? { sha256: kept.sha256 } : {}), ...(written ? { written } : {}) }
           work.finish(id, 'pass', summary, result)
           results.push(result)
-          if (kept && a.release) released.push({ kind: k, sha256: kept.sha256, bytes: bytes.length, commit, run: id, at: Date.now() })
+          const entry: Printed | null = kept ? { kind: k, sha256: kept.sha256, bytes: bytes.length, commit, run: id, at: Date.now() } : null
+        if (entry) newest.push(entry)
+        if (entry && a.release) released.push(entry)
         } finally {
           rmSync(revFile, { force: true })
         }
       }
     } catch (e) {
-      // what printed before a failure is still the revision's: the next print adds the rest
+      // what printed before a failure is still the revision's, and the newest: the next print adds the rest
+      if (printed) await recordLatest(printed.store, printed.repository, newest)
       if (a.release && printed && released.length) await recordRelease(printed.store, printed.repository, a.release, released)
       throw e
     }
+    if (printed) await recordLatest(printed.store, printed.repository, newest)
     if (!a.release || !printed) return { documents: results }
     const rel = await recordRelease(printed.store, printed.repository, a.release, released)
     return {

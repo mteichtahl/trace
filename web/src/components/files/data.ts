@@ -50,6 +50,8 @@ export interface FileRef {
   findings?: FileFinding[]
   /** a run's output, read through `artifact` */
   run?: { id: string; name: string }
+  /** a printed copy of a project document, read through documents.pdf by its hash (src/docs/printed.ts) */
+  printed?: { sha256: string }
   /** an address already in hand (a nested file inside an archive, a tool's own link) */
   url?: string
   /** cited place: a PDF page, with an optional region in PDF points [x, y, w, h] from the page's top left */
@@ -86,6 +88,17 @@ const artifactUrls = new Map<string, string>()
 /** Resolve a link for the file (and version). Signed links live 5 minutes; we ask again after 4. */
 export async function resolveUrl(f: FileRef, commit?: string): Promise<{ url: string; mime?: string | null; size?: number }> {
   if (f.url && !commit) return { url: f.url }
+  if (f.printed) {
+    const key = `${f.repo}|printed|${f.printed.sha256}`
+    const have = artifactUrls.get(key)
+    if (have) return { url: have, mime: 'application/pdf' }
+    const a = await call('documents.pdf', { repo: f.repo, sha256: f.printed.sha256 })
+    const bytes = b64ToBytes(a.base64)
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+    artifactUrls.set(key, url)
+    artifactBytes.set(url, bytes)
+    return { url, mime: 'application/pdf', size: a.bytes }
+  }
   if (f.run) {
     const key = `${f.repo}|${f.run.id}|${f.run.name}`
     const have = artifactUrls.get(key)
@@ -111,7 +124,7 @@ export async function resolveUrl(f: FileRef, commit?: string): Promise<{ url: st
 /** A run artifact's bytes, by the local address made for it. */
 const artifactBytes = new Map<string, Uint8Array>()
 
-const versionKey = (f: FileRef, commit?: string) => [f.repo, f.run ? `runs/${f.run.id}/${f.run.name}` : f.path, commit ?? f.commit ?? 'current', f.url ?? ''] as const
+const versionKey = (f: FileRef, commit?: string) => [f.repo, f.printed ? `printed/${f.printed.sha256}` : f.run ? `runs/${f.run.id}/${f.run.name}` : f.path, commit ?? f.commit ?? 'current', f.url ?? ''] as const
 
 /** The signed link for a file, kept fresh. */
 export function useFileUrl(f: FileRef | null, commit?: string) {
@@ -120,7 +133,7 @@ export function useFileUrl(f: FileRef | null, commit?: string) {
     queryFn: () => resolveUrl(f!, commit),
     enabled: !!f,
     staleTime: 4 * 60_000,
-    refetchInterval: f?.url || f?.run ? false : 4 * 60_000,
+    refetchInterval: f?.url || f?.run || f?.printed ? false : 4 * 60_000,
   })
 }
 

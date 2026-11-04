@@ -15,7 +15,7 @@ import { PY_DIR } from '../../../src/tools/mech/engine.js'
 import { imagesOf } from '../../../src/tools/docs/tools.js'
 import { allTools } from '../../../src/tools/index.js'
 import { backendFor } from '../../../src/core/central.js'
-import { readPrinted, releasesOf } from '../../../src/docs/printed.js'
+import { latestOf, readPrinted, releasesOf } from '../../../src/docs/printed.js'
 
 type Dict = Record<string, any>
 const reg = allTools()
@@ -101,6 +101,7 @@ describe.skipIf(!programs)('docs.publish, with pandoc, Mermaid and Typst here', 
       // the run record keeps where, never the PDF
       expect(run.artifacts.map((x: Dict) => x.name)).toEqual(['hld.pdf.json'])
       expect((await releasesOf(store, 'acme/printed'))[0]!.documents).toMatchObject([{ kind: 'hld', sha256: d.sha256, run: d.run_id }])
+      expect((await latestOf(store, 'acme/printed')).hld).toMatchObject({ sha256: d.sha256, run: d.run_id })
       // printed again for the same revision: the first copy stands
       const again = await inRepo(r, () => call('docs.publish', { release: 'A' }))
       expect(again.release).toEqual({ revision: 'A', added: [], kept: ['hld'] })

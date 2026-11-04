@@ -88,7 +88,7 @@ export function FileViewer({ file, size, onOpenPage, popOut, className }: FileVi
 
   const kind = viewerKind(file.path)
   const versions = file.versions ?? []
-  const canCompare = !!compareMode(kind) && !file.run
+  const canCompare = !!compareMode(kind) && !file.run && !file.printed
   const shown = inner ?? file
   const effectiveSize: ViewerSize = size === 'card' && expanded ? 'sheet' : size
 
@@ -162,7 +162,7 @@ export function FileViewer({ file, size, onOpenPage, popOut, className }: FileVi
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={() => void downloadFile(shown, version)}><Download /> Download</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void copyLink(file)}><Link2 /> Copy link</DropdownMenuItem>
+        {!file.printed && <DropdownMenuItem onSelect={() => void copyLink(file)}><Link2 /> Copy link</DropdownMenuItem>}
         {versions.length > 1 && canCompare && <DropdownMenuItem onSelect={() => setCompare({ before: versions[1]!.commit, after: 'current' })}>Compare with previous</DropdownMenuItem>}
         {onOpenPage && <DropdownMenuItem onSelect={onOpenPage}><ExternalLink /> Open full page</DropdownMenuItem>}
       </DropdownMenuContent>
@@ -172,10 +172,13 @@ export function FileViewer({ file, size, onOpenPage, popOut, className }: FileVi
       <Button variant="outline" size="sm" onClick={() => void downloadFile(shown, version).catch((e: Error) => toast('Could not download the file', { description: e.message }))}>
         <Download /> Download
       </Button>
-      <Button variant="outline" size="sm" onClick={() => void copyLink(file)}>
-        <Link2 /> Copy link
-      </Button>
-      {!file.run && versionsMenu}
+      {/* a printed copy has no address of its own in the app: it opens from the Documents tab */}
+      {!file.printed && (
+        <Button variant="outline" size="sm" onClick={() => void copyLink(file)}>
+          <Link2 /> Copy link
+        </Button>
+      )}
+      {!file.run && !file.printed && versionsMenu}
     </>
   )
 
@@ -190,7 +193,7 @@ export function FileViewer({ file, size, onOpenPage, popOut, className }: FileVi
         <Button size="sm" onClick={() => askAbout(file)}>
           <Sparkles /> {phone ? 'Ask' : 'Ask about this file'}
         </Button>
-        {popOut && !phone && (
+        {popOut && !phone && !file.printed && (
           <Button variant="outline" size="sm" onClick={() => window.open(fileHref(file, { bare: true }), '_blank', 'noopener,popup,width=1280,height=900')}>
             <SquareArrowOutUpRight /> Pop out
           </Button>

@@ -14,7 +14,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { docsReleaseRequest, docsRequest } from '../../src/api/docs-follow.js'
 import { skeleton } from '../../src/docs/catalog.js'
 import { decide } from '../../src/core/journey.js'
-import { recordRelease, storePrinted } from '../../src/docs/printed.js'
+import { recordLatest, recordRelease, storePrinted } from '../../src/docs/printed.js'
 import { AccessDenied, type Principal } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { startJourney } from '../../src/core/journey.js'
@@ -199,10 +199,20 @@ describe('documents.get and documents.pdf', () => {
       return { result: null }
     })
     const r = (await perform('documents.get', { repo: REPO }, ctx(ADMIN))).result as Record<string, any>
-    expect(r.documents.find((d: any) => d.kind === 'hld')).toMatchObject({ exists: true, commit: 'abc1234def', revision: 'A' })
-    expect(r.documents.find((d: any) => d.kind === 'guide')).toMatchObject({ exists: false })
+    const hld = r.documents.find((d: any) => d.kind === 'hld')
+    // nothing it is written from changed since its commit, but its sections due by Capture are still pending
+    expect(hld).toMatchObject({ exists: true, commit: 'abc1234def', revision: 'A', due: true, behind: [], state: 'behind', printed: null })
+    expect(hld.sections.some((x: any) => x.overdue)).toBe(true)
+    expect(r.documents.find((d: any) => d.kind === 'lld')).toMatchObject({ exists: false, due: true, state: 'missing' })
+    expect(r.documents.find((d: any) => d.kind === 'guide')).toMatchObject({ exists: false, due: false, state: 'later' })
+    expect(r.documents.find((d: any) => d.kind === 'protocol')).toMatchObject({ due: false, state: 'later' })
+    expect(r).toMatchObject({ stage: 'capture', writing: null })
     expect(r.releases).toMatchObject([{ revision: 'A', cut: { commit: 'c0ffee', branch: 'trace/release-a-1' }, documents: [{ kind: 'hld', title: 'High level design', sha256: kept.sha256 }] }])
     expect(Date.parse(r.next_check)).toBeGreaterThan(Date.now())
+    // its newest print, and whether it is of the commit the text was written at
+    await recordLatest(store, REPO, [{ kind: 'hld', sha256: kept.sha256, bytes: 12, commit: 'abc1234def00', run: 'r-2', at: 2 }])
+    const again = (await perform('documents.get', { repo: REPO }, ctx(ADMIN))).result as Record<string, any>
+    expect(again.documents.find((d: any) => d.kind === 'hld').printed).toMatchObject({ sha256: kept.sha256, run: 'r-2', current: true })
     const pdf = (await perform('documents.pdf', { repo: REPO, sha256: kept.sha256 }, ctx(ADMIN))).result as Record<string, any>
     expect(Buffer.from(pdf.base64, 'base64').toString()).toBe('%PDF-1.7 hld')
     await expect(perform('documents.pdf', { repo: REPO, sha256: '0'.repeat(64) }, ctx(ADMIN))).rejects.toThrow(/no printed copy/)

@@ -113,6 +113,7 @@ A person is never more than two steps from Home: an area from the rail, then an 
 | Overview | The stage rail, the next step, what is waiting on whom, what trace is doing now | Always |
 | Requirements | The intent, the requirements and the traceability view | Define |
 | Design | The block diagram, schematic sheets, the pin plan, the board, each with its findings | Architect |
+| Documents | The project's documents (high level design, low level design, protocol specification, user guide): how current each is and why, its PDF and text, each revision's release copies, the next nightly check (docs/scribe.md) | Architect |
 | Evidence | The coverage matrix, every run with its plots, waivers | Prove |
 | Build | Releases, orders, boards by serial, the bench | Release |
 | Decisions | Gate records, change requests, answered questions, the decision log | First gate signed |

@@ -5,7 +5,7 @@
  * and the project's rare actions sit at the bottom. On wider screens the tab row stays.
  */
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Brain, ClipboardList, Coins, FileStack, Folder, GitPullRequest, Images, LayoutGrid, ListChecks, type LucideIcon, Package, PanelsTopLeft, Settings, ShieldCheck } from 'lucide-react'
+import { BookOpenText, Brain, ClipboardList, Coins, FileStack, Folder, GitPullRequest, Images, LayoutGrid, ListChecks, type LucideIcon, Package, PanelsTopLeft, Settings, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
@@ -23,6 +23,7 @@ const ICON: Record<string, LucideIcon> = {
   overview: PanelsTopLeft,
   requirements: ListChecks,
   design: LayoutGrid,
+  docs: BookOpenText,
   changes: GitPullRequest,
   evidence: ClipboardList,
   build: Package,
@@ -41,6 +42,7 @@ const ICON: Record<string, LucideIcon> = {
 const LATER: { id: string; label: string; stage: (j?: Journey) => string }[] = [
   { id: 'requirements', label: 'Requirements', stage: () => 'Define' },
   { id: 'design', label: 'Design', stage: () => 'Architect' },
+  { id: 'docs', label: 'Documents', stage: () => 'Architect' },
   { id: 'evidence', label: 'Evidence', stage: (j) => (j && !j.stages.some((s) => s.id === 'capture' || s.name.toLowerCase() === 'capture') ? 'Prove' : 'Capture') },
   { id: 'build', label: 'Build', stage: () => 'Release' },
   { id: 'renders', label: 'Renders', stage: () => 'Release' },
