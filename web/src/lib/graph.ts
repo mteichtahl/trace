@@ -8,13 +8,16 @@
  * these lists (test/api/graph-vocabulary.test.ts checks it). readGraph() still accepts from/to for source/target.
  */
 
-export const NODE_KINDS = ['intent', 'requirement', 'block', 'part', 'datasheet', 'run', 'decision', 'memory', 'document', 'person'] as const
+// the node kinds are made from the ontology (trace:graphKind): scripts/graph-kinds.mjs writes graph-kinds.gen.ts
+import { NODE_KINDS } from './graph-kinds.gen'
+export { NODE_KINDS }
 export type NodeKind = (typeof NODE_KINDS)[number]
 
-export const LINK_KINDS = ['derived_from', 'serves', 'uses', 'proves', 'fails', 'cites', 'decided_in', 'decided_by', 'waives', 'learned_from', 'related'] as const
+export const LINK_KINDS = ['derived_from', 'serves', 'uses', 'made', 'proves', 'fails', 'cites', 'contains', 'connects', 'decided_in', 'decided_by', 'waives', 'learned_from', 'related'] as const
 export type LinkKind = (typeof LINK_KINDS)[number]
 
-export type NodeStatus = 'verified' | 'failing' | 'untested' | 'waived' | 'active' | 'inactive'
+/** stale: made from something that changed since it ran (lineage) */
+export type NodeStatus = 'verified' | 'failing' | 'untested' | 'waived' | 'stale' | 'active' | 'inactive'
 
 export interface GraphNode {
   id: string
@@ -52,8 +55,14 @@ export const NODE_WORD: Record<NodeKind, { one: string; many: string }> = {
   block: { one: 'Block', many: 'blocks' },
   part: { one: 'Part', many: 'parts' },
   datasheet: { one: 'Datasheet page', many: 'datasheet pages' },
+  component: { one: 'Placed part', many: 'placed parts' },
+  net: { one: 'Net', many: 'nets' },
   run: { one: 'Run or evidence', many: 'runs' },
-  decision: { one: 'Decision or waiver', many: 'decisions' },
+  artifact: { one: 'Output of a run', many: 'outputs' },
+  gate: { one: 'Gate', many: 'gates' },
+  criterion: { one: 'Criterion', many: 'criteria' },
+  waiver: { one: 'Waiver', many: 'waivers' },
+  decision: { one: 'Decision', many: 'decisions' },
   memory: { one: 'Memory', many: 'memories' },
   document: { one: 'Document', many: 'documents' },
   person: { one: 'Person', many: 'people' },
@@ -63,9 +72,12 @@ export const LINK_WORD: Record<LinkKind, string> = {
   derived_from: 'derived from',
   serves: 'serves',
   uses: 'uses',
+  made: 'made',
   proves: 'proves',
   fails: 'fails',
   cites: 'cites',
+  contains: 'contains',
+  connects: 'connects to',
   decided_in: 'decided in',
   decided_by: 'decided by',
   waives: 'waives',

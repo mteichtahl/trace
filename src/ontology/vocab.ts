@@ -50,6 +50,8 @@ export interface ClassTerm extends Term {
   keptIn: string | null
   /** computed when read, never stored (trace:derived) */
   derived: boolean
+  /** the kind of item the graph view draws it as (trace:graphKind), if it draws it */
+  graphKind: string | null
 }
 export interface PropertyTerm extends Term {
   kind: 'object' | 'datatype' | 'annotation'
@@ -97,7 +99,7 @@ export function readVocabulary(dir: string = ONTOLOGY_DIR): Vocabulary {
       if (!kind) continue
       v.definedIn.set(name, [...(v.definedIn.get(name) ?? []), file])
       if (kind === 'class') {
-        v.classes.set(name, { ...base, kind, parents: of(s, `${RDFS}subClassOf`).map(short), keptIn: one(s, `${NS}keptIn`), derived })
+        v.classes.set(name, { ...base, kind, parents: of(s, `${RDFS}subClassOf`).map(short), keptIn: one(s, `${NS}keptIn`), derived, graphKind: one(s, `${NS}graphKind`) })
       } else {
         const dom = one(s, `${RDFS}domain`)
         const rng = one(s, `${RDFS}range`)

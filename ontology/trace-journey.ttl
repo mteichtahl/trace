@@ -17,7 +17,7 @@
     rdfs:label "trace journey" ;
     rdfs:comment "Templates, stages, gates and their criteria, signatures, waivers, questions, decisions, hand-offs and jobs: the record of how a project got where it is." ;
     owl:imports <https://trace-eda.com/ns/trace/core> ;
-    owl:versionInfo "0.3.0" .
+    owl:versionInfo "0.3.1" .
 
 # ================================================================== templates, journey, revisions, stages
 
@@ -946,3 +946,13 @@ trace:buildQuantity a owl:DatatypeProperty ;
     trace:derived true ;
     rdfs:domain trace:Journey ;
     rdfs:range xsd:integer .
+
+# ------------------------------------------------------------------ how the graph view draws them (graphKind)
+
+trace:Gate trace:graphKind "gate" .
+trace:Criterion trace:graphKind "criterion" .
+trace:Waiver trace:graphKind "waiver" .
+trace:Decision trace:graphKind "decision" .
+trace:DesignDecision trace:graphKind "decision" .
+trace:Question trace:graphKind "decision" .
+trace:Person trace:graphKind "person" .

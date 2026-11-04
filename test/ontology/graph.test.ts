@@ -127,7 +127,7 @@ describe('a project\'s graph', () => {
       '@context': contextUrl(v), '@id': id('criterion', 'define.accepted'), '@type': 'Criterion', ofGate: id('gate', 'define'), status: 'met',
       hasEvidence: { '@type': 'Evidence', evidenceKind: 'run', evidenceRef: 'run-define.accepted' },
     })
-    expect(contextUrl(v)).toBe('https://trace-eda.com/ns/trace/context/0.3.0.jsonld')
+    expect(contextUrl(v)).toBe('https://trace-eda.com/ns/trace/context/0.3.1.jsonld')
     expect(recordJsonLd(store, id('journey', 'current'), v)).toMatchObject({ buildPlan: { quantity: 5 } })
     expect(recordJsonLd(store, id('criterion', 'nope'), v)).toBeNull()
   })

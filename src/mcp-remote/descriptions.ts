@@ -24,7 +24,7 @@ export const DESCRIPTIONS: Readonly<Record<string, string>> = {
   'cost.get': 'A project\'s stage timeline: when each stage started and finished. Money is shown to admins only.',
   'files.list': 'A project\'s files at a ref (the default branch unless named), grouped by kind: design, fabrication, firmware, documents, models, evidence.',
   'files.url': 'One file of a project by path (optionally at an earlier commit): its bytes as base64 up to 8 MB, else a short-lived download link.',
-  'graph.neighbourhood': 'What trace knows around one item of a project (a requirement id such as REQ-001, a run, a part): linked requirements, runs, decisions, blocks and parts, as nodes and links.',
+  'graph.neighbourhood': 'What trace knows around one item of a project (a requirement id such as REQ-001, a run, a part, a gate, a placed part such as U1): linked requirements, runs and their outputs, gates and criteria, waivers, decisions, blocks, parts, placed parts and nets, as nodes and links. A run made from something that changed since is marked stale.',
   'ontology.describe': 'trace\'s ontology: every class and property of its records with a plain-words label and comment, parents, domain and range, and its links to the Si2 EDA ontology. With term, one term and the tables that store it.',
   'record.get': 'One record of a project as JSON-LD, by its identifier (urn:trace:…) or as <kind>:<key> (requirement:REQ-001, run:<id>, criterion:capture.erc, gate:capture). Its links are identifiers you can get in turn.',
   'artifact.lineage': 'What one run of a project was made from (repository files with their hashes, other runs\' outputs), what it made (each output\'s hash), and the runs made from its outputs.',

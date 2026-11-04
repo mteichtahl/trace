@@ -534,21 +534,24 @@ describe('me', () => {
 
 describe('graph.neighbourhood', () => {
   it('draws the record around a focus in the app\'s vocabulary, with memories this person may see', async () => {
-    const r = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'requirement:REQ-001', depth: 2, memory: true }) as { nodes: { id: string; kind: string; status?: string; to?: string; distance: number }[]; links: { id: string; source: string; target: string; kind: string }[] }
+    const r = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'requirement:REQ-001', depth: 3, memory: true }) as { nodes: { id: string; kind: string; status?: string; to?: string; distance: number }[]; links: { id: string; source: string; target: string; kind: string }[] }
     const ids = r.nodes.map((n) => n.id)
     expect(ids[0]).toBe('requirement:REQ-001')
-    expect(ids).toEqual(expect.arrayContaining(['test:TST-001', 'run:run-1', 'run:run-0', 'gate:define', 'memory:mem-0']))
+    expect(ids).toEqual(expect.arrayContaining(['test:TST-001', 'run:run-1', 'run:run-0', 'criterion:define.accepted', 'gate:define', 'memory:mem-0']))
     expect(ids).not.toContain('memory:mem-1')
-    // the test item (still planned) serves the requirement; its failed run fails it; the run rests on the capture; the gate cites the run
+    // the test item (still planned) serves the requirement; its failed run fails it; the run rests on the capture; the
+    // gate's criterion cites the run, and the gate contains the criterion
     expect(r.links.map(({ source, target, kind }) => ({ source, target, kind }))).toEqual(expect.arrayContaining([
       { source: 'test:TST-001', target: 'requirement:REQ-001', kind: 'serves' }, { source: 'run:run-1', target: 'requirement:REQ-001', kind: 'fails' },
-      { source: 'run:run-1', target: 'run:run-0', kind: 'uses' }, { source: 'gate:define', target: 'run:run-1', kind: 'cites' },
+      { source: 'run:run-1', target: 'run:run-0', kind: 'uses' }, { source: 'criterion:define.accepted', target: 'run:run-1', kind: 'cites' },
+      { source: 'gate:define', target: 'criterion:define.accepted', kind: 'contains' },
       { source: 'memory:mem-0', target: 'requirement:REQ-001', kind: 'related' },
     ]))
     const byId = new Map(r.nodes.map((n) => [n.id, n]))
     expect(byId.get('requirement:REQ-001')).toMatchObject({ kind: 'requirement', status: 'untested', to: '/p/acme~web/requirements/REQ-001' })
     expect(byId.get('test:TST-001')).toMatchObject({ kind: 'run' })
-    expect(byId.get('gate:define')).toMatchObject({ kind: 'decision' })
+    expect(byId.get('gate:define')).toMatchObject({ kind: 'gate' })
+    expect(byId.get('criterion:define.accepted')).toMatchObject({ kind: 'criterion', status: 'verified', to: '/p/acme~web/gates/define' })
     const one = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'REQ-001', depth: 1 }) as { focus: string; nodes: { id: string }[] }
     expect(one.focus).toBe('requirement:REQ-001')
     expect(one.nodes.map((n) => n.id).sort()).toEqual(['requirement:REQ-001', 'run:run-1', 'test:TST-001'])
