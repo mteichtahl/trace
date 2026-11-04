@@ -47,8 +47,7 @@ import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuant
 import { loadBoards } from '../core/boards.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { boardView, readingView } from './actions-build.js'
-import { CAPABILITIES, capabilitiesStamp } from '../tools/mech/capabilities.js'
-import { type BuildInputs, filesNow, staleReasons } from '../tools/mech/stale.js'
+import { caseStaleness } from './case-read.js'
 
 /** The skills that read the bench. */
 const HARDWARE_SKILLS = new Set(['bench-setup', 'bring-up-run', 'incoming-inspection'])
@@ -180,19 +179,6 @@ async function evidenceFiles(ctx: Context, repo: string, r: JourneyRecord): Prom
   }
 }
 
-/** Why the latest case build no longer stands for the default branch (src/tools/mech/stale.ts); null when the files
- * cannot be read (not compared). */
-async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<string[] | null> {
-  if (!was || typeof was !== 'object') return ['the build recorded no inputs']
-  try {
-    const gh = await ctx.deps.github()
-    const { branch } = await gh.defaultBranch(repo)
-    const now = await filesNow(was as Partial<BuildInputs>, (p) => gh.rawFile(repo, p, branch), { checked: CAPABILITIES.checked, sha256: capabilitiesStamp() })
-    return staleReasons(was as Partial<BuildInputs>, now)
-  } catch {
-    return null
-  }
-}
 
 /** Each requirement's words and acceptance as the record has them: a decision on one keeps what it was made on. */
 const requirementTexts = (db: import('node:sqlite').DatabaseSync): Map<string, RequirementWords> => new Map(hasTable(db, 'requirements') ? (db.prepare('SELECT id, text, acceptance FROM requirements').all() as { id: string; text: string; acceptance: string | null }[]).map((x) => [String(x.id), { text: String(x.text), acceptance: x.acceptance === null ? null : String(x.acceptance) }]) : [])

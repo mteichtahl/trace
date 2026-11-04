@@ -4,7 +4,8 @@
  *
  *   1. the graph: the project's records as trace builds them (src/ontology/graph.ts): the journey record and the
  *      agents' facts from the central bucket when this runtime has the project in scope (as the journey tools do),
- *      else the journey tables in .trace/project.db; the run, design and verification records of .trace/project.db
+ *      else the journey tables in .trace/project.db; the run, design and verification records of .trace/project.db,
+ *      with the newest case build and, from the working tree, whether it still stands (layout.fit)
  *   2. the shape: ontology/shapes/<criterion>.ttl, which names the criterion it backs (tsh:criterion)
  *   3. pySHACL through the Python bridge (python/tracebridge/shapes.py `shapes.check`)
  *   4. recorded as a run (kind shape.check), its findings an artifact; and, when the journey is in scope, written as
@@ -14,7 +15,7 @@
  *
  * The shape decides; the agent does not. A criterion with no shape is refused, naming the ones that have one.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
@@ -22,7 +23,7 @@ import { type Store, Writer } from 'n3'
 import { z } from 'zod'
 import { bridge } from '../../core/bridge.js'
 import { type AnyTool, ToolError, defineTool } from '../../core/registry.js'
-import { Work } from '../../core/store.js'
+import { Work, findRoot } from '../../core/store.js'
 import { AgentFactError, addCriterionCheck } from '../../core/agent-facts.js'
 import { type JourneyRecord, copyJourneyTables, loadJourney } from '../../core/journey.js'
 import { buildGraph, type GraphSources } from '../../ontology/graph.js'
@@ -42,8 +43,19 @@ export type ShapeFinding = z.infer<typeof Finding>
 export const SHAPES_DIR = join(ONTOLOGY_DIR, 'shapes')
 
 type Quads = ReturnType<Store['getQuads']>
-/** The quads of the records in some of the project's databases (records link across databases by name). */
-export const graphQuads = (src: GraphSources, o: { installation: string; project: string }): Quads => buildGraph(src, { ...o, derived: true }).store.getQuads(null, null, null, null)
+type Files = (path: string) => Uint8Array | null
+/** The quads of the records in some of the project's databases (records link across databases by name); with `files`,
+ *  the repository's files as they are now, what freshness needs (whether the newest case build still stands). */
+export const graphQuads = (src: GraphSources, o: { installation: string; project: string; files?: Files }): Quads => buildGraph(src, { ...o, derived: true }).store.getQuads(null, null, null, null)
+
+/** The repository's files as they are in the working tree (null when gone or outside it). */
+export function workingTree(root: string | null = findRoot()): Files | undefined {
+  if (!root) return undefined
+  return (p) => {
+    const abs = join(root, p)
+    return !p.startsWith('/') && !p.split('/').includes('..') && existsSync(abs) && statSync(abs).isFile() ? readFileSync(abs) : null
+  }
+}
 
 /** Quads as Turtle. */
 export function turtle(quads: Quads): Promise<string> {
@@ -73,7 +85,7 @@ export async function runShape(criterion: string, data: string, call = (m: strin
  * .trace/project.db with the journey's tables replaced by the central store's when the project is in scope, and the
  * agents' facts beside it. The repository's file is never written.
  */
-export async function projectGraph(scope: Scope | null, o: { installation: string; project: string }, path?: string): Promise<{ quads: Quads; rec: JourneyRecord | null }> {
+export async function projectGraph(scope: Scope | null, o: { installation: string; project: string; files?: Files }, path?: string): Promise<{ quads: Quads; rec: JourneyRecord | null }> {
   const dir = mkdtempSync(join(tmpdir(), 'trace-shape-'))
   try {
     const copy = join(dir, 'record.db')
@@ -105,7 +117,7 @@ export const check = defineTool({
     let scope: Scope | null = null
     try { scope = journeyScope() } catch { scope = null }
     const repo = scope?.repository ?? process.env.GITHUB_REPOSITORY ?? 'local/project'
-    const { quads, rec } = await projectGraph(scope, { installation: process.env.TRACE_PREFIX ?? 'trace', project: repo })
+    const { quads, rec } = await projectGraph(scope, { installation: process.env.TRACE_PREFIX ?? 'trace', project: repo, files: workingTree() })
     const data = await turtle(quads)
     // a finding a person waived on its own (a waiver of kind finding, open, on its id) no longer holds the criterion
     const waived = new Set((rec?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))

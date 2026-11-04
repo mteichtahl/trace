@@ -258,7 +258,10 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
     `clearance` (ref → mm, reason) change them, refusing a change from the recommendation without a reason.
   - `mech.build` — runs the engine, writes `mechanical/out/`, records `fit.json`, `result.json` and the STEP files as
     run artifacts, measures `clashes`, `gap_violations`, `assumed_heights`; run status `pass` / `fail` from the fit
-    and rules. Its answer says, when it passes, to record `layout.fit` with `journey.check` and this run id.
+    and rules. Its answer says to run `shape.check layout.fit`: the criterion's shape (`ontology/shapes/layout.fit.ttl`)
+    reads the newest build from the project's graph and records the criterion: met when the build still stands, the case
+    closes around the board, and every clash, gap, missing opening and failing rule is fixed or waived on its own (a
+    waiver of kind finding on `layout.fit@<the problem's record>`, which names the part, so it outlasts a rebuild).
   - `mech.fit` — the latest `mech.build` run's fit, and whether it is stale (`src/tools/mech/stale.ts`): the build
     records its `inputs` (the board and its sha256, what of the board the case depends on (`case_facts`,
     `src/tools/mech/case-facts.ts`: the outline, the mounting and unplated holes, the parts at the edge and every part's
@@ -278,7 +281,7 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
   - `mech.order` — writes `mechanical/out/order.json` and `order.md` (service, process, material, finish, quantity,
     files to upload, the fit run id, and the upload page) for a person to submit and pay; it never places an order.
 - `src/agents/impl/index.ts`: the mech tools, workflow lines (init when the project has no case and the intent asks for
-  an enclosure; build; read clashes; delegate script changes; journey.check layout.fit with the build run), keywords
+  an enclosure; build; read clashes; delegate script changes; shape.check layout.fit after each build), keywords
   (enclosure, case, housing, fit check), escalation (a clash that needs the board outline or a part moved).
 - `tracectl check`: with `mechanical/case.json` present, runs `mech.build` and fails on a failing fit; when build123d
   is not importable it says so and skips (not a failure); with `TRACE_CHECK_MECH=0` it skips with

@@ -76,6 +76,17 @@ function design(): DesignView {
       findings: [{ id: 'peripheral:U1:USART2:claimed_twice', target: 'peripheral:U1.USART2', kind: 'claimed_twice', severity: 'blocks', text: "U1's USART2 is claimed by 2 uses: debug console, gps." }],
     },
     drawings: { run: '9f8e7d6c5b4a3210', at },
+    case: {
+      run: '5e6f7a8b9c0d1e2f', at, status: 'fail', summary: '2 clashes (C1 with lid 3.10 mm³; J2 with lid 1.42 mm³); 1 gap under its clearance (J1 in its opening 0.20 mm, needs 0.50 mm)',
+      board: 'hardware/soil-sensor.kicad_pcb', process: 'MJF PA12-HP at jlc3dp', size: '58.4 × 38.4 × 19.6 mm',
+      findings: [
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-finding:clash%2FC1%2Flid', kind: 'clash', severity: 'blocks', text: 'C1 clashes with the lid (3.1 mm³)', where: 'C1', x_mm: 28, y_mm: 14.1, source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-finding:clash%2FJ2%2Flid', kind: 'clash', severity: 'waived', text: 'J2 clashes with the lid (1.42 mm³)', where: 'J2', x_mm: 40, y_mm: 8, source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-finding:gap%2FJ1%2Faround', kind: 'gap', severity: 'blocks', text: 'J1 in its opening: 0.2 mm, needs 0.5 mm', where: 'J1', x_mm: 13, y_mm: 14.4, source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+        { id: 'layout.fit@urn:trace:trace:acme%2Fsoil-sensor:case-rule:lid_top', kind: 'rule', severity: 'blocks', text: 'Outside the process\'s rules: the lid\'s top as built is 1.4 mm, under MJF\'s 2 mm for a 58 mm part', source: { kind: 'run', id: '5e6f7a8b9c0d1e2f', label: 'case build 5e6f7a8b' } },
+      ],
+      stale: ['J1 at the board\'s edge moved or changed since the build'],
+    },
     notes: [
       ...(chosen ? [] : ['No architecture is chosen yet: the diagram shows trace\'s recommendation, until a person chooses in Architecture choice.']),
       'Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate\'s stock criterion records it.',

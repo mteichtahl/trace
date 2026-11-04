@@ -302,6 +302,22 @@ export type DesignDecisionInput =
   | { kind: 'architecture'; option: string; reason: string; deciding: string[] }
   | { kind: 'pins'; part: string }
 
+/** design.get's case: the newest case build, as the Case view draws it. */
+export interface CaseView {
+  run: string
+  at: string
+  status: 'pass' | 'fail'
+  summary: string
+  /** the board file the case was built for */
+  board: string | null
+  process: string | null
+  size: string | null
+  /** each problem, named as a waiver of it names it (layout.fit@…); a part's at the part's centre on the board */
+  findings: (PictureFinding & { kind: 'clash' | 'gap' | 'opening' | 'rule' })[]
+  /** why the build no longer stands for the default branch, in plain words; [] current; null not compared */
+  stale: string[] | null
+}
+
 export interface DesignView {
   architecture?: ArchitectureRecord
   /** one per schematic file; `path`: its drawing (runs/<id>/sheets/<file>.svg) when an export kept one */
@@ -314,6 +330,8 @@ export interface DesignView {
     findings: { id: string; target: string; kind: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
   }
   board?: { file?: string; path?: string; render?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  /** the newest case build (src/api/case-read.ts): each problem by its part, and why it is out of date when it is */
+  case?: CaseView
   /** the export run the drawings come from */
   drawings?: { run: string; at: string | null }
   /** the latest rule checks the findings come from */

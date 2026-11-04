@@ -316,8 +316,8 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
         warnings: [...facts.warnings, ...unexplained.map((x) => `${x} differs from the recommendation without a reason in ${CASE_JSON} (set it with mech.settings)`)],
         inputs,
         next: passed
-          ? 'The case fits and is within the process\'s rules: record it with journey.check criterion "layout.fit", status "met", evidence [{"kind":"run","ref":"<this run_id>"}].'
-          : 'Read the clashes and gaps: a clearance or wall change is mech.settings; a shape change is an edit to mechanical/case.py (delegate it); a clash that needs the board outline or a part moved is for a person. Waive a clash only through the journey, never by recording layout.fit as met.',
+          ? 'The case fits and is within the process\'s rules: run shape.check with criterion "layout.fit", which reads this build and records the criterion.'
+          : 'Read the clashes and gaps: a clearance or wall change is mech.settings; a shape change is an edit to mechanical/case.py (delegate it); a clash that needs the board outline or a part moved is for a person, who may waive that one problem in the journey. shape.check layout.fit records the criterion from the newest build and its waivers.',
       },
     }
   })
@@ -325,7 +325,7 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
 
 export const buildTool = defineTool({
   name: 'mech.build',
-  description: `Build the case with the enclosure engine (build123d) from the board facts, ${CASE_JSON} and ${CASE_PY} (or the handed-in STEP), then check it. A ${CASE_PY} that differs from the template runs first as its own cad-script job (on the project's cad function, or locally; the cloud without one builds only the template or a handed-in STEP), then a cad job (the tools function, or locally) checks what it built; the answer's stages say where each ran. The check: clashes (part envelopes or the board against case parts, mm³), gaps (board edge to wall, each part to the lid or floor, against its clearance), openings for edge connectors, and the process's design rules (wall, size, hole, lip gap; JLC3DP or JLCCNC). Writes ${OUT_DIR}/ (case.step, case-<part>.step/.stl/.3mf, fit.json, case.jsonld). Measures clashes, gap_violations, assumed_heights; status pass only when the fit passes and no rule fails. When it passes, record layout.fit with journey.check and this run id. Recorded; returns run_id.`,
+  description: `Build the case with the enclosure engine (build123d) from the board facts, ${CASE_JSON} and ${CASE_PY} (or the handed-in STEP), then check it. A ${CASE_PY} that differs from the template runs first as its own cad-script job (on the project's cad function, or locally; the cloud without one builds only the template or a handed-in STEP), then a cad job (the tools function, or locally) checks what it built; the answer's stages say where each ran. The check: clashes (part envelopes or the board against case parts, mm³), gaps (board edge to wall, each part to the lid or floor, against its clearance), openings for edge connectors, and the process's design rules (wall, size, hole, lip gap; JLC3DP or JLCCNC). Writes ${OUT_DIR}/ (case.step, case-<part>.step/.stl/.3mf, fit.json, case.jsonld). Measures clashes, gap_violations, assumed_heights; status pass only when the fit passes and no rule fails. Then shape.check layout.fit records the layout gate's fit criterion from the newest build (its shape: met when the build still stands and every clash, gap and failing rule is fixed or waived on its own). Recorded; returns run_id.`,
   input: z.object({ formats: Formats.describe('files to write (default step, stl and 3mf)') }),
   run: async (a) => {
     const r = await root()
@@ -374,7 +374,7 @@ export const fitTool = defineTool({
           build_run: b.id, build_status: b.status, stale: reasons.length > 0, stale_reasons: reasons,
           fit_status: res.fit_status, fit_summary: res.fit_summary, problems: res.problems, clashes: res.clashes, gaps: res.gaps, openings: res.openings,
           assumptions: res.assumptions, rules_failing: res.rules_failing, rules_not_checked: res.rules_not_checked, case: res.case, files: res.files,
-          next: reasons.length ? 'mech.build: the fit is stale.' : b.status === 'pass' ? `journey.check layout.fit met with evidence run ${b.id}, if not recorded yet.` : 'Fix the clashes and gaps (mech.settings, or a delegated change to the case script), then mech.build.',
+          next: reasons.length ? 'mech.build: the fit is stale.' : b.status === 'pass' ? 'shape.check layout.fit, if not checked since this build.' : 'Fix the clashes and gaps (mech.settings, or a delegated change to the case script), then mech.build.',
         },
       }
     })

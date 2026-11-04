@@ -11,6 +11,9 @@
  *   Board          the board from its .kicad_pcb, in 3D by default (src/components/board3d: lifelike, turn it, turn it
  *                  over, tap a part, try a finish) or as KiCanvas's flat drawing (Top and Bottom, layers) for exact
  *                  checking; the person's last choice is remembered. The design rule check's findings are pinned on both
+ *   Case           the newest case build (design.get `case`): whether the board fits, each clash, gap and missing
+ *                  opening pinned on its part of the board (the part outlined) and listed, the process's failing
+ *                  rules, and, when the board or the case changed since the build, why, in plain words
  *
  * design.get's notes say what the record still does not hold; the tab shows them rather than drawing made-up content.
  *
@@ -37,7 +40,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { useAction } from '@/lib/queries'
-import type { Block, DesignView, PictureFinding } from '@/lib/types-s1'
+import type { Block, CaseView, DesignView, PictureFinding } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { type FileFinding, useFileText } from '@/components/files/data'
 import { ViewerLoading } from '@/components/files/viewers/common'
@@ -91,6 +94,7 @@ function Design() {
   useCommands([
     { id: 'design-board', label: 'Show the board', run: () => setTab('board') },
     { id: 'design-arch', label: 'Show the block diagram', run: () => setTab('architecture') },
+    { id: 'design-case', label: 'Show the case', run: () => setTab('case') },
     ...(data?.sheets ?? []).map((s) => ({ id: `design-sheet-${s.id}`, label: `Show the ${s.name.toLowerCase()} sheet`, run: () => { setTab('sheets'); setSheet(s.id) } })),
   ])
 
@@ -120,6 +124,7 @@ function Design() {
           <TabsTrigger value="sheets">Sheets</TabsTrigger>
           <TabsTrigger value="pins">Pin plan</TabsTrigger>
           <TabsTrigger value="board">Board</TabsTrigger>
+          <TabsTrigger value="case">Case</TabsTrigger>
         </TabsList>
 
         <TabsContent value="architecture" className="mt-4 space-y-4">
@@ -229,6 +234,14 @@ function Design() {
             <EmptyState>No board yet. It starts in Layout, once the schematic gate is signed.</EmptyState>
           )}
         </TabsContent>
+
+        <TabsContent value="case" className="mt-4">
+          {data.case ? (
+            <CaseTab id={id} repo={repo} c={data.case} board={data.case.board ?? data.board?.file ?? null} selected={selected} onSelect={setSelected} />
+          ) : (
+            <EmptyState>No case yet. Case design builds one around the board, once the board is placed.</EmptyState>
+          )}
+        </TabsContent>
       </Tabs>
     </div>
   )
@@ -261,15 +274,49 @@ function useBoardView(): [BoardView, (v: BoardView) => void] {
   }]
 }
 
+/**
+ * The Case tab: whether the board fits its newest case build, why the build is out of date when it is, and each problem
+ * pinned on its part of the board (a part's problem outlines the part) and listed. A waived problem stays listed, grey.
+ */
+function CaseTab({ id, repo, c, board, selected, onSelect }: { id: string; repo: string; c: CaseView; board: string | null; selected: string | null; onSelect: (id: string | null) => void }) {
+  const open = c.findings.filter((f) => f.severity !== 'waived').length
+  const stale = c.stale?.length ? c.stale : null
+  const status = stale ? 'warning' : open === 0 ? 'met' : 'failing'
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+        <StatusBadge status={status} label={stale ? 'Out of date' : open === 0 ? (c.findings.length ? 'Fits, problems waived' : 'Fits') : `${open} problem${open === 1 ? '' : 's'} to fix or waive`} />
+        <span>{c.summary}</span>
+        <span className="text-xs text-muted-foreground">
+          {[c.process, c.size].filter(Boolean).join(' · ')}{c.process || c.size ? ' · ' : ''}
+          <Link to="/p/$id/runs/$run" params={{ id, run: c.run }} className="underline underline-offset-2">build {c.run.slice(0, 8)}</Link>
+        </span>
+      </div>
+      {stale && (
+        <div role="status" className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <p className="font-medium">This build is out of date: {stale[0]}.</p>
+          {stale.length > 1 && <ul className="mt-1 list-disc pl-5 text-muted-foreground">{stale.slice(1).map((r) => <li key={r}>{r}.</li>)}</ul>}
+          <p className="mt-1 text-muted-foreground">Its fit is no evidence until the case is built again from the board as it is now.</p>
+        </div>
+      )}
+      {c.stale === null && <p className="text-xs text-muted-foreground">trace could not compare this build with the default branch, so it does not say whether it is still current.</p>}
+      {board ? (
+        <LiveBoard repo={repo} path={board} title="Case problems on the board" findings={c.findings} selected={selected} onSelect={onSelect} onAsk={() => openPanel(true)} />
+      ) : null}
+      <FindingsList findings={c.findings} selected={selected} onSelect={onSelect} empty="The board fits its case: no clash, every gap at its clearance, and within the process's rules." />
+    </div>
+  )
+}
+
 /** The board from its file in the repository: in 3D (default) or KiCanvas's flat drawing, findings pinned on either. */
-function LiveBoard({ repo, path, size, findings, selected, onSelect, onAsk }: { repo: string; path: string; size?: string | undefined; findings: PictureFinding[]; selected: string | null; onSelect: (id: string | null) => void; onAsk: () => void }) {
+function LiveBoard({ repo, path, size, title = 'Board', findings, selected, onSelect, onAsk }: { repo: string; path: string; size?: string | undefined; title?: string; findings: PictureFinding[]; selected: string | null; onSelect: (id: string | null) => void; onAsk: () => void }) {
   const q = useFileText({ repo, path })
   const [view, setView] = useBoardView()
   const pinned = findings.flatMap((f) => toFileFinding(f, true))
   return (
-    <section className="overflow-hidden rounded-xl border bg-card" aria-label="Board">
+    <section className="overflow-hidden rounded-xl border bg-card" aria-label={title}>
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2.5">
-        <h3 className="text-sm font-semibold">Board</h3>
+        <h3 className="text-sm font-semibold">{title}</h3>
         <span className="text-xs text-muted-foreground">{[size, view === '3d' ? 'Turn over to look underneath' : 'switch Top and Bottom to look underneath'].filter(Boolean).join(' · ')}</span>
         <div className="ml-auto flex items-center gap-1">
           <div role="group" aria-label="How to show the board" className="flex overflow-hidden rounded-md border text-xs">
