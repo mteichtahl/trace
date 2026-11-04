@@ -69,11 +69,28 @@ export interface PublicKeyCredentialCreationOptionsJSONish {
 
 // ------------------------------------------------------------------ projects and the journey
 
+/** Who paused or retired a project, when (seconds since the epoch) and why. */
+export interface LifecycleMark { at: number; by: string; reason: string | null }
+
 export interface ProjectRef {
   repo: string
   role: Role
   part?: Part
+  /** set while the project is paused (project.pause): nothing changes and no work starts until it is resumed */
+  paused?: LifecycleMark | null
 }
+
+/** project.lifecycle: whether the project is paused, and (admins only) retired, with its recent changes. */
+export interface Lifecycle {
+  repo: string
+  paused: LifecycleMark | null
+  retired: LifecycleMark | null
+  history?: { at: number; change: 'paused' | 'resumed' | 'retired' | 'restored'; by: string; reason: string | null }[]
+  summary?: string
+}
+
+/** projects.retired: a retired project as admins see it. */
+export interface RetiredProject { repo: string; name: string | null; icon: string | null; description: string | null; retired: LifecycleMark; paused: LifecycleMark | null }
 
 export interface Member {
   sub: string
@@ -653,7 +670,7 @@ export interface SpeechMark { time: number; type: 'word' | 'sentence'; start: nu
 // ------------------------------------------------------------------ live events
 
 export type LiveEvent =
-  | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb'; at: string }
+  | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'projects'; at: string }
   | { type: 'job.updated'; repo: string; jobId: string; state: string; at: string }
   | { type: 'notification'; id: string; kind: InboxKind; repo: string; summary: string; at: string }
   /** a run's log grew (docs/progress-and-logs.md, decision C): a count, never the text */

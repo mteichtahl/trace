@@ -53,6 +53,7 @@ import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
+import { assertNotHeld } from './held.js'
 
 export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up'] as const
 export type JobOp = (typeof JOB_OPS)[number]
@@ -312,6 +313,8 @@ export const JOB_ACTIONS = {
 
   'job.control': def('job', z.object({ id: z.string().min(1).max(400), op: z.enum(JOB_OPS), reason: z.string().trim().max(300).optional(), repo: z.string().max(140).optional() }), async (a, ctx) => {
     const { jobs, repo } = await writeAccess(a.id, ctx, a.repo)
+    // a paused or retired project: its work can be paused or cancelled, but nothing resumed or moved up
+    if (a.op === 'resume' || a.op === 'move_up') await assertNotHeld(repo)
     const by = label(ctx.principal)
     const at = Date.now() / 1000
     const { jobs: views, rows } = await listJobs(ctx, repo, { at })

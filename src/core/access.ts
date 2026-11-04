@@ -44,6 +44,7 @@ import { z } from 'zod'
 import { join } from 'node:path'
 import { type Central, central, ensureSchema, read as readCentral } from './central.js'
 import { traceHome } from './store.js'
+import { type Lifecycle, heldProjects } from './lifecycle.js'
 
 export const CLASSES = ['admin', 'user', 'guest'] as const
 export type PersonClass = (typeof CLASSES)[number]
@@ -252,10 +253,23 @@ export async function standing(p: Principal, repo: string): Promise<{ role: Role
   }
 }
 
-export interface ProjectOf { repo: string; role: Role; part: Part }
+export interface ProjectOf { repo: string; role: Role; part: Part; paused?: Lifecycle['paused'] }
 
-/** The projects `p` may see, with their role and part. Admins see every registered or assigned project. */
+/**
+ * The projects `p` may see, with their role and part (and its pause, when paused). Admins see every registered or
+ * assigned project. A retired project is in nobody's list (src/core/lifecycle.ts): admins find it among the retired.
+ */
 export async function projectsFor(p: Principal): Promise<ProjectOf[]> {
+  const all = await everyProjectFor(p)
+  const held = await heldProjects()
+  return all.flatMap((o) => {
+    const l = held.get(o.repo.toLowerCase())
+    if (l?.retired) return []
+    return [l?.paused ? { ...o, paused: l.paused } : o]
+  })
+}
+
+async function everyProjectFor(p: Principal): Promise<ProjectOf[]> {
   const cls = classOf(p)
   if (cls === null) return []
   const db = await read()

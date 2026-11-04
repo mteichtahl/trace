@@ -5,8 +5,9 @@
 import { useQueries } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Plus } from 'lucide-react'
+import { PauseCircle, Plus } from 'lucide-react'
 import { z } from 'zod'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataTable, Highlight, useUrlView } from '@/components/data-table'
 import { Column } from '@/components/shell/app-shell'
@@ -36,11 +37,22 @@ interface Row {
   next: string
   yours: boolean
   part: string
+  /** Active, or Paused (project.pause): a paused project's next step is that someone resumes it */
+  status: string
   journey?: Journey
 }
 
 const columns: ColumnDef<Row, any>[] = [
-  { accessorKey: 'name', header: 'Project', size: 200, meta: { label: 'Project', kind: 'text' }, cell: ({ row }) => <span className="font-medium"><Highlight text={row.original.name} /></span> },
+  {
+    accessorKey: 'name', header: 'Project', size: 220, meta: { label: 'Project', kind: 'text' },
+    cell: ({ row }) => (
+      <span className="inline-flex items-center gap-2">
+        <span className="font-medium"><Highlight text={row.original.name} /></span>
+        {row.original.status === 'Paused' && <Badge variant="outline" className="gap-1 rounded-md border-warning/50 text-warning-foreground"><PauseCircle className="size-3" aria-hidden />Paused</Badge>}
+      </span>
+    ),
+  },
+  { accessorKey: 'status', header: 'Status', size: 100, meta: { label: 'Status', kind: 'enum' } },
   { accessorKey: 'revision', header: 'Revision', size: 96, meta: { label: 'Revision', kind: 'enum' } },
   { accessorKey: 'template', header: 'Template', size: 110, meta: { label: 'Template', kind: 'enum' } },
   {
@@ -64,9 +76,10 @@ function toRow(p: ProjectRef, j?: Journey): Row {
     template: j ? (j.template === 'fpga' ? 'FPGA' : j.template.charAt(0).toUpperCase() + j.template.slice(1)) : '',
     stage: cur?.name ?? '',
     criteria: cur ? `${cur.criteria.met} of ${cur.criteria.total}` : '',
-    next: j ? j.next.short ?? j.next.summary.replace(/\*\*/g, '') : '',
-    yours: j?.next.owner === 'you',
+    next: p.paused ? `Paused by ${p.paused.by}${p.paused.reason ? `: ${p.paused.reason}` : ''}. Resume it to carry on.` : j ? j.next.short ?? j.next.summary.replace(/\*\*/g, '') : '',
+    yours: !p.paused && j?.next.owner === 'you',
     part: p.part === 'reviewer' ? 'Reviewer' : 'Contributor',
+    status: p.paused ? 'Paused' : 'Active',
     journey: j,
   }
 }
@@ -107,6 +120,8 @@ function Projects() {
           getRowId={(r) => r.repo}
           url={url}
           noun="projects"
+          // the Paused badge beside the name says it; Status is there to filter by, under Columns
+          defaultView={{ visibility: { status: false } }}
           onRowClick={(r) => void navigate({ to: '/p/$id', params: { id: projectId(r.repo) } })}
           empty={user?.class === 'admin' ? 'No projects yet. Start one with New project.' : 'You are not on a project yet. Ask an admin to add you.'}
         />

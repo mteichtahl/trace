@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { teeCheckOutput } from '../core/check-stream.js'
 import { type TraceConfig, readSettings, resolve } from '../core/config.js'
+import { heldReason } from '../core/lifecycle.js'
 import { stepLine } from '../core/run-logs.js'
 import type { Layers, Override } from '../prompts/resolve.js'
 import { InstallationPrompts, loadLayers, projectOverrides, promptsHome } from '../prompts/store.js'
@@ -127,7 +128,28 @@ export async function run(args: { github: GitHub; context: Context; core: Core; 
   }
 }
 
+/**
+ * A paused or retired project (src/core/lifecycle.ts) runs no harness work: these tasks are skipped, and the steps that
+ * would deploy fail so nothing is deployed. Reports of work already done still run. Seen only by steps that can read
+ * the central store (TRACE_HOME and the step's AWS credentials); the API and the worker refuse the rest.
+ */
+export const HELD_SKIPS: ReadonlySet<string> = new Set(['open-pr', 'automerge', 'update-queue', 'ci-doctor', 'worker-pick', 'worker-prompt', 'worker-delegate', 'worker-dispatch', 'deploy-request', 'deploy-approve'])
+export const HELD_FAILS: ReadonlySet<string> = new Set(['deploy-commands', 'deploy-guard'])
+
+/** Whether the task may run; when it may not, says why (a skip) or fails the step (a deploy). */
+export async function mayRun(name: string, context: Context, core: Core, env: NodeJS.ProcessEnv, held: (repo: string) => Promise<string | null> = (r) => heldReason(r, env, (l) => core.info(l))): Promise<boolean> {
+  if (!HELD_SKIPS.has(name) && !HELD_FAILS.has(name)) return true
+  const why = await held(`${context.repo.owner}/${context.repo.repo}`)
+  if (!why) return true
+  const words = `trace ${name} did not run: ${why}.`
+  if (HELD_FAILS.has(name)) core.setFailed(`${words} Nothing was deployed.`)
+  else core.info(words)
+  await core.summary.addRaw(`${words}\n`).write()
+  return false
+}
+
 async function runTask(args: { github: GitHub; context: Context; core: Core; getOctokit: (token: string) => GitHub }, env: TaskEnv & { TRACE_TASK?: string; JOB_TOKEN?: string }, task: (d: Deps) => Promise<void> | void): Promise<void> {
+  if (!(await mayRun(env.TRACE_TASK ?? '', args.context, args.core, process.env))) return
   const jobApi = env.JOB_TOKEN ? args.getOctokit(env.JOB_TOKEN) : args.github
   // prompt overrides matter only to the steps that build prompts: the others need not read the installation's store
   const prompting = ['worker-prompt', 'worker-delegate'].includes(env.TRACE_TASK ?? '')

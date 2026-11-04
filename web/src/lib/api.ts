@@ -80,6 +80,13 @@ export interface Actions {
     args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null }; later?: ('certify' | 'produce' | 'sustain')[] }
     result: { repo: string; version: number }
   }
+  // a project's lifecycle (src/api/actions-lifecycle.ts): paused holds it as it is; retired hides it until an admin restores it
+  'project.lifecycle': { args: Repo; result: import('./types').Lifecycle }
+  'project.pause': { args: Repo & { reason?: string }; result: import('./types').Lifecycle & { summary: string } }
+  'project.resume': { args: Repo; result: import('./types').Lifecycle & { summary: string } }
+  'project.retire': { args: Repo & { reason?: string }; result: import('./types').Lifecycle & { summary: string } }
+  'project.restore': { args: Repo; result: import('./types').Lifecycle & { summary: string } }
+  'projects.retired': { args: Record<string, never>; result: { projects: import('./types').RetiredProject[] } }
   'journey.get': { args: Repo; result: Journey }
   'journey.criterion.open': { args: Repo & { gate?: string; criterion?: string; waiver?: string }; result: { repo: string; opened: string; at: string; version: number } }
   'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[] }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }

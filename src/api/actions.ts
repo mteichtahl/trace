@@ -171,6 +171,8 @@ import { BUILD_ACTIONS } from './actions-build.js'
 import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
+import { LIFECYCLE_ACTIONS_DEFS, lifecycleGate } from './actions-lifecycle.js'
+import { assertNotHeld } from './held.js'
 import { PROMPT_ACTIONS } from './actions-prompts.js'
 import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
@@ -671,6 +673,8 @@ export const ACTIONS = {
 
   'job.check_now': def('job', JobId.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {
     const jobs = await jobAccess(a.id, ctx)
+    const of = jobs.repositoryOf(a.id)
+    if (of) await assertNotHeld(of)
     return { ok: jobs.checkNow ? await jobs.checkNow(a.id, a.waitId) : false }
   }),
 
@@ -799,6 +803,7 @@ export const ACTIONS = {
   }, mayReadHistory),
 
   ...PROJECT_ACTIONS,
+  ...LIFECYCLE_ACTIONS_DEFS,
   ...JOURNEY_ACTIONS,
   ...CHAT_ACTIONS,
   ...ME_ACTIONS,
@@ -864,6 +869,8 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
       break
     }
   }
+  // a retired project is "no access" to all but admins; a paused or retired one refuses changes and new work
+  await lifecycleGate(name, action.need, args, ctx, repo)
   return { repo, result: await action.run(args, ctx) }
 }
 

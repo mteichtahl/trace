@@ -32,7 +32,7 @@ describe('the three classes', () => {
   })
 
   it('admin: everything everywhere; user: read+write where assigned; guest: read where assigned; else nothing', async () => {
-    await update((db) => { db.exec("CREATE TABLE IF NOT EXISTS projects (repo TEXT PRIMARY KEY, added REAL NOT NULL, path TEXT)"); db.prepare('INSERT OR IGNORE INTO projects VALUES (?,?,?)').run('o/secret', 0, null) })
+    await update((db) => { db.exec("CREATE TABLE IF NOT EXISTS projects (repo TEXT PRIMARY KEY, added REAL NOT NULL, path TEXT)"); db.prepare('INSERT OR IGNORE INTO projects (repo, added, path) VALUES (?,?,?)').run('o/secret', 0, null) })
     await assign(admin, user, 'O/Board')
     await assign(admin, guest, 'o/board')
 

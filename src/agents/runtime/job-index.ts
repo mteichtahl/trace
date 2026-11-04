@@ -44,6 +44,7 @@ import { type SnsApi, type SqsApi, openWaitQueue, staleAfterMs, waitQueueName } 
 import type { Admit, JobEvent, Jobs } from './jobs.js'
 import { type JobInfo, type JobPayload, isDelegated, isHandoff } from './schemas.js'
 import { handoffTitle } from '../../core/handoffs.js'
+import { heldReason } from '../../core/lifecycle.js'
 
 export const STEP_EVERY_MS = 15_000
 /**
@@ -329,6 +330,8 @@ export interface QueueOptions {
   log?: (line: string) => void
   /** how a queued job is told of changes (default: the project's events topic, else a timer) */
   changes?: (jobId: string) => Promise<Changes>
+  /** why the whole project waits (paused or retired, src/core/lifecycle.ts), or null; default heldReason */
+  held?: () => Promise<string | null>
 }
 
 /**
@@ -342,6 +345,16 @@ export function queueAdmit(o: QueueOptions): Admit {
     let changes: Changes | null = null
     try {
       for (;;) {
+        // the project paused or retired: the job stays queued, and looks again when the journey record changes (a
+        // resume is logged there) or the timer goes
+        const projectHeld = await (o.held ?? (() => heldReason(o.store.slug, process.env, log)))()
+        if (projectHeld) {
+          a.queued(projectHeld)
+          changes ??= await (o.changes ?? eventsOrTimer(o.store.slug, log))(job.id)
+          await changes.next(10 * 60_000, a.signal)
+          if (a.signal.aborted) return
+          continue
+        }
         const controls = await readControls(o.controls).catch((e: unknown) => { log(`people's controls could not be read (${errText(e)}): none taken`); return new Map<string, JobControl>() })
         const at = now() / 1000
         const out = await o.store.update((db) => {

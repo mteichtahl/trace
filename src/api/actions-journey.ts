@@ -494,7 +494,10 @@ export const JOURNEY_ACTIONS = {
 
   inbox: def('signed-in', z.object({ kinds: z.array(z.enum(INBOX_KINDS)).optional(), limit: z.number().int().min(1).max(200).default(50) }), async (a, ctx) => {
     if (classOf(ctx.principal) === null) throw new AccessDenied(NO_ACCESS)
-    const projects = await projectsFor(ctx.principal)
+    const all = await projectsFor(ctx.principal)
+    // a paused project asks nothing of anyone until it is resumed: it is listed apart, not as things to do
+    const paused = all.flatMap((p) => (p.paused ? [{ repo: p.repo, by: p.paused.by, at: p.paused.at }] : []))
+    const projects = all.filter((p) => !p.paused)
     const unavailable: { repo: string; reason: string }[] = []
     const per = await mapLimit(projects, INBOX_PARALLEL, async (p): Promise<InboxItem[]> => {
       try {
@@ -518,7 +521,7 @@ export const JOURNEY_ACTIONS = {
     const n = items.length
     return {
       summary: n ? `${n} ${n === 1 ? 'thing needs' : 'things need'} you.` : 'Nothing needs you. trace will tell you when something does.',
-      items, unavailable,
+      items, unavailable, paused,
     }
   }),
 }
