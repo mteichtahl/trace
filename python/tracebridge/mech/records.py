@@ -1,5 +1,5 @@
-"""The case as JSON-LD records (case.jsonld), in the ontology's mechanical module (docs/ontology.md: prefix `tm:`,
-namespace https://trace-eda.com/ns/trace/mech#).
+"""The case as JSON-LD records (case.jsonld), in the ontology's mechanical module (docs/ontology.md: the one namespace
+every module shares, https://trace-eda.com/ns/trace#; `tm:` names the module in the docs and stands for it).
 
 Nodes: the `Enclosure` with its `EnclosurePart`s (partKind base, lid, or case for a handed-in file), its `Material`
 (name and process), one `Fastener` and one `MountingPoint` per screw, an `Opening` per connector cut (face = the
@@ -14,7 +14,7 @@ from typing import Any
 
 from .shell import Case
 
-MECH = "https://trace-eda.com/ns/trace/mech#"
+MECH = "https://trace-eda.com/ns/trace#"
 CONTEXT = {"tm": MECH, "@vocab": MECH}
 # the ontology's closed list of joint kinds, from the shell's own names
 JOINT_KINDS = {"fastened": "fastened", "press_fit": "press-fit"}

@@ -1,0 +1,272 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://trace-eda.com/ns/trace#",
+    "trace": "https://trace-eda.com/ns/trace#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "acknowledgedAt": {
+      "@id": "trace:acknowledgedAt",
+      "@type": "xsd:dateTime"
+    },
+    "acknowledgesWaiver": {
+      "@id": "trace:acknowledgesWaiver",
+      "@type": "@id"
+    },
+    "answeredAt": {
+      "@id": "trace:answeredAt",
+      "@type": "xsd:dateTime"
+    },
+    "answerEvidence": {
+      "@id": "trace:answerEvidence",
+      "@type": "@id"
+    },
+    "answersHandOff": {
+      "@id": "trace:answersHandOff",
+      "@type": "@id"
+    },
+    "askedAt": {
+      "@id": "trace:askedAt",
+      "@type": "xsd:dateTime"
+    },
+    "atGate": {
+      "@id": "trace:atGate",
+      "@type": "@id"
+    },
+    "atStage": {
+      "@id": "trace:atStage",
+      "@type": "@id"
+    },
+    "buildPlan": {
+      "@id": "trace:buildPlan",
+      "@type": "@json"
+    },
+    "cameIn": {
+      "@id": "trace:cameIn",
+      "@type": "@id"
+    },
+    "checkedAt": {
+      "@id": "trace:checkedAt",
+      "@type": "xsd:dateTime"
+    },
+    "checks": {
+      "@id": "trace:checks",
+      "@type": "@id"
+    },
+    "chose": {
+      "@id": "trace:chose",
+      "@type": "@id"
+    },
+    "closedAt": {
+      "@id": "trace:closedAt",
+      "@type": "xsd:dateTime"
+    },
+    "consulted": {
+      "@id": "trace:consulted",
+      "@type": "@id"
+    },
+    "controlsJob": {
+      "@id": "trace:controlsJob",
+      "@type": "@id"
+    },
+    "createdAt": {
+      "@id": "trace:createdAt",
+      "@type": "xsd:dateTime"
+    },
+    "criteriaAsSigned": {
+      "@id": "trace:criteriaAsSigned",
+      "@type": "@json"
+    },
+    "currentRevision": {
+      "@id": "trace:currentRevision",
+      "@type": "@id"
+    },
+    "currentStage": {
+      "@id": "trace:currentStage",
+      "@type": "@id"
+    },
+    "declines": {
+      "@id": "trace:declines",
+      "@type": "@id"
+    },
+    "deliveredAt": {
+      "@id": "trace:deliveredAt",
+      "@type": "xsd:dateTime"
+    },
+    "derivedFromVersion": {
+      "@id": "trace:derivedFromVersion",
+      "@type": "@id"
+    },
+    "detail": {
+      "@id": "trace:detail",
+      "@type": "@json"
+    },
+    "endedAt": {
+      "@id": "trace:endedAt",
+      "@type": "xsd:dateTime"
+    },
+    "expectedShipDate": {
+      "@id": "trace:expectedShipDate",
+      "@type": "xsd:date"
+    },
+    "forCriterion": {
+      "@id": "trace:forCriterion",
+      "@type": "@id"
+    },
+    "forStage": {
+      "@id": "trace:forStage",
+      "@type": "@id"
+    },
+    "fromJob": {
+      "@id": "trace:fromJob",
+      "@type": "@id"
+    },
+    "fromSpecialist": {
+      "@id": "trace:fromSpecialist",
+      "@type": "@id"
+    },
+    "fromTemplate": {
+      "@id": "trace:fromTemplate",
+      "@type": "@id"
+    },
+    "hasEvidence": {
+      "@id": "trace:hasEvidence",
+      "@type": "@id"
+    },
+    "hasOption": {
+      "@id": "trace:hasOption",
+      "@type": "@id"
+    },
+    "hasStage": {
+      "@id": "trace:hasStage",
+      "@type": "@id"
+    },
+    "icon": {
+      "@id": "trace:icon",
+      "@type": "@json"
+    },
+    "inProject": {
+      "@id": "trace:inProject",
+      "@type": "@id"
+    },
+    "inRevision": {
+      "@id": "trace:inRevision",
+      "@type": "@id"
+    },
+    "isInputTo": {
+      "@id": "trace:isInputTo",
+      "@type": "@id"
+    },
+    "isOutputOf": {
+      "@id": "trace:isOutputOf",
+      "@type": "@id"
+    },
+    "lostAt": {
+      "@id": "trace:lostAt",
+      "@type": "xsd:dateTime"
+    },
+    "ofBoardUnit": {
+      "@id": "trace:ofBoardUnit",
+      "@type": "@id"
+    },
+    "ofGate": {
+      "@id": "trace:ofGate",
+      "@type": "@id"
+    },
+    "ofOrder": {
+      "@id": "trace:ofOrder",
+      "@type": "@id"
+    },
+    "ofRevision": {
+      "@id": "trace:ofRevision",
+      "@type": "@id"
+    },
+    "ofStage": {
+      "@id": "trace:ofStage",
+      "@type": "@id"
+    },
+    "opened": {
+      "@id": "trace:opened",
+      "@type": "@id"
+    },
+    "parentJob": {
+      "@id": "trace:parentJob",
+      "@type": "@id"
+    },
+    "pausedAt": {
+      "@id": "trace:pausedAt",
+      "@type": "xsd:dateTime"
+    },
+    "performedBy": {
+      "@id": "trace:performedBy",
+      "@type": "@id"
+    },
+    "placedAt": {
+      "@id": "trace:placedAt",
+      "@type": "xsd:dateTime"
+    },
+    "queuedAt": {
+      "@id": "trace:queuedAt",
+      "@type": "xsd:dateTime"
+    },
+    "receivedAt": {
+      "@id": "trace:receivedAt",
+      "@type": "xsd:dateTime"
+    },
+    "recordedAt": {
+      "@id": "trace:recordedAt",
+      "@type": "xsd:dateTime"
+    },
+    "reopenedAt": {
+      "@id": "trace:reopenedAt",
+      "@type": "xsd:dateTime"
+    },
+    "resolvedAt": {
+      "@id": "trace:resolvedAt",
+      "@type": "xsd:dateTime"
+    },
+    "resumes": {
+      "@id": "trace:resumes",
+      "@type": "@id"
+    },
+    "returnedAt": {
+      "@id": "trace:returnedAt",
+      "@type": "xsd:dateTime"
+    },
+    "shippedAt": {
+      "@id": "trace:shippedAt",
+      "@type": "xsd:dateTime"
+    },
+    "signs": {
+      "@id": "trace:signs",
+      "@type": "@id"
+    },
+    "startedAt": {
+      "@id": "trace:startedAt",
+      "@type": "xsd:dateTime"
+    },
+    "startsJob": {
+      "@id": "trace:startsJob",
+      "@type": "@id"
+    },
+    "supersededAt": {
+      "@id": "trace:supersededAt",
+      "@type": "xsd:dateTime"
+    },
+    "supersedes": {
+      "@id": "trace:supersedes",
+      "@type": "@id"
+    },
+    "toSpecialist": {
+      "@id": "trace:toSpecialist",
+      "@type": "@id"
+    },
+    "updatedAt": {
+      "@id": "trace:updatedAt",
+      "@type": "xsd:dateTime"
+    },
+    "versionOf": {
+      "@id": "trace:versionOf",
+      "@type": "@id"
+    }
+  }
+}

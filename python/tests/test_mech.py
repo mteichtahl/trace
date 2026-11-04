@@ -260,7 +260,7 @@ def test_records_have_expected_nodes(built):
     by_id = {n["@id"]: n for n in rec["@graph"]}
     types = {n["@type"] for n in rec["@graph"]}
     assert {"Enclosure", "EnclosurePart", "Material", "BoardOutline", "Joint", "Fastener", "MountingPoint", "Opening", "FitCheck"} <= types
-    assert rec["@context"]["tm"] == "https://trace-eda.com/ns/trace/mech#"
+    assert rec["@context"]["tm"] == "https://trace-eda.com/ns/trace#"
     by_id = {n["@id"]: n for n in rec["@graph"]}
     assert by_id["case:base"]["partKind"] == "base" and by_id["case:base"]["wallThickness"] == 2.0
     assert by_id["joint:H1"] == {"@id": "joint:H1", "@type": "Joint", "jointKind": "fastened", "joins": [{"@id": "board:hardware/test.kicad_pcb"}, {"@id": "case:base"}], "usesFastener": {"@id": "fastener:H1"}}

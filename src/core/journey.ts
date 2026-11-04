@@ -373,8 +373,90 @@ CREATE TABLE IF NOT EXISTS design_decisions (
 );
 CREATE INDEX IF NOT EXISTS design_decisions_target ON design_decisions(kind, target, at);`, merge: newer('design_decisions', 'id', ['kind', 'target', 'choice', 'detail', 'by', 'by_hash', 'at', 'superseded_at', 'updated']) })
 
+/**
+ * History (docs/ontology.md "Replay"): three append-only tables for what the journey otherwise overwrites in place, a
+ * criterion's status and evidence, a stage's start, finish and reopening, and the journey's own fields. SQLite
+ * triggers write each row inside the very UPDATE it records, so history can never disagree with the record, whichever
+ * of the writes in this file (or a merge) made the change. Rows are never updated or deleted; they merge as a union.
+ *
+ * A row's id is the changed record's key with the field or event and the record's `updated` time, so the same change
+ * arriving twice (made here, and merged in from another copy of the record) is one row (INSERT OR IGNORE).
+ * `reconstructed` marks rows rebuilt from the decisions log and the signatures for a project older than its history
+ * (backfillHistory); the triggers never write one.
+ *
+ * Only UPDATEs are recorded: a journey starting, a release copy (DELETE then INSERT) and later stages turned on insert
+ * rows, and the decisions log already says when those happened.
+ */
+const UPDATED = "printf('%.6f', new.updated)"
+
+ensureProjectSchema({ table: 'criterion_history', sql: `
+CREATE TABLE IF NOT EXISTS criterion_history (
+  id TEXT PRIMARY KEY,            -- <criterion>@<updated>
+  criterion TEXT NOT NULL,
+  gate TEXT NOT NULL,
+  revision TEXT,                  -- the journey's revision when it changed
+  status TEXT NOT NULL,           -- met | not_met (rebuilt rows: also waived, as signed)
+  evidence TEXT,                  -- JSON list, as gate_criteria.evidence
+  source TEXT NOT NULL,           -- person | checker | signature (rebuilt from a signature)
+  by TEXT, by_hash TEXT,
+  at REAL NOT NULL,
+  reconstructed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS criterion_history_at ON criterion_history(criterion, at);
+CREATE TRIGGER IF NOT EXISTS criterion_history_write AFTER UPDATE OF status, evidence ON gate_criteria
+WHEN old.status IS NOT new.status OR old.evidence IS NOT new.evidence
+BEGIN
+  INSERT OR IGNORE INTO criterion_history (id, criterion, gate, revision, status, evidence, source, by, at)
+  VALUES (new.id || '@' || ${UPDATED}, new.id, new.gate, (SELECT revision FROM journey WHERE id = 'current'), new.status, new.evidence,
+          CASE WHEN new.checked_by = 'trace' THEN 'checker' ELSE 'person' END, new.checked_by, new.updated);
+END;` })
+
+const stageEvent = (event: string, when: string, reason = 'NULL', by = 'NULL'): string => `
+  INSERT OR IGNORE INTO stage_history (id, stage, revision, event, reason, by, at)
+  SELECT new.id || '@${event}@' || ${UPDATED}, new.id, new.revision, '${event}', ${reason}, ${by}, new.updated WHERE ${when};`
+
+ensureProjectSchema({ table: 'stage_history', sql: `
+CREATE TABLE IF NOT EXISTS stage_history (
+  id TEXT PRIMARY KEY,            -- <stage>@<event>@<updated>
+  stage TEXT NOT NULL,
+  revision TEXT,
+  event TEXT NOT NULL,            -- started | finished | reopened | unfinished | cleared (a new revision starts over)
+  reason TEXT,
+  by TEXT,
+  at REAL NOT NULL,
+  reconstructed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS stage_history_at ON stage_history(stage, at);
+CREATE TRIGGER IF NOT EXISTS stage_history_write AFTER UPDATE OF started, finished, reopened_at ON stages
+BEGIN${stageEvent('started', 'new.started IS NOT NULL AND old.started IS NOT new.started')}${stageEvent('finished', 'new.finished IS NOT NULL AND old.finished IS NOT new.finished')}${stageEvent('reopened', 'new.reopened_at IS NOT NULL AND old.reopened_at IS NOT new.reopened_at', 'new.reopened_reason', 'new.reopened_by')}${stageEvent('unfinished', 'new.finished IS NULL AND old.finished IS NOT NULL')}${stageEvent('cleared', 'new.started IS NULL AND old.started IS NOT NULL')}
+END;` })
+
+/** The journey's fields history follows, and whether `journey.by` names who changed them (only the project's about). */
+const JOURNEY_FIELDS: readonly (readonly [string, boolean])[] = [
+  ['template', false], ['revision', false], ['current_stage', false], ['later', true], ['start', false],
+  ['name', true], ['description', true], ['icon', true], ['build', true],
+]
+
+ensureProjectSchema({ table: 'journey_history', sql: `
+CREATE TABLE IF NOT EXISTS journey_history (
+  id TEXT PRIMARY KEY,            -- <field>@<updated>
+  field TEXT NOT NULL,
+  old TEXT, new TEXT,
+  by TEXT,
+  at REAL NOT NULL,
+  reconstructed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS journey_history_at ON journey_history(field, at);
+CREATE TRIGGER IF NOT EXISTS journey_history_write AFTER UPDATE ON journey
+BEGIN${JOURNEY_FIELDS.map(([f, by]) => `
+  INSERT OR IGNORE INTO journey_history (id, field, old, new, by, at)
+  SELECT '${f}@' || ${UPDATED}, '${f}', old.${f}, new.${f}, ${by ? 'new.by' : 'NULL'}, new.updated WHERE old.${f} IS NOT new.${f};`).join('')}
+END;` })
+
+export const HISTORY_TABLES = ['criterion_history', 'stage_history', 'journey_history'] as const
+
 /** The journey's tables, in the order they are created and copied. */
-export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'handoff_declines', 'design_decisions', ...BUILD_TABLES] as const
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'handoff_declines', 'design_decisions', ...BUILD_TABLES, ...HISTORY_TABLES] as const
 
 /**
  * Tables only the journey store keeps: each person's unsubmitted guided-skill drafts. They are never copied into the
@@ -395,6 +477,44 @@ CREATE TABLE IF NOT EXISTS skill_drafts (
 export function applyJourneySchema(db: DatabaseSync, o: { store?: boolean } = {}): void {
   for (const t of projectTables()) if ((JOURNEY_TABLES as readonly string[]).includes(t.table)) db.exec(t.sql)
   if (o.store) db.exec(STORE_ONLY_SQL)
+  backfillHistory(db)
+}
+
+/**
+ * The start of history for a project older than its history tables, rebuilt and marked `reconstructed`: stage events
+ * from the decisions log (journey.started, stage.reopened, revision.started) and each criterion's status as every
+ * signature recorded it. Only what happened before the first row the triggers wrote is rebuilt, so the two never
+ * overlap; ids are derived from the source rows, so running it again adds nothing.
+ */
+export function backfillHistory(db: DatabaseSync): void {
+  const has = (t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
+  if (!has('decisions') || !has('stage_history') || !has('criterion_history') || !has('gate_signatures')) return
+  const before = (t: string): number => {
+    const first = (db.prepare(`SELECT MIN(at) AS at FROM ${t} WHERE reconstructed = 0`).get() as { at: number | null } | undefined)?.at
+    return first ?? Number.POSITIVE_INFINITY
+  }
+  const stageCut = before('stage_history')
+  const events: Readonly<Record<string, string>> = { 'journey.started': 'started', 'stage.reopened': 'reopened', 'revision.started': 'reopened' }
+  const ds = db.prepare("SELECT id, at, kind, stage, summary, by, detail FROM decisions WHERE kind IN ('journey.started', 'stage.reopened', 'revision.started') AND stage IS NOT NULL").all() as {
+    id: string; at: number; kind: string; stage: string; summary: string; by: string | null; detail: string | null
+  }[]
+  const addStage = db.prepare('INSERT OR IGNORE INTO stage_history (id, stage, revision, event, reason, by, at, reconstructed) VALUES (?,?,?,?,?,?,?,1)')
+  for (const d of ds) {
+    if (!(d.at < stageCut)) continue
+    const rev = json<{ revision?: unknown }>(d.detail, {}).revision
+    addStage.run(`${d.id}@${d.stage}`, d.stage, typeof rev === 'string' ? rev : null, events[d.kind] as string, d.kind === 'journey.started' ? null : d.summary, d.by, d.at)
+  }
+  const critCut = before('criterion_history')
+  const gates = new Map((has('gate_criteria') ? db.prepare('SELECT id, gate FROM gate_criteria').all() as { id: string; gate: string }[] : []).map((c) => [c.id, c.gate]))
+  const addCrit = db.prepare("INSERT OR IGNORE INTO criterion_history (id, criterion, gate, revision, status, evidence, source, by, by_hash, at, reconstructed) VALUES (?,?,?,?,?,?,'signature',?,?,?,1)")
+  const sigs = db.prepare('SELECT id, gate, revision, by, by_hash, at, criteria FROM gate_signatures').all() as { id: string; gate: string; revision: string; by: string; by_hash: string; at: number; criteria: string }[]
+  for (const s of sigs) {
+    if (!(s.at < critCut)) continue
+    for (const c of json<{ id?: unknown; status?: unknown; evidence?: unknown }[]>(s.criteria, [])) {
+      if (typeof c?.id !== 'string' || typeof c.status !== 'string') continue
+      addCrit.run(`${s.id}@${c.id}`, c.id, gates.get(c.id) ?? s.gate, s.revision, c.status, JSON.stringify(c.evidence ?? []), s.by, s.by_hash, s.at)
+    }
+  }
 }
 
 const tableIn = (db: DatabaseSync, schema: string, t: string): boolean =>
@@ -1406,23 +1526,24 @@ export function updateAbout(db: DatabaseSync, patch: AboutPatch, by: string): Jo
   const j = r.journey
   const t = now()
   const changes: string[] = []
+  // each field's write names when and who, so its history row (journey_history) does
   transaction(db, () => {
     if (p.name !== undefined && p.name !== j.name) {
-      db.prepare("UPDATE journey SET name=? WHERE id='current'").run(p.name)
+      db.prepare("UPDATE journey SET name=?, updated=?, by=? WHERE id='current'").run(p.name, t, by)
       changes.push(`renamed the project to ${p.name}`)
     }
     if (p.description !== undefined && p.description !== (j.description ?? '')) {
-      db.prepare("UPDATE journey SET description=? WHERE id='current'").run(p.description || null)
+      db.prepare("UPDATE journey SET description=?, updated=?, by=? WHERE id='current'").run(p.description || null, t, by)
       changes.push('changed its description')
     }
     if (p.icon !== undefined && p.icon !== j.icon) {
-      db.prepare("UPDATE journey SET icon=? WHERE id='current'").run(p.icon || null)
+      db.prepare("UPDATE journey SET icon=?, updated=?, by=? WHERE id='current'").run(p.icon || null, t, by)
       changes.push('changed its icon')
     }
     if (p.build) {
       const next = BuildSchema.parse({ ...j.build, ...p.build })
       if (JSON.stringify(next) !== JSON.stringify(j.build)) {
-        db.prepare("UPDATE journey SET build=? WHERE id='current'").run(JSON.stringify(next))
+        db.prepare("UPDATE journey SET build=?, updated=?, by=? WHERE id='current'").run(JSON.stringify(next), t, by)
         changes.push('changed the build plan')
       }
     }
@@ -1451,7 +1572,7 @@ export function updateAbout(db: DatabaseSync, patch: AboutPatch, by: string): Jo
         }
       }
       if (added.length || removed.length) {
-        db.prepare("UPDATE journey SET later=? WHERE id='current'").run(JSON.stringify(want))
+        db.prepare("UPDATE journey SET later=?, updated=?, by=? WHERE id='current'").run(JSON.stringify(want), t, by)
         if (added.length) changes.push(`turned on ${added.map((s) => STAGE_NAMES[s]).join(' and ')}`)
         if (removed.length) changes.push(`turned off ${removed.map((s) => STAGE_NAMES[s]).join(' and ')}`)
       }

@@ -1,0 +1,223 @@
+# trace's ontology: the core module (docs/ontology.md). The shared base every other module builds on: the design
+# artifact and its versions, the input/output pattern Si2's agent-workflow ontology also uses, and the plain properties
+# many records share (when, who, why). One namespace for every module; the module a term is defined in is the file it
+# is in. Labels are plain words: acronyms only as skos:altLabel (test/ontology/vocabulary.test.ts checks it).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+
+<https://trace-eda.com/ns/trace/core> a owl:Ontology ;
+    rdfs:label "trace core" ;
+    rdfs:comment "The design artifact, its versions and the input and output links between them, shared by every trace module." ;
+    owl:versionInfo "0.1.0" .
+
+# ------------------------------------------------------------------ annotations
+
+trace:derived a owl:AnnotationProperty ;
+    rdfs:label "derived" ;
+    rdfs:comment "Marks a term no table stores: trace computes it when it is read (freshness, for one)." .
+
+trace:keptIn a owl:AnnotationProperty ;
+    rdfs:label "kept in" ;
+    rdfs:comment "Where the instances of a class come from when no mapped table stores them." .
+
+# ------------------------------------------------------------------ classes
+
+trace:Project a owl:Class ;
+    rdfs:label "Project" ;
+    rdfs:comment "One repository trace works on, with its journey, its design and its records." .
+
+trace:DesignArtifact a owl:Class ;
+    rdfs:label "Design artifact" ;
+    rdfs:comment "Anything trace makes or keeps about a design: a file, a model, a report or a record." ;
+    trace:keptIn "the run record's runs and artifacts and the repository's files, mapped with lineage" .
+
+trace:FileArtifact a owl:Class ;
+    rdfs:subClassOf trace:DesignArtifact ;
+    rdfs:label "File" ;
+    rdfs:comment "A design artifact stored as a file, with its path, format and content hash." ;
+    trace:keptIn "the run record's runs and artifacts and the repository's files, mapped with lineage" .
+
+trace:ArtifactVersion a owl:Class ;
+    rdfs:label "Artifact version" ;
+    rdfs:comment "One version of a design artifact that never changes once made: what it was made from, by whom and when." ;
+    trace:keptIn "the run record's runs and artifacts and the repository's files, mapped with lineage" .
+
+trace:Evidence a owl:Class ;
+    rdfs:label "Evidence" ;
+    rdfs:comment "Something a check, a signature or an answer points at to show why: a run, a report, a file or a record." .
+
+# ------------------------------------------------------------------ input and output (Si2's pattern)
+
+trace:isInputTo a owl:ObjectProperty ;
+    rdfs:label "is input to" ;
+    rdfs:comment "This version was read by that action." ;
+    rdfs:domain trace:ArtifactVersion .
+
+trace:isOutputOf a owl:ObjectProperty ;
+    rdfs:label "is output of" ;
+    rdfs:comment "This version was made by that action, or by a person's edit." ;
+    rdfs:domain trace:ArtifactVersion .
+
+trace:derivedFromVersion a owl:ObjectProperty ;
+    rdfs:label "made from" ;
+    rdfs:comment "Each input version this version was made from: the shortcut over is input to and is output of." ;
+    rdfs:domain trace:ArtifactVersion ;
+    rdfs:range trace:ArtifactVersion .
+
+trace:supersedes a owl:ObjectProperty ;
+    rdfs:label "replaces" ;
+    rdfs:comment "The previous version of the same artifact." ;
+    rdfs:domain trace:ArtifactVersion ;
+    rdfs:range trace:ArtifactVersion .
+
+trace:versionOf a owl:ObjectProperty ;
+    rdfs:label "version of" ;
+    rdfs:comment "The artifact this is a version of." ;
+    rdfs:domain trace:ArtifactVersion ;
+    rdfs:range trace:DesignArtifact .
+
+trace:freshness a owl:DatatypeProperty ;
+    rdfs:label "freshness" ;
+    rdfs:comment "Current, stale or unknown: worked out when it is read from what the version was made from, never typed in." ;
+    trace:derived true ;
+    rdfs:domain trace:ArtifactVersion ;
+    rdfs:range xsd:string .
+
+trace:inProject a owl:ObjectProperty ;
+    rdfs:label "in project" ;
+    rdfs:comment "The project a record belongs to." ;
+    rdfs:range trace:Project .
+
+# ------------------------------------------------------------------ files and versions
+
+trace:path a owl:DatatypeProperty ;
+    rdfs:label "path" ;
+    rdfs:comment "Where a file is, relative to the project's repository." ;
+    rdfs:range xsd:string .
+
+trace:format a owl:DatatypeProperty ;
+    rdfs:label "format" ;
+    rdfs:comment "The kind of file, such as a schematic or a board file." ;
+    rdfs:range xsd:string .
+
+trace:sha256 a owl:DatatypeProperty ;
+    rdfs:label "content hash" ;
+    rdfs:comment "A hash of the content, over a normalised form where the kind of artifact needs one, so the same content always has the same hash." ;
+    skos:altLabel "SHA-256" ;
+    rdfs:range xsd:string .
+
+trace:gitCommit a owl:DatatypeProperty ;
+    rdfs:label "commit" ;
+    rdfs:comment "The repository commit something was made at." ;
+    rdfs:range xsd:string .
+
+trace:versionNumber a owl:DatatypeProperty ;
+    rdfs:label "version number" ;
+    rdfs:comment "The place of a version among the versions of its artifact." ;
+    rdfs:range xsd:integer .
+
+# ------------------------------------------------------------------ evidence
+
+trace:hasEvidence a owl:ObjectProperty ;
+    rdfs:label "has evidence" ;
+    rdfs:comment "What a check, a criterion or an answer points at to show why." ;
+    rdfs:range trace:Evidence .
+
+trace:evidenceKind a owl:DatatypeProperty ;
+    rdfs:label "evidence kind" ;
+    rdfs:comment "What the evidence is: a run, an artifact, a file, a record or a report." ;
+    rdfs:domain trace:Evidence ;
+    rdfs:range xsd:string .
+
+trace:evidenceRef a owl:DatatypeProperty ;
+    rdfs:label "points at" ;
+    rdfs:comment "The run, file or record the evidence names, by its identifier or path." ;
+    rdfs:domain trace:Evidence ;
+    rdfs:range xsd:string .
+
+# ------------------------------------------------------------------ shared plain properties
+
+trace:name a owl:DatatypeProperty ;
+    rdfs:label "name" ;
+    rdfs:comment "What people call it." ;
+    rdfs:range xsd:string .
+
+trace:label a owl:DatatypeProperty ;
+    rdfs:label "label" ;
+    rdfs:comment "Words shown for it on a screen." ;
+    rdfs:range xsd:string .
+
+trace:text a owl:DatatypeProperty ;
+    rdfs:label "text" ;
+    rdfs:comment "Its words, as written." ;
+    rdfs:range xsd:string .
+
+trace:description a owl:DatatypeProperty ;
+    rdfs:label "description" ;
+    rdfs:comment "A longer account in plain words." ;
+    rdfs:range xsd:string .
+
+trace:summary a owl:DatatypeProperty ;
+    rdfs:label "summary" ;
+    rdfs:comment "One sentence that says what happened or what it is." ;
+    rdfs:range xsd:string .
+
+trace:note a owl:DatatypeProperty ;
+    rdfs:label "note" ;
+    rdfs:comment "A remark someone added." ;
+    rdfs:range xsd:string .
+
+trace:reason a owl:DatatypeProperty ;
+    rdfs:label "reason" ;
+    rdfs:comment "Why it was done, in the words of whoever did it." ;
+    rdfs:range xsd:string .
+
+trace:status a owl:DatatypeProperty ;
+    rdfs:label "status" ;
+    rdfs:comment "Where it stands, in the word the record uses (met, not met, running, passed, …)." ;
+    rdfs:range xsd:string .
+
+trace:order a owl:DatatypeProperty ;
+    rdfs:label "order" ;
+    rdfs:comment "Its place among its siblings." ;
+    rdfs:range xsd:decimal .
+
+trace:detail a owl:DatatypeProperty ;
+    rdfs:label "detail" ;
+    rdfs:comment "Further facts kept with it, as the record holds them." ;
+    rdfs:range rdf:JSON .
+
+trace:recordedAt a owl:DatatypeProperty ;
+    rdfs:label "recorded at" ;
+    rdfs:comment "When it was recorded." ;
+    rdfs:range xsd:dateTime .
+
+trace:recordedBy a owl:DatatypeProperty ;
+    rdfs:label "recorded by" ;
+    rdfs:comment "Who recorded it: a person's email, or the specialist's kind." ;
+    rdfs:range xsd:string .
+
+trace:recordedByHash a owl:DatatypeProperty ;
+    rdfs:label "recorded by (person key)" ;
+    rdfs:comment "The short hash trace keeps for the person who recorded it, which never changes when their email does." ;
+    rdfs:range xsd:string .
+
+trace:createdAt a owl:DatatypeProperty ;
+    rdfs:label "created at" ;
+    rdfs:comment "When it was made." ;
+    rdfs:range xsd:dateTime .
+
+trace:updatedAt a owl:DatatypeProperty ;
+    rdfs:label "updated at" ;
+    rdfs:comment "When the record was last changed." ;
+    rdfs:range xsd:dateTime .
+
+trace:updatedBy a owl:DatatypeProperty ;
+    rdfs:label "updated by" ;
+    rdfs:comment "Who last changed the record." ;
+    rdfs:range xsd:string .
