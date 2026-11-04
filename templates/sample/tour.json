@@ -440,5 +440,20 @@
     ],
     "remote": null,
     "body": "Layout stage, enclosure. A printed two-part case for `hardware/trace-sample.kicad_pcb`, built by the enclosure engine (build123d, a cad job on the tools function).\n\n- mech.capabilities, then mech.capabilities_check: say whether any stored JLC3DP figure has changed.\n- mech.board: the outline, holes and part heights; name any height that is assumed.\n- mech.options: the case designs that could work for the board and why the rest were dropped; with ask: true, put them to a person. mech.init with the design and process the answer names (the recommended printed shell in MJF PA12-HP if no one answers), then mech.build. Read every clash and gap by part.\n- mech.settings: give J1 a 2 mm clearance with the reason \"mating face of the plug\", then mech.build again and mech.fit (it must say current, not stale).\n- mech.hand_in `mechanical/case.py` (the script as it stands) to show a handed-in script rebuilds the same case.\n- Ask the worker to add one line to `mechanical/case.py` (case.notes.append(\"tour\") before return), then mech.build: a changed case script runs as a cad-script job on the project's cad function, and the answer's stages show both jobs.\n- When a build passes: shape.check layout.fit records the fit criterion, then mech.order quantity 5. If it does not pass, list each clash with its part, volume and the change that would clear it, and ask the worker to commit `mechanical/` as it stands.\n\nDone when: the case builds, its fit is passed and recorded or each clash is explained, and the order sheet is written when it passes. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "release-documents",
+    "title": "Tour 22: check and print the project's documents",
+    "agent": "worker",
+    "labels": [
+      "agent-fix",
+      "agent:render"
+    ],
+    "exercises": [
+      "docs.check",
+      "docs.publish"
+    ],
+    "remote": null,
+    "body": "Release stage, documents. `docs/design/high-level-design.md` is the start of the board's high level design: its overview, context and data flow are written, the rest is pending.\n\n- docs.check at stage architect: list each error by section. Expect only pending sections; anything else is a finding.\n- docs.publish: print it to PDF (pandoc, Mermaid and Typst, a docs job on the tools function). It has two Mermaid diagrams and no logo yet, so the cover carries the project icon.\n- Read the run (trace.run): the PDF is its artifact; say its size and how many diagrams it drew.\n\nDone when: the check's findings are listed and the PDF is stored with its run id. Comment the numbers on this issue, then close it."
   }
 ]
