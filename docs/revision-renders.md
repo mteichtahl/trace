@@ -29,9 +29,10 @@ revision, like the journey record that is copied into the repository with it.
 | `exploded` | Base, board and lid pulled apart along their assembly axis, fasteners between them | Three-quarter view, framed on the whole stack |
 
 **Exploded view.** The board and the case are placed in the case frame from [enclosure-build.md](enclosure-build.md):
-y flipped from KiCad, and the board's bottom face at z = 0. The base stays at 0. The board is lifted by 60% of the
-case's inside height, and the lid by 140% of it. Fasteners sit halfway between the parts they join. Thin dashed lines
-along the assembly axis are an option, off by default.
+y flipped from KiCad, and the board's bottom face at z = 0. The board model is placed by its own outline, so where
+kicad-cli puts its origin does not matter. The base stays put; the board is lifted until its lowest point clears the
+base's top by half the case's height, and the lid until it clears the board's tallest part by the same gap. Fasteners
+are not drawn yet.
 
 ## Look
 
@@ -91,7 +92,8 @@ test-esp32_rev-B_2026-11-04_exploded.png
    statistics, so a blank image fails the run as the other render tools do.
 2. **`render.showcase` tool** (`src/tools/render/`).
    - It takes a project, a revision and a date, and optional shots, size and samples.
-   - It exports the board with `exportBoard`, and tessellates the case's STEP files through `stepToMesh`.
+   - It exports the board with `exportBoard` (GLB), and reads the case as mech.build's `mechanical/out/case-base.stl` and
+     `case-lid.stl`, which are already in the case frame.
    - It names the files as above and stores them as one run.
 3. **`brand.palette` tool and the logo upload.**
    - The tool works out the palette from the logo on the tools function, using Pillow.

@@ -15,6 +15,7 @@ import { tools as parts } from './parts/tools.js'
 import { tools as pcb } from './pcb/tools.js'
 import { tools as protocol } from './protocol/tools.js'
 import { tools as render } from './render/tools.js'
+import { showcase } from './render/showcase.js'
 import { tools as runs } from './runs/tools.js'
 import { tools as sim } from './sim/tools.js'
 import { tools as ams } from './ams/tools.js'
@@ -29,6 +30,6 @@ import { tools as voice } from './voice/tools.js'
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...design, ...fpga, ...layout, ...mech, ...thermal, ...kb, ...voice, ...journey, ...shape, ...agent])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, showcase, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...design, ...fpga, ...layout, ...mech, ...thermal, ...kb, ...voice, ...journey, ...shape, ...agent])
   return registry
 }
