@@ -106,10 +106,57 @@ function sse(events: unknown[]): Response {
   return new Response(stream, { headers: { 'content-type': 'text/event-stream' } })
 }
 
+/** What mock mode answers when asked to show, draw, plot or diagram something: one of each picture the chat draws. */
+export const PICTURES_REPLY = [
+  'Here is the soil sensor at a glance: how power and data flow, the I2C timing, and the 3.3 V rail at power-on.',
+  '',
+  '```mermaid',
+  '%% title: Power and data path',
+  'flowchart LR',
+  '  USB["USB-C 5 V"] --> LDO["3.3 V regulator"]',
+  '  LDO --> MCU["ESP32-C3"]',
+  '  LDO --> OLED["OLED display"]',
+  '  MCU -- "I2C" --> OLED',
+  '  MCU -- "ADC" --> PROBE["Soil probe"]',
+  '```',
+  '',
+  '```wavedrom',
+  '{ signal: [',
+  '  { name: "SCL", wave: "1.0101010101010101.1" },',
+  '  { name: "SDA", wave: "1.0.3.......4.....01", data: ["address 0x3C, write", "data"] },',
+  '], head: { text: "I2C write to the display" } }',
+  '```',
+  '',
+  '```plot',
+  '{ title: "3.3 V rail at power-on", kind: "line",',
+  '  x: { label: "Time", unit: "s" }, y: { label: "Voltage", unit: "V" },',
+  '  series: [{ name: "3V3", points: [[0,0],[0.0005,1.1],[0.001,2.4],[0.0015,3.1],[0.002,3.28],[0.003,3.3],[0.005,3.3]] }],',
+  '  limit: { value: 2.97, label: "min 2.97 V", kind: "min" }, verdict: "Settles in 3.1 ms, inside the 5 ms needed.", ok: true }',
+  '```',
+  '',
+  '```plot',
+  '{ title: "Cost per board at 10 boards", x: { label: "Item" }, y: { label: "Cost", unit: "US$" },',
+  '  series: [{ name: "Cost", points: [["PCB", 2.1], ["Parts", 6.8], ["Assembly", 3.4], ["Case", 4.2]] }] }',
+  '```',
+  '',
+  '```svg',
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 90"><title>Display connector pinout</title>',
+  '<rect x="20" y="20" width="200" height="40" rx="4" fill="#f4f4f5" stroke="#52525b"/>',
+  '<g font-family="sans-serif" font-size="11" text-anchor="middle" fill="#18181b">',
+  '<circle cx="50" cy="40" r="7" fill="#a1a1aa"/><text x="50" y="78">GND</text>',
+  '<circle cx="97" cy="40" r="7" fill="#ef4444"/><text x="97" y="78">3V3</text>',
+  '<circle cx="144" cy="40" r="7" fill="#3b82f6"/><text x="144" y="78">SCL</text>',
+  '<circle cx="191" cy="40" r="7" fill="#22c55e"/><text x="191" y="78">SDA</text>',
+  '</g></svg>',
+  '```',
+  '',
+  'Tap any picture to open it full screen.',
+].join('\n')
+
 function agui(body: { threadId: string; runId: string; messages: { role: string; content?: unknown }[] }): Response {
   const last = [...body.messages].reverse().find((m) => m.role === 'user')
   const q = typeof last?.content === 'string' ? last.content : ''
-  const reply = `**Here is what I found** about “${q.slice(0, 60)}”.\n\nThis is mock mode: no agent ran. In a real installation trace answers from the project record, with cards for runs, plots and parts.\n\n- One\n- Two`
+  const reply = /\b(show|draw|diagram|plot|chart|picture|timing)\b/i.test(q) ? PICTURES_REPLY : `**Here is what I found** about “${q.slice(0, 60)}”.\n\nThis is mock mode: no agent ran. In a real installation trace answers from the project record, with cards for runs, plots and parts.\n\n- One\n- Two`
   const id = crypto.randomUUID()
   const words = reply.split(/(?<=\s)/)
   // a question about a simulation runs a tool for a while, with its run named (docs/progress-and-logs.md, "Chat")

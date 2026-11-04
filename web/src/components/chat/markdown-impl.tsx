@@ -4,7 +4,10 @@
  * - GitHub-flavoured markdown: tables scroll sideways in their own frame; task lists; images.
  * - Formulas with KaTeX, only between double dollars ($$…$$, inline or on their own lines). A single $ is always
  *   literal text, so currency ("US$5 … US$50") never becomes a formula.
- * - Code blocks with Shiki, a language label and Copy; ```mermaid as a picture with Show source.
+ * - Code blocks with Shiki, a language label and Copy.
+ * - Pictures (diagram-frame.tsx: Full screen with pan and zoom, Download, Source): ```mermaid diagrams, ```wavedrom
+ *   timing diagrams (also wavejson, timing), ```plot charts (also chart), ```svg drawings, and images that open full
+ *   screen when tapped. Which fence draws what is DIAGRAM_LANGS.
  * - Links into the record (/p/…, or trace:<kind>/<id>) become chips that open in place; links out of trace show
  *   their domain.
  * - Raw HTML is never rendered: it is shown as the text it is.
@@ -21,6 +24,15 @@ import remarkMath from 'remark-math'
 import { CodeBlock } from './code-block'
 import { Mermaid } from './mermaid'
 import { closeStreaming } from './streaming'
+import { TimingDiagram } from './timing'
+import { ChatImage, PlotBlock, SvgBlock } from './visuals'
+
+/** The fenced-block languages drawn as pictures rather than shown as code (see chat.visuals in the prompt catalog). */
+export const DIAGRAM_LANGS = {
+  mermaid: 'mermaid', wavedrom: 'timing', wavejson: 'timing', timing: 'timing', plot: 'plot', chart: 'plot', svg: 'svg',
+} as const
+type DiagramLang = keyof typeof DIAGRAM_LANGS
+const isDiagram = (l?: string): l is DiagramLang => !!l && l.toLowerCase() in DIAGRAM_LANGS
 
 /** Maths only between $$…$$: a single $ is a currency sign far more often than a formula. */
 export const remarkMathOptions = { singleDollarTextMath: false } as const
@@ -88,7 +100,13 @@ function components(streaming: boolean): Components {
       const code = textOf(children).replace(/\n$/, '')
       const block = !!lang || code.includes('\n')
       if (!block) return <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">{children}</code>
-      if (lang === 'mermaid') return <Mermaid source={code} streaming={streaming} />
+      if (isDiagram(lang)) {
+        const what = DIAGRAM_LANGS[lang.toLowerCase() as DiagramLang]
+        if (what === 'mermaid') return <Mermaid source={code} streaming={streaming} />
+        if (what === 'timing') return <TimingDiagram source={code} streaming={streaming} />
+        if (what === 'plot') return <PlotBlock source={code} streaming={streaming} />
+        return <SvgBlock source={code} streaming={streaming} />
+      }
       return <CodeBlock code={code} lang={lang} />
     },
     table({ children }) {
@@ -99,7 +117,7 @@ function components(streaming: boolean): Components {
       )
     },
     img({ src, alt }) {
-      return <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} loading="lazy" className="my-2 max-h-80 rounded-md border" />
+      return <ChatImage src={typeof src === 'string' ? src : undefined} alt={alt} />
     },
     blockquote({ children }) {
       return <blockquote className="my-2 border-l-2 pl-3 text-muted-foreground">{children}</blockquote>
@@ -107,11 +125,16 @@ function components(streaming: boolean): Components {
   }
 }
 
+// built once each: react-markdown uses these as component types, so new functions every render would remount (and
+// redraw) every picture in the message on each update
+const LIVE = components(true)
+const DONE = components(false)
+
 export default function MarkdownImpl({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const source = streaming ? closeStreaming(text) : text
   return (
     <div className="prose-trace text-sm leading-relaxed [&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_p:first-child]:mt-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-1 [&_.katex-display]:overflow-x-auto">
-      <ReactMarkdown remarkPlugins={[remarkGfm, [remarkMath, remarkMathOptions], remarkHtmlAsText]} rehypePlugins={[rehypeKatex]} components={components(streaming)} skipHtml={false}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, [remarkMath, remarkMathOptions], remarkHtmlAsText]} rehypePlugins={[rehypeKatex]} components={streaming ? LIVE : DONE} skipHtml={false}>
         {source}
       </ReactMarkdown>
     </div>
