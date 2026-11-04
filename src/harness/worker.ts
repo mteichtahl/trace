@@ -43,6 +43,9 @@ export const WorkItemSchema = z.object({
   ref: z.string(),
   own: z.boolean(),
   title: z.string(),
+  /** A pull request's base, when it is not the default branch: a stacked change (docs/stacked-changes.md), which is
+   * brought up to date from its base, not from the default branch. */
+  base: z.string().max(200).regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, 'not a valid branch name').optional(),
   /** The specialist it goes to and why (worker-pick routes it; the runtime routes an item without one). */
   route: RouteSchema.optional(),
 }).strict()
@@ -188,7 +191,9 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
     }
     known.set(p.number, { labels: labelNames(p.labels), body: p.body })
     await askAgain(p.number, p.head.sha)
-    await consider({ kind, number: p.number, sha: p.head.sha, ref: p.head.ref, own, title: p.title.slice(0, 200) })
+    await consider({ kind, number: p.number, sha: p.head.sha, ref: p.head.ref, own, title: p.title.slice(0, 200),
+      // a base that is not a plain branch name (it goes into a git command) leaves the item on the default branch
+      ...(p.base?.ref && p.base.ref !== cfg.branch && /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(p.base.ref) ? { base: p.base.ref } : {}) })
   }
   const issues = (await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'open', labels: cfg.labels.agent_fix, per_page: 100 }))
     .filter((i) => !i.pull_request)
@@ -252,7 +257,7 @@ export function composeItem(item: WorkItem, cfg: TraceConfig, repository: string
   if (!item.own) p.add('worker.item.not-own')
   p.add('worker.tools').add('design.silkscreen')
   p.add(`worker.item.${item.kind}`, {
-    repository, number: item.number, sha: item.sha, default_branch: cfg.branch, branch_prefix: cfg.worker.own_branch_prefix, ci_red_label: cfg.labels.ci_red,
+    repository, number: item.number, sha: item.sha, default_branch: cfg.branch, base: item.base ?? cfg.branch, branch_prefix: cfg.worker.own_branch_prefix, ci_red_label: cfg.labels.ci_red,
   })
   addValidate(p, cfg)
   const esc = cfg.worker.escalate_to

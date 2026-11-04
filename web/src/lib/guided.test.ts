@@ -189,6 +189,8 @@ describe('changes in words, and what the decision bar may do', () => {
     expect(checksWords({ ...c, total: 0, passed: 0, running: 0 })).toBe('No checks yet')
     expect(changeLine({ verdict: 'blocked', checks: null, checks_denied: true } as never)).toMatch(/Actions: read/)
     expect(changeLine({ verdict: 'conflict', checks: null } as never)).toMatch(/trace will bring it up to date/)
+    // a stacked change waits for the one below it, named
+    expect(changeLine({ verdict: 'blocked', state: 'open', checks: null, builds_on: { number: 4, title: 'Pin plan' } } as never)).toBe('Builds on "Pin plan". Accept that one first; this one follows it.')
   })
 
   it('decisionMode: reviewers read only; a closed change is closed; may_accept decides the rest', () => {
@@ -205,5 +207,14 @@ describe('"pull request" becomes "change" where people read', () => {
       .toBe('Soil: The Schematic agent finished "Power sheet" (a draft). Review it and accept it into the design.')
     expect(changeWords('Two pull requests wait')).toBe('Two changes wait')
     expect(changeWords('Nothing to rename')).toBe('Nothing to rename')
+  })
+})
+
+describe('stacked changes in the change readers', () => {
+  it('keeps what a change builds on and what builds on it, and drops what is not a change link', () => {
+    const c = readChange({ number: 15, title: 'Test points', builds_on: { number: 12, title: 'Power sheet' }, built_on_by: [{ number: 16, title: 'Silkscreen' }, { number: 'x' }, null] })
+    expect(c.builds_on).toEqual({ number: 12, title: 'Power sheet' })
+    expect(c.built_on_by).toEqual([{ number: 16, title: 'Silkscreen' }])
+    expect(readChange({ number: 3, builds_on: { title: 'no number' } })).not.toHaveProperty('builds_on')
   })
 })

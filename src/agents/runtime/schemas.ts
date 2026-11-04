@@ -107,6 +107,9 @@ export const TaskPayload = z.object({
   /** The person's Cognito sub (immutable): their person memory is keyed on it; requestedBy (an email) is for reading. */
   requestedBySub: z.string().min(1).max(200).optional(),
   branch: BranchSchema.optional(),
+  /** The open change a new branch starts from (a stacked change, docs/stacked-changes.md); the default branch when
+   * that branch is not on GitHub. */
+  stackOn: BranchSchema.optional(),
   /** An issue or PR to report back on, when the request came from one. */
   issue: z.number().int().positive().optional(),
   /** Which specialist does it; routed when absent. */
@@ -157,6 +160,8 @@ export const HandoffSchema = z.object({
   recommendation: z.string().max(2000).nullable(),
   acceptance: z.array(z.string().min(1).max(1000)).min(1).max(10),
   depth: z.literal(1),
+  /** The asking job's branch: the answer's branch starts from it when it is on GitHub (docs/stacked-changes.md). */
+  base: BranchSchema.optional(),
 }).strict()
 export type Handoff = z.infer<typeof HandoffSchema>
 

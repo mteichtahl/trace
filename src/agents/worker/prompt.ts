@@ -30,13 +30,18 @@ export function taskBranch(job: Pick<TaskJob, 'request' | 'branch'>, cfg: TraceC
 const quoted = (text: string): string => text.split('\n').map((l) => `> ${l}`).join('\n')
 
 /** The worker's task prompt, from the prompt catalog (src/prompts/catalog.ts) with the job's overrides. */
-export function composeTask(job: TaskLike, cfg: TraceConfig, branch: string, layers: Layers = NO_LAYERS): Composed {
+export function composeTask(job: TaskLike, cfg: TraceConfig, branch: string, layers: Layers = NO_LAYERS,
+  /** where a new branch started, when not the default branch: a stacked change (docs/stacked-changes.md) */
+  stackedOn?: { ref: string; name: string }): Composed {
   const p = new Composer(layers)
   const from = JSON.stringify(job.requestedBy)
   p.add('worker.role', { repository: job.repository, where: WHERE }).add('worker.data.task')
   p.add('worker.request', { from, request: quoted(job.request) })
   p.add('worker.tools').add('worker.knowledge')
-  p.add('worker.task', { branch, default_branch: cfg.branch, requested_by: job.requestedBy })
+  p.add('worker.task', {
+    branch, default_branch: cfg.branch, requested_by: job.requestedBy,
+    start: stackedOn?.ref ?? `origin/${cfg.branch}`, base: stackedOn?.name ?? cfg.branch,
+  })
   addValidate(p, cfg)
   const esc = cfg.worker.escalate_to
   if (job.issue) p.add('worker.report.issue', { issue: job.issue, mention: esc ? p.text('mention.starting', { escalate_to: esc }) : '' })
@@ -45,6 +50,6 @@ export function composeTask(job: TaskLike, cfg: TraceConfig, branch: string, lay
   return p.done()
 }
 
-export function taskPrompt(job: TaskLike, cfg: TraceConfig, branch: string, layers: Layers = NO_LAYERS): string {
-  return composeTask(job, cfg, branch, layers).text
+export function taskPrompt(job: TaskLike, cfg: TraceConfig, branch: string, layers: Layers = NO_LAYERS, stackedOn?: { ref: string; name: string }): string {
+  return composeTask(job, cfg, branch, layers, stackedOn).text
 }

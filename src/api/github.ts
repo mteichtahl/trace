@@ -19,6 +19,8 @@ export class GitHubError extends Error {
 export interface PullSummary {
   number: number; title: string; head: string; draft: boolean; labels: string[]; url: string; updated_at: string; created_at?: string | undefined
   headRepo?: string | null | undefined; sha?: string | undefined; author?: string | null | undefined
+  /** the branch it targets: the default branch, or, for a stacked change, the branch of the change it builds on */
+  base?: string | undefined
 }
 export interface IssueSummary { number: number; title: string; labels: string[]; url: string; updated_at: string }
 export interface RunSummary { id: number; name: string; path: string; event: string; status: string; conclusion: string | null; branch: string | null; url: string; created_at: string; updated_at?: string }
@@ -167,6 +169,7 @@ const User = z.object({ login: z.string() }).loose().nullable().optional()
 const Pull = z.object({
   number: z.number(), title: z.string(), draft: z.boolean().optional(), html_url: z.string(), updated_at: z.string(), created_at: z.string().optional(),
   head: z.object({ ref: z.string(), sha: z.string().optional(), repo: HeadRepo }).loose(), labels: z.array(Label).default([]), user: User,
+  base: z.object({ ref: z.string() }).loose().optional(),
 }).loose()
 const Issue = z.object({
   number: z.number(), title: z.string(), html_url: z.string(), updated_at: z.string(), labels: z.array(Label).default([]),
@@ -419,6 +422,7 @@ export class HttpGitHub implements GitHubApi {
       number: p.number, title: p.title, head: p.head.ref, draft: p.draft ?? false, labels: labelNames(p.labels), url: p.html_url, updated_at: p.updated_at,
       ...(p.created_at ? { created_at: p.created_at } : {}),
       headRepo: p.head.repo?.full_name ?? null, author: p.user?.login ?? null, ...(p.head.sha ? { sha: p.head.sha } : {}),
+      ...(p.base?.ref ? { base: p.base.ref } : {}),
     }))
   }
 
