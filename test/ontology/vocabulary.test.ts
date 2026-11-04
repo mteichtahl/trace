@@ -14,6 +14,7 @@ import { TABLES, type ColumnRule, type FieldMap } from '../../src/ontology/mappi
 import { BOARD_CLASSES, BOARD_PROPERTIES } from '../../src/ontology/board.js'
 import { ENGINE_CLASSES, ENGINE_PROPERTIES, MECH_CLASSES, MECH_PROPERTIES } from '../../src/ontology/mech.js'
 import { DOCS_CLASSES, DOCS_PROPERTIES } from '../../src/ontology/docs.js'
+import { RENDER_CLASSES, RENDER_PROPERTIES } from '../../src/ontology/renders.js'
 
 const v = readVocabulary()
 
@@ -23,8 +24,8 @@ const acronyms = (s: string): string[] => (s.match(/\b[A-Z]{2,}\b/g) ?? []).filt
 
 /** Classes and properties the mapping names: a table's class, each column's property and link type, each object's. */
 function mapped(): { classes: Set<string>; props: Set<string> } {
-  const classes = new Set<string>(['Project', ...BOARD_CLASSES, ...ENGINE_CLASSES, ...MECH_CLASSES, ...DOCS_CLASSES])
-  const props = new Set<string>(['inProject', ...BOARD_PROPERTIES, ...ENGINE_PROPERTIES, ...MECH_PROPERTIES, ...DOCS_PROPERTIES])
+  const classes = new Set<string>(['Project', ...BOARD_CLASSES, ...ENGINE_CLASSES, ...MECH_CLASSES, ...DOCS_CLASSES, ...RENDER_CLASSES])
+  const props = new Set<string>(['inProject', ...BOARD_PROPERTIES, ...ENGINE_PROPERTIES, ...MECH_PROPERTIES, ...DOCS_PROPERTIES, ...RENDER_PROPERTIES])
   const rule = (r: ColumnRule): void => {
     if ('ignore' in r) return
     props.add(r.prop)

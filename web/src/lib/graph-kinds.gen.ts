@@ -16,6 +16,8 @@ export const CLASS_KINDS: Readonly<Record<string, (typeof NODE_KINDS)[number]>> 
   Part: 'part',
   Person: 'person',
   Question: 'decision',
+  Render: 'artifact',
+  RenderSet: 'run',
   Requirement: 'requirement',
   Run: 'run',
   RunArtifact: 'artifact',

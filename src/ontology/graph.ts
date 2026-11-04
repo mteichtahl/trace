@@ -21,6 +21,7 @@ import { addBoard } from './board.js'
 import { addDocuments } from './docs.js'
 import { addDerived } from './derived.js'
 import { addCase } from './mech.js'
+import { addRenders } from './renders.js'
 
 const { namedNode, literal, quad } = DataFactory
 
@@ -172,6 +173,8 @@ export function buildGraph(src: GraphSources, o: GraphOptions): { store: Store; 
   for (const b of src.boards ?? []) addBoard(c.store, o, b.path, b.board)
   // the newest case build, from the run record's artifacts (the mechanical module)
   if (src.project) addCase(c.store, o, src.project, o.files)
+  // each revision's renders: the revision, the day, the colours and each picture's shot (docs/revision-renders.md)
+  if (src.project) addRenders(c.store, o, src.project)
   // the project's documents, read through their markers (the documentation module)
   if (src.documents?.length && addDocuments(c.store, o, src.documents)) link(c, 'project', o.project, 'Project')
   // for the shapes, what no column stores, worked out as the app reads it: people's decisions are the journey's, or the
