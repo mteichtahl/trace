@@ -83,6 +83,7 @@ function action(name: string, a: Record<string, unknown>): Response {
         threads.unshift({ id, repo, title: String(a.title ?? 'New conversation'), updatedAt: new Date().toISOString() })
         messages[id] = []
       }
+      messages[id] ??= []
       const mid = crypto.randomUUID()
       for (const m of (a.messages as { text: string }[] | undefined) ?? []) messages[id]!.push({ id: mid, role: 'user', content: m.text, at: new Date().toISOString() })
       return ok({ id, messageId: mid, created: !(a.thread ?? a.id) })
@@ -158,9 +159,37 @@ export const PICTURES_REPLY = [
 function agui(body: { threadId: string; runId: string; messages: { role: string; content?: unknown }[] }): Response {
   const last = [...body.messages].reverse().find((m) => m.role === 'user')
   const q = typeof last?.content === 'string' ? last.content : ''
+  // a card's answer (remember's Confirm, start_task's job) comes back as the tool's result: acknowledge it, no new card
+  if (body.messages.at(-1)?.role === 'tool') {
+    const ack = crypto.randomUUID()
+    return sse([
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: ack, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: ack, delta: 'Done.' },
+      { type: 'TEXT_MESSAGE_END', messageId: ack },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
+    ])
+  }
   const reply = /\b(show|draw|diagram|plot|chart|picture|timing)\b/i.test(q) ? PICTURES_REPLY : `**Here is what I found** about “${q.slice(0, 60)}”.\n\nThis is mock mode: no agent ran. In a real installation trace answers from the project record, with cards for runs, plots and parts.\n\n- One\n- Two`
   const id = crypto.randomUUID()
   const words = reply.split(/(?<=\s)/)
+  // asked to remember, trace proposes it; the card waits for the person's Confirm (README, "Agent memory")
+  if (/\bremember\b/i.test(q)) {
+    const say = crypto.randomUUID()
+    const call = `call_${id.slice(0, 8)}`
+    const scope = /\b(i|me|my)\b/i.test(q) ? 'personal' : 'project'
+    const text = q.replace(/^.*?\bremember\b[:,]?\s*(that\s+)?/i, '').trim() || 'The probe runs from a 3.3 V rail.'
+    return sse([
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: say, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: say, delta: 'I can keep that in memory once you confirm it.' },
+      { type: 'TEXT_MESSAGE_END', messageId: say },
+      { type: 'TOOL_CALL_START', toolCallId: call, toolCallName: 'remember', parentMessageId: say },
+      { type: 'TOOL_CALL_ARGS', toolCallId: call, delta: JSON.stringify({ repo: 'acme/soil-sensor', scope, text: text.charAt(0).toUpperCase() + text.slice(1) }) },
+      { type: 'TOOL_CALL_END', toolCallId: call },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
+    ])
+  }
   // a question about a simulation runs a tool for a while, with its run named (docs/progress-and-logs.md, "Chat")
   if (/simulat|settle/i.test(q)) {
     const call = `call_${id.slice(0, 8)}`
