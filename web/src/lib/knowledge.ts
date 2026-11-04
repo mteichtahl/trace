@@ -24,8 +24,8 @@ export type AgentId = (typeof AGENTS)[number]['id']
 const LEGACY: Record<string, string> = { 'ci-doctor': 'Build doctor', conflict: 'Merge helper', local: 'Local session' }
 
 /**
- * Who else remembers besides the agents (src/agents/runtime/memory.ts AGENTS): the chat (Ask trace), from its
- * conversations and what people asked it to remember. Not an agent (no jobs, no page of its own), but a filter on the
+ * Who else remembers besides the agents (src/agents/runtime/memory.ts AGENTS): the chat (Ask trace), only the project
+ * facts people confirmed it should remember (its conversations are recorded under each person's own actor, never here). Not an agent (no jobs, no page of its own), but a filter on the
  * memory screens.
  */
 export const OTHER_ACTORS = [{ id: 'chat', name: 'Chat' }] as const

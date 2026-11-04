@@ -209,7 +209,7 @@ function LongTerm() {
             url={url}
             noun="memories"
             onRowClick={(r) => setOpen(r.m)}
-            empty={searching ? `Nothing the agents remember is close to “${query}”.` : 'Nothing is remembered here yet. Memories appear a few minutes after an agent session or a chat, once they are extracted; ask trace to remember something in the chat and it is added the same way.'}
+            empty={searching ? `Nothing the agents remember is close to “${query}”.` : 'Nothing is remembered here yet. Memories appear a few minutes after an agent session or one of your own chats, once they are extracted; ask trace to remember something in the chat and, once you confirm it, it is added the same way.'}
           />
         )}
       </div>

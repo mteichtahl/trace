@@ -148,8 +148,10 @@ const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Imp
  * trace offers to start work: the exact request and agent, and nothing starts until the person presses Confirm (then
  * `onConfirm` calls `task` as them). Done: the run, or what happened instead.
  */
-export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, blocked }: {
+export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, blocked, refused }: {
   task: Partial<TaskRequest>
+  /** why this offer cannot be confirmed at all (it names another project than the conversation's), or null */
+  refused?: string | null
   /** why Confirm waits (the project's agent is not set up yet), or null */
   blocked?: string | null
   answer?: TaskAnswer
@@ -175,6 +177,8 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
         </p>
       ) : readOnly ? (
         <p className="mt-2 text-xs text-muted-foreground">Work can't be started from this conversation.</p>
+      ) : refused ? (
+        <Refused text={refused} onCancel={onCancel} />
       ) : (
         <>
           <div className="mt-3 flex gap-2">
@@ -187,6 +191,16 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
         </>
       )}
     </Frame>
+  )
+}
+
+/** A confirm card's offer that cannot be confirmed: why, and Dismiss (which tells trace why). */
+function Refused({ text, onCancel }: { text: string; onCancel?: () => void }) {
+  return (
+    <>
+      <p className="mt-2 text-xs text-destructive" role="alert">{text}</p>
+      {onCancel && <button type="button" className="mt-2 rounded-md border px-3 py-1.5 text-xs" onClick={onCancel}>Dismiss</button>}
+    </>
   )
 }
 
@@ -204,15 +218,17 @@ export type RememberAnswer = { confirmed: true; recorded: boolean; reason?: stri
 
 const SCOPE_WORDS: Record<RememberRequest['scope'], string> = {
   personal: 'Your own preference: only you (and admins) see it, and the agents use it for your requests.',
-  project: 'A fact about the project: everyone on it, and its agents, will use it.',
+  project: 'A fact about the project: recalled in this project\'s chats, and shown to everyone on it on its Memory screen.',
 }
 
 /**
  * trace offers to remember something: the exact words and whose they are, and nothing is saved until the person
  * presses Confirm (then `onConfirm` calls memory.remember as them). Done: that it was recorded, and when it shows.
  */
-export function RememberConfirmCard({ memory, answer, onConfirm, onCancel, busy, readOnly }: {
+export function RememberConfirmCard({ memory, answer, onConfirm, onCancel, busy, readOnly, refused }: {
   memory: Partial<RememberRequest>
+  /** why this offer cannot be confirmed at all (another project than the conversation's, or none), or null */
+  refused?: string | null
   answer?: RememberAnswer
   onConfirm?: () => void
   onCancel?: () => void
@@ -235,6 +251,8 @@ export function RememberConfirmCard({ memory, answer, onConfirm, onCancel, busy,
         </p>
       ) : readOnly ? (
         <p className="mt-2 text-xs text-muted-foreground">Nothing can be remembered from this conversation.</p>
+      ) : refused ? (
+        <Refused text={refused} onCancel={onCancel} />
       ) : (
         <div className="mt-3 flex gap-2">
           <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !memory.repo || !memory.text?.trim() || !scope} onClick={onConfirm}>

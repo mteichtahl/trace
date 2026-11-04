@@ -1745,7 +1745,7 @@ is kept, so every record still says whose it is, and the existing checks still h
 | Actor | Who |
 | --- | --- |
 | `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc`, `render` and `thermal` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. A specialist's recall (at the start of a job, and `memory_recall`) also searches `ci-doctor`, `conflict` and `worker`, read only, ranked after its own records and tagged `legacy` in the prompt block; nothing is migrated (AgentCore cannot copy records). |
-| `<owner>/<repo>/chat` | Ask trace, the web app's chat: its conversations on the project, and the project facts people asked it to remember. Shown as "Chat" on the Memory screen. |
+| `<owner>/<repo>/chat` | Ask trace, the web app's chat: only the project facts people confirmed it should remember (`memory.remember`, scope project). Conversations are never recorded here. Recalled in the project's chats (`memory_recall`) and shown as "Chat" on the Memory screen; no job's recall reads it. |
 | `<owner>/<repo>/person/<hash>` | The person who started a task through the API, or chatted with trace: their own preferences, inside the project. The hash is part of the sha256 of their Cognito sub (records from before carry their email's), so the email itself never appears. |
 
 | Strategy | Namespace |
@@ -1766,17 +1766,22 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
 - **Inside a job:** Claude has the MCP tools `memory_recall` and `memory_remember`. They act only as the job's actor and
   session (`TRACE_MEMORY_ACTOR` and `TRACE_MEMORY_SESSION`, or `TRACE_MEMORY_REPOSITORY` and `TRACE_MEMORY_AGENT`), and
   they are offered only when `TRACE_MEMORY_ID` is set.
-- **In the chat:** each turn the app keeps (`chats.append`, `chats.reply`) is also recorded, best-effort, as a short-term
-  event in session `chat-<thread>`: the conversation under the project's `chat` actor (only from people with write
-  access; a guest's words never shape what the project remembers), and the person's own messages under their person
-  actor. Tool calls are recorded as their name and whether they worked, never their output. A memory failure is
-  logged and never breaks the chat. When a person asks trace to remember something, it offers a card (`remember`)
-  with the exact words and whether they are the person's own preference or a project fact; nothing is saved until
-  they press Confirm, which calls `memory.remember { repo, text, scope: personal | project, thread? }` as them
-  (write access: guests are refused). The author is always the signed-in person, never anything the model says, and
-  the event says it is something they asked to remember. Like start_task, the card is never offered in a read-only
-  or shared conversation, so text in a document or a tool result cannot write memory. Long-term records appear a
-  few minutes later, once AgentCore has extracted them.
+- **In the chat:** the person's own messages (`chats.append`) are also recorded, best-effort, as short-term events in
+  session `chat-<thread>`, under their own person actor only, and only for people with write access (a guest's words
+  are not recorded at all). trace's replies and tool calls (`chats.reply`) are never recorded, so nothing the model
+  says, or that a tool result or document planted in its words, reaches memory on its own. The chat's recording never
+  writes the project's `chat` actor. A memory failure is logged and never breaks the chat.
+- **Remembering in the chat:** when a person asks trace to remember something, it offers a card (`remember`) with the
+  exact words and whether they are the person's own preference or a project fact; nothing is saved until they press
+  Confirm, which calls `memory.remember { repo, text, scope: personal | project, thread? }` as them (write access:
+  guests are refused; held to the chat's limit on writes). The card writes only to the conversation's own project:
+  one the model names that is not the chat's is refused on the card. The author is always the signed-in person, never
+  anything the model says, and `thread` must be a conversation of theirs on that project. A personal preference goes
+  under their person actor; a project fact under the project's `chat` actor, which nothing else writes, so a project
+  fact is always one a person confirmed (typing the same words in a message only ever reaches the person's own
+  records). Project facts are recalled in the project's chats and shown on its Memory screen; the agents' jobs do not
+  read them. Like start_task, the card is never offered in a read-only or shared conversation. Long-term records
+  appear a few minutes later, once AgentCore has extracted them.
 - **Through the API:** anyone who can read a project can see its memory with the read-only actions `memory.list` and
   `memory.recall` (optionally for one `agent`). The API learns every project's memory from `TRACE_PROJECT_MEMORIES`
   (`owner/repo=<memory id>`, separated by spaces, the same encoding as `TRACE_WORKER_RUNTIMES`). After the access

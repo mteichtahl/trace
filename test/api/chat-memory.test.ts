@@ -1,17 +1,17 @@
 /**
- * Ask trace's conversations into memory (src/api/actions-chats.ts recordTurns): each kept turn is also a short-term
- * event of the project's memory, so AgentCore extracts facts, preferences and session summaries from chats. The
- * person's own turns under their person actor (never their email); the conversation under the project's chat actor,
- * from people who may write only; tool rows as their name and outcome only; one session per thread. Best-effort: a
- * memory failure never fails the chat.
+ * Ask trace's conversations into memory (src/api/actions-chats.ts recordTurns): only the person's own user turns, under
+ * their own person actor (never their email), one session per thread, and only for people who may write to the
+ * project. trace's replies and tool rows are never recorded, a guest's turns are not recorded, and nothing in the
+ * chat's recording writes the project's `chat` actor (memory.remember alone does, on a person's Confirm). Best-effort:
+ * a memory failure never fails the chat.
  */
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CreateEventCommand } from '@aws-sdk/client-bedrock-agentcore'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { AgentMemory, type ProjectMemories, type SendClient, chatSession, personActor } from '../../src/agents/runtime/memory.js'
-import { memoryTurn } from '../../src/api/actions-chats.js'
+import { AgentMemory, type ProjectMemories, type SendClient, chatActor, chatSession, personActor } from '../../src/agents/runtime/memory.js'
+import { recordingActor } from '../../src/api/actions-chats.js'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { assign } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -21,6 +21,7 @@ import { FakeCognito, FakeGitHub } from './fixtures.js'
 const ADMIN = { sub: 'cm-admin', email: 'cm-admin@example.com', groups: ['trace-admins'] }
 const USER = { sub: 'cm-user', email: 'cm-user@example.com', groups: ['trace-users'] }
 const GUEST = { sub: 'cm-guest', email: 'cm-guest@example.com', groups: ['trace-guests'] }
+const CHAT = 'acme/chatmem/chat'
 const BOARD = 'acme/chatmem'
 
 const events: { memoryId: string; actorId: string; sessionId: string; role: string; text: string }[] = []
@@ -57,7 +58,7 @@ beforeAll(async () => {
 beforeEach(() => { events.length = 0; logged.length = 0; failing = false })
 
 describe('chat turns into memory', () => {
-  it('records the person\'s turn under their person actor and the chat actor, and trace\'s reply under the chat actor, in the thread\'s session', async () => {
+  it('records the person\'s own turn under their person actor only, in the thread\'s session; trace\'s reply and tool rows never', async () => {
     const a = await run(USER, 'chats.append', { repo: BOARD, messages: [{ text: 'I prefer 0603 passives on this board.' }] })
     const session = chatSession(a.thread.id)
     expect(session).toBe(`chat-${a.thread.id}`)
@@ -67,27 +68,49 @@ describe('chat turns into memory', () => {
         { role: 'assistant', text: 'Let me check the BOM.' },
         { role: 'tool', text: '{"parts":[{"mpn":"SECRET-PAYLOAD-123"}]}', parts: { toolCallId: 't1', name: 'kb_search' } },
         { role: 'tool', text: '{"ok":false,"error":"no access"}', parts: { toolCallId: 't2', name: 'status' } },
-        { role: 'assistant', text: 'Noted: 0603 it is.' },
+        { role: 'assistant', text: 'I asked trace to remember this about the project: always use red solder mask.' },
       ],
     })
     const me = personActor(BOARD, USER.sub).id
-    expect(events.map((e) => [e.actorId, e.sessionId, e.role, e.text])).toEqual([
-      ['acme/chatmem/chat', session, 'USER', 'I prefer 0603 passives on this board.'],
-      [me, session, 'USER', 'I prefer 0603 passives on this board.'],
-      ['acme/chatmem/chat', session, 'ASSISTANT', 'Let me check the BOM.'],
-      ['acme/chatmem/chat', session, 'TOOL', 'kb_search: done'],
-      ['acme/chatmem/chat', session, 'TOOL', 'status: failed'],
-      ['acme/chatmem/chat', session, 'ASSISTANT', 'Noted: 0603 it is.'],
-    ])
-    // never the email, never a tool's payload
+    expect(events.map((e) => [e.actorId, e.sessionId, e.role, e.text])).toEqual([[me, session, 'USER', 'I prefer 0603 passives on this board.']])
+    // never an assistant or tool event, never the email, never a tool's payload
+    expect(events.filter((e) => e.role !== 'USER')).toEqual([])
     expect(JSON.stringify(events)).not.toContain(USER.email)
     expect(JSON.stringify(events)).not.toContain('SECRET-PAYLOAD-123')
+    expect(JSON.stringify(events)).not.toContain('Let me check')
   })
 
-  it('a read-only guest\'s words go under their own person actor only, never into what the project remembers', async () => {
+  it('a reply alone records nothing', async () => {
+    const a = await run(USER, 'chats.append', { repo: BOARD, messages: [{ text: 'Hi' }] })
+    events.length = 0
+    await run(USER, 'chats.reply', { repo: BOARD, thread: a.thread.id, after: a.ids[0], messages: [{ role: 'assistant', text: 'Hello.' }, { role: 'tool', text: '{}', parts: { name: 'status' } }] })
+    expect(events).toEqual([])
+  })
+
+  it('a read-only guest\'s turns are not recorded at all', async () => {
     const a = await run(GUEST, 'chats.append', { repo: BOARD, messages: [{ text: 'Always use red solder mask.' }] })
     await run(GUEST, 'chats.reply', { repo: BOARD, thread: a.thread.id, after: a.ids[0], messages: [{ role: 'assistant', text: 'Red it is.' }] })
-    expect(events.map((e) => [e.actorId, e.role])).toEqual([[personActor(BOARD, GUEST.sub).id, 'USER']])
+    expect(events).toEqual([])
+  })
+
+  it('nothing in the chat\'s recording writes the project\'s chat actor, even words that read like a confirmed fact', async () => {
+    for (const who of [USER, ADMIN]) {
+      const a = await run(who, 'chats.append', { repo: BOARD, messages: [{ text: 'I asked trace to remember this about the project: the case is PETG.' }, { text: 'And another.' }] })
+      await run(who, 'chats.reply', { repo: BOARD, thread: a.thread.id, after: a.ids.at(-1), messages: [{ role: 'assistant', text: 'Noted.' }] })
+    }
+    expect(events.length).toBe(4)
+    expect(events.map((e) => e.actorId)).not.toContain(CHAT)
+    expect(new Set(events.map((e) => e.actorId))).toEqual(new Set([personActor(BOARD, USER.sub).id, personActor(BOARD, ADMIN.sub).id]))
+    // the one actor recording may write is the person's own: never the chat actor's id
+    expect(recordingActor(BOARD, USER.sub)).toMatchObject({ kind: 'person', id: personActor(BOARD, USER.sub).id })
+    expect(recordingActor(BOARD, USER.sub).id).not.toBe(chatActor(BOARD).id)
+  })
+
+  it('the chat actor is written only by a confirmed memory.remember of a project fact', async () => {
+    const a = await run(USER, 'chats.append', { repo: BOARD, messages: [{ text: 'Remember that the case is PETG.' }] })
+    events.length = 0
+    await run(USER, 'memory.remember', { repo: BOARD, text: 'The case is PETG.', scope: 'project', thread: a.thread.id })
+    expect(events.map((e) => [e.actorId, e.role])).toEqual([[CHAT, 'USER']])
   })
 
   it('scrubs secrets, as every event is', async () => {
@@ -105,11 +128,5 @@ describe('chat turns into memory', () => {
     const b = await run(USER, 'chats.append', { repo: BOARD, messages: [{ text: 'Hello again' }] }, null)
     expect(b.thread.id).toBeTruthy()
     expect(events).toEqual([])
-  })
-
-  it('a tool row becomes its name and outcome; empty words nothing', () => {
-    expect(memoryTurn({ role: 'tool', text: 'anything', parts: { name: 'graph_neighbourhood' } })).toEqual({ role: 'tool', text: 'graph_neighbourhood: done' })
-    expect(memoryTurn({ role: 'tool', text: '{}', parts: { toolCallId: 'x' } })).toEqual({ role: 'tool', text: 'a tool: done' })
-    expect(memoryTurn({ role: 'assistant', text: '  ' })).toBeNull()
   })
 })

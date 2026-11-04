@@ -124,6 +124,17 @@ export const ChatRepo = createContext<string | undefined>(undefined)
 /** The stored conversation (chat-view.tsx sets it): what remember files its memory under (one session per thread). */
 export const ChatThread = createContext<string | undefined>(undefined)
 
+/**
+ * The project a confirm card may act on: the conversation's own (ChatRepo), never one the model named. `refused` says
+ * why not when the model named another (or, for `strict`, when the conversation is on no project at all); the card then
+ * offers no Confirm.
+ */
+export function lockedRepo(chatRepo: string | undefined, named: string | undefined, o: { strict: boolean; doing: string }): { repo: string | undefined; refused: string | null } {
+  if (!chatRepo) return o.strict ? { repo: undefined, refused: `This conversation is not on a project, so nothing can be ${o.doing} from it.` } : { repo: named, refused: null }
+  if (named && named.toLowerCase() !== chatRepo.toLowerCase()) return { repo: chatRepo, refused: `trace named ${named}, but this conversation is on ${chatRepo}: nothing can be ${o.doing} on another project from here.` }
+  return { repo: chatRepo, refused: null }
+}
+
 const StartTask = z.object({ repo: z.string(), request: z.string(), agent: z.string().optional(), branch: z.string().optional() })
 type TaskArgs = z.infer<typeof StartTask>
 
@@ -134,18 +145,22 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
   // the conversation's own project: what the notice on the screen already knows of its agent (nothing asked from
   // here); another project's is asked for, so Confirm waits for that project's agent too
   const chatRepo = useContext(ChatRepo)
-  const other = !!args.repo && args.repo.toLowerCase() !== (chatRepo ?? '').toLowerCase()
+  // locked to the conversation's project: another one the model named is refused on the card (a conversation on no
+  // project, the app's own, has none to lock to: the card names the project the model gave)
+  const { repo, refused } = lockedRepo(chatRepo, args.repo, { strict: false, doing: 'started' })
+  const other = !!repo && repo.toLowerCase() !== (chatRepo ?? '').toLowerCase()
   // asked only while Confirm is offered (a finished or past offer needs no answer)
   const offered = status === 'executing' && !!respond
-  const blocked = agentBlocked(useAgentSetup(args.repo, { fetch: other && offered }).data)
+  const blocked = agentBlocked(useAgentSetup(repo, { fetch: other && offered && !refused }).data)
   if (status === 'complete') return <TaskConfirmCard task={args} answer={parseResult<TaskAnswer>(result)} />
   if (!live && status !== 'executing') return <TaskConfirmCard task={args} answer={{ confirmed: false, reason: 'not confirmed' }} />
   if (status !== 'executing' || !respond) return <TaskConfirmCard task={args} readOnly={readOnly} busy />
+  if (refused) return <TaskConfirmCard task={args} refused={refused} onCancel={() => respond({ confirmed: false, reason: refused } satisfies TaskAnswer)} />
   const confirm = async () => {
-    if (!args.repo || !args.request) return
+    if (!repo || !args.request) return
     setBusy(true)
     try {
-      const r = await call('task', { repo: args.repo, request: args.request, ...(args.agent ? { agent: args.agent } : {}), ...(args.branch ? { branch: args.branch } : {}) })
+      const r = await call('task', { repo, request: args.request, ...(args.agent ? { agent: args.agent } : {}), ...(args.branch ? { branch: args.branch } : {}) })
       respond({ confirmed: true, accepted: r.accepted, jobId: r.jobId, ...(r.reason ? { reason: r.reason } : {}) } satisfies TaskAnswer)
     } catch (e) {
       respond({ confirmed: true, accepted: false, reason: e instanceof Error ? e.message : 'the task could not be started' } satisfies TaskAnswer)
@@ -161,20 +176,24 @@ type RememberArgs = z.infer<typeof Remember>
 
 /**
  * remember's card: the person's Confirm calls memory.remember as them (the API takes who they are from their sign-in,
- * never from these arguments, and records it in the conversation's session); the answer goes back to trace.
+ * never from these arguments, and records it in the conversation's session), on the conversation's own project (a
+ * different `repo` from the model is refused on the card); the answer goes back to trace.
  */
 export function RememberCard({ args, status, respond, result, readOnly, thread }: { args: Partial<RememberArgs>; status: string; respond?: (r: unknown) => unknown; result?: string; readOnly?: boolean; thread?: string }) {
   const [busy, setBusy] = useState(false)
   const live = useContext(LiveCall)
   const chatThread = useContext(ChatThread) ?? thread
+  // locked to the conversation's project: what the model named is only checked against it, never written to
+  const { repo, refused } = lockedRepo(useContext(ChatRepo), args.repo, { strict: true, doing: 'remembered' })
   if (status === 'complete') return <RememberConfirmCard memory={args} answer={parseResult<RememberAnswer>(result)} />
   if (!live && status !== 'executing') return <RememberConfirmCard memory={args} answer={{ confirmed: false, reason: 'not confirmed' }} />
   if (status !== 'executing' || !respond) return <RememberConfirmCard memory={args} readOnly={readOnly} busy />
+  if (refused) return <RememberConfirmCard memory={args} refused={refused} onCancel={() => respond({ confirmed: false, reason: refused } satisfies RememberAnswer)} />
   const confirm = async () => {
-    if (!args.repo || !args.text?.trim() || (args.scope !== 'personal' && args.scope !== 'project')) return
+    if (!repo || !args.text?.trim() || (args.scope !== 'personal' && args.scope !== 'project')) return
     setBusy(true)
     try {
-      const r = await call('memory.remember', { repo: args.repo, text: args.text, scope: args.scope, ...(chatThread ? { thread: chatThread } : {}) })
+      const r = await call('memory.remember', { repo, text: args.text, scope: args.scope, ...(chatThread ? { thread: chatThread } : {}) })
       respond({ confirmed: true, recorded: r.recorded, note: r.note } satisfies RememberAnswer)
     } catch (e) {
       respond({ confirmed: true, recorded: false, reason: e instanceof Error ? e.message : 'it could not be recorded' } satisfies RememberAnswer)

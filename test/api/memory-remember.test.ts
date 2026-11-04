@@ -116,6 +116,7 @@ describe('memory.remember', () => {
     expect(events()).toHaveLength(0)
     // one the caller wrote in counts as theirs, though someone else started it
     await perform('chats.append', { repo: BOARD, thread: theirs, messages: [{ text: 'Me too.' }] }, ctx(USER))
+    sent.length = 0
     await perform('memory.remember', { repo: BOARD, text: 'x', scope: 'personal', thread: theirs }, ctx(USER))
     await perform('memory.remember', { repo: BOARD, text: 'y', thread: mine }, ctx(USER))
     expect(events().map((e) => e.sessionId)).toEqual([chatSession(theirs), chatSession(mine)])

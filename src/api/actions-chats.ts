@@ -14,13 +14,15 @@
  *   chats.rename  read   give a thread a name
  *   chats.recall  read   the person's own sent messages on this project, newest first (Up and Down in the box)
  *
- * Memory: each kept turn is also recorded, best-effort, as a short-term event of the project's memory (recordTurns), so
- * AgentCore extracts facts, preferences and session summaries from conversations as it does from agent jobs. One
- * session per thread (`chat-<thread>`). The person's own turns go under their person actor (the hash of their sub,
- * never the email); the conversation (their turns and trace's replies) under the project's `chat` actor, but only for
- * people who may write to the project (a read-only guest's words never shape what the project remembers). Tool rows
- * are recorded as their name and whether they worked, never their payload. A memory failure is logged and never fails
- * the action.
+ * Memory: the person's own words, and only those, are also recorded, best-effort, as short-term events of the
+ * project's memory (recordTurns), so AgentCore extracts their preferences and session summaries from conversations.
+ * Each user turn of chats.append goes under the caller's own person actor (the hash of their sub, never the email), one
+ * session per thread (`chat-<thread>`), and only for people who may write to the project (a read-only guest's words
+ * are not recorded at all). trace's replies and tool rows (chats.reply) are never recorded: model output, or anything a
+ * tool result, a document or another person's message planted in it, must not shape memory. Nothing here writes the
+ * project's `chat` actor: what the whole project remembers is only what a person confirmed (memory.remember, scope
+ * project, after the Confirm of the `remember` card), so typing the words that mark a confirmed fact only ever
+ * reaches the person's own records. A memory failure is logged and never fails the action.
  *
  * People are matched by the hash of their Cognito sub (and, for threads written before, of their email): never by
  * their email, which can change. Stored in the central bucket under projects/<slug>/chats/ (the API role needs Get,
@@ -29,7 +31,7 @@
 import { z } from 'zod'
 import { type Author, type ChatMessage, ChatStore, MAX_MESSAGE_CHARS, MAX_USER_CHARS, ThreadId, isAuthor } from '../core/chats.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
-import { type Actor, type Role as TurnRole, chatActor, chatSession, personActor } from '../agents/runtime/memory.js'
+import { type Actor, chatSession, personActor } from '../agents/runtime/memory.js'
 import { isAdmin, require_ } from '../core/access.js'
 import { ActionError, type Context, Repo, def, hashOf, hashesOf, label, plainly, projectMemory, storeAt } from './action-kit.js'
 
@@ -71,40 +73,35 @@ export function markYours(messages: readonly ChatMessage[], who: Author): (ChatM
 
 /** How long recording a turn may hold the answer (the turn is kept already; memory is best-effort). */
 export const RECORD_MS = 4000
-/** The most turns one call records (a reply holds at most 50 messages). */
+/** The most turns one call records (chats.append takes at most 20 messages). */
 const MAX_RECORDED = 20
 
-interface Turn { role: TurnRole; text: string }
-
-/** What a kept message becomes in memory: a person's or trace's words as they are, a tool row as its name and outcome. */
-export function memoryTurn(m: { role: 'user' | 'assistant' | 'tool'; text: string; parts?: unknown }): Turn | null {
-  if (m.role !== 'tool') return m.text.trim() ? { role: m.role, text: m.text } : null
-  const p = m.parts && typeof m.parts === 'object' ? m.parts as Record<string, unknown> : {}
-  const name = typeof p.name === 'string' ? p.name.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64) : ''
-  let failed = false
-  try { const v: unknown = JSON.parse(m.text); failed = !!v && typeof v === 'object' && (v as { ok?: unknown }).ok === false } catch { /* not JSON: an outcome in words */ }
-  return { role: 'tool', text: `${name || 'a tool'}: ${failed ? 'failed' : 'done'}` }
+/** The one actor chat recording writes: the caller's own person actor. Never the project's chat actor (or any agent's),
+ * whatever happens upstream: that is memory.remember's alone, on a person's Confirm. */
+export function recordingActor(repo: string, sub: string): Actor {
+  const a = personActor(repo, sub)
+  if (a.kind !== 'person') throw new Error('chat recording writes only the person\'s own actor')
+  return a
 }
 
 /**
- * Record a chat call's turns in the project's memory, best-effort: never throws, and holds the answer at most RECORD_MS.
- * `person`: the caller's own turns (user turns only) under their person actor too.
+ * Record the caller's own user turns in the project's memory, under their own person actor, best-effort: never throws,
+ * and holds the answer at most RECORD_MS. Nothing for a read-only guest; never trace's words or tool rows (there is no
+ * way to pass them here: only texts, recorded as role user).
  */
-async function recordTurns(ctx: Context, repo: string, thread: string, turns: readonly Turn[], o: { person: boolean }): Promise<void> {
+async function recordTurns(ctx: Context, repo: string, thread: string, texts: readonly string[]): Promise<void> {
   const log = ctx.deps.log ?? ((l: Record<string, unknown>) => { console.log(JSON.stringify(l)) })
   const work = (async () => {
+    const turns = texts.filter((t) => t.trim()).slice(0, MAX_RECORDED)
+    if (!turns.length) return
     const mem = projectMemory(ctx, repo)
     if (!mem) return
-    // the project's conversation only from people who may write to it; their own preferences from anyone on it
+    // only people who may write to the project: a read-only guest's words are not recorded
     const writer = isAdmin(ctx.principal) || (await require_(ctx.principal, repo, 'read')) === 'write'
+    if (!writer) return
+    const actor = recordingActor(repo, ctx.principal.sub)
     const session = chatSession(thread)
-    const actors: { actor: Actor; roles: readonly TurnRole[] }[] = [
-      ...(writer ? [{ actor: chatActor(repo), roles: ['user', 'assistant', 'tool'] as const }] : []),
-      ...(o.person ? [{ actor: personActor(repo, ctx.principal.sub), roles: ['user'] as const }] : []),
-    ]
-    for (const t of turns.slice(0, MAX_RECORDED)) {
-      for (const a of actors) if (a.roles.includes(t.role)) await mem.shortTerm.record(a.actor, session, t.role, t.text)
-    }
+    for (const t of turns) await mem.shortTerm.record(actor, session, 'user', t)
   })()
   let timer: ReturnType<typeof setTimeout> | undefined
   const late = new Promise<'late'>((ok) => { timer = setTimeout(() => ok('late'), RECORD_MS) })
@@ -138,14 +135,13 @@ export const CHAT_ACTIONS = {
   'chats.append': def('read', Repo.extend({ thread: ThreadId.optional(), title: z.string().max(120).optional(), messages: z.array(NewMessage).min(1).max(20) }), async (a, ctx) => {
     limited(ctx)
     const out = await plainly(() => store(ctx, a.repo).append(author(ctx), { thread: a.thread, title: a.title, messages: a.messages }))
-    await recordTurns(ctx, a.repo, out.thread.id, a.messages.flatMap((m) => memoryTurn({ role: 'user', text: m.text }) ?? []), { person: true })
+    await recordTurns(ctx, a.repo, out.thread.id, a.messages.map((m) => m.text))
     return { repo: a.repo, ...out }
   }),
 
   'chats.reply': def('read', Repo.extend({ thread: ThreadId, after: z.string().min(1).max(40), messages: z.array(Reply).min(1).max(50) }), async (a, ctx) => {
     limited(ctx)
     const out = await plainly(() => store(ctx, a.repo).reply(author(ctx), { thread: a.thread, after: a.after, messages: a.messages }))
-    await recordTurns(ctx, a.repo, a.thread, a.messages.flatMap((m) => memoryTurn(m) ?? []), { person: false })
     return { repo: a.repo, ...out }
   }),
 

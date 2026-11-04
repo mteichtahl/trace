@@ -84,8 +84,9 @@ export const NAMESPACE_TEMPLATES: Readonly<Record<Strategy, string>> = {
 export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'worker', 'local', 'ci-doctor', 'conflict', 'chat'] as const
 
 /**
- * The chat's actor name: Ask trace's conversations on a project (the API records them, src/api/actions-chats.ts), and
- * the project facts a person confirmed it should remember (memory.remember). No job runs as it.
+ * The chat's actor name: the project facts a person confirmed Ask trace should remember (memory.remember, scope
+ * project), and nothing else. The chat's recording of conversations never writes it (src/api/actions-chats.ts: a
+ * person's own turns go under their person actor). No job runs as it, and no job's recall reads it.
  */
 export const CHAT_AGENT = 'chat'
 
