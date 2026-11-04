@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bannerWords, markWords, mayPause } from './lifecycle'
+import { bannerWords, heldNextWords, markWords, mayPause } from './lifecycle'
 import { invalidationsFor } from '@/lib/live'
 
 const NOW = Date.parse('2026-11-04T12:00:00Z')
@@ -38,5 +38,21 @@ describe('live events', () => {
   it('a lifecycle change refreshes the lists, the banner and Next', () => {
     const keys = invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'projects', at: '' })
     expect(keys).toEqual(expect.arrayContaining([['projects'], ['project.lifecycle', 'a/b'], ['projects.retired'], ['inbox']]))
+  })
+})
+
+describe('the Next step card while held', () => {
+  const paused = { paused: { at: at(3600_000), by: 'ana@example.com', reason: null }, retired: null }
+  it('active: the usual card', () => expect(heldNextWords({ paused: null, retired: null }, { admin: false, part: 'contributor' }, NOW)).toBeNull())
+  it('paused: nothing happens until it is resumed; who may resume is told how', () => {
+    expect(heldNextWords(paused, { admin: false, part: 'contributor' }, NOW)).toMatchObject({ label: 'Paused', summary: 'Nothing happens here until the project is resumed.', action: 'resume' })
+    const r = heldNextWords(paused, { admin: false, part: 'reviewer' }, NOW)
+    expect(r?.action).toBeNull()
+    expect(r?.detail).toMatch(/A Contributor or an admin can resume it\.$/)
+  })
+  it('retired: only an admin is pointed at Restore', () => {
+    const l = { paused: null, retired: { at: at(60_000), by: 'marc@example.com', reason: null } }
+    expect(heldNextWords(l, { admin: true }, NOW)?.action).toBe('restore')
+    expect(heldNextWords(l, { admin: false }, NOW)).toMatchObject({ action: null, detail: 'Retired by marc@example.com 1 minute ago.' })
   })
 })

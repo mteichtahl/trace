@@ -25,6 +25,7 @@ import { q } from '@/lib/queries'
 import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
+import { HeldNextCard, useLifecycle } from '@/components/project/lifecycle'
 import { RunLine, runControls, splitRuns } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
@@ -70,6 +71,9 @@ function Overview() {
   const phone = useMediaQuery('(max-width: 767px)')
   const changes = useChanges(repo)
   const watch = useWatchRun(repo)
+  // paused or retired: the next step is to resume it, so its card stands in for the usual one
+  const life = useLifecycle(repo)
+  const held = !!(life.data?.paused || life.data?.retired)
   void navigate
 
   if (!j.data)
@@ -179,7 +183,7 @@ function Overview() {
       ))}
     </div>
   ) : null
-  const nextCard = (
+  const nextCard = held ? <HeldNextCard repo={repo} part={part} /> : (
     <NextStepCard
       step={d.next}
       part={part}
@@ -255,7 +259,7 @@ function Overview() {
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
 
           {/* the build when it is failing, the fixes asked for, and Ask trace to fix something (health.get) */}
-          <BuildHealth repo={repo} jobs={d.jobs} write={projects.data !== undefined && write} />
+          <BuildHealth repo={repo} jobs={d.jobs} write={projects.data !== undefined && write && !held} />
 
           <Section label="Waiting on people" count={d.questions.length} className="mt-10">
             {waitingList}
