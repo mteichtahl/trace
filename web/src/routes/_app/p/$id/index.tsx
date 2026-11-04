@@ -168,6 +168,17 @@ function Overview() {
   ) : (
     <RecentTimeline items={d.recent} />
   )
+  // evidence gone out of date since it was checked (journey.get stale_evidence): one plain line each, opening its gate
+  const outOfDate = d.staleEvidence?.length ? (
+    <div className="mt-4 space-y-1.5" aria-label="Out of date">
+      {d.staleEvidence.map((s) => (
+        <p key={s.criterion} className="text-sm">
+          <Link to="/p/$id/gates/$gate" params={{ id, gate: s.gate }} className="font-medium hover:underline">{s.text}</Link>
+          <span className="text-muted-foreground"> {s.why}</span>
+        </p>
+      ))}
+    </div>
+  ) : null
   const nextCard = (
     <NextStepCard
       step={d.next}
@@ -196,6 +207,7 @@ function Overview() {
         <StageChip j={d} admin={admin} onOpen={(s) => setSheet(s)} />
         <StageSheet j={d} stage={sheet} admin={admin} onOpenChange={(o) => !o && setSheet(null)} />
         {nextCard}
+        {outOfDate}
         <FoldRows label="Around this project">
           {(changeList.length > 0 || d.changesUnavailable) && (
             <FoldLink label="Changes from trace" to="/p/$id/changes" params={{ id }} count={forYou ? `${forYou} for you` : changeList.length || undefined} accent={forYou > 0} />
@@ -238,6 +250,7 @@ function Overview() {
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
           {nextCard}
+          {outOfDate}
 
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
 
