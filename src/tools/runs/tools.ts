@@ -7,6 +7,7 @@
  *   trace.run       one run: its arguments, result, measurements and artifact names
  *   trace.artifact  one artifact: its text (truncated, or a window of it), or saved to a path the caller names
  */
+import { readOutput } from '../../core/artifact-store.js'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
@@ -94,10 +95,12 @@ export const artifact = defineTool({
     tail_lines: z.number().int().min(1).max(5000).optional().describe('the last N lines instead'),
     save_to: z.string().optional().describe('write the artifact to this path (relative to the repository) instead of returning it'),
   }),
-  run: ({ run: id, name, max_chars, offset, tail_lines, save_to }) => withWork((w) => {
+  run: async ({ run: id, name, max_chars, offset, tail_lines, save_to }) => { const w = new Work(); try {
     const rec = w.run(id) ?? matchPrefix(w, id)
     if (!rec) throw new ToolError(`no run ${JSON.stringify(id)}`)
-    const bytes = w.getArtifact(rec.id, name)
+    // a large output may be kept in the installation's storage, not the run record (src/core/artifact-store.ts)
+    const bytes = await readOutput(w, rec.id, name)
+    if (!bytes && rec.artifacts.some((a) => a.name === name)) throw new ToolError(`${name} of run ${rec.id} is kept in the installation's storage, which cannot be reached from here`)
     if (!bytes) throw new ToolError(`run ${rec.id} has no artifact ${JSON.stringify(name)} (it has: ${rec.artifacts.map((a) => a.name).join(', ') || 'none'})`)
     const meta = rec.artifacts.find((a) => a.name === name)
     const mime = meta?.mime ?? null
@@ -126,7 +129,7 @@ export const artifact = defineTool({
       run: rec.id, name, mime, bytes: bytes.length, chars: text.length, offset, text: chunk, truncated: more || offset > 0,
       ...(more ? { next_offset: offset + chunk.length } : {}),
     }
-  }),
+  } finally { w.close() } },
 })
 
 /** The runs tools. */

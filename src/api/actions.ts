@@ -153,7 +153,8 @@ import {
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
 import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
-import { Work, unpackArtifact } from '../core/store.js'
+import { Work } from '../core/store.js'
+import { artifactBytes, artifactSize } from './artifact-read.js'
 import { personHash as telemetryHash } from '../core/telemetry.js'
 import { PROMPT_ID, entry } from '../prompts/catalog.js'
 import type { Layers } from '../prompts/resolve.js'
@@ -550,12 +551,15 @@ export const ACTIONS = {
     } finally { w.close() }
   })),
 
-  artifact: def('read', Repo.extend({ id: z.string().min(1).max(64), name: z.string().min(1).max(300) }), async (a, ctx) => withProjectDb(ctx, a.repo, (db) => {
+  artifact: def('read', Repo.extend({ id: z.string().min(1).max(64), name: z.string().min(1).max(300) }), async (a, ctx) => withProjectDb(ctx, a.repo, async (db) => {
     const w = new Work(db)
     try {
       const row = w.db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(a.id, a.name)
       if (!row) throw new ActionError(`no artifact ${a.name} on run ${a.id}`)
-      const { mime, bytes } = unpackArtifact(row.mime === null ? null : String(row.mime), row.bytes as Uint8Array)
+      const size = artifactSize(row.mime, (row.bytes as Uint8Array).length)
+      if (size > MAX_ARTIFACT) throw new ActionError(`${a.name} is ${size} bytes; the API returns at most ${MAX_ARTIFACT}`)
+      // a large output may be kept in the installation's storage, not the run record (src/core/artifact-store.ts)
+      const { mime, bytes } = await artifactBytes(ctx, a.repo, row, a.name)
       if (bytes.length > MAX_ARTIFACT) throw new ActionError(`${a.name} is ${bytes.length} bytes; the API returns at most ${MAX_ARTIFACT}`)
       return { id: a.id, name: a.name, mime, size: bytes.length, base64: Buffer.from(bytes).toString('base64') }
     } finally { w.close() }

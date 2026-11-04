@@ -24,6 +24,7 @@ import { execFileSync } from 'node:child_process'
 import { z } from 'zod'
 import { type AnyTool, defineTool, ToolError, type ToolContext } from '../../core/registry.js'
 import { openProject, Work } from '../../core/store.js'
+import { readOutput } from '../../core/artifact-store.js'
 import { VALUE_KINDS } from '../../docs/catalog.js'
 import { recordedValues, valuesTable } from '../../docs/values.js'
 import { backendFor, runJob } from '../../gpu/jobs.js'
@@ -128,7 +129,8 @@ const figures = defineTool({
         try {
           for (const s of shots) {
             const name = byShot.get(s)
-            const bytes = name ? work.getArtifact(run, name) : null
+            // release-quality pictures may be kept in the installation's storage (src/core/artifact-store.ts)
+            const bytes = name ? await readOutput(work, run, name) : null
             if (!bytes) throw new ToolError(`render.showcase made no ${s} picture (run ${run})`)
             const key = SHOT_FIGURE[s]
             const file = `${FIGURES_DIR}/${key}.png`

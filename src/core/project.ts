@@ -44,6 +44,8 @@ export const sameProject = (a: string, b: string): boolean => a.trim().toLowerCa
 
 /** S3 prefixes (no leading or trailing slash). */
 export const PROJECTS_PREFIX = 'projects'
+/** Each project's large run outputs kept outside its run record (src/core/artifact-store.ts): projects/<slug>/artifacts/<sha256> */
+export const ARTIFACTS_FOLDER = 'artifacts'
 export const JOBS_PREFIX = 'jobs'
 /** GPU jobs submitted outside any project (a laptop with admin credentials): never a project's prefix. */
 export const LOCAL_JOBS = '_local'

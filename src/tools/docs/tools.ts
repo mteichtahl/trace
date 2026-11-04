@@ -17,6 +17,7 @@ import { z } from 'zod'
 import { STAGE_IDS, type StageId } from '../../core/journey-catalog.js'
 import { type AnyTool, defineTool, ToolError } from '../../core/registry.js'
 import { Work } from '../../core/store.js'
+import { keepOutput } from '../../core/artifact-store.js'
 import { backendFor, runJob } from '../../gpu/jobs.js'
 import { DOC_KINDS, DOCS, docsFor, type DocKind } from '../../docs/catalog.js'
 import { checkDoc, passes } from '../../docs/checks.js'
@@ -130,7 +131,8 @@ const publish = defineTool({
         }
         const bytes = readFileSync(got)
         rmSync(got, { force: true })
-        work.artifact(id, pdf, bytes, 'application/pdf')
+        // a printed copy can be large: the installation's storage, not the run record in git (src/core/artifact-store.ts)
+        await keepOutput(work, id, pdf, bytes, 'application/pdf')
         work.measure(id, 'bytes', bytes.length, 'B')
         work.measure(id, 'diagrams', said.diagrams ?? null, '')
         let written: string | undefined

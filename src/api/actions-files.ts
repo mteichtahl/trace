@@ -27,9 +27,10 @@
  *                       (putFile) on a new branch trace/edit-<slug>-<base36 time> from the default branch, then
  *                       recorded as an app edit (kind prompt, "Edit CLAUDE.md"): its pull request opens at once
  */
+import { artifactBytes, artifactSize } from './artifact-read.js'
 import { z } from 'zod'
 import { loadJourney } from '../core/journey.js'
-import { Work, artifactMime, unpackArtifact } from '../core/store.js'
+import { Work, artifactMime } from '../core/store.js'
 import { ActionError, type Context, MAX_ARTIFACT, PROJECT_DB_PATH, Repo, def, label, slugify, withProjectDb, withRecordDb } from './action-kit.js'
 import { isProtected, protectedPathsOf } from './actions-handin.js'
 import { quote } from './actions-changes.js'
@@ -109,7 +110,7 @@ async function evidence(ctx: Context, repo: string, limit: number): Promise<File
     const w = new Work(db)
     try {
       return (w.db.prepare('SELECT a.run_id, a.name, a.mime, length(a.bytes) AS size FROM artifacts a JOIN runs r ON r.id = a.run_id ORDER BY r.started DESC LIMIT ?').all(limit) as Record<string, unknown>[])
-        .map((r) => ({ path: `runs/${String(r.run_id)}/${String(r.name)}`, kind: 'evidence' as const, size: Number(r.size), sha: null, run: String(r.run_id), mime: artifactMime(r.mime === null ? null : String(r.mime)) }))
+        .map((r) => ({ path: `runs/${String(r.run_id)}/${String(r.name)}`, kind: 'evidence' as const, size: artifactSize(r.mime, Number(r.size)), sha: null, run: String(r.run_id), mime: artifactMime(r.mime === null ? null : String(r.mime)) }))
     } finally {
       w.close()
     }
@@ -197,12 +198,15 @@ export const FILE_ACTIONS = {
     const ev = EVIDENCE.exec(a.path)
     if (ev) {
       const [, run, name] = ev as unknown as [string, string, string]
-      return withProjectDb(ctx, a.repo, (db) => {
+      return withProjectDb(ctx, a.repo, async (db) => {
         const w = new Work(db)
         try {
           const row = w.db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(run, name)
           if (!row) throw new ActionError(`There is no ${name} on run ${run}.`)
-          const { mime, bytes } = unpackArtifact(row.mime === null ? null : String(row.mime), row.bytes as Uint8Array)
+          const size = artifactSize(row.mime, (row.bytes as Uint8Array).length)
+          if (size > MAX_ARTIFACT) throw new ActionError(`${name} is ${size} bytes; the API returns at most ${MAX_ARTIFACT}.`)
+          // a large output may be kept in the installation's storage, not the run record (src/core/artifact-store.ts)
+          const { mime, bytes } = await artifactBytes(ctx, a.repo, row, name)
           if (bytes.length > MAX_ARTIFACT) throw new ActionError(`${name} is ${bytes.length} bytes; the API returns at most ${MAX_ARTIFACT}.`)
           return { repo: a.repo, path: a.path, kind: 'evidence', mime: mime ?? mimeOf(name), size: bytes.length, base64: Buffer.from(bytes).toString('base64') }
         } finally {

@@ -34,7 +34,7 @@ import { RegionInfo } from 'aws-cdk-lib/region-info'
 import type * as s3 from 'aws-cdk-lib/aws-s3'
 import type * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
-import { PROJECTS_PREFIX } from '../core/project.js'
+import { ARTIFACTS_FOLDER, PROJECTS_PREFIX } from '../core/project.js'
 import { SERVICES_SEEN } from '../core/services-seen.js'
 import { ACTUALS_OBJECTS } from './cost.js'
 import { KB_RETRIEVE_ACTIONS, knowledgeBaseArn } from './knowledge.js'
@@ -120,6 +120,9 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
   // and its job index there (jobs.db, src/core/job-index.ts: jobs.list): read, never written by the API
   // (and what the bench measured, live: projects/<slug>/journey-agent/bench.db, src/core/bench.ts)
   grantPrefixes(role, p.central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
+  // each project's large run outputs (renders), kept outside its run record by the worker (src/core/artifact-store.ts):
+  // read, for artifact and files.url, after the person's or system's read access to the project is checked
+  grantPrefixes(role, p.central, { read: [`${PROJECTS_PREFIX}/*/${ARTIFACTS_FOLDER}`] })
   if (people) {
     // cost, the build's shipping and the run logs, in a policy of their own (the role's inline policy has a size limit, which CDK
     // would otherwise meet by moving statements into an overflow policy):

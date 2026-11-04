@@ -334,7 +334,7 @@ describe('the trace stack', () => {
     expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
-    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/cost/*', 'installation/pending-projects/*', 'installation/shipping/*', 'projects/*/chats/*', 'projects/*/journey-agent/*', 'projects/*/journey/*', MS, 'prompts/*'])
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/cost/*', 'installation/pending-projects/*', 'installation/shipping/*', 'projects/*/artifacts/*', 'projects/*/chats/*', 'projects/*/journey-agent/*', 'projects/*/journey/*', MS, 'prompts/*'])
     // the cost ledger's actuals (installation/cost/*): read only, never written by the API
     expect(s.filter((x) => actionsOf(x).some((a) => a === 's3:PutObject' || a === 's3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toMatch(/\/cost\//)
     // the order watch: invoked, nothing else of Lambda
@@ -367,6 +367,7 @@ describe('the trace stack', () => {
     // waiting to be created: conditional writes, as above)
     const rest = text.replaceAll('/projects/*/chats/*', '').replaceAll('projects/*/chats/*', '').replaceAll('/projects/*/journey/*', '').replaceAll('projects/*/journey/*', '')
       .replaceAll('/projects/*/journey-agent/*', '').replaceAll('projects/*/journey-agent/*', '').replaceAll('pending-projects/*', '')
+      .replaceAll('/projects/*/artifacts/*', '').replaceAll('projects/*/artifacts/*', '') // large run outputs, read only
     for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(rest.replaceAll(MS, '')).not.toContain(never)
     expect(rest.replaceAll(MS, '')).not.toContain('projects/')
   })
