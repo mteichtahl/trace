@@ -90,7 +90,7 @@ export interface Actions {
   'projects.retired': { args: Record<string, never>; result: { projects: import('./types').RetiredProject[] } }
   'journey.get': { args: Repo; result: Journey }
   'journey.criterion.open': { args: Repo & { gate?: string; criterion?: string; waiver?: string }; result: { repo: string; opened: string; at: string; version: number } }
-  'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[] }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }
+  'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[]; time_zone?: string }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }
   'gate.return': { args: Repo & { gate: string; reason: string; reopen?: string }; result: { repo: string; reopened: string | null; summary: string } }
   'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string } }
   /** `job`: the stuck agent's job id, or the stuck item's own id (an inbox item's questionId) */
