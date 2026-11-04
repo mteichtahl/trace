@@ -6,6 +6,8 @@
  *
  *   <projects>/<slug>/journey-agent/documents/printed/<sha256>.pdf       every copy docs.publish prints, named by
  *                                                                       its content: written once (If-None-Match)
+ *   <projects>/<slug>/journey-agent/documents/latest.json               each document's newest print (replaced by
+ *                                                                       the next), what the Docs tab opens
  *   <projects>/<slug>/journey-agent/documents/releases/<revision>.json  the copies printed for a revision when it
  *                                                                       was cut: one entry per document, each
  *                                                                       written once; a later print of the same
@@ -24,6 +26,7 @@ const REVISION = /^[A-Z]{1,3}$/
 const SHA = /^[0-9a-f]{64}$/
 
 export const printedKey = (repository: string, sha256: string): string => `${projectSlug(repository)}/${PRINTED_FOLDER}/printed/${sha256}.pdf`
+export const latestKey = (repository: string): string => `${projectSlug(repository)}/${PRINTED_FOLDER}/latest.json`
 export const releaseKey = (repository: string, revision: string): string => `${projectSlug(repository)}/${PRINTED_FOLDER}/releases/${revision}.json`
 
 /** One printed document, as a release manifest and docs.publish's run record it. */
@@ -94,6 +97,32 @@ export async function recordRelease(store: Backend, repository: string, revision
     }
   }
   throw new Error(`the release copies of revision ${revision} kept changing while they were written: try again`)
+}
+
+/** Each document's newest print, by kind (latest.json), or {} when nothing was printed on a worker yet. */
+export async function latestOf(store: Backend, repository: string): Promise<Partial<Record<DocKind, Printed>>> {
+  const got = await store.get(latestKey(repository))
+  if (!got) return {}
+  const m = parseManifest(got.body, 'latest')
+  return Object.fromEntries(m.documents.map((d) => [d.kind, d]))
+}
+
+/** Make these prints each document's newest (latest.json). Conditional writes, re-run on a lost race. */
+export async function recordLatest(store: Backend, repository: string, docs: readonly Printed[]): Promise<void> {
+  if (!docs.length) return
+  const key = latestKey(repository)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const got = await store.get(key)
+    const have = got ? parseManifest(got.body, 'latest').documents : []
+    const next = [...have.filter((d) => !docs.some((x) => x.kind === d.kind)), ...docs].sort((a, b) => DOC_KINDS.indexOf(a.kind) - DOC_KINDS.indexOf(b.kind))
+    try {
+      await store.put(key, Buffer.from(`${JSON.stringify({ documents: next }, null, 2)}\n`), { contentType: 'application/json', ...(got ? { ifMatch: got.etag } : { ifNoneMatch: true }) })
+      return
+    } catch (e) {
+      if (!(e instanceof Conflict)) throw e
+    }
+  }
+  throw new Error('the newest prints kept changing while they were written: try again')
 }
 
 /** Every revision's release copies, oldest revision first (A, B, … Z, AA). */

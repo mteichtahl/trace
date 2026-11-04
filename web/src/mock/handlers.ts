@@ -22,6 +22,7 @@ import { deploysAction } from './deploys'
 import { healthAction } from './health'
 import { progressAction } from './progress'
 import { rendersAction } from './renders'
+import { docsAction } from './docs'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -40,6 +41,7 @@ function action(name: string, a: Record<string, unknown>): Response {
   const hl = healthAction(name, a); if (hl) return hl
   const pr = progressAction(name, a); if (pr) return pr
   const rnd = rendersAction(name, a); if (rnd) return rnd
+  const doc = docsAction(name, a); if (doc) return doc
   const files = filesAction(name, a); if (files) return files
   const k = knowledgeAction(name, a); if (k !== undefined) return k && typeof k === 'object' && '__error' in k ? json({ ok: false, error: (k as { __error: string }).__error }, 403) : ok(k)
   const des = designAction(name, a); if (des) return des

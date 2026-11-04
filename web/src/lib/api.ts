@@ -157,6 +157,10 @@ export interface Actions {
   'build.get': { args: Repo; result: import('./types-s1').BuildView }
   'renders.list': { args: Repo; result: import('./types-renders').RendersView }
   'renders.seen': { args: Repo & { revision: string }; result: { repo: string; revision: string; seen: boolean } }
+  /** the project's documents: how current each is, its newest print, each revision's release copies, the next check */
+  'documents.get': { args: Repo; result: import('./types-docs').DocumentsView }
+  /** one printed copy, by its hash: the PDF as base64 (at most 8 MB) */
+  'documents.pdf': { args: Repo & { sha256: string }; result: { repo: string; sha256: string; bytes: number; mime: string; base64: string } }
   /** record a placed order (number, paid cost, ship date) */
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null }; result: { ok: true; wait?: Wait } }
   /** the stage timeline; money for admins (cloud estimates and actuals from the cost ledger, orders); notes */

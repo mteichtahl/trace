@@ -90,8 +90,8 @@ Two rules keep it trustworthy:
      checks them, and prints each with `docs.publish release=<revision>`, the revision ending the revision table. Those
      are the revision's release copies (`documents/releases/<revision>.json`): one per document, written once, kept as
      they were if printed again. That job is queued behind a Scribe already working, so a release is never skipped.
-   - **With the journey record.** `documents.get` shows each document (its revision and the commit it was last written
-     at), each revision's release copies beside the record copied into the repository for it (the `journey.snapshot`
+   - **With the journey record.** `documents.get` shows each document (its revision, the commit it was last written
+     at, how current it is and its newest print), each revision's release copies beside the record copied into the repository for it (the `journey.snapshot`
      decision: commit and branch), and when the nightly check next runs; `documents.pdf` opens a copy by its hash.
    - **The nightly drift check.** At 17:00 UTC (03:00 in Melbourne in winter, 04:00 in summer; `src/docs/drift.ts`)
      the hooks function's schedule asks the API for the projects (`hook.projects`) and checks each (`hook.drift`):
@@ -155,16 +155,42 @@ Each layer is one pull request that builds and passes on its own.
    `docs.stale` names the sections a change touched (its files, and the project database compared table by table),
    `docs.write_section` writes one section between its markers only when it passes the quality bar. As a specialist it
    has no file tools of its own; the worker commits its documents as a change stacked on the one documented.
-7. **Events and gates** (#267): Scribe started by a push that changed a record (`hook.docs`) and by a gate opening a stage
+7. **Events and gates** (merged, #267): Scribe started by a push that changed a record (`hook.docs`) and by a gate opening a stage
    that needs documents (`gate.sign`); `docs.stale` compares with the documents' own last commit; `docs.check` recorded
    as a run and the release gate's documents criterion (`signoff.docs`).
-7b. **Publishing** (this layer): `docs.publish` keeps PDFs in the central bucket (`src/docs/printed.ts`) and, with
+7b. **Publishing** (merged, #269): `docs.publish` keeps PDFs in the central bucket (`src/docs/printed.ts`) and, with
    `release`, a revision's release copies; a revision cut starts Scribe on them (`docsReleaseRequest`); `documents.get`
    and `documents.pdf`; the nightly drift check (`hook.projects`, `hook.drift`, the hooks function's schedule).
-8. **Docs tab** in the web app (from `documents.get` and `documents.pdf`): each document with a freshness badge, the
-   PDF viewer, each revision's release copies, and when it next checks.
+8. **Documents tab** (this layer): `/p/:id/docs` from Architect on (`web/src/routes/_app/p/$id/docs.tsx`,
+   `web/src/components/docs`), shown below. `documents.get` now says how current each document is and why, and each
+   document's newest print (`documents/latest.json`, which `docs.publish` keeps).
 9. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
    exercises the protocol specification).
+
+### The Documents tab
+
+A card per document, with how current it is in a word and an icon (never colour alone):
+
+| State | When |
+|---|---|
+| **Current** | Nothing it is written from changed since the commit it was written at |
+| **Behind** | A record it is written from changed since (GitHub's comparison, the project database table by table), or a section due by the stage is still pending; the card says which, in a sentence |
+| **Updating** | Behind, and the Documentation agent is working on the project (its card at the top opens its log) |
+| **Not written** | The stage needs it and it is not there yet |
+| **From <stage>** | Not needed yet; the protocol specification once the design has an interface |
+| **Not compared** | Written, but its commit could not be compared with the default branch |
+
+Each written document shows its revision, day and commit, its sections written, **Open the PDF** (its newest print,
+"from an earlier text" when the print is older than the text) and **Read the text** (the markdown). Below, each
+revision's release copies, newest first, open or download one by one. The line at the top says when trace next checks,
+in the viewer's own time. PDFs open in the file viewer, read by their hash (`documents.pdf`); a printed copy has no link
+of its own and no versions.
+
+![The Documents tab](ui/screens/DocsTab.png)
+
+| A print open | Dark theme | Phone | A project at Architect |
+|---|---|---|---|
+| ![](ui/screens/DocsPdf.png) | ![](ui/screens/DocsTabDark.png) | ![](ui/screens/DocsPhone.png) | ![](ui/screens/DocsEmpty.png) |
 
 ### Markers
 
