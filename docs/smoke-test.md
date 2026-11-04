@@ -80,5 +80,6 @@ system turn on the external API and MCP checks. A later installer run keeps them
 | Found | Where | What | Status |
 | --- | --- | --- | --- |
 | 2026-11-04 | Change review, after Accept | The page threw `Cannot read properties of undefined (reading 'setTransform')` four times: pdf.js still drawing a page after the PDF viewer left. Intermittent (1 in about 4 full runs) | open |
+| 2026-11-04 | Ask trace, sending right after opening it | The panel reopens the last conversation when its list arrives; a message sent before that started its own conversation, which the late list then switched away from, so the message vanished from view. 1 in 3 CI runs | fixed: the last conversation reopens only when none was chosen meanwhile |
 | 2026-11-04 | Mock: Evidence → a run | The runs list (admin fixtures) and the single-run lookup (s1 fixtures) disagreed, so a listed run sometimes showed "Could not load this run" | fixed in the mock |
 | 2026-11-04 | 3D board, desktop | Building the board in 3D took over 30 s with software rendering on a loaded test machine | check allows 90 s |

@@ -15,7 +15,7 @@ import { useProjects } from '@/lib/queries'
 import { AgentSetupNotice } from '@/components/project/agent-setup'
 import { cn } from '@/lib/utils'
 import { AGENT_ID } from './agent'
-import { openPanel, setPanelWidth, setThread, showHistory, usePanel, useThreads } from './chat-state'
+import { openPanel, panel, setPanelWidth, setThread, showHistory, usePanel, useThreads } from './chat-state'
 import { ChatView } from './chat-view'
 import { removeContext, restoreContext, useContextEntries } from './context'
 import { PlayerBar, VoiceControls } from './voice/voice-controls'
@@ -96,7 +96,9 @@ export function AskTrace({ onClose, className }: { onClose?: () => void; classNa
       const { call } = await import('@/lib/api')
       const ts = await call('chats.list', { repo: repo! })
       const last = [...ts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
-      setThread(repo!, last?.id)
+      // only if nothing was chosen meanwhile: a message sent before this answer arrives starts its own conversation,
+      // which this older list does not know about, and must stay on screen (found by the smoke test, docs/smoke-test.md)
+      if (!(repo! in panel.get().threads)) setThread(repo!, last?.id)
       return ts
     },
   })
