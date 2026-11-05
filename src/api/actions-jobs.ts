@@ -15,9 +15,10 @@
  *                                        cancelled at once where the API can reach it, and otherwise does not run at its
  *                                        turn. The asking specialist reads the decline in journey.status and may ask a
  *                                        person instead. A running one is refused: cancel its job. Reviewers cannot
- *   job.control   write on its project   { id, op, repo? }: pause | resume | cancel | move_up → { ok, kept? } or
- *                                        { ok: false, reason } in plain words. Reviewers cannot (write is needed);
- *                                        another project's job, and one that does not exist, get "no access"
+ *   job.control   write on its project   { id, op, reason?, repo? }: pause | resume | cancel | move_up | restart |
+ *                                        dismiss → { ok, kept? } or { ok: false, reason } in plain words. Reviewers
+ *                                        cannot (write is needed); another project's job, and one that does not exist,
+ *                                        get "no access"
  *
  * What each op does (src/agents/runtime/jobs.ts, job.ts, job-index.ts):
  *
@@ -33,6 +34,16 @@
  *                            tools submitted are terminated when its tool server closes (src/gpu/inflight.ts)
  *             paused job     discarded: it is not resumed; its branch stays as it is
  *   move_up   queued job     one place up its agent's queue (job_controls.ord)
+ *   restart   lost task      the same request on the same branch, as a new attempt (a session of its own): the new
+ *                            task's row links back to the lost one (resume_of), and its prompt says what the lost one
+ *                            left on the branch. Claimed in the journey record first (job_controls.restarted_by), so
+ *                            two presses start it once; recorded in the decisions (job.restarted)
+ *   dismiss   lost job       with an optional reason: it leaves the overview's "Ended without finishing" and the next
+ *                            step; recorded in the decisions (job.dismissed). Nothing runs or stops
+ *
+ * STARTED AGAIN ONCE (test-esp32 log #45, #46): a lost task that left no change behind is started again by trace on
+ * its own, once, on the next journey.get (restartLostJobs), with a note in the decisions. If that attempt is lost too,
+ * a person decides: its card offers Start again and Dismiss, and the next step says it ended without finishing.
  *
  * A work item (a workflow's) can only be cancelled: the workflows claim it and would dispatch it again. A delegated
  * worker is controlled through its specialist's job. A hand-off job (one specialist asked another) is held, moved up and
@@ -47,7 +58,7 @@ import { AccessDenied, isAdmin, require_, standing } from '../core/access.js'
 import {
   type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, heardOf, indexedHandle, isLive, lastWords, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
 } from '../core/job-index.js'
-import { type AgentFacts, type JourneyRecord, loadJourney } from '../core/journey.js'
+import { type AgentFacts, type JourneyRecord, type NextStep, type StageView, type Viewer, decide, loadJourney } from '../core/journey.js'
 import { type HandoffView, declineHandoff, handoffViews } from '../core/handoffs.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
@@ -55,7 +66,7 @@ import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 import { assertNotHeld } from './held.js'
 
-export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up'] as const
+export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'] as const
 export type JobOp = (typeof JOB_OPS)[number]
 
 /** The agents, in words (src/agents/<kind>/index.ts titles, and the worker). */
@@ -88,6 +99,11 @@ export interface IndexedJob extends JobView {
   heard: { at: string; overdueAt: string; lostAt: string } | null
   /** a hand-off job: the hand-off it answers and who asked (its title says so too: "Asked by the … specialist: …") */
   handoff: { id: string; from: string | null; fromName: string | null } | null
+  /**
+   * lost: what a person (or trace) decided about it, once decided: dismissed (with their reason), or started again (the
+   * new job's row links back to it). A settled lost job leaves the overview's "Ended without finishing" and the next step
+   */
+  settled: { how: 'dismissed' | 'restarted'; by: string; at: string; reason: string | null } | null
   controls: JobOp[]
 }
 
@@ -116,9 +132,12 @@ const LOST = `trace lost contact with it: its runtime stopped without a word for
  * The ops a person may do on a job as it is now. `write`: they may change the project (contributors, admins); `can`:
  * what this installation's API can reach (a worker to pause or cancel).
  */
-export function controlsOf(j: Pick<JobRow, 'kind' | 'state' | 'parentJob' | 'resumedBy' | 'session'> & Partial<Pick<JobRow, 'handoff'>> & { held: boolean; discarded: boolean; lost: boolean; first: boolean },
+export function controlsOf(j: Pick<JobRow, 'kind' | 'state' | 'parentJob' | 'resumedBy' | 'session'> & Partial<Pick<JobRow, 'handoff' | 'payload'>> & { held: boolean; discarded: boolean; lost: boolean; first: boolean; settled?: boolean },
   o: { write: boolean; pause: boolean; cancel: boolean }): JobOp[] {
-  if (!o.write || j.parentJob || j.lost) return []
+  if (!o.write) return []
+  // a lost job: Start again (a person's task whose request was recorded) and Dismiss, until one of them is done
+  if (j.lost) return j.settled ? [] : [...(restartable(j) ? ['restart' as const] : []), 'dismiss']
+  if (j.parentJob) return []
   const task = j.kind === 'task'
   const reach = j.session !== null
   switch (j.state) {
@@ -128,6 +147,24 @@ export function controlsOf(j: Pick<JobRow, 'kind' | 'state' | 'parentJob' | 'res
     case 'paused': return j.discarded || j.resumedBy ? [] : ['resume', 'cancel']
     default: return []
   }
+}
+
+/**
+ * Whether a lost job can be started again as it was asked: a person's task (not a delegated worker, not a hand-off)
+ * whose request the index recorded. A workflow's work item is dispatched again by its workflow instead.
+ */
+export const restartable = (j: Pick<JobRow, 'kind' | 'parentJob'> & Partial<Pick<JobRow, 'handoff' | 'payload'>>): boolean =>
+  j.kind === 'task' && !j.parentJob && !j.handoff && Boolean(j.payload)
+
+/** A claim to start a lost job again older than this, with no new job to show for it, failed without a word. */
+const RESTART_CLAIM_S = 15 * 60
+
+/** What was decided about a lost job: dismissed, or started again (claimed in the record, or its new job in the index). */
+export function settledOf(j: Pick<JobRow, 'resumedBy'>, c: JobControl | undefined, at: number): IndexedJob['settled'] {
+  if (c?.dismissed) return { how: 'dismissed', by: c.by, at: iso(c.at) as string, reason: c.reason }
+  if (j.resumedBy) return { how: 'restarted', by: c?.restartedBy ?? 'trace', at: iso(c?.restartedAt ?? c?.at ?? at) as string, reason: null }
+  if (c?.restartedBy && c.restartedAt !== null && at - c.restartedAt < RESTART_CLAIM_S) return { how: 'restarted', by: c.restartedBy, at: iso(c.restartedAt) as string, reason: null }
+  return null
 }
 
 /** The job index's rows as views, for this person. */
@@ -152,6 +189,7 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       queue = { position, of: q.length, startsWhen }
     }
     const state: ViewState = lost ? 'lost' : discarded ? 'aborted' : j.state
+    const settled = lost ? settledOf(j, c, o.at) : null
     out.push({
       id: indexedHandle(repo, j.session, j.id), workerJobId: j.id, kind: j.kind, repository: repo, agent: j.agent, agentName: j.agent ? AGENT_WORDS[j.agent] ?? j.agent : null,
       title: j.title, number: j.number, startedBy: j.requestedBy, yours: j.requestedBySub !== null && j.requestedBySub === o.sub, state,
@@ -161,8 +199,8 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
       heard: state === 'running' ? (({ heardAt, overdueAt, lostAt }) => ({ at: iso(heardAt) as string, overdueAt: iso(overdueAt) as string, lostAt: iso(lostAt) as string }))(heardOf(j)) : null,
-      handoff: j.handoff ? handoffOf(j) : null,
-      controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first }, o),
+      handoff: j.handoff ? handoffOf(j) : null, settled,
+      controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first, settled: settled !== null }, o),
     })
   }
   const rank: Record<ViewState, number> = { running: 0, paused: 1, queued: 2, lost: 3, failed: 4, aborted: 5, succeeded: 6 }
@@ -249,6 +287,135 @@ export async function listJobs(ctx: Context, repo: string, o: { at?: number } = 
   return { jobs: views, batch: result.batch.filter((b) => b.endedAt === null && live.has(b.jobId)), rows: result.rows }
 }
 
+/**
+ * The lost jobs that still need a person (the overview's "Ended without finishing" and the next step): lost in the last
+ * day (as the app counts it: since trace last heard from it), not dismissed or started again, and not a specialist's
+ * delegated worker or a sweep (its specialist's own job is the one to act on). Newest first.
+ */
+export function openLostJobs(jobs: readonly IndexedJob[], rows: readonly JobRow[], at: number): IndexedJob[] {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  return jobs.filter((j) => {
+    const row = byId.get(j.workerJobId)
+    return j.state === 'lost' && !j.settled && !j.parentJob && j.kind !== 'sweep' && row !== undefined && at - heardOf(row).heardAt < DAY_S
+  })
+}
+
+/** The attempt a job is: 1, plus one for each job before it that it starts again or carries on (resume_of). */
+export function attemptOf(row: Pick<JobRow, 'id' | 'resumeOf'>, rows: readonly Pick<JobRow, 'id' | 'resumeOf'>[]): number {
+  const seen = new Set([row.id])
+  let n = 1
+  for (let cur = row.resumeOf; cur && !seen.has(cur); cur = rows.find((r) => r.id === cur)?.resumeOf ?? null) {
+    seen.add(cur)
+    n++
+  }
+  return n
+}
+
+/**
+ * Start a lost task again: its recorded request, for the same specialist, on the same branch, as a new attempt (a
+ * session of its own: src/api/workers.ts taskSession), carrying `restart` so the new row links back to it and its prompt
+ * says what the lost one left on the branch. Claimed in the journey record first, so two presses (or a press and trace's
+ * own restart) start it once; a start that is refused takes the claim back, so the card offers Start again again.
+ * `auto`: trace on its own (restartLostJobs), only for a first attempt it has never started again itself, and noted in
+ * the decisions before it starts. A person's restart is noted once it has started.
+ */
+export async function restartLost(ctx: Context, repo: string, row: JobRow, rows: readonly JobRow[], o: { by: string; auto: boolean }):
+  Promise<{ ok: true; jobId: string; kept: string } | { ok: false; reason: string }> {
+  const p = row.payload ? Resumable.safeParse(JSON.parse(row.payload)) : null
+  if (!restartable(row) || !p?.success) return { ok: false, reason: 'Its request was not recorded, so it cannot be started again as it was asked. Ask trace to do the work again with "Ask trace to fix something", or dismiss it.' }
+  const agent = p.data.agent ?? SPECIALIST_KINDS.find((k) => k === row.agent)
+  const branch = row.branch ?? p.data.branch ?? undefined
+  const attempt = attemptOf(row, rows) + 1
+  const at = Date.now() / 1000
+  const where = branch ? ` on ${branch}` : ''
+  const claim = await plainly(() => writeJourney(ctx, repo, (db) => {
+    const settled = settledOf(row, loadControls(db).get(row.id), at)
+    if (settled) return { result: { claimed: false, why: settled.how === 'dismissed' ? 'It was dismissed.' : 'It was started again already: follow the new job.' }, changed: false }
+    const rec = loadJourney(db)
+    // trace starts a lost job again on its own once: never a second time, nor after a person decided about it
+    if (o.auto && rec?.decisions.some((d) => d.ref === row.id && d.kind.startsWith('job.'))) return { result: { claimed: false, why: 'trace started it again once already.' }, changed: false }
+    putControl(db, { job: row.id, by: o.by, at, restartedBy: o.by, restartedAt: at })
+    if (o.auto && rec) {
+      decide(db, {
+        kind: 'job.restarted', stage: rec.journey.currentStage, ref: row.id, by: 'trace', detail: { job: row.id, auto: true, attempt, branch: branch ?? null },
+        summary: `trace started "${row.title}" again on its own${where}: it ended without finishing and left no change. If this attempt stops too, trace asks you.`,
+      })
+    }
+    return { result: { claimed: true, why: '' } }
+  }))
+  if (!claim.claimed) return { ok: false, reason: claim.why }
+  const jobs = await ctx.deps.jobs()
+  const started = await jobs.startJob({
+    kind: 'task', repository: repo, request: p.data.request, requestedBy: p.data.requestedBy, ...(p.data.requestedBySub ? { requestedBySub: p.data.requestedBySub } : {}),
+    ...(agent ? { agent } : {}), ...(branch ? { branch } : {}), restart: { job: row.id, by: o.by }, attempt,
+  }).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) }))
+  await writeJourney(ctx, repo, (db) => {
+    const rec = loadJourney(db)
+    if (!started.accepted) {
+      putControl(db, { job: row.id, by: o.by, at: Date.now() / 1000, restartedBy: null, restartedAt: null })
+      if (o.auto && rec) decide(db, { kind: 'job.restart_failed', stage: rec.journey.currentStage, ref: row.id, by: 'trace', detail: { job: row.id, reason: started.reason ?? null }, summary: `trace could not start "${row.title}" again: ${started.reason ?? 'the job was not accepted'}. Start it again or dismiss it on the overview.` })
+    } else if (!o.auto && rec) {
+      decide(db, { kind: 'job.restarted', stage: rec.journey.currentStage, ref: row.id, by: o.by, detail: { job: row.id, auto: false, attempt, branch: branch ?? null, new_job: started.jobId }, summary: `${o.by} started "${row.title}" again${where}: it ended without finishing.` })
+    }
+    return { result: {} }
+  }).catch(() => undefined)
+  if (!started.accepted) return { ok: false, reason: `trace could not start it again: ${started.reason ?? 'the job was not accepted'}.` }
+  return { ok: true, jobId: started.jobId, kept: `It starts again${where}, from what the lost attempt left there.` }
+}
+
+/**
+ * The next step while a job ended without finishing (test-esp32 log #46): never "trace works on …" or a person's
+ * "Continue" over work nothing is doing. It names the lost job (the newest, and how many more), and offers Start again
+ * (its button calls job.control restart) or, for a job that cannot be started again from here, Dismiss. Only a step
+ * that would have the person carry on, or say trace is working, gives way: a question, a gate, a change to review and a
+ * failure stay first, and so does drafting the requirements again (its own action). `lost`: openLostJobs.
+ */
+export function lostJobStep(next: NextStep, lost: readonly Pick<IndexedJob, 'id' | 'title' | 'agentName' | 'kind' | 'parentJob' | 'handoff'>[], viewer: Pick<Viewer, 'admin' | 'part'>, canRestart: (id: string) => boolean): NextStep {
+  // one that can be started again first: the button then does what the step says
+  const j = lost.find((x) => canRestart(x.id)) ?? lost[0]
+  if (!j || (next.kind !== 'task' && next.kind !== 'working') || next.ref?.kind === 'action') return next
+  const mine = viewer.admin || viewer.part === 'contributor'
+  const can = canRestart(j.id)
+  const more = lost.length > 1 ? ` ${lost.length - 1} more ${lost.length === 2 ? 'job' : 'jobs'} ended the same way: see the overview.` : ''
+  return {
+    kind: 'task', belongs_to: mine ? 'you' : 'contributors', yours: mine,
+    summary: `${j.agentName ? `The ${j.agentName} job` : 'A job'} "${j.title}" ended without finishing: trace lost contact with it, and nothing is doing its work now.${more}`,
+    why: 'Until it is started again, nothing does its work, and the steps that wait on it wait too.',
+    recommendation: can ? 'trace recommends starting it again: it carries on from what the lost attempt left on its branch.' : null,
+    button: mine ? (can ? 'Start it again' : 'Dismiss it') : 'Read the stage',
+    stage: next.stage, ref: mine ? { kind: 'action', id: can ? 'job.restart' : 'job.dismiss' } : next.ref, step: null,
+    after: can
+      ? 'Once it is started again, trace carries on with the work. If it is no longer needed, dismiss it on the overview instead.'
+      : 'Once it is dismissed, the next step is what the stage needs next. To have the work done again, use "Ask trace to fix something".',
+    job_id: j.id,
+  }
+}
+
+/** The stage's steps while a lost job holds up the next step: trace's step `now` reads as stopped, not as being worked on. */
+export function stoppedSteps<S extends Pick<StageView, 'steps'>>(stages: readonly S[]): S[] {
+  return stages.map((s) => (s.steps.some((x) => x.state === 'now' && x.owner === 'trace')
+    ? { ...s, steps: s.steps.map((x) => (x.state === 'now' && x.owner === 'trace' ? { ...x, stopped: true as const } : x)) }
+    : s))
+}
+
+/**
+ * Started again once, on its own (STARTED AGAIN ONCE above): each lost task that is a first attempt and left no change
+ * behind (no open change made by it; `changeJobs`, the jobs the open changes came from, null when the changes could not
+ * be listed: then nothing starts).
+ * Nothing starts while the project is paused or retired. Answers the titles started again.
+ */
+export async function restartLostJobs(ctx: Context, repo: string, list: { jobs: readonly IndexedJob[]; rows: readonly JobRow[] }, changeJobs: ReadonlySet<string> | null, o: { held: boolean; at?: number }): Promise<string[]> {
+  if (o.held || !changeJobs) return []
+  const out: string[] = []
+  for (const j of openLostJobs(list.jobs, list.rows, o.at ?? Date.now() / 1000)) {
+    const row = list.rows.find((r) => r.id === j.workerJobId)
+    if (!row || row.resumeOf || !restartable(row) || changeJobs.has(j.id)) continue
+    const r = await restartLost(ctx, repo, row, list.rows, { by: 'trace', auto: true }).catch(() => null)
+    if (r?.ok) out.push(row.title)
+  }
+  return out
+}
+
 /** need 'job' with write: the project from the job id, checked before its worker is asked anything. */
 async function writeAccess(id: string, ctx: Context, repo?: string): Promise<{ jobs: JobsApi; repo: string }> {
   const jobs = await ctx.deps.jobs()
@@ -314,7 +481,7 @@ export const JOB_ACTIONS = {
   'job.control': def('job', z.object({ id: z.string().min(1).max(400), op: z.enum(JOB_OPS), reason: z.string().trim().max(300).optional(), repo: z.string().max(140).optional() }), async (a, ctx) => {
     const { jobs, repo } = await writeAccess(a.id, ctx, a.repo)
     // a paused or retired project: its work can be paused or cancelled, but nothing resumed or moved up
-    if (a.op === 'resume' || a.op === 'move_up') await assertNotHeld(repo)
+    if (a.op === 'resume' || a.op === 'move_up' || a.op === 'restart') await assertNotHeld(repo)
     const by = label(ctx.principal)
     const at = Date.now() / 1000
     const { jobs: views, rows } = await listJobs(ctx, repo, { at })
@@ -376,15 +543,42 @@ export const JOB_ACTIONS = {
         await control({ order })
         return answer({ ok: true, state: 'queued', position: Math.max(1, (view.queue?.position ?? 2) - 1) })
       }
+      case 'restart': {
+        const row = rows.find((r) => r.id === view.workerJobId)
+        if (!row) return answer({ ok: false, state: view.state, reason: 'It is no longer in the project\'s job list.' })
+        const r = await restartLost(ctx, repo, row, rows, { by, auto: false })
+        return answer(r.ok ? { ok: true, state: 'queued', jobId: r.jobId, kept: r.kept } : { ok: false, state: view.state, reason: r.reason })
+      }
+      case 'dismiss': {
+        const why = a.reason?.replace(/\s+/g, ' ').trim() || null
+        const done = await plainly(() => writeJourney(ctx, repo, (db) => {
+          if (loadControls(db).get(view.workerJobId)?.dismissed) return { result: { already: true }, changed: false }
+          putControl(db, { job: view.workerJobId, by, at, dismissed: true, reason: why })
+          const rec = loadJourney(db)
+          if (rec) {
+            decide(db, {
+              kind: 'job.dismissed', stage: rec.journey.currentStage, ref: view.workerJobId, by, detail: { job: view.workerJobId, reason: why },
+              summary: `${by} dismissed "${view.title}", which ended without finishing${why ? `: ${why}` : '.'}`,
+            })
+          }
+          return { result: { already: false } }
+        }))
+        return answer({ ok: true, state: 'lost', dismissed: true, kept: done.already ? 'It was dismissed already.' : 'Dismissed: it leaves the overview, and the decision is in the project\'s history.' })
+      }
     }
   }),
 }
 
 /** Why an op cannot be done for this job now, in plain words. */
-export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parentJob' | 'resumedBy' | 'queue'> & Partial<Pick<IndexedJob, 'handoff'>>, jobs: Pick<JobsApi, 'cancel' | 'pause'>): string {
+export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parentJob' | 'resumedBy' | 'queue'> & Partial<Pick<IndexedJob, 'handoff' | 'settled'>>, jobs: Pick<JobsApi, 'cancel' | 'pause'>): string {
   if (j.parentJob) return 'A worker job belongs to the specialist that asked for it: pause or cancel that job instead.'
   if (op === 'pause' && j.handoff && j.state === 'running') return 'A job another specialist asked for is not paused: cancel it, and the asking specialist is told it was not answered.'
-  if (j.state === 'lost') return 'trace lost contact with this job; there is nothing to control. Start it again if it is still needed.'
+  if (j.state === 'lost') {
+    if (j.settled) return j.settled.how === 'dismissed' ? 'It was dismissed already.' : 'It was started again already: follow the new job.'
+    if (op === 'restart') return 'Only a person\'s task whose request trace recorded can be started again from here. Ask trace to do the work again with "Ask trace to fix something", or dismiss it.'
+    return 'trace lost contact with this job: there is nothing to pause, resume or cancel. Start it again if it is still needed, or dismiss it.'
+  }
+  if (op === 'restart' || op === 'dismiss') return 'Only a job that ended without finishing can be started again or dismissed.'
   switch (op) {
     case 'pause':
       if (j.kind !== 'task') return 'Only a person\'s task can be paused; a workflow\'s job can only be cancelled (the workflow would start it again).'

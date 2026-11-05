@@ -75,7 +75,7 @@ import { type ModelUse, recordModelUse } from '../../core/cost.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, memoryLine, noMemory, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { composeTask, taskBranch } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
-import { type Resumed, composeResumeNote, composeSpecialist } from '../specialist.js'
+import { type Restarted, type Resumed, composeResumeNote, composeSpecialist } from '../specialist.js'
 import { PROJECT_DB } from '../../core/store.js'
 import { type Composed, type Layers, NO_LAYERS, type Provenance, provenanceOf, record } from '../../prompts/resolve.js'
 import { InstallationPrompts, loadLayers } from '../../prompts/store.js'
@@ -621,14 +621,14 @@ const ITEM_WHAT: Readonly<Record<WorkItem['kind'], string>> = {
 
 /**
  * Whether a task's specialist is checked against its request (router.ts misPicked): only a person's own pick for new
- * work. A specialist's delegation, a resumed task (its agent was settled when it first ran) and a task that carries on
+ * work. A specialist's delegation, a resumed or restarted task (its agent was settled when it first ran) and a task that carries on
  * an existing branch (a carry-on after an answer, a revision asked for with "Ask for changes": the specialist whose work
  * is on it) go where they say. Checked, a Documentation carry-on whose answer was about firmware was moved to the
  * Implementation specialist and queued behind a layout job (test-esp32 log #122). A task stacked on an open change is
  * follow-up work too: a carry-on whose asking job ran on another specialist's branch opens a change of its own on top
  * of it (src/core/answer-followups.ts carryOnPlace), and stays with the specialist that asked.
  */
-export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.branch && !p.stackOn
+export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.restart && !p.branch && !p.stackOn
 
 function prepared(p: WorkItemJob | TaskJob): Prepared {
   if (p.kind === 'work-item') {
@@ -795,6 +795,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     // (not on a new branch: the paused work was on the discarded one, and is not carried over)
     const resumeOf = p.kind === 'task' && p.resume && !discard ? p.resume : null
     const prior = resumeOf ? await d.paused?.read(resumeOf.job).catch(() => null) ?? null : null
+    // a restarted task: the lost job it starts again, on the same branch (whatever that job pushed is there)
+    const restartOf = p.kind === 'task' && p.restart && !resumeOf ? p.restart : null
 
     // the item's labels, body and latest comments: for the router (when the pick did not route it) and the prompt
     const thread = p.kind === 'work-item' ? await threadOf(gh, p.repository, p.item.number, log) : null
@@ -842,11 +844,19 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         if (prior?.session && d.paused && await d.paused.restore(resumeOf.job, prior.session, dir).catch(() => false)) continueSession = prior.session
         log(`resuming ${resumeOf.job} on ${branch}: ${continueSession ? 'its conversation was kept and carries on' : 'its conversation was not kept, so a new one starts from what the branch has'}`)
       }
+      let restarted: Restarted | null = null
+      if (restartOf) {
+        const commits = await gitIn(g)(['log', '--format=%h %s', '-n', '20', `origin/${base.defaultBranch}..HEAD`]).then((x) => x.stdout.trim()).catch(() => '')
+        restarted = { lostJob: restartOf.job, by: restartOf.by, commits }
+        log(`starting ${restartOf.job} again on ${branch} (it ended without finishing): ${commits ? `${commits.split('\n').length} commit(s) of it are on the branch` : 'nothing of it is on the branch'}`)
+      }
       const made = prep.job(branch, thread?.text, startedFrom && startedFrom !== base.defaultBranch ? startedFrom : undefined)
-      const job: SpecialistJob = discard && made.kind === 'task' ? { ...made, afterDiscard: { number: discard.from.number, branch: discard.from.branch, by: discard.from.by, reason: discard.from.reason } } : made
+      const job: SpecialistJob = made.kind === 'task' && (discard || resumed || restarted)
+        ? { ...made, ...(discard ? { afterDiscard: { number: discard.from.number, branch: discard.from.branch, by: discard.from.by, reason: discard.from.reason } } : {}), ...(resumed ? { resumed } : {}), ...(restarted ? { restarted } : {}) }
+        : made
       const prompt = continueSession && resumed
         ? composeResumeNote(resumed, branch, layers)
-        : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers, requirements })
+        : composeSpecialist(s, { cfg, repository: p.repository, job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers, requirements })
       const system = systemAppend(notes, layers)
       const asked = prep.route === null && r.source === 'model'
       const used = [...(asked ? provenanceOf(['router.classify', 'router.contract'], layers) : []), ...prompt.provenance, ...system.provenance,

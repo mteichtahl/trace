@@ -247,7 +247,8 @@ export const TABLES: readonly TableMap[] = [
     db: 'journey', table: 'job_controls', class: 'JobControl', kind: 'job-control', key: 'job',
     columns: {
       job: { prop: 'controlsJob', ref: 'job' }, held: { prop: 'held', as: 'bool' }, ord: { prop: 'order', as: 'decimal' },
-      discarded: { prop: 'discarded', as: 'bool' }, by: { prop: 'recordedBy' }, at: { prop: 'recordedAt', as: 'time' },
+      discarded: { prop: 'discarded', as: 'bool' }, dismissed: { prop: 'dismissed', as: 'bool' }, reason: { prop: 'reason' },
+      restarted_by: { prop: 'restartedBy' }, restarted_at: { prop: 'restartedAt', as: 'time' }, by: { prop: 'recordedBy' }, at: { prop: 'recordedAt', as: 'time' },
     },
   },
   {

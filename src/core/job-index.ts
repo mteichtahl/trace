@@ -23,8 +23,10 @@
  *
  * What people decide about jobs is not here (an agent writes this index, and agents never decide for a person): it is
  * the journey record's `job_controls` table (projects/<slug>/journey/journey.db, written only by the API, after its
- * access check): a queued job held ("paused" before it starts), its place in the queue (Move up), and a paused job
- * discarded. The worker reads those controls when it decides whether a queued job may start (QUEUE RULE below).
+ * access check): a queued job held ("paused" before it starts), its place in the queue (Move up), a paused job
+ * discarded, and a lost job dismissed (with the person's reason) or started again (by whom, and when: the new job's
+ * row links back to it through resume_of). The worker reads those controls when it decides whether a queued job may
+ * start (QUEUE RULE below).
  *
  * QUEUE RULE. A person's task waits while the project already has a job running for the same agent, or
  * worker.max_parallel jobs running in all: it is `queued` until it is first in its agent's queue, not held, and a
@@ -93,8 +95,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   branch TEXT,
   parent_job TEXT,                -- a delegated worker's specialist job
   handoff TEXT,                   -- a hand-off job: the hand-off it answers (src/core/handoffs.ts)
-  resume_of TEXT,                 -- the paused job this one carries on
-  resumed_by TEXT,                -- the job that carried this paused one on
+  resume_of TEXT,                 -- the paused job this one carries on, or the lost one it starts again
+  resumed_by TEXT,                -- the job that carried this paused one on, or started this lost one again
   summary TEXT,
   error TEXT,
   payload TEXT,                   -- a task's request (JSON, without its trace context): what Resume starts again
@@ -279,27 +281,52 @@ export interface JobControl {
   order: number | null
   /** a paused job a person discarded (Cancel on a paused job): it is not resumed */
   discarded: boolean
+  /** a lost job a person dismissed (Dismiss on its "Ended without finishing" card): it leaves the overview */
+  dismissed: boolean
+  /** why it was dismissed, in the person's words; null when they gave none */
+  reason: string | null
+  /**
+   * a lost job started again: who (a person, or trace on its own) and when. Written before the new job is asked for,
+   * so two presses (or two looks) start it once; cleared again when the start is refused
+   */
+  restartedBy: string | null
+  restartedAt: number | null
   by: string
   at: number
 }
 
 export const JOB_CONTROLS_SQL = `CREATE TABLE IF NOT EXISTS job_controls (
-  job TEXT PRIMARY KEY, held INTEGER NOT NULL DEFAULT 0, ord REAL, discarded INTEGER NOT NULL DEFAULT 0, by TEXT NOT NULL, at REAL NOT NULL
+  job TEXT PRIMARY KEY, held INTEGER NOT NULL DEFAULT 0, ord REAL, discarded INTEGER NOT NULL DEFAULT 0, dismissed INTEGER NOT NULL DEFAULT 0,
+  reason TEXT, restarted_by TEXT, restarted_at REAL, by TEXT NOT NULL, at REAL NOT NULL
 )`
+
+/** Make the table, and add the columns a record made before lost jobs could be dismissed or started again lacks. */
+function controlsTable(db: DatabaseSync): void {
+  db.exec(JOB_CONTROLS_SQL)
+  const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('job_controls')").all() as { name: string }[]).map((c) => c.name))
+  if (!cols.has('dismissed')) db.exec('ALTER TABLE job_controls ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0')
+  if (!cols.has('reason')) db.exec('ALTER TABLE job_controls ADD COLUMN reason TEXT')
+  if (!cols.has('restarted_by')) db.exec('ALTER TABLE job_controls ADD COLUMN restarted_by TEXT')
+  if (!cols.has('restarted_at')) db.exec('ALTER TABLE job_controls ADD COLUMN restarted_at REAL')
+}
 
 /** The controls in a journey record (none when the table was never made). */
 export function loadControls(db: DatabaseSync): Map<string, JobControl> {
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_controls'").get()) return new Map()
   return new Map((db.prepare('SELECT * FROM job_controls').all() as Record<string, unknown>[]).map((r) => [String(r.job), {
-    job: String(r.job), held: Number(r.held) === 1, order: num(r.ord), discarded: Number(r.discarded) === 1, by: String(r.by), at: Number(r.at),
+    job: String(r.job), held: Number(r.held) === 1, order: num(r.ord), discarded: Number(r.discarded) === 1,
+    dismissed: Number(r.dismissed ?? 0) === 1, reason: str(r.reason), restartedBy: str(r.restarted_by), restartedAt: num(r.restarted_at),
+    by: String(r.by), at: Number(r.at),
   }]))
 }
 
-export function putControl(db: DatabaseSync, c: Pick<JobControl, 'job' | 'by' | 'at'> & Partial<Pick<JobControl, 'held' | 'order' | 'discarded'>>): void {
-  db.exec(JOB_CONTROLS_SQL)
+export function putControl(db: DatabaseSync, c: Pick<JobControl, 'job' | 'by' | 'at'> & Partial<Omit<JobControl, 'job' | 'by' | 'at'>>): void {
+  controlsTable(db)
   const was = loadControls(db).get(c.job)
-  db.prepare('INSERT OR REPLACE INTO job_controls (job, held, ord, discarded, by, at) VALUES (?,?,?,?,?,?)').run(
-    c.job, (c.held ?? was?.held ?? false) ? 1 : 0, c.order !== undefined ? c.order : was?.order ?? null, (c.discarded ?? was?.discarded ?? false) ? 1 : 0, c.by, c.at)
+  const pick = <K extends keyof JobControl>(k: K, none: JobControl[K]): JobControl[K] => (c[k] !== undefined ? c[k] as JobControl[K] : was?.[k] ?? none)
+  db.prepare('INSERT OR REPLACE INTO job_controls (job, held, ord, discarded, dismissed, reason, restarted_by, restarted_at, by, at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+    c.job, pick('held', false) ? 1 : 0, pick('order', null), pick('discarded', false) ? 1 : 0, pick('dismissed', false) ? 1 : 0,
+    pick('reason', null), pick('restartedBy', null), pick('restartedAt', null), c.by, c.at)
 }
 
 /**

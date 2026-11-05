@@ -119,6 +119,12 @@ export const TaskPayload = z.object({
    * resumed it. Its work is on its branch; its transcript, when kept, is resumed (src/agents/runtime/job.ts).
    */
   resume: z.object({ job: z.string().min(1).max(64), by: z.string().min(1).max(200) }).strict().optional(),
+  /**
+   * This task starts a lost one again (job.control restart, or trace on its own once): the lost job's id on this
+   * project's worker and who started it again. The same request on the same branch, as a new attempt; whatever the lost
+   * job pushed there stays, and the prompt says so (src/agents/runtime/job.ts).
+   */
+  restart: z.object({ job: z.string().min(1).max(64), by: z.string().min(1).max(200) }).strict().optional(),
   trace: TraceContextSchema.optional(),
 }).strict()
 
@@ -137,7 +143,7 @@ export type Delegation = z.infer<typeof DelegationSchema>
  * A worker job a specialist started (internal only: never accepted on /invocations or through the API). The request
  * is the specialist's brief with its acceptance criteria; it runs in the specialist's checkout.
  */
-export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true, resume: true }).extend({
+export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true, resume: true, restart: true }).extend({
   agent: z.literal(WORKER),
   delegation: DelegationSchema,
 }).strict()

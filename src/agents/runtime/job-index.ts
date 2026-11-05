@@ -75,7 +75,7 @@ export function titleOf(p: JobPayload): string {
  * not kept: it is never paused, so never resumed. */
 export function resumablePayload(p: JobPayload): string | null {
   if (p.kind !== 'task' || isDelegated(p) || isHandoff(p)) return null
-  const { trace: _t, resume: _r, ...rest } = p
+  const { trace: _t, resume: _r, restart: _s, ...rest } = p
   return JSON.stringify(rest)
 }
 
@@ -144,7 +144,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
       requestedBySub: p?.kind === 'task' ? p.requestedBySub ?? null : null, requestedBy: p?.kind === 'task' ? p.requestedBy : null,
       state: j.state, step: j.step ?? null, startedAt: iso(j.runningAt ?? j.startedAt), endedAt: iso(j.endedAt), where: WHERE,
       branch: j.branch ?? null, parentJob: j.parentJobId ?? null, handoff: j.handoffId ?? null, session: j.session ?? null, summary: j.summary?.slice(0, 8000) ?? null, error: j.error?.slice(0, 2000) ?? null,
-      ...(p?.kind === 'task' && !isDelegated(p) ? { payload: resumablePayload(p), resumeOf: p.resume?.job ?? null } : {}),
+      ...(p?.kind === 'task' && !isDelegated(p) ? { payload: resumablePayload(p), resumeOf: p.resume?.job ?? p.restart?.job ?? null } : {}),
       ...(j.pause ? { pausedBy: j.pause.by, pausedAt: iso(j.pause.at) } : {}),
     }
   }
@@ -176,7 +176,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
             // `queued` or `running`. Its end always lands: stripped, a job that ended before its first write was
             // confirmed stayed `running` and was shown lost though it had finished
             const f = fresh.has(id) && exists && (f0.state === 'queued' || f0.state === 'running') ? { ...f0, state: undefined } : f0
-            // a resumed task marks the paused one it carries on
+            // a resumed task marks the paused one it carries on, and a restarted one the lost one it starts again
             if (f.resumeOf) putJob(db, f.resumeOf, { resumedBy: id }, at)
             putJob(db, id, f.beatAt === undefined && f.state === 'running' ? { ...f, beatAt: at } : f, at)
           }
