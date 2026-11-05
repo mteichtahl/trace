@@ -191,7 +191,7 @@ that repository alone, good for an hour, with the app's own quota (5,000 request
 Without it they spend the quota of the person whose token `TRACE_TOKEN` is, which ten open pull requests and busy agents
 used up in an hour (test-esp32 run 2, #126). The app's private key is never a repository secret: it is kept in Secrets
 Manager (`<prefix>/github-app`), and only the installation's token broker reads it (`<prefix>-github-app-token`, a
-Lambda function URL with IAM sign-in, `docs/agent-identity.md`). The broker picks the repository
+Lambda function URL with IAM sign-in, [docs/agent-identity.md](docs/agent-identity.md)). The broker picks the repository
 from the AWS role that asks, never from the request. What each project repository needs for it:
 
 | What | Where | For |

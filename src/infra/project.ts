@@ -112,8 +112,11 @@ import { gpuTelemetryEnv } from './observability.js'
 import { jobIndexKey } from '../core/job-index.js'
 import { PRICES_KEY, PRICES_PREFIX } from '../core/prices-store.js'
 import {
-  GPU_JOB_VCPUS, type InfraProps, githubSubjects, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
+  GPU_JOB_VCPUS, type InfraProps, githubAppEnabled, githubSubjects, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
+  tokenRoleOutput,
 } from './props.js'
+import { projectRoleNames } from '../core/github-app.js'
+import { brokerInvokeStatements } from './github-app.js'
 
 /** A project's job-events topic, and its EventBridge rule: `<prefix>-<hash>-batch-events` (src/gpu/batch.ts reads the
  * prefix and hash back from the topic's name to name its wait queues). */
@@ -226,6 +229,8 @@ export class ProjectStack extends Construct {
   readonly runtimeName: string
   readonly role: iam.Role
   readonly actionsRole: iam.Role
+  /** its token role (TRACE_GITHUB_APP_ROLE), with githubApp on: may only ask the token broker (src/infra/github-app.ts) */
+  readonly tokenRole: iam.Role | null = null
   readonly secret: secrets.Secret
   readonly jobDefinitionName: string | null
   /** its jobs' state-change events (null without the GPU queue) */
@@ -623,6 +628,28 @@ export class ProjectStack extends Construct {
     // and makes its dictation vocabulary on that push too (the kb-sync job's voice.vocabulary step)
     for (const st of vocabulary) this.actionsRole.addToPolicy(st.copy())
 
+    // ------------------------------------------------------------------ trace's GitHub app: asking its token broker
+    // (docs/agent-identity.md). The broker gives a token for the caller's own repository, which it reads from the
+    // caller's role name (src/core/github-app.ts projectRoleNames), so every role that may ask is named here. The token
+    // role is assumed from ANY of the repository's runs (open-pr runs on pushed branches, automerge on pull requests,
+    // where the OIDC role above is refused) and may do nothing but ask the broker: a branch's run gets a token of the
+    // app for its own repository, as it could use TRACE_TOKEN, and none of the agent, the central store or the models.
+    if (githubAppEnabled(cfg)) {
+      const ask = brokerInvokeStatements(partition, region, account, cfg.prefix)
+      for (const st of ask) { this.role.addToPolicy(st.copy()); this.actionsRole.addToPolicy(st.copy()) }
+      this.tokenRole = new iam.Role(this, 'TokenRole', {
+        roleName: projectRoleNames(cfg.prefix, repository, region).token,
+        maxSessionDuration: Duration.hours(1),
+        description: `Assumed by ${slug}'s trace workflows to ask the token broker for trace's GitHub app's token (GitHub OIDC)`,
+        assumedBy: new iam.WebIdentityPrincipal(p.oidcProviderArn, {
+          StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
+          // any ref, pull requests and environments of this repository, by name or by ids; never another repository
+          StringLike: { [`${issuer}:sub`]: githubSubjects(repository, cfg.githubSubjects, ':*') },
+        }),
+        inlinePolicies: { Broker: new iam.PolicyDocument({ statements: ask }) },
+      })
+    }
+
     // ------------------------------------------------------------------ its CI: the CodeBuild runner project (src/infra/runner.ts)
     // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job
     // assumes the OIDC role above for that, as before). With a connection, only once it is authorized (connectionReady)
@@ -644,6 +671,7 @@ export class ProjectStack extends Construct {
     const stack = Stack.of(this)
     new CfnOutput(stack, outputs.runtimeArn, { value: this.runtime.attrAgentRuntimeArn, description: `${slug}: its worker runtime (TRACE_AGENT_RUNTIME_ARN)` })
     new CfnOutput(stack, outputs.roleArn, { value: this.actionsRole.roleArn, description: `${slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
+    if (this.tokenRole) new CfnOutput(stack, tokenRoleOutput(repository), { value: this.tokenRole.roleArn, description: `${slug}: its token role (TRACE_GITHUB_APP_ROLE)` })
     new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
     if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
     if (this.runner) new CfnOutput(stack, outputs.runnerProject, { value: this.runner.runner, description: `${slug}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT); none while GitHub refuses its webhook` })

@@ -4,6 +4,7 @@
 import { App } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { projectRoleNames } from '../../src/core/github-app.js'
 import { projectHash } from '../../src/core/project.js'
 import { InfraPropsSchema, githubSubjects, stackName } from '../../src/infra/props.js'
 import { RELEASE_STACK, TraceReleaseStack, releaseSettings } from '../../src/infra/release.js'
@@ -30,7 +31,7 @@ describe('the roles GitHub workflows assume', () => {
     syn = synth(InfraPropsSchema.parse({
       account: '123456789012', region: 'us-east-1', repositories: [BOARD, `${OTHER}@develop`], ciRepositories: [TRACE],
       model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS,
-      selfUpdate: { repository: TRACE }, githubSubjects: { [TRACE]: TRACE_ID, [BOARD]: BOARD_ID },
+      selfUpdate: { repository: TRACE }, githubSubjects: { [TRACE]: TRACE_ID, [BOARD]: BOARD_ID }, githubApp: { enabled: true },
     }), stackName('trace'))
   }, 300_000)
 
@@ -48,6 +49,21 @@ describe('the roles GitHub workflows assume', () => {
     const c = conditionOf(syn.parent, 'trace-self-update')
     expect(c.StringEquals?.[SUB]).toEqual([`repo:${TRACE}:ref:refs/heads/main`, `${TRACE_ID}:ref:refs/heads/main`])
     expect(c.StringLike).toEqual({ 'token.actions.githubusercontent.com:job_workflow_ref': `${TRACE}/.github/workflows/ci.yml@refs/heads/main` })
+  })
+
+  it('the token role (trace\'s GitHub app, docs/agent-identity.md): any run of its own repository, by name or by ids', () => {
+    // open-pr runs on pushed branches and automerge on pull requests, where the default-branch role is refused
+    expect(conditionOf(syn.all, `trace-gt-${projectHash(BOARD)}-us-east-1`).StringLike?.[SUB]).toEqual([`repo:${BOARD}:*`, `${BOARD_ID}:*`])
+    expect(conditionOf(syn.all, `trace-gt-${projectHash(OTHER)}-us-east-1`).StringLike?.[SUB]).toBe(`repo:${OTHER}:*`)
+    // and it may do nothing but ask the broker
+    const role = Object.values(syn.all.findResources('AWS::IAM::Role') as Record<string, { Properties: { RoleName?: string; Policies?: { PolicyDocument: { Statement: { Action: string }[] } }[] } }>)
+      .find((r) => r.Properties.RoleName === `trace-gt-${projectHash(BOARD)}-us-east-1`)!
+    expect(role.Properties.Policies?.flatMap((p) => p.PolicyDocument.Statement.map((st) => st.Action)).sort()).toEqual(['lambda:InvokeFunction', 'lambda:InvokeFunctionUrl'])
+    expect(Object.values(syn.all.findResources('AWS::IAM::Policy')).some((p) => JSON.stringify(p).includes('lambda:InvokeFunctionUrl'))).toBe(true)
+    syn.parent.hasResourceProperties('AWS::Lambda::Url', { AuthType: 'AWS_IAM' })
+    // the broker knows a caller's repository by these names: they are the roles the project really has
+    const names = Object.values(syn.all.findResources('AWS::IAM::Role') as Record<string, { Properties: { RoleName?: string } }>).map((r) => r.Properties.RoleName)
+    for (const n of Object.values(projectRoleNames('trace', BOARD, 'us-east-1'))) expect(names).toContain(n)
   })
 
   it('never a wildcard over the ids, and the settings take only real subjects', () => {
