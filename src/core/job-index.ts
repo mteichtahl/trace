@@ -157,7 +157,7 @@ const str = (v: unknown): string | null => (v === null || v === undefined ? null
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v))
 
 export function loadJobs(db: DatabaseSync): JobRow[] {
-  return (db.prepare('SELECT * FROM jobs ORDER BY COALESCE(started_at, queued_at, updated_at) DESC').all() as Record<string, unknown>[]).map((r) => ({
+  return (db.prepare('SELECT * FROM jobs ORDER BY COALESCE(started_at, queued_at, updated_at) DESC').all() as Record<string, unknown>[]).map((r) => endedByItsWord({
     id: String(r.id), handle: str(r.handle), session: str(r.session), kind: String(r.kind), agent: str(r.agent), title: String(r.title), number: num(r.number),
     requestedBySub: str(r.requested_by_sub), requestedBy: str(r.requested_by), state: String(r.state) as IndexState, step: str(r.step),
     queuedAt: num(r.queued_at), startedAt: num(r.started_at), endedAt: num(r.ended_at), beatAt: num(r.beat_at), where: str(r.where_),
@@ -165,6 +165,67 @@ export function loadJobs(db: DatabaseSync): JobRow[] {
     summary: str(r.summary), error: str(r.error), payload: str(r.payload), claudeSession: str(r.claude_session),
     pausedBy: str(r.paused_by), pausedAt: num(r.paused_at), tail: str(r.tail), vitals: str(r.vitals), lostAt: num(r.lost_at), updatedAt: Number(r.updated_at),
   }))
+}
+
+// ------------------------------------------------------------------ a job's own word on its end
+
+/**
+ * A job's end as its own log says it: the line jobs.ts logs as the job ends, just before its 'ended' event
+ * ("<time> succeeded: branch …, done in 8 turns"). No other log line starts with these words.
+ */
+const END_LINE = /^(\d{4}-\d\d-\d\dT[\d:.]+Z) (succeeded|failed|aborted|paused)(?:: ([\s\S]*))?$/
+
+export type EndState = 'succeeded' | 'failed' | 'aborted' | 'paused'
+
+/** The end a row's last log line reports, or null when its last line is not its end. Pure. */
+export function endInTail(tail: string | null): { state: EndState; at: number; text: string | null } | null {
+  let lines: unknown = []
+  try { lines = tail ? JSON.parse(tail) : [] } catch { return null }
+  if (!Array.isArray(lines)) return null
+  const last: unknown = lines[lines.length - 1]
+  const m = typeof last === 'string' ? END_LINE.exec(last) : null
+  if (!m) return null
+  const at = Date.parse(m[1] as string) / 1000
+  return Number.isFinite(at) ? { state: m[2] as EndState, at, text: m[3]?.trim() || null } : null
+}
+
+/**
+ * A running row whose own last log line is its end has ended, whatever its state column says. Its end's write can
+ * miss the index while its last lines (written on their own) land: job-mw36djoh's docs worker logged "succeeded …
+ * done in 8 turns" and its commits were on the change, yet its row stayed `running` and it was shown lost 15 minutes
+ * later, so a person would have restarted finished work. Every reader (the views, the queue, the lost sweep) loads
+ * rows through here, so none of them calls such a job lost; the worker also writes the end into the row
+ * (recordTailEnds). Pure.
+ */
+export function endedByItsWord(j: JobRow): JobRow {
+  if (j.state !== 'running') return j
+  const end = endInTail(j.tail)
+  if (!end) return j
+  const ok = end.state === 'succeeded' || end.state === 'paused'
+  return {
+    ...j, state: end.state, endedAt: j.endedAt ?? end.at,
+    summary: j.summary ?? (ok ? end.text : null), error: j.error ?? (ok ? null : end.text),
+  }
+}
+
+/**
+ * Write the end of every running row whose own last log line is its end (endedByItsWord) into the row, and return
+ * them. Run it inside the index's conditional put, before markLost.
+ */
+export function recordTailEnds(db: DatabaseSync, at: number): Pick<JobRow, 'id' | 'state'>[] {
+  const out: Pick<JobRow, 'id' | 'state'>[] = []
+  for (const r of db.prepare("SELECT id, tail FROM jobs WHERE state='running'").all() as { id: string; tail: string | null }[]) {
+    const end = endInTail(r.tail)
+    if (!end) continue
+    const ok = end.state === 'succeeded' || end.state === 'paused'
+    const was = db.prepare('SELECT summary, error, ended_at FROM jobs WHERE id=?').get(r.id) as { summary: string | null; error: string | null; ended_at: number | null }
+    putJob(db, r.id, {
+      state: end.state, endedAt: was.ended_at ?? end.at,
+      ...(ok && !was.summary && end.text ? { summary: end.text } : {}), ...(!ok && !was.error && end.text ? { error: end.text } : {}),
+    }, at)
+    out.push({ id: r.id, state: end.state })
+  }
+  return out
 }
 
 export function loadBatch(db: DatabaseSync): BatchRow[] {
@@ -305,11 +366,33 @@ export function moveUpOrder(id: string, jobs: readonly JobRow[], controls: Reado
 
 // ------------------------------------------------------------------ estimates
 
-/** The typical time (s) of this kind of job by this agent on the project: the median of its last 20 that succeeded. */
-export function typicalSeconds(jobs: readonly JobRow[], kind: string, agent: string | null): number | null {
-  const d = jobs.filter((j) => j.state === 'succeeded' && j.kind === kind && j.agent === agent && j.startedAt !== null && j.endedAt !== null)
+/** Fewer earlier runs of the same kind than this make no estimate: one quick job is not what such jobs usually take. */
+export const ESTIMATE_MIN_RUNS = 3
+/** How many of a job's request's first words name what kind of work it is. */
+const KIND_WORDS = 3
+
+/**
+ * What kind of job a row is, for its estimate: its kind (task, work item), its agent, the specialist that delegated it
+ * (a worker drawing a layout for the impl specialist is not a worker fixing a sentence for the docs one), and the
+ * first words of its request ("lay out the", "draw the schematic"), a hand-off's after who asked. One estimate for all
+ * of an agent's jobs said "usually 1.5 min" for a layout that took an hour (#121). Pure.
+ */
+export function jobKindOf(j: Pick<JobRow, 'kind' | 'agent' | 'title' | 'parentJob'>, agentOf: ReadonlyMap<string, string | null>): string {
+  const parent = j.parentJob ? agentOf.get(j.parentJob) ?? '?' : ''
+  const words = j.title.replace(/^Asked by the [^:]{1,60} specialist:\s*/, '').toLowerCase().match(/[a-z0-9]+/g)?.slice(0, KIND_WORDS).join(' ') ?? ''
+  return [j.kind, j.agent ?? '', parent, words].join('|')
+}
+
+/**
+ * The typical time (s) of this kind of job on the project (jobKindOf): the median of the last 20 of that kind that
+ * succeeded, or null with fewer than ESTIMATE_MIN_RUNS of them. No estimate is better than a tiny one.
+ */
+export function typicalSeconds(jobs: readonly JobRow[], of: Pick<JobRow, 'kind' | 'agent' | 'title' | 'parentJob'>): number | null {
+  const agentOf = new Map(jobs.map((j) => [j.id, j.agent]))
+  const kind = jobKindOf(of, agentOf)
+  const d = jobs.filter((j) => j.state === 'succeeded' && j.startedAt !== null && j.endedAt !== null && jobKindOf(j, agentOf) === kind)
     .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0)).slice(0, 20).map((j) => (j.endedAt as number) - (j.startedAt as number)).sort((a, b) => a - b)
-  if (!d.length) return null
+  if (d.length < ESTIMATE_MIN_RUNS) return null
   const mid = Math.floor(d.length / 2)
   return Math.round(d.length % 2 ? (d[mid] as number) : ((d[mid - 1] as number) + (d[mid] as number)) / 2)
 }

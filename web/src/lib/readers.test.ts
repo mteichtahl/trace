@@ -57,7 +57,9 @@ describe('reading the API\'s answers', () => {
   it('jobs.list: each job as a run line (its step, typical time, queue place and controls), and each agent\'s state', () => {
     const r = read<ProjectJobs>('jobs.list')
     const [run, queued, done] = r.jobs.filter((j) => !j.handoff)
-    expect(run).toMatchObject({ title: 'Check the ERC', state: 'running', step: 'running ERC on the main sheet', typicalS: 600, controls: ['pause', 'cancel'], agentName: 'Verification', yours: true, branch: 'claude/task-erc' })
+    expect(run).toMatchObject({ title: 'Check the ERC', state: 'running', step: 'running ERC on the main sheet', controls: ['pause', 'cancel'], agentName: 'Verification', yours: true, branch: 'claude/task-erc' })
+    // one earlier run of another request is no estimate (#121): no typical time rather than a tiny one
+    expect(run).not.toHaveProperty('typicalS')
     expect(run!.id).toMatch(/^trace-api-[0-9a-f]{8}-[0-9a-f]{24}\.job-run$/)
     expect(queued).toMatchObject({ state: 'queued', position: 1, startsWhen: expect.stringMatching(/already working/), controls: ['pause', 'cancel'] })
     expect(queued!.step).toBeUndefined()

@@ -157,6 +157,48 @@ describe('the job index, from the jobs\' own events', () => {
     }
   })
 
+  it('a job whose own last line says it finished is written finished by the next write, never declared lost (#124)', async () => {
+    // job-mw36djoh's docs worker: "succeeded … done in 8 turns" in its last lines, its commits on the change, yet its
+    // row stayed running (its end's write never landed) and the next writer declared it lost
+    const s = stores('said-it-finished')
+    const at = Date.now() / 1000
+    const t = (x: number) => new Date(x * 1000).toISOString()
+    await s.index.update((db) => {
+      putJob(db, 'docs-worker', {
+        kind: 'task', title: 'Write the Wi-Fi setup section', state: 'running', agent: 'worker', parentJob: 'job-mw36djoh', session: 's',
+        startedAt: at - 3 * STALE_AFTER_S, beatAt: at - 2 * STALE_AFTER_S,
+        tail: JSON.stringify([`${t(at - 3 * STALE_AFTER_S)} running the worker`, `${t(at - 2 * STALE_AFTER_S)} succeeded: branch claude/docs, done in 8 turns`]),
+      }, at - 2 * STALE_AFTER_S)
+      putJob(db, 'silent', { kind: 'task', title: 'silent', state: 'running', agent: 'impl', session: 's', startedAt: at - 3 * STALE_AFTER_S, beatAt: at - 2 * STALE_AFTER_S }, at - 2 * STALE_AFTER_S)
+      return { result: null }
+    })
+    const said: string[] = []
+    const jobs = createJobs(async () => 'done', quiet)
+    const w = indexJobs(jobs, s.index, (id) => jobs.payloadOf(id), { heartbeat: false, log: (l) => { said.push(l) } })
+    await w.beat()
+    expect(said.filter((l) => l.includes('is lost'))).toEqual([expect.stringContaining('silent is lost')])
+    expect(said).toContainEqual(expect.stringContaining('docs-worker ended (succeeded) by its own last line'))
+    // the row itself says so, not only how it loads
+    expect((await s.index.read((db) => ({ ...db.prepare("SELECT state, summary, lost_at FROM jobs WHERE id='docs-worker'").get() }))).result)
+      .toEqual({ state: 'succeeded', summary: 'branch claude/docs, done in 8 turns', lost_at: null })
+    w.stop()
+    jobs.dispose()
+  })
+
+  it('a job\'s end is written with its last lines, so its row never says one without the other', async () => {
+    const s = stores('end-with-tail')
+    const jobs = createJobs(async (_p, ctx) => { ctx.log('writing the user guide'); return 'branch claude/docs, done in 8 turns' }, quiet)
+    const w = indexJobs(jobs, s.index, (id) => jobs.payloadOf(id), { heartbeat: false, stepEveryMs: 60_000 })
+    const { jobId } = jobs.startJob(task('Write the Wi-Fi setup section'), 'trace-api-00000000-000000000000000000000000')
+    await until(() => !jobs.busy())
+    await w.flush()
+    const row = (await s.index.read(loadJobs)).result.find((r) => r.id === jobId)
+    expect(row).toMatchObject({ state: 'succeeded' })
+    expect(JSON.parse(row?.tail ?? '[]').at(-1)).toMatch(/ succeeded: branch claude\/docs, done in 8 turns$/)
+    w.stop()
+    jobs.dispose()
+  })
+
   it('a change that comes before the job\'s first row (its "started" log line, its route) waits for that row', async () => {
     const s = stores('index-early')
     const said: string[] = []

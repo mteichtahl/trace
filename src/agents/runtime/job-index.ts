@@ -32,7 +32,7 @@ import { freemem, homedir, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { type Backend } from '../../core/central.js'
 import {
-  BEAT_S, STALE_AFTER_S, type BatchRow, type JobControl, JobIndexStore, JOB_SESSIONS_FOLDER, type JobRow, loadControls, loadJobs, markLost, mayStart, pruneJobs, putBatch, putJob, tailOf,
+  BEAT_S, STALE_AFTER_S, type BatchRow, type JobControl, JobIndexStore, JOB_SESSIONS_FOLDER, type JobRow, loadControls, loadJobs, markLost, mayStart, pruneJobs, putBatch, putJob, recordTailEnds, tailOf,
 } from '../../core/job-index.js'
 import { ATTR, recordProjectMetric } from '../../core/telemetry.js'
 import { type BucketDb, JourneyStore } from '../../core/journey-store.js'
@@ -172,22 +172,27 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
             // a change that reached the index before the job's first row (a log line's step, its route: the job logs
             // "started" before its 'started' event) waits for that row instead of failing the whole write
             if (!exists && !('kind' in f0 && 'title' in f0 && 'state' in f0)) { early.set(id, { ...early.get(id), ...f0 }); continue }
-            // the queue (queueAdmit) may have written this job's state first: a first row never overwrites it
-            const f = fresh.has(id) && exists ? { ...f0, state: undefined } : f0
+            // the queue (queueAdmit) may have written this job's state first: a first row never overwrites it with
+            // `queued` or `running`. Its end always lands: stripped, a job that ended before its first write was
+            // confirmed stayed `running` and was shown lost though it had finished
+            const f = fresh.has(id) && exists && (f0.state === 'queued' || f0.state === 'running') ? { ...f0, state: undefined } : f0
             // a resumed task marks the paused one it carries on
             if (f.resumeOf) putJob(db, f.resumeOf, { resumedBy: id }, at)
             putJob(db, id, f.beatAt === undefined && f.state === 'running' ? { ...f, beatAt: at } : f, at)
           }
           for (const b of bs) putBatch(db, b)
+          // a row whose own last line is its end has ended (endedByItsWord): written so, never declared lost
+          const ends = recordTailEnds(db, at)
           // this runtime's own running jobs are alive whatever their rows say (a beat not written yet)
           const lost = markLost(db, at, new Set(jobs.jobStatus().filter((j) => j.state === 'running').map((j) => j.id)))
           pruneJobs(db)
           // a heartbeat with nothing to write and nobody lost writes nothing
-          return { result: lost, ...(!rows.size && !bs.length && !lost.length ? { changed: false } : {}) }
+          return { result: { lost, ends }, ...(!rows.size && !bs.length && !lost.length && !ends.length ? { changed: false } : {}) }
         })
         for (const id of rows.keys()) fresh.delete(id)
         // only the write that won the put returns them: each lost job is counted once
-        for (const j of out.result) {
+        for (const j of out.result.ends) log(`${j.id} ended (${j.state}) by its own last line: its end is written into the project's job index`)
+        for (const j of out.result.lost) {
           recordProjectMetric('trace.jobs', 1, { [ATTR.jobKind]: j.kind, [ATTR.agent]: j.agent ?? undefined, [ATTR.outcome]: 'lost' })
           log(`${j.id} is lost: no word from it for more than ${Math.round(STALE_AFTER_S / 60)} minutes`)
         }
@@ -251,8 +256,12 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
         merge(e.jobId, { ...rowOf(e.job), queuedAt: iso(e.job.startedAt), ...(waits ? { state: 'queued' as const, step: 'getting ready: its checkout and its agent' } : {}) })
         return soon()
       }
-      case 'state': case 'ended':
+      case 'state':
         merge(e.jobId, rowOf(e.job))
+        return soon()
+      case 'ended':
+        // its last lines go with its end, so the row never holds an end line without its state (or the reverse)
+        merge(e.jobId, { ...rowOf(e.job), step: e.job.step ?? null, tail: tailOf(e.job.log ?? []) })
         return soon()
       case 'routed':
         merge(e.jobId, { agent: e.route.kind })

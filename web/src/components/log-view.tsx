@@ -397,7 +397,11 @@ export function LogView({ repo, run, ...rest }: { repo: string; run: string } & 
   return <LogPanel log={log} {...rest} />
 }
 
-/** "3 min so far, usually 6" / "1 min so far, about 2 left" / "48 s so far". Pure. */
+/**
+ * "3 min so far, usually 6" / "1 min so far, about 2 left" / "48 s so far" / "40 min so far, taking longer than usual".
+ * Past its usual time a job says so rather than repeat an estimate it has outrun ("50 min so far, usually 1.5 min" for
+ * the layout worker of #121 and #125 read as a broken clock). Pure.
+ */
 export function timeAgainstUsual(startedAt: string | null | undefined, typicalS: number | null | undefined, now: number): string | null {
   if (!startedAt) return null
   const el = Math.max(0, (now - Date.parse(startedAt)) / 1000)
@@ -405,5 +409,5 @@ export function timeAgainstUsual(startedAt: string | null | undefined, typicalS:
   if (!typicalS) return so
   if (el <= typicalS * 0.5) return `${so}, usually ${duration(typicalS, { short: true })}`
   if (el < typicalS) return `${so}, about ${duration(typicalS - el, { short: true })} left`
-  return `${so}, usually ${duration(typicalS, { short: true })}`
+  return `${so}, taking longer than usual`
 }

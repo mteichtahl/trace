@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { agentViews, cannot, controlsOf, jobViews } from '../../src/api/actions-jobs.js'
 import {
   type JobControl, type JobRow, OVERDUE_AFTER_S, STALE_AFTER_S, applyJobIndexSchema, changedSince, indexedHandle, isLive, loadControls, loadJobs, mayStart, moveUpOrder, pruneJobs, putControl,
-  putJob, queueOrder, typicalSeconds, lastWords, markLost, tailOf, TAIL_LINES,
+  putJob, queueOrder, typicalSeconds, lastWords, markLost, tailOf, TAIL_LINES, endInTail, recordTailEnds, jobKindOf,
 } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
 
@@ -80,13 +80,14 @@ describe('the queue rule', () => {
 describe('the index', () => {
   it('estimates from the median of the last succeeded jobs of that kind and agent, and keeps only the newest finished rows', () => {
     const d = db()
-    for (let i = 0; i < 5; i++) add(d, `s${i}`, { state: 'succeeded', startedAt: AT, endedAt: AT + 100 * (i + 1) })
-    add(d, 'f', { state: 'failed', startedAt: AT, endedAt: AT + 9999 })
-    add(d, 'o', { state: 'succeeded', agent: 'impl', startedAt: AT, endedAt: AT + 7 })
+    for (let i = 0; i < 5; i++) add(d, `s${i}`, { state: 'succeeded', title: 'Check the ERC', startedAt: AT, endedAt: AT + 100 * (i + 1) })
+    add(d, 'f', { state: 'failed', title: 'Check the ERC', startedAt: AT, endedAt: AT + 9999 })
+    for (let i = 0; i < 3; i++) add(d, `o${i}`, { state: 'succeeded', title: 'Check the ERC', agent: 'impl', startedAt: AT, endedAt: AT + 7 })
     const jobs = loadJobs(d)
-    expect(typicalSeconds(jobs, 'task', 'verify')).toBe(300)
-    expect(typicalSeconds(jobs, 'task', 'impl')).toBe(7)
-    expect(typicalSeconds(jobs, 'work-item', 'verify')).toBeNull()
+    const of = (f: Partial<JobRow>) => ({ kind: 'task', agent: 'verify', title: 'Check the ERC again', parentJob: null, ...f })
+    expect(typicalSeconds(jobs, of({}))).toBe(300)
+    expect(typicalSeconds(jobs, of({ agent: 'impl' }))).toBe(7)
+    expect(typicalSeconds(jobs, of({ kind: 'work-item' }))).toBeNull()
     for (let i = 0; i < 320; i++) add(d, `old${i}`, { state: 'succeeded', endedAt: i })
     pruneJobs(d)
     expect(loadJobs(d).filter((j) => j.state !== 'running' && j.state !== 'queued').length).toBe(300)
@@ -211,5 +212,61 @@ describe('lost jobs, declared once (LOST COUNTED ONCE)', () => {
     putJob(d, 'silent', { beatAt: AT + 130 - 2 * STALE_AFTER_S }, AT + 131)
     expect(markLost(d, AT + 200)).toEqual([])
     expect(loadJobs(d).find((j) => j.id === 'silent')).toMatchObject({ state: 'running', lostAt: AT })
+  })
+})
+
+describe('estimates from past runs of the same kind of job (#121)', () => {
+  it('tells a layout from a sentence fix: by the delegating specialist and the request\'s first words, and needs enough runs', () => {
+    const d = db()
+    add(d, 'docs', { state: 'succeeded', agent: 'docs' as never, title: 'Update the user guide', startedAt: AT, endedAt: AT + 60 })
+    add(d, 'impl', { state: 'succeeded', agent: 'impl', title: 'Lay out the board', startedAt: AT, endedAt: AT + 3600 })
+    // the docs specialist's workers: quick sentence fixes
+    for (let i = 0; i < 4; i++) add(d, `w-docs-${i}`, { state: 'succeeded', agent: 'worker', parentJob: 'docs', title: 'Fix the wording in section 2', startedAt: AT, endedAt: AT + 90 })
+    // the impl specialist's layout workers: an hour each, but only two so far
+    for (let i = 0; i < 2; i++) add(d, `w-impl-${i}`, { state: 'succeeded', agent: 'worker', parentJob: 'impl', title: 'Lay out the PCB from the netlist', startedAt: AT, endedAt: AT + 3000 + i * 600 })
+    const jobs = loadJobs(d)
+    const worker = (parentJob: string, title: string) => ({ kind: 'task', agent: 'worker', parentJob, title })
+    // "usually 1.5 min" came from every worker job; a layout worker now has no estimate until there are enough layouts
+    expect(typicalSeconds(jobs, worker('docs', 'Fix the wording in the intro'))).toBe(90)
+    expect(typicalSeconds(jobs, worker('impl', 'Lay out the PCB again'))).toBeNull()
+    add(d, 'w-impl-2', { state: 'succeeded', agent: 'worker', parentJob: 'impl', title: 'Lay out the PCB with the keep-out', startedAt: AT, endedAt: AT + 3300 })
+    expect(typicalSeconds(loadJobs(d), worker('impl', 'Lay out the PCB again'))).toBe(3300)
+    // a hand-off is its question's kind, whoever asked
+    expect(jobKindOf({ kind: 'task', agent: 'thermal', parentJob: null, title: 'Asked by the Verification specialist: Model the case air' }, new Map()))
+      .toBe(jobKindOf({ kind: 'task', agent: 'thermal', parentJob: null, title: 'Asked by the Implementation specialist: model the case' }, new Map()))
+  })
+})
+
+describe('a job that says it finished is finished (#124)', () => {
+  // job-mw36djoh's docs worker: its last lines said "succeeded … done in 8 turns" and its commits were on the change,
+  // yet its row stayed running and it was shown "Ended without finishing: trace lost contact with it"
+  const t = (s: number) => new Date(s * 1000).toISOString()
+
+  it('reads a job\'s end from its own last log line, and nothing else', () => {
+    expect(endInTail(tailOf([`${t(AT - 100)} running the worker`, `${t(AT - 5)} succeeded: branch claude/docs, done in 8 turns\ncommits:\n02498a5 Wi-Fi setup`])))
+      .toEqual({ state: 'succeeded', at: AT - 5, text: 'branch claude/docs, done in 8 turns\ncommits:\n02498a5 Wi-Fi setup' })
+    expect(endInTail(tailOf([`${t(AT)} failed: Claude stopped (error_max_turns)`]))).toMatchObject({ state: 'failed', text: 'Claude stopped (error_max_turns)' })
+    // an end line that is not the last line, or a line that only mentions success, is not an end
+    expect(endInTail(tailOf([`${t(AT - 5)} succeeded: x`, `${t(AT)} tool: Bash (kicad-cli pcb drc)`]))).toBeNull()
+    expect(endInTail(tailOf([`${t(AT)} the ERC succeeded: 0 errors`]))).toBeNull()
+    expect(endInTail(null)).toBeNull()
+    expect(endInTail('not json')).toBeNull()
+  })
+
+  it('every reader loads it as ended: never lost, never holding the queue; the worker writes its end into the row', () => {
+    const d = db()
+    const end = `${t(AT - 3 * STALE_AFTER_S)} succeeded: branch claude/docs, done in 8 turns`
+    add(d, 'docs-worker', { state: 'running', agent: 'worker', parentJob: 'job-mw36djoh', startedAt: AT - 4 * STALE_AFTER_S, beatAt: AT - 3 * STALE_AFTER_S, tail: tailOf([`${t(AT - 4 * STALE_AFTER_S)} running the worker`, end]) })
+    add(d, 'silent', { state: 'running', startedAt: AT - 3 * STALE_AFTER_S, beatAt: AT - 2 * STALE_AFTER_S, tail: tailOf([`${t(AT - 2 * STALE_AFTER_S)} tool: Bash (kicad-cli pcb drc)`]) })
+    expect(loadJobs(d).find((j) => j.id === 'docs-worker')).toMatchObject({ state: 'succeeded', endedAt: AT - 3 * STALE_AFTER_S, summary: 'branch claude/docs, done in 8 turns' })
+    const v = jobViews(REPO, loadJobs(d), new Map(), { at: AT, sub: 'sub-m', write: true, pause: true, cancel: true })
+    expect(v.find((j) => j.workerJobId === 'docs-worker')).toMatchObject({ state: 'succeeded', error: null })
+    expect(v.find((j) => j.workerJobId === 'silent')).toMatchObject({ state: 'lost' })
+    // the lost sweep passes it over: only the job that truly went silent is declared lost
+    expect(markLost(d, AT).map((j) => j.id)).toEqual(['silent'])
+    // and the worker makes the row itself say so
+    expect(recordTailEnds(d, AT)).toEqual([{ id: 'docs-worker', state: 'succeeded' }])
+    expect({ ...d.prepare("SELECT state, ended_at, summary FROM jobs WHERE id='docs-worker'").get() }).toEqual({ state: 'succeeded', ended_at: AT - 3 * STALE_AFTER_S, summary: 'branch claude/docs, done in 8 turns' })
+    expect(recordTailEnds(d, AT + 1)).toEqual([])
   })
 })

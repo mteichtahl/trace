@@ -74,7 +74,7 @@ export interface IndexedJob extends JobView {
   id: string; workerJobId: string; kind: string; repository: string; agent: string | null; agentName: string | null; title: string; number: number | null
   startedBy: string | null; yours: boolean; state: ViewState; step: string | null; held: boolean
   queuedAt: string | null; startedAt: string | null; endedAt: string | null
-  /** typical seconds for this kind of job by this agent on this project (median of its last 20 that succeeded) */
+  /** typical seconds for this kind of job on this project (core/job-index.ts typicalSeconds), null without enough history */
   typicalS: number | null
   where: string | null; branch: string | null
   /** queued: its place in its agent's queue (1 is next) and what it waits for */
@@ -157,7 +157,7 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       title: j.title, number: j.number, startedBy: j.requestedBy, yours: j.requestedBySub !== null && j.requestedBySub === o.sub, state,
       step: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : discarded ? `discarded by ${c?.by ?? 'a person'}` : j.step, held: Boolean(c?.held),
       queuedAt: iso(j.queuedAt), startedAt: iso(j.state === 'queued' ? null : j.startedAt), endedAt: iso(j.endedAt),
-      typicalS: typicalSeconds(rows, j.kind, j.agent), where: j.where, branch: j.branch, queue,
+      typicalS: typicalSeconds(rows, j), where: j.where, branch: j.branch, queue,
       parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
       heard: state === 'running' ? (({ heardAt, overdueAt, lostAt }) => ({ at: iso(heardAt) as string, overdueAt: iso(overdueAt) as string, lostAt: iso(lostAt) as string }))(heardOf(j)) : null,
