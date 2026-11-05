@@ -25,6 +25,8 @@ describe('reading the API\'s answers', () => {
     ] })
     const g = (READERS['journey.get']!(result, a.args) as JourneyMore).gates.find((x) => x.id === 'define')!
     expect(g.criteria[0]).toMatchObject({ status: 'not_met', evidence: { kind: 'run', id: 'run-9' } })
+    // everything it was checked on, findings apart (they are its findings)
+    expect(g.criteria[0]!.checked).toEqual([{ kind: 'run', label: 'the define.accepted shape: 2 finding(s)', id: 'run-9', to: '/p/acme~answers/runs/run-9' }])
     expect(g.criteria[0]!.findings).toEqual([
       { id: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-1', text: 'No block of the chosen architecture serves "Runs a year". Add it to a block, or strike it with a reason.' },
       { id: 'define.accepted@urn:trace:acme:acme%2Fanswers:requirement:R-2', text: 'No block of the chosen architecture serves "Survives rain". Add it to a block, or strike it with a reason.' },

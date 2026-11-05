@@ -9,7 +9,9 @@
  *                 (src/docs/printed.ts), and the run keeps only where (<kind>.pdf.json), so prints never grow the
  *                 repository's run record; elsewhere (a laptop, CI) the PDF is the run's artifact. With `release`, the
  *                 copies are the revision's release copies (written once). The run has the size, diagram count and
- *                 commit; a diagram that does not draw or an image not beside the document fails it, saying which.
+ *                 commit; a diagram Mermaid cannot read or an image not beside the document fails it, saying which.
+ *                 When the browser behind Mermaid cannot start, the document still prints with those diagrams as
+ *                 their Mermaid source and a note, and the run names them (`not_drawn`) for the next print to draw.
  *
  * The images a document names are sent with it (relative to docs/design, as in the repository); so is the logo
  * (docs/design/logo.svg|png, src/docs/logo.ts).
@@ -81,7 +83,7 @@ const check = defineTool({
 
   const publish = defineTool({
     name: 'docs.publish',
-    description: 'Print the project\'s documents to PDF with the project\'s logo: a cover, revisions, contents, every Mermaid diagram drawn, the renders, drawings and traces they name, page headers and numbers. Runs pandoc, Mermaid and Typst on the tools function (or here). Each PDF is kept as the run\'s artifact. A diagram that does not draw fails, naming it.',
+    description: 'Print the project\'s documents to PDF with the project\'s logo: a cover, revisions, contents, every Mermaid diagram drawn, the renders, drawings and traces they name, page headers and numbers. Runs pandoc, Mermaid and Typst on the tools function (or here). Each PDF is kept as the run\'s artifact. A diagram Mermaid cannot read fails, naming it: fix the diagram. If the browser that draws diagrams cannot start (a fault in trace\'s installation, not the document), the PDF is still made with those diagrams printed as their Mermaid source, and the result lists them under not_drawn: carry on, and print again later; do not ask the person to fix trace.',
     input: z.object({
       docs: Kinds,
       revisions: z.array(z.object({ revision: z.string().max(20), date: z.string().max(40), commit: z.string().regex(/^[0-9a-f]{4,40}$/), note: z.string().max(300) })).max(50).optional()
@@ -133,7 +135,7 @@ const check = defineTool({
             argv: [python, '-m', 'tracebridge.docs', 'publish', '--doc', `{in:${file}}`, '--out', `{out:${pdf}}`,
               '--revisions', '{in:revisions.json}', ...(logo ? ['--logo', `{in:${logo}}`] : [])],
           })
-          let said: { error?: string; bytes?: number; diagrams?: number; browser?: { flags: number | null; tried: string[] } } = {}
+          let said: { error?: string; bytes?: number; diagrams?: number; browser?: { flags: number | null; tried: string[] }; not_drawn?: number[]; not_drawn_why?: string } = {}
           try { said = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '{}') } catch { /* a crash: stderr says why */ }
           const got = r.outputs[pdf]
           if (r.exitCode !== 0 || !got) {
@@ -143,12 +145,20 @@ const check = defineTool({
           }
           const bytes = readFileSync(got)
           rmSync(got, { force: true })
+          // a release copy is kept for good: never one with a diagram left as source
+          if (a.release && said.not_drawn?.length) {
+            const why = `${DOCS[k].title} was not kept as revision ${a.release}'s release copy: diagram(s) ${said.not_drawn.join(', ')} could not be drawn (${said.not_drawn_why ?? 'the browser did not start'})`
+            work.finish(id, 'fail', why)
+            throw new ToolError(why)
+          }
           // the bucket when there is one (the run keeps where), else the run's own artifact
           const kept = printed ? await storePrinted(printed.store, printed.repository, bytes) : null
           if (kept) work.artifact(id, `${pdf}.json`, JSON.stringify({ key: kept.key, sha256: kept.sha256, bytes: bytes.length, ...(a.release ? { release: a.release } : {}) }), 'application/json')
           else work.artifact(id, pdf, bytes, 'application/pdf')
           work.measure(id, 'bytes', bytes.length, 'B')
           work.measure(id, 'diagrams', said.diagrams ?? null, '')
+          const notDrawn = said.not_drawn ?? []
+          if (notDrawn.length) work.measure(id, 'diagrams_not_drawn', notDrawn.length, '')
           let written: string | undefined
           if (a.out_dir) {
             const target = resolve(root, a.out_dir, pdf)
@@ -157,8 +167,13 @@ const check = defineTool({
             writeFileSync(target, bytes)
             written = target
           }
-          const summary = `${DOCS[k].title}: ${(bytes.length / 1024).toFixed(0)} KB, ${said.diagrams ?? 0} diagram(s)${logo ? '' : ', no logo (the project icon is used)'}`
-          const result = { kind: k, file, run_id: id, pdf, bytes: bytes.length, diagrams: said.diagrams ?? 0, logo: logo ?? null, commit, where: r.where, ...(said.browser ? { browser: said.browser } : {}), ...(kept ? { sha256: kept.sha256 } : {}), ...(written ? { written } : {}) }
+          const summary = `${DOCS[k].title}: ${(bytes.length / 1024).toFixed(0)} KB, ${said.diagrams ?? 0} diagram(s)${notDrawn.length ? `, ${notDrawn.length} printed as Mermaid source (the browser that draws them did not start)` : ''}${logo ? '' : ', no logo (the project icon is used)'}`
+          const undrawn = notDrawn.length ? {
+            not_drawn: notDrawn,
+            not_drawn_why: said.not_drawn_why ?? '',
+            note: `Diagram(s) ${notDrawn.join(', ')} were printed as their Mermaid source: the browser that draws diagrams did not start where this ran, which is a fault in trace's installation, not in the document. The rest of the document printed; print it again later to draw them.`,
+          } : {}
+          const result = { kind: k, file, run_id: id, pdf, bytes: bytes.length, diagrams: said.diagrams ?? 0, logo: logo ?? null, commit, where: r.where, ...(said.browser ? { browser: said.browser } : {}), ...undrawn, ...(kept ? { sha256: kept.sha256 } : {}), ...(written ? { written } : {}) }
           work.finish(id, 'pass', summary, result)
           results.push(result)
           const entry: Printed | null = kept ? { kind: k, sha256: kept.sha256, bytes: bytes.length, commit, run: id, at: Date.now() } : null

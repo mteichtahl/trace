@@ -99,7 +99,7 @@ function Review() {
   const place = j.data ? nextPlace(j.data) : null
   const edit = !!d.kind && d.kind !== 'work'
   const forYou = d.verdict === 'ready' && part !== 'reviewer' && d.may_accept
-  const busy = actions.accept.isPending ? 'accept' : actions.ask.isPending ? 'ask' : actions.discard.isPending ? 'discard' : actions.resolve.isPending ? 'resolve' : null
+  const busy = actions.accept.isPending ? 'accept' : actions.ask.isPending ? 'ask' : actions.discard.isPending ? 'discard' : actions.resolve.isPending ? 'resolve' : actions.rerun.isPending ? 'rerun' : null
   // the next step is this change: its place in the stage, and what accepting moves
   const isNext = !!j.data && j.data.next.kind === 'review' && changeOf(j.data.next) === number
   // an accepted requirement it edits is what accepting costs most: said instead of the step it moves (log #112)
@@ -229,6 +229,7 @@ function Review() {
         onAsk={(n) => actions.ask.mutate({ number, title: d.title, note: n, from: d.from }, { onSuccess: () => setNote('') })}
         onDiscard={(r) => actions.discard.mutate({ number, title: d.title, reason: r }, { onSuccess: back })}
         onResolve={() => actions.resolve.mutate({ number, title: d.title })}
+        onRerun={() => actions.rerun.mutate({ number, title: d.title })}
       />
     </div>
   )

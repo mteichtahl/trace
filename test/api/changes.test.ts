@@ -18,10 +18,10 @@ import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/
 import { AGENT_WORDS, jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { answeredRequest } from '../../src/api/actions-journey.js'
-import { CHECK_LOG_MAX, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
+import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
-  readySince, CHECK_TEXT_MAX, checkLines, checkText, stacksOf,
+  readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -354,6 +354,7 @@ class ChangesGitHub extends FakeGitHub {
   async checkRun(_r: string, id: number): Promise<CheckRunFull | null> { this.read(`check ${id}`); return this.checks.get(id) ?? null }
   async checkAnnotations(_r: string, id: number, max: number): Promise<CheckAnnotation[]> { return (this.notes.get(id) ?? []).slice(0, max) }
   async request(method: string, path: string): Promise<unknown> {
+    if (method !== 'GET') this.did.push(`${method} ${path}`)
     const a = this.answers.get(path.split('?')[0]!)
     if (a === undefined) throw new GitHubError(404, `GitHub ${method} ${path}: 404`)
     return a
@@ -712,6 +713,92 @@ describe('change.accept', () => {
     github.mergeRefusal = new GitHubError(405, 'GitHub PUT merge: 405', 'At least 1 approving review is required by reviewers with write access.')
     await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/requires an approving review.*Fix the rule and accept/)
     expect((await decisions()).filter((x) => x.kind === 'change.accepted' && x.ref === '1').length).toBe(1) // only the earlier test's
+  })
+})
+
+describe('a check that did not run properly (test-esp32 run 2, #126, #128, #99)', () => {
+  const RATE = 'Error: Unhandled error: HttpError: API rate limit exceeded for user ID 1817657. If you reach out to GitHub Support for help, please include the request ID.'
+  /** change 2, whose trace-prs jobs both died on GitHub's rate limit, as the test run's layout change did */
+  const busy = (o: { automerge?: string } = {}) => {
+    github.add(2, 'claude/task-sch', { mergeable: 'unstable', checks: { total: 3, passed: 1, failed: 2, running: 0, skipped: 0, failing: ['trace-prs'] } })
+    github.pulls.get(2)!.runs = [
+      { name: 'kicad-erc', status: 'completed', conclusion: 'success', summary: null, id: 'job:500' },
+      { name: 'open-pr', status: 'completed', conclusion: 'failure', summary: null, id: 'job:501' },
+      { name: 'automerge', status: 'completed', conclusion: 'failure', summary: null, id: 'job:502' },
+    ]
+    for (const [id, name] of [[501, 'open-pr'], [502, 'automerge']] as const) {
+      github.answers.set(`/repos/${REPO}/actions/jobs/${id}`, { id, name, status: 'completed', conclusion: 'failure', head_sha: sha(2), run_url: `https://api.github.com/repos/${REPO}/actions/runs/77` })
+    }
+    github.texts.set(`/repos/${REPO}/actions/jobs/501/logs`, `##[group]Run actions/github-script\n##[error]${RATE}`)
+    github.texts.set(`/repos/${REPO}/actions/jobs/502/logs`, `##[error]${o.automerge ?? RATE}`)
+    github.answers.set(`/repos/${REPO}/actions/runs/77/rerun-failed-jobs`, null)
+  }
+
+  it('tells GitHub\'s and the runner\'s own words from a check that failed on the work', () => {
+    expect(infraReason(RATE)).toMatch(/^GitHub was busy/)
+    expect(infraReason('You have exceeded a secondary rate limit. Please wait a few minutes before you try again.')).toMatch(/^GitHub was busy/)
+    expect(infraReason('The runner has received a shutdown signal. This can happen when the runner service is stopped')).toBe('the machine running it stopped partway')
+    expect(infraReason('The self-hosted runner: codebuild-x lost communication with the server.')).toBe('the machine running it stopped partway')
+    expect(infraReason('RequestError [HttpError]: Server Error')).toBe('GitHub had a problem')
+    expect(infraReason('ERC: pin 4 of U3 unconnected\nError: Process completed with exit code 1.')).toBeNull()
+    expect(infraReason('DRC: 3 clearance violations (rate limit of 0.2 mm)')).toBeNull()
+    expect(infraReason(null)).toBeNull()
+  })
+
+  it('says GitHub was busy, never "ask for changes", and offers to run the checks again', async () => {
+    busy()
+    const d = await run(USER, 'change.get', { repo: REPO, number: 2 })
+    expect(d.infra_failed).toEqual({ checks: [{ id: 'job:501', name: 'open-pr' }, { id: 'job:502', name: 'automerge' }], why: expect.stringMatching(/^GitHub was busy/) })
+    expect(d.recommendation).toEqual({ verdict: 'wait', why: expect.stringMatching(/^GitHub was busy .*, so the open-pr and automerge checks did not run properly\. That says nothing about the work\. Run them again/) })
+    expect(d.verdict).toBe('blocked')
+    expect(d.may_accept).toBe(false)
+    expect(d.blockers).toEqual([expect.stringMatching(/^The open-pr and automerge checks did not run properly: GitHub was busy.*Run them again\.$/)])
+  })
+
+  it('a check that failed on the work as well: as before, ask for changes', async () => {
+    busy({ automerge: 'Error: ERC found 2 errors' })
+    const d = await run(USER, 'change.get', { repo: REPO, number: 2 })
+    expect(d.infra_failed).toBeUndefined()
+    expect(d.recommendation).toMatchObject({ verdict: 'ask' })
+    expect(d.verdict).toBe('failing')
+  })
+
+  it('change.rerun: runs the failed jobs of their workflow run again, once per run, and only for such checks', async () => {
+    busy()
+    expect(await run(USER, 'change.rerun', { repo: REPO, number: 2 })).toEqual({ checks: ['open-pr', 'automerge'], runs: 1 })
+    expect(github.did).toEqual([`POST /repos/${REPO}/actions/runs/77/rerun-failed-jobs`])
+    await expect(run(REVIEWER, 'change.rerun', { repo: REPO, number: 2 })).rejects.toThrow(AccessDenied)
+    // a run on an older commit of the change is not this change's check
+    github.answers.set(`/repos/${REPO}/actions/jobs/502`, { id: 502, name: 'automerge', status: 'completed', head_sha: 'f'.repeat(40), run_url: `https://api.github.com/repos/${REPO}/actions/runs/76` })
+    await expect(run(USER, 'change.rerun', { repo: REPO, number: 2 })).rejects.toThrow(/ran on an older commit/)
+    // a change whose checks failed on the work has nothing to run again from here
+    github.add(2, 'claude/task-sch', { mergeable: 'unstable', checks: { total: 2, passed: 1, failed: 1, running: 0, skipped: 0, failing: ['kicad-erc'] } })
+    await expect(run(USER, 'change.rerun', { repo: REPO, number: 2 })).rejects.toThrow(/nothing to run again/)
+    expect(github.did).toHaveLength(1)
+  })
+
+  it('accepting while GitHub is still taking the checks in: tries the merge again instead of doing nothing', async () => {
+    const waits: number[] = []
+    deps.sleep = async (ms) => { waits.push(ms) }
+    try {
+      let refusals = 2
+      const real = github.mergePull.bind(github)
+      github.mergePull = async (r, n, o) => {
+        if (refusals-- > 0) throw new GitHubError(405, 'GitHub PUT merge: 405', 'Required status check "build" is expected.')
+        return real(r, n, o)
+      }
+      expect(await run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).toMatchObject({ merged: true })
+      expect(waits).toEqual(MERGE_WAITS_MS.slice(0, 2))
+      // GitHub still not ready after every wait: said plainly, nothing merged
+      refusals = 99
+      waits.length = 0
+      github.add(1, 'claude/task-reqs', {})
+      await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/GitHub is not ready to merge it yet \(it says: Required status check "build" is expected\.\)\. trace tried for 19 seconds.*Accept it again in a minute/)
+      expect(waits).toEqual(MERGE_WAITS_MS)
+      github.mergePull = real
+    } finally {
+      delete deps.sleep
+    }
   })
 })
 

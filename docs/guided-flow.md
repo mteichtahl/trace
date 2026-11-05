@@ -64,9 +64,10 @@ Access is checked first, as for every action. `read` = assigned to the project; 
 | `changes.list` | read | `{ repo }` | `{ repo, changes: ChangeSummary[] }`: the open pull requests a trace job of this project opened (the same branch match as `src/api/inbox-review.ts`), oldest first |
 | `change.get` | read | `{ repo, number }` | `ChangeDetail` |
 | `change.diff` | read | `{ repo, number, path }` | `{ path, kind, patch: string \| null, before: { ref } \| null, after: { ref } \| null, binary: boolean }` |
-| `change.accept` | write | `{ repo, number, head_sha, note? }` (`head_sha`: 40 hex, the head the person was shown) | `{ merged: true, sha, stage, next: string, warning? }`: refuses a head that moved since; merges that commit (the repository's allowed method, squash first), removes the hold label, comments the note as a quote, records decision `change.accepted` (a record that fails after the merge is `warning`, logged: the merge stands) |
+| `change.accept` | write | `{ repo, number, head_sha, note? }` (`head_sha`: 40 hex, the head the person was shown) | `{ merged: true, sha, stage, next: string, warning? }`: refuses a head that moved since; merges that commit (the repository's allowed method, squash first), removes the hold label, comments the note as a quote, records decision `change.accepted` (a record that fails after the merge is `warning`, logged: the merge stands). While GitHub is still taking the checks in (a 405 not about a review) the merge is tried again for about 20 s, then refused in plain words |
 | `change.ask` | write | `{ repo, number, note }` (1–4000 chars) | `{ job_id }`: holds the branch to the task action's rule, starts a revision job with the same agent on the same branch, comments the note as a quote ("Asked for changes by <name>: …"), records `change.asked` |
 | `change.discard` | write | `{ repo, number, reason }` (1–2000 chars) | `{ closed: true }`: closes it, then comments the reason as a quote (a comment that fails still answers closed, logged), records `change.discarded` |
+| `change.rerun` | write | `{ repo, number }` | `{ checks, runs }`: only when every failed check failed for a reason outside the work (`infra_failed`: GitHub busy or down, the runner lost, read from the check's annotations or its job's log end); re-runs the failed jobs of their workflow runs on the change's head commit. Such a change is recommended "wait", never "ask for changes" |
 
 ```ts
 interface ChangeSummary {
@@ -90,6 +91,8 @@ interface ChangeDetail extends ChangeSummary {
                           // running, no conflict
   blockers: string[]      // plain words, when may_accept is false
   base: { ref: string; sha: string }; head: { ref: string; sha: string }
+  infra_failed?: { checks: { id: string; name: string }[]; why: string }  // every failed check failed for a reason
+                          // outside the work (GitHub busy or down, the runner lost): "Run the check again" (change.rerun)
 }
 ```
 

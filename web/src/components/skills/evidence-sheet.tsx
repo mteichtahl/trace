@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { projectId } from '@/lib/api'
 import { time } from '@/lib/format'
 import { useAction } from '@/lib/queries'
-import type { Criterion } from '@/lib/types'
+import type { Criterion, EvidenceRef } from '@/lib/types'
 import type { RunRecordView } from '@/lib/types-s1'
 import { FindingsList } from './findings'
 
@@ -25,13 +25,18 @@ export function EvidenceBody({ repo, criterion, opened }: { repo: string; criter
   const isRun = ev?.kind === 'run' && !!ev.id
   const run = useAction('run', { repo, id: ev?.id ?? '' }, { enabled: isRun })
   const r = run.data as RunRecordView | undefined
+  // what it was checked on, every piece of it (a single run is shown in full below instead)
+  const checked = criterion.checked ?? []
+  const listed = checked.length > 1 || (checked.length === 1 && !isRun) ? checked : []
   return (
     <div className="space-y-4 text-sm">
       <div className="flex flex-wrap gap-1.5">
         {opened && <StatusBadge status="opened" />}
         <StatusBadge status={criterion.status === 'met' ? 'met' : criterion.status === 'waived' ? 'waived' : 'not_met'} />
       </div>
-      {!isRun && <p>{ev?.summary ?? 'This criterion is checked against the project record.'}</p>}
+      {criterion.stale && <p className="text-muted-foreground">{criterion.stale}</p>}
+      {listed.length > 0 && <CheckedList repo={repo} items={listed} />}
+      {!isRun && !listed.length && <p>{ev?.summary ?? 'trace has not recorded what this criterion was checked on yet.'}</p>}
       {isRun && run.isError && <QueryError error={run.error} what="the run" onRetry={() => void run.refetch()} />}
       {isRun && !r && (
         <Loading loading={run.isLoading}>
@@ -70,6 +75,27 @@ export function EvidenceBody({ repo, criterion, opened }: { repo: string; criter
         </>
       )}
     </div>
+  )
+}
+
+/** Each piece a criterion was checked on, in order: its words, and a run opens in the runs page. */
+function CheckedList({ repo, items }: { repo: string; items: readonly EvidenceRef[] }) {
+  return (
+    <section aria-label="What it was checked on" className="space-y-1.5">
+      <h3 className="text-xs font-medium text-muted-foreground">What it was checked on ({items.length})</h3>
+      <ul className="space-y-1">
+        {items.map((e, i) => (
+          <li key={`${e.kind}:${e.id ?? ''}:${i}`} className="flex gap-2">
+            <span className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground" aria-hidden />
+            {e.kind === 'run' && e.id ? (
+              <Link to="/p/$id/runs/$run" params={{ id: projectId(repo), run: e.id }} className="min-w-0 break-words hover:underline">{e.label}</Link>
+            ) : (
+              <span className="min-w-0 break-words">{e.label}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

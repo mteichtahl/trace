@@ -4,7 +4,7 @@
  * on SN-002; the soil sensor's cost has estimates by kind and the actuals a day behind; Admin › Usage and cost has
  * the month. Registered in handlers.ts with one line; returns undefined for anything else.
  */
-import type { BoardView, BuildView, CostView, ReadingView, UsageMonth } from '@/lib/types-s1'
+import type { BoardView, BuildView, CostView, JobSpendView, ReadingView, UsageMonth } from '@/lib/types-s1'
 import { BUILD, COST } from './fixtures-s1'
 
 const MIN = 60_000
@@ -72,8 +72,52 @@ const PANEL_BUILD: BuildView = {
   notes: [],
 }
 
+/** The soil sensor's jobs, a little like test-esp32's run 2: a second proposal, docs sent back, a lost PDF job. */
+const jobSpend = (o: Partial<JobSpendView> & Pick<JobSpendView, 'id' | 'title' | 'stage' | 'amount'> & { daysAgo: number; minutes: number }): JobSpendView => {
+  const { daysAgo, minutes, ...rest } = o
+  const specialists: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', thermal: 'Thermal', docs: 'Documentation', render: 'Rendering' }
+  const agent = rest.agent ?? 'impl'
+  return {
+    agent, specialist: specialists[agent] ?? agent, stageId: rest.stage?.toLowerCase() ?? null, outcome: 'finished', started: ago(daysAgo * DAY), ended: ago(daysAgo * DAY - minutes * MIN),
+    seconds: minutes * 60, byKind: { agents: rest.amount, gpu: 0, cpu: 0, tools: 0 }, workers: 0, repeat: null, ...rest,
+  }
+}
+const SOIL_JOBS: JobSpendView[] = [
+  jobSpend({ id: 'job-c7', agent: 'docs', title: 'Bring the design documents up to date with the power sheet', stage: 'Capture', amount: 2.85, daysAgo: 0.2, minutes: 14, repeat: { kind: 'redone', of: 'job-c3', text: 'Redone: worked again on an earlier job\'s change' } }),
+  jobSpend({ id: 'job-c6', agent: 'docs', title: 'Make the design documents PDF', stage: 'Capture', amount: 1.1, daysAgo: 0.5, minutes: 31, outcome: 'lost' }),
+  jobSpend({ id: 'job-c5', agent: 'ams', title: 'Changes asked on #12: move the LDO enable to the MCU', stage: 'Capture', amount: 4.2, daysAgo: 0.9, minutes: 22, repeat: { kind: 'sent_back', of: 'job-c1', text: 'Sent back: a person asked for changes' } }),
+  jobSpend({ id: 'job-c4', agent: 'verify', title: 'Check the pin plan against the datasheets', stage: 'Capture', amount: 1.65, daysAgo: 1.4, minutes: 9 }),
+  jobSpend({ id: 'job-c3', agent: 'docs', title: 'Write the Capture design documents', stage: 'Capture', amount: 2.3, daysAgo: 2, minutes: 12 }),
+  jobSpend({ id: 'job-c1', agent: 'ams', title: 'Draw the power and USB-C input sheet', stage: 'Capture', amount: 7.9, daysAgo: 3, minutes: 48, workers: 1, byKind: { agents: 7.48, gpu: 0, cpu: 0.42, tools: 0 } }),
+  jobSpend({ id: 'job-a4', agent: 'thermal', title: 'Thermal model of the sealed case', stage: 'Architect', amount: 2.4, daysAgo: 15.5, minutes: 26, byKind: { agents: 1.3, gpu: 0, cpu: 1.1, tools: 0 } }),
+  jobSpend({ id: 'job-a3', agent: 'impl', title: 'Propose three architectures with real parts', stage: 'Architect', amount: 3.9, daysAgo: 16, minutes: 19, repeat: { kind: 'duplicate', of: 'job-a2', text: 'Duplicate: the same request as an earlier job' } }),
+  jobSpend({ id: 'job-a2', agent: 'impl', title: 'Propose three architectures with real parts', stage: 'Architect', amount: 4.7, daysAgo: 16.2, minutes: 23 }),
+  jobSpend({ id: 'job-d2', agent: 'verify', title: 'Draft the requirements from the intent', stage: 'Define', amount: 4.1, daysAgo: 19, minutes: 17 }),
+  jobSpend({ id: 'job-d1', agent: 'docs', title: 'Write the project brief', stage: 'Define', amount: 1.9, daysAgo: 20, minutes: 8 }),
+  { ...jobSpend({ id: null, title: 'Not tied to a job', stage: null, amount: 1.12, daysAgo: 0, minutes: 0 }), agent: null, specialist: null, started: null, ended: null, seconds: null, outcome: 'unknown', byKind: { agents: 0, gpu: 1.12, cpu: 0, tools: 0 } },
+]
+const SOIL_SPEND = {
+  total: 38.12, repeated: 10.95, wasted: 1.1,
+  stages: [
+    { stage: 'Define', id: 'define', amount: 6, jobs: 2, repeated: 0, wasted: 0 },
+    { stage: 'Architect', id: 'architect', amount: 11, jobs: 3, repeated: 3.9, wasted: 0 },
+    { stage: 'Capture', id: 'capture', amount: 21.12, jobs: 6, repeated: 7.05, wasted: 1.1 },
+  ],
+  jobs: SOIL_JOBS,
+}
+
 const SOIL_COST: CostView = {
   ...COST,
+  money: true,
+  // the build is forecast, not committed, before Fabricate
+  committed: 0,
+  budget: 200,
+  quantity: 10,
+  unit_cost: 12,
+  jobs: SOIL_SPEND,
+  stages: COST.stages.map((x) => (x.stage === 'Capture' ? { ...x, cloud: 21.12 } : x)),
+  // US$200 less the build's US$120 and Define's and Architect's US$17: US$63 for Capture and the 6 stages after it
+  warning: { level: 'over', stage: 'Capture', spent: 21.12, share: 9, left: 63, stagesLeft: 7, top: [SOIL_JOBS[5]!, SOIL_JOBS[2]!, SOIL_JOBS[0]!] },
   spent: { cloud: 38.12, orders: 0, detail: { estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: { total: 9.86, byService: { 'Amazon Bedrock AgentCore': 7.2, 'AWS CodeBuild': 1.9, 'AWS Secrets Manager': 0.76 }, through: ago(DAY).slice(0, 10), estimatedDays: 1 }, basis: 'estimate' } },
   lines: COST.lines.map((l) => ({ ...l, estimate: true })),
   explorer: { checkedAt: ago(3 * HOUR), nextAt: ahead(21 * HOUR), ok: true, tag: 'active', text: `Read from Cost Explorer by the trace:project cost allocation tag. A day's figures settle about 24 hours later, so the latest days may still change. Read ${ago(3 * HOUR).slice(0, 16).replace('T', ' ')} UTC; next read ${ahead(21 * HOUR).slice(0, 16).replace('T', ' ')} UTC.` },
@@ -88,7 +132,7 @@ const SOIL_COST: CostView = {
 const MONTH = (): UsageMonth => ({
   month: new Date().toISOString().slice(0, 7), currency: 'USD',
   projects: [
-    { repo: SOIL, estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: 9.86, orders: 0, orderCurrency: 'USD', budget: 400, started: true },
+    { repo: SOIL, estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: 9.86, orders: 0, orderCurrency: 'USD', budget: 200, started: true },
     { repo: 'acme/motor-driver', estimated: { agents: 12.1, gpu: 0, cpu: 0.6, total: 12.7 }, actual: 3.1, orders: 0, orderCurrency: 'USD', budget: null, started: true },
     { repo: PANEL, estimated: { agents: 22.9, gpu: 6.8, cpu: 1.2, total: 30.9 }, actual: 7.4, orders: 131.4, orderCurrency: 'USD', budget: 250, started: true },
   ],

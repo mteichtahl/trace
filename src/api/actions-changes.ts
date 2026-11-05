@@ -21,6 +21,10 @@
  *                           (squash first), takes the hold label off, and records change.accepted (a record that
  *                           cannot be written after the merge is a warning in the answer: the merge stands), with when it became
  *                           ready (ready_since); then the wait from ready to accepted (src/api/process-metrics.ts)
+ *   change.rerun    write   { repo, number } → { checks, runs }: runs again the checks that did not run properly (GitHub
+ *                           busy or down, the runner lost: change.get's infra_failed), by re-running the failed jobs of
+ *                           their workflow runs on the change's head commit. Accepting tries the merge again for about
+ *                           20 s while GitHub is still taking the checks in (mergeWhenReady)
  *   change.ask      write   { repo, number, note } → { job_id }: comments the note on it as a quote, starts a revision
  *                           job with the same specialist on the same branch (so the same pull request updates), and
  *                           records change.asked (and a rework, sent_back: src/api/process-metrics.ts)
@@ -62,7 +66,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFact
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
-  editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, jobRequest, jobsByBranch, readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
+  editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
   traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
@@ -73,6 +77,7 @@ import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type Pu
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { recordRework, recordWait } from './process-metrics.js'
 import { jobLogEnd, repoJob } from './actions-health.js'
+import type { CheckRunDetail } from './github.js'
 import { backToDefine, changedRequirements, pastDefine } from './pending-changes.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 
@@ -267,6 +272,8 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   if (stack.stacked) facts.stacked = stack.stacked
+  const infra = await infraFailures(ctx, gh, repo, runs)
+  if (infra) facts.infra = infra
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
   const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body, request: jobRequest(job) })
   if (unfinished) facts.unfinished = unfinished
@@ -295,7 +302,41 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
     ready_since: readySince(runs, pull.created_at),
     rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
+    ...(infra ? { infra_failed: infra } : {}),
   }
+}
+
+/** At most this many failed checks are looked into for a cause outside the work (each costs a GitHub read or two). */
+export const INFRA_LOOKS = 4
+/** How much of a failed job's log end is read for one (GitHub's error is the last thing a failed job prints). */
+const INFRA_LOG_MAX = 16 * 1024
+
+/**
+ * The checks that failed, when every one failed for a reason outside the work (src/api/changes.ts infraReason), from
+ * their annotations, else the end of their Actions job's log; null when none failed, or any failed on the work, or
+ * could not be looked into. Completed checks do not change, so what is read is kept (the cache's default time).
+ */
+export async function infraFailures(ctx: Context, gh: GitHubApi, repo: string, runs: readonly CheckRunDetail[] | null): Promise<InfraFailure | null> {
+  const failed = (runs ?? []).filter((c) => checkState(c) === 'failed')
+  if (!failed.length || failed.length > INFRA_LOOKS || failed.some((c) => !c.id)) return null
+  const whys = await Promise.all(failed.map((c) => failureText(ctx, gh, repo, c.id!, c.summary).then(infraReason, () => null)))
+  if (whys.some((w) => !w)) return null
+  return { checks: failed.map((c) => ({ id: c.id!, name: c.name })), why: whys[0]! }
+}
+
+async function failureText(ctx: Context, gh: GitHubApi, repo: string, id: string, summary: string | null): Promise<string> {
+  const [kind, raw] = id.split(':') as ['cr' | 'job', string]
+  const n = Number(raw)
+  const said = [summary ?? '']
+  if (kind === 'cr' && typeof gh.checkAnnotations === 'function') {
+    const notes = await cached(ctx.deps.githubCache, repo, `annotations:${n}:completed`, () => gh.checkAnnotations!(repo, n, CHECK_ANNOTATIONS)).catch(() => [])
+    said.push(...notes.map((a) => `${a.title ?? ''} ${a.message}`))
+    if (infraReason(said.join('\n'))) return said.join('\n')
+  }
+  // an Actions job (a check run GitHub Actions made carries its job's id): the end of its log. Another app's check
+  // run has no log there, and reads as nothing
+  const log = await jobLogEnd(ctx, repo, n, 'completed', INFRA_LOG_MAX).catch(() => null)
+  return [...said, log?.text ?? ''].join('\n')
 }
 
 /**
@@ -413,6 +454,8 @@ async function editDetail(ctx: Context, gh: ReturnType<typeof changesApi>, repo:
   ])
   const sum = editSummary({ pull: { ...pull, labels: pull.labels }, edit, status, hold: rule.hold, viewerSub: ctx.principal.sub })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
+  const infra = await infraFailures(ctx, gh, repo, runs)
+  if (infra) facts.infra = infra
   const mine = edit.by_sub === ctx.principal.sub
   const admin = isAdmin(ctx.principal)
   const checksList = checkLines(runs)
@@ -427,12 +470,38 @@ async function editDetail(ctx: Context, gh: ReturnType<typeof changesApi>, repo:
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
     rule_blocks: ruleBlocks(editFacts(facts, edit.kind)), may_discard: mine || admin, may_ask: false,
     ready_since: readySince(runs, pull.created_at),
+    ...(infra ? { infra_failed: infra } : {}),
   }
 }
 
 /** The merge method to use: the first of squash, merge, rebase the repository allows (squash when it says nothing). */
 export function mergeMethod(allowed: readonly MergeMethod[]): MergeMethod {
   return (['squash', 'merge', 'rebase'] as const).find((m) => allowed.includes(m)) ?? 'squash'
+}
+
+/**
+ * How long change.accept waits, between tries, for GitHub to finish working out a merge it refused for now. Right after
+ * the last check passes GitHub says "blocked" for up to a minute while it takes the checks in; an Accept then did
+ * nothing a person could see (test-esp32 run 2, #99). About 20 s in all, inside one request.
+ */
+export const MERGE_WAITS_MS = [3_000, 6_000, 10_000]
+
+/**
+ * The merge, tried again while GitHub refuses it for now (405 not about a review: its checks not yet taken in, the
+ * base branch just moved). A refusal for a review, a head that moved (409) or anything else is thrown at once.
+ */
+export async function mergeWhenReady(ctx: Context, merge: () => Promise<{ sha: string }>): Promise<string> {
+  const sleep = ctx.deps.sleep ?? ((ms: number) => new Promise<void>((ok) => setTimeout(ok, ms)))
+  for (let i = 0; ; i++) {
+    try {
+      return (await merge()).sha
+    } catch (e) {
+      const notYet = e instanceof GitHubError && e.status === 405 && !/review/i.test(e.said ?? '')
+      const wait = MERGE_WAITS_MS[i]
+      if (!notYet || wait === undefined) throw e
+      await sleep(wait)
+    }
+  }
 }
 
 /** GitHub's refusal of a merge, in plain words; a required review gets the words the guided flow promises. */
@@ -443,7 +512,7 @@ export function mergeRefusal(e: unknown): ActionError | null {
     return new ActionError('GitHub refused: this repository requires an approving review before a change goes in, and trace cannot approve its own. An admin can fix the rule from this change\'s page ("Fix the rule and accept"), and nothing else changes.')
   }
   if (e.status === 409) return new ActionError('The change moved on since you looked at it (trace pushed to it again). Look at it again, then accept.')
-  if (e.status === 405) return new ActionError(`GitHub would not merge it: ${said || 'its rules do not allow it yet'}. Look at it again in a minute.`)
+  if (e.status === 405) return new ActionError(`GitHub is not ready to merge it yet (it says: ${said || 'its rules do not allow it yet'}). trace tried for ${Math.round(MERGE_WAITS_MS.reduce((a, b) => a + b, 0) / 1000)} seconds; nothing changed. Accept it again in a minute.`)
   if (e.status === 403) return new ActionError('GitHub refused: trace\'s token may not merge in this repository. An admin can give the token write access to its contents and pull requests.')
   return null
 }
@@ -522,6 +591,41 @@ export const CHANGE_ACTIONS = {
 
   'change.check': def('read', ChangeArgs.extend({ id: CheckId }), async ({ repo, number, id }, ctx) => { spend(ctx); return checkDetail(ctx, repo, number, id) }),
 
+  /**
+   * Run again the checks that did not run properly (ChangeDetail.infra_failed: GitHub busy or down, the runner lost),
+   * instead of re-running a workflow on GitHub by hand (test-esp32 run 2, #128). Each check's workflow run is read
+   * first: it must be on the change's head commit (a re-run of a run on an older commit changes nothing here), and its
+   * failed jobs are run again (one call per run). A check that failed on the work is never run again from here.
+   */
+  'change.rerun': def('write', ChangeArgs, async ({ repo, number }, ctx) => {
+    spend(ctx)
+    const d = await changeDetail(ctx, repo, number, { fresh: true })
+    if (d.state !== 'open') throw new ActionError(d.state === 'merged' ? 'It is already accepted into the design.' : 'It was discarded.')
+    const infra = d.infra_failed
+    if (!infra?.checks.length) throw new ActionError('None of its checks failed for a reason outside the work, so there is nothing to run again here.')
+    const gh = await ctx.deps.github()
+    if (typeof gh.request !== 'function') throw new ActionError('This installation cannot run checks again from the app yet: its update brings it.')
+    const runs = new Set<string>()
+    for (const c of infra.checks) {
+      const job = await repoJob(ctx, repo, Number(c.id.split(':')[1]))
+      if (job.head_sha !== d.head.sha) throw new ActionError(`The ${c.name} check ran on an older commit of this change. Look at it again.`)
+      const run = /\/actions\/runs\/(\d+)$/.exec(job.run_url ?? '')?.[1]
+      if (run) runs.add(run)
+    }
+    const [o, n] = repo.split('/')
+    try {
+      for (const run of runs) await gh.request('POST', `/repos/${encodeURIComponent(o ?? '')}/${encodeURIComponent(n ?? '')}/actions/runs/${run}/rerun-failed-jobs`)
+    } catch (e) {
+      if (e instanceof GitHubError && e.status === 403 && /already running|in progress/i.test(e.said ?? '')) throw new ActionError('It is already running again. Look again in a minute.')
+      if (e instanceof GitHubError && (e.status === 403 || e.status === 404)) throw new ActionError('GitHub refused: trace\'s token may not run checks again in this repository. An admin can give the token write access to Actions.')
+      throw e
+    } finally {
+      bust(ctx, repo)
+    }
+    logLine(ctx, { event: 'change.rerun', repo, number, by: label(ctx.principal), checks: infra.checks.map((c) => c.name), runs: [...runs] })
+    return { checks: infra.checks.map((c) => c.name), runs: runs.size }
+  }),
+
   'change.diff': def('read', ChangeArgs.extend({ path: RepoPath }), async ({ repo, number, path }, ctx) => {
     spend(ctx)
     const gh = changesApi(await ctx.deps.github())
@@ -558,7 +662,7 @@ export const CHANGE_ACTIONS = {
     const method = above.length ? 'merge' as const : mergeMethod(allowed)
     let sha: string
     try {
-      sha = (await gh.mergePull(repo, number, { method, sha: looked })).sha
+      sha = await mergeWhenReady(ctx, () => gh.mergePull(repo, number, { method, sha: looked }))
     } catch (e) {
       throw mergeRefusal(e) ?? e
     } finally {

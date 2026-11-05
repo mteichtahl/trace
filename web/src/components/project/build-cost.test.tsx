@@ -102,6 +102,13 @@ describe('small rules', () => {
   it('the gate\'s line says nothing without money, and counts the budget left after what is committed', () => {
     expect(gateSpendLine({ money: false, currency: 'USD', spent: { cloud: null, orders: null }, committed: null, forecast: null, stages: [], lines: [] })).toBeNull()
     const line = gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 12, orders: 100, detail: { estimated: { agents: 12, gpu: 0, cpu: 0, total: 12 }, actual: { total: 3, byService: {}, through: null, estimatedDays: 0 }, basis: 'estimate' } }, committed: 50, forecast: 0, budget: 300, stages: [], lines: [] })
-    expect(line).toBe('Spent so far US$112, US$12 of it cloud use (estimated; US$3 billed by AWS so far), US$100 on orders. Budget US$300: US$138 left after what is committed and forecast.')
+    expect(line).toBe('Spent so far US$112, US$12 of it cloud use (estimated; US$3 billed by AWS so far), US$100 on orders. Budget US$300: US$138 left after US$112 spent and US$50 committed.')
+  })
+
+  it('the gate\'s line names the build\'s forecast and says how far over, never US$0 left (test-esp32 run 2: US$21.28 spent of US$100)', () => {
+    const run2 = { money: true, currency: 'USD', spent: { cloud: 21.28, orders: 0 }, committed: 0, forecast: 80, budget: 100, quantity: 10, unit_cost: 8, stages: [], lines: [] }
+    expect(gateSpendLine(run2)).toBe('Spent so far US$21.28, US$21.28 of it cloud use (estimated). Budget US$100: US$1.28 over after US$21.28 spent and US$80 forecast for the build (10 boards at US$8). Cost and time shows what each job cost.')
+    // the Define gate: within it, the forecast named so the US$18.41 left makes sense
+    expect(gateSpendLine({ ...run2, spent: { cloud: 1.59, orders: 0 } })).toMatch(/Budget US\$100: US\$18.41 left after US\$1.59 spent and US\$80 forecast for the build \(10 boards at US\$8\)\.$/)
   })
 })

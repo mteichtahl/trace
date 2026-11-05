@@ -174,6 +174,14 @@ Each layer is one pull request that builds and passes on its own.
      leaves out single-process mode, its own error reaches the run (`dumpio`, never just the last stack frame), and a
      browser that never draws is said to be the browser, not the diagram (`python/tracebridge/docs/publish.py`).
      The same documents print here.
+   - **Printing still failed there** (run 2): the run's only reason was Chromium's note that there is no D-Bus,
+     which it logs on every start in a container; the real one (the full browser closing in single-process mode) was
+     hidden under it. Now the tools image draws with Chromium's headless shell (built to run with no display, D-Bus
+     or GPU), Chromium's container noise is left out of the reason, and the image's build draws one diagram
+     (`python -m tracebridge.docs smoke`), so an image that cannot draw fails its build, not every print. A browser
+     that still cannot start no longer stops the print: those diagrams are printed as their Mermaid source with a
+     note, the run says which (`not_drawn`), and the specialist carries on instead of asking the person to fix trace.
+     Only release copies, kept for good, still refuse a diagram left as source.
    - **Sections left at the stage before**: a gate signed changes the journey, which is not in the repository, so no
      comparison saw it. `docs.stale` takes `also` (the records the request says changed outside the repository), and
      a gate signed or a revision cut names the journey. Only the Journey section says where the project is (a new

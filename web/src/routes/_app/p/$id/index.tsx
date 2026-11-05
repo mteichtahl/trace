@@ -5,7 +5,8 @@
  * to be reviewed, the build when it is failing (with "Ask trace to fix something"), and what is happening around it (Waiting on people, trace is doing, Queued, and Recently as a short timeline). Any stage on
  * the rail, and "What happens in <Stage>", opens the stage sheet. A job one specialist asked another for reads "Asked by the …
  * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
- * summaries.
+ * summaries. For admins, a warning under the next step when the current stage nears or passes its share of the budget,
+ * with its biggest jobs (cost.get warning).
  * Reference screen for a project tab.
  */
 import { useQuery } from '@tanstack/react-query'
@@ -44,6 +45,7 @@ import { SKILLS } from '@/components/skills/definitions'
 import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
 import { BuildHealth } from '@/components/project/build-health'
+import { SpendWarningCard } from '@/components/project/spend-by-job'
 
 export const Route = createFileRoute('/_app/p/$id/')({
   component: Overview,
@@ -67,6 +69,8 @@ function Overview() {
   // the change the next step is about: whether this person may accept it straight from the card
   const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
   const change = useQuery({ ...q('change.get', { repo, number: changeNo ?? 0 }), enabled: !!changeNo && part !== 'reviewer' })
+  // the current stage near or past its share of the budget (admins only: cost.get carries no money for anyone else)
+  const cost = useQuery(q('cost.get', { repo }, { enabled: admin }))
   const now = useNow(30_000)
   const phone = useMediaQuery('(max-width: 767px)')
   const changes = useChanges(repo)
@@ -183,6 +187,9 @@ function Overview() {
       ))}
     </div>
   ) : null
+  const spendWarning = admin && cost.data?.money && cost.data.warning
+    ? <SpendWarningCard warning={cost.data.warning} currency={cost.data.currency} id={id} className="mt-4" />
+    : null
   const nextCard = held ? <HeldNextCard repo={repo} part={part} /> : (
     <NextStepCard
       step={d.next}
@@ -212,6 +219,7 @@ function Overview() {
         <StageSheet j={d} stage={sheet} admin={admin} held={held} onOpenChange={(o) => !o && setSheet(null)} />
         {nextCard}
         {outOfDate}
+        {spendWarning}
         <FoldRows label="Around this project">
           {(changeList.length > 0 || d.changesUnavailable) && (
             <FoldLink label="Changes from trace" to="/p/$id/changes" params={{ id }} count={forYou ? `${forYou} for you` : changeList.length || undefined} accent={forYou > 0} />
@@ -255,6 +263,7 @@ function Overview() {
         <div className="min-w-0">
           {nextCard}
           {outOfDate}
+          {spendWarning}
 
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
 
@@ -332,7 +341,7 @@ function SideSummary({ j, id }: { j: Journey; id: string }) {
               <div className="flex justify-between"><dt className="text-muted-foreground"><Explained text={`Parts list (BOM) for ${c.quantity ?? ''} boards`} /></dt><dd className="font-semibold">{money(c.bom, c.currency)}</dd></div>
             )}
           </dl>
-          <Link to="/p/$id/$" params={{ id, _splat: 'cost' }} className="mt-3 inline-block text-sm text-primary hover:underline">
+          <Link to="/p/$id/cost" params={{ id }} className="mt-3 inline-block text-sm text-primary hover:underline">
             Cost and time
           </Link>
         </div>

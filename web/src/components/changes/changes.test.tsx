@@ -63,6 +63,23 @@ describe('the decision bar', () => {
     expect(screen.queryByRole('button')).toBeNull()
   })
 
+  it('a check that did not run properly (GitHub busy): Run the checks again leads, Accept waits, a reviewer gets neither (#128)', async () => {
+    const onRerun = vi.fn()
+    const c = {
+      ...change, may_accept: false, verdict: 'blocked' as const,
+      blockers: ['The open-pr and automerge checks did not run properly: GitHub was busy (it limited how many requests trace could make). Run them again.'],
+      infra_failed: { checks: [{ id: 'job:1', name: 'open-pr' }, { id: 'job:2', name: 'automerge' }], why: 'GitHub was busy' },
+    }
+    const { unmount } = render(<DecisionBar change={c} part="contributor" note="" onAccept={vi.fn()} onAsk={vi.fn()} onDiscard={vi.fn()} onRerun={onRerun} />)
+    expect(screen.getByText(/Not ready to accept: The open-pr and automerge checks did not run properly: GitHub was busy/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Accept into the design' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Run the checks again' }))
+    expect(onRerun).toHaveBeenCalledOnce()
+    unmount()
+    render(<DecisionBar change={c} part="reviewer" note="" onAccept={vi.fn()} onAsk={vi.fn()} onDiscard={vi.fn()} onRerun={onRerun} />)
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
   it('Discard confirms in the bar and needs a reason', async () => {
     const f = bar({}, 'contributor')
     await userEvent.click(screen.getByRole('button', { name: 'Discard' }))
@@ -140,7 +157,7 @@ describe('the mock change actions (dev:mock)', () => {
 
   it('lists, reads, diffs, refuses an early accept, and accepting moves Capture on', async () => {
     const list = await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })
-    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready'], [15, 'blocked'], [16, 'ready']])
+    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready'], [15, 'blocked'], [16, 'blocked'], [19, 'ready']])
     // a stacked change names the one it builds on, and that one names it
     expect(list.result.changes.find((c) => c.number === 15)?.builds_on).toEqual({ number: 12, title: 'Power and USB-C input sheet' })
     const twelve = await call<ChangeDetail>('change.get', { repo: 'acme/soil-sensor', number: 12 })
@@ -157,7 +174,18 @@ describe('the mock change actions (dev:mock)', () => {
     expect(done.result.merged).toBe(true)
     const j = await call<Journey>('journey.get', { repo: 'acme/soil-sensor' })
     expect(j.result.next).toMatchObject({ kind: 'working', step: { index: 4, total: 5 } })
-    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => [c.number, c.verdict])).toEqual([[13, 'checking'], [14, 'ready'], [15, 'ready'], [16, 'ready']])
+    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => [c.number, c.verdict])).toEqual([[13, 'checking'], [14, 'ready'], [15, 'ready'], [16, 'blocked'], [19, 'ready']])
     expect((await call<{ id: string }[]>('inbox', {})).result.some((i) => i.id.includes(':12'))).toBe(false)
+  })
+
+  it('runs again the checks GitHub was too busy to run: the change is checking, not failing', async () => {
+    const before = await call<ChangeDetail>('change.get', { repo: 'acme/soil-sensor', number: 16 })
+    expect(before.result).toMatchObject({ recommendation: { verdict: 'wait' }, infra_failed: { checks: [{ name: 'open-pr' }, { name: 'automerge' }] } })
+    const r = await call<{ checks: string[] }>('change.rerun', { repo: 'acme/soil-sensor', number: 16 })
+    expect(r.result.checks).toEqual(['open-pr', 'automerge'])
+    const after = await call<ChangeDetail>('change.get', { repo: 'acme/soil-sensor', number: 16 })
+    expect(after.result).toMatchObject({ verdict: 'checking', checks: { failed: 0, running: 2 } })
+    expect(after.result.infra_failed).toBeUndefined()
+    expect(await call('change.rerun', { repo: 'acme/soil-sensor', number: 16 })).toMatchObject({ ok: false, error: expect.stringMatching(/nothing to run again/) })
   })
 })
