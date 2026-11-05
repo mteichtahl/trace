@@ -1,9 +1,10 @@
 /**
  * A revision's renders (docs/revision-renders.md "In the app"): the gallery card, the viewer, the card for renders
  * still being made, and downloading one picture or all of them as a zip made here in the browser (a full set is over
- * the API's 8 MB answer limit, so the server never builds it).
+ * the API's 8 MB answer limit, so the server never builds it). The turntable is a video: it plays muted and looping
+ * where it is shown large (unless the person asks for reduced motion), and shows its first frame as a thumbnail.
  */
-import { ChevronLeft, ChevronRight, Download, Images, Loader2, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Images, Loader2, Play, X } from 'lucide-react'
 import { type KeyboardEvent, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { type FileRef, fetchBytes, useFileUrl } from '@/components/files/data'
@@ -11,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ago } from '@/lib/format'
-import type { MakingRenders, RenderPicture, RevisionRenders } from '@/lib/types-renders'
+import { isVideo, type MakingRenders, type RenderPicture, type RevisionRenders } from '@/lib/types-renders'
 import { cn } from '@/lib/utils'
 import { saveBytes, zipStored } from '@/lib/zip'
 
@@ -32,18 +33,52 @@ export function zipName(r: RevisionRenders): string {
   return `${first.slice(0, first.lastIndexOf('_'))}_renders.zip`
 }
 
-/** One picture, fetched as its run's artifact. */
-export function Picture({ repo, r, p, className, alt }: { repo: string; r: RevisionRenders; p: RenderPicture; className?: string; alt?: string }) {
+const reducedMotion = (): boolean => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+/**
+ * One picture, fetched as its run's artifact. The turntable is a video: `play` plays it muted and looping (`controls`
+ * adds the player's own); a thumbnail shows its first frame.
+ */
+export function Picture({ repo, r, p, className, alt, play, controls }: { repo: string; r: RevisionRenders; p: RenderPicture; className?: string; alt?: string; play?: boolean; controls?: boolean }) {
   const f = useMemo(() => fileOf(repo, r, p), [repo, r, p])
   const u = useFileUrl(f)
+  const label = alt ?? `Rev ${r.revision}, ${p.label.toLowerCase()}`
   if (!u.data) return <Skeleton className={cn('bg-muted', className)} aria-label={u.isError ? `${p.label} could not be loaded` : `Loading ${p.label}`} />
-  return <img src={u.data.url} alt={alt ?? `Rev ${r.revision}, ${p.label.toLowerCase()}`} className={cn('block object-cover', className)} />
+  if (isVideo(p.shot)) {
+    const auto = !!play && !reducedMotion()
+    return (
+      <video
+        key={`${u.data.url}|${auto}`}
+        // a thumbnail seeks a moment in, so the browser paints a frame rather than black
+        src={auto || controls ? u.data.url : `${u.data.url}#t=0.1`}
+        className={cn('block bg-muted object-cover', className)}
+        aria-label={label || undefined}
+        aria-hidden={label ? undefined : true}
+        muted loop playsInline preload="metadata" autoPlay={auto} controls={controls}
+      />
+    )
+  }
+  return <img src={u.data.url} alt={label} className={cn('block object-cover', className)} />
 }
 
-/** Download one picture. */
+/** A small mark on a thumbnail that it is a video. */
+function VideoMark({ p }: { p: RenderPicture }) {
+  if (!isVideo(p.shot)) return null
+  return <span aria-hidden="true" className="absolute top-1/2 left-1/2 flex size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/70 text-background"><Play className="size-3.5 fill-current" /></span>
+}
+
+/** "6 pictures and a turntable", "3 pictures", "1 picture". */
+export function countWords(r: RevisionRenders): string {
+  const videos = r.pictures.filter((p) => isVideo(p.shot)).length
+  const pics = r.pictures.length - videos
+  const still = `${pics} ${pics === 1 ? 'picture' : 'pictures'}`
+  return videos ? `${pics ? `${still} and ` : ''}a turntable` : still
+}
+
+/** Download one picture (or the turntable). */
 export async function downloadPicture(repo: string, r: RevisionRenders, p: RenderPicture): Promise<void> {
   const bytes = new Uint8Array(await fetchBytes(fileOf(repo, r, p)))
-  saveBytes(p.name, bytes, 'image/png')
+  saveBytes(p.name, bytes, isVideo(p.shot) ? 'video/mp4' : 'image/png')
 }
 
 /** Download every picture of a revision as one zip; `onStep` hears how many are fetched. */
@@ -93,7 +128,7 @@ export function RevisionCard({ repo, r, onOpen, compact }: { repo: string; r: Re
         <span className="text-sm text-muted-foreground">Cut {dayWords(r.date)}</span>
         <span className="flex gap-1">
           {r.pictures.slice(0, 4).map((p, i) => (
-            <button key={p.name} type="button" onClick={() => onOpen(i)} aria-label={`Open ${p.label}`} className="overflow-hidden rounded border">
+            <button key={p.name} type="button" onClick={() => onOpen(i)} aria-label={`Open ${p.label}`} className="relative overflow-hidden rounded border">
               <Picture repo={repo} r={r} p={p} className="h-9 w-14" alt="" />
             </button>
           ))}
@@ -114,7 +149,7 @@ export function RevisionCard({ repo, r, onOpen, compact }: { repo: string; r: Re
         <span className="text-sm text-muted-foreground">Cut {dayWords(r.date)}</span>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="text-sm text-muted-foreground">{n} {n === 1 ? 'picture' : 'pictures'}{r.at ? ` · made ${ago(r.at)}` : ''}</span>
+        <span className="text-sm text-muted-foreground">{countWords(r)}{r.at ? ` · made ${ago(r.at)}` : ''}</span>
         <Swatches r={r} />
         <span className="flex gap-2 max-md:w-full md:ml-auto">
           <Button variant="outline" className="max-md:flex-1" onClick={() => onOpen(0)}><Images /> {`See all ${n}`}</Button>
@@ -124,20 +159,20 @@ export function RevisionCard({ repo, r, onOpen, compact }: { repo: string; r: Re
       {first && (
         <div className="mt-4 grid gap-2.5 md:grid-cols-3">
           <button type="button" onClick={() => onOpen(0)} className="group relative overflow-hidden rounded-lg border md:col-span-2 md:row-span-2" aria-label={`Open ${first.label}`}>
-            <Picture repo={repo} r={r} p={first} className="h-52 w-full md:h-[380px]" />
+            <Picture repo={repo} r={r} p={first} className="h-52 w-full md:h-[380px]" play />
             <span className="absolute bottom-2.5 left-2.5 rounded-md bg-background/90 px-2 py-1 text-xs font-medium">{first.label}</span>
             <span className="absolute right-2.5 bottom-2.5 rounded-md bg-foreground/75 px-2 py-1 text-xs font-medium text-background md:hidden">1 of {n}</span>
           </button>
           {rest.map((p, i) => (
             <button key={p.name} type="button" onClick={() => onOpen(i + 1)} className={cn('relative overflow-hidden rounded-lg border max-md:hidden', i < 2 ? 'h-[185px]' : 'h-[150px]')} aria-label={`Open ${p.label}`}>
-              <Picture repo={repo} r={r} p={p} className="h-full w-full" />
-              <span className="absolute bottom-2 left-2 rounded-md bg-background/90 px-1.5 py-0.5 text-xs font-medium">{p.label}</span>
+              <Picture repo={repo} r={r} p={p} className="h-full w-full" play />
+              <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md bg-background/90 px-1.5 py-0.5 text-xs font-medium">{isVideo(p.shot) && <Play aria-hidden="true" className="size-3 fill-current" />}{p.label}</span>
             </button>
           ))}
         </div>
       )}
       <p className="mt-3 text-xs text-muted-foreground">
-        Named <span className="font-mono">{zipName(r).replace(/_renders\.zip$/, '_<shot>.png')}</span>
+        Named <span className="font-mono">{zipName(r).replace(/_renders\.zip$/, '_<shot>.png')}</span>{r.pictures.some((p) => isVideo(p.shot)) ? ' (the turntable .mp4)' : ''}
         {r.commit ? ` · made from ${r.commit.slice(0, 7)}${r.case ? ' and the case built from it' : ''}` : ''}
       </p>
     </article>
@@ -200,7 +235,7 @@ export function RendersViewer({ repo, r, index, onIndex, onClose }: { repo: stri
                 <Button variant="ghost" size="icon" className="size-11 text-neutral-50 hover:bg-neutral-800" onClick={onClose} aria-label="Close"><X /></Button>
               </div>
               <div className="relative flex min-h-0 flex-1 items-center justify-center p-2 md:p-5">
-                <Picture repo={repo} r={r} p={p} className="max-h-full w-full rounded-lg object-contain md:w-auto md:max-w-full md:shadow-sm" />
+                <Picture repo={repo} r={r} p={p} className="max-h-full w-full rounded-lg object-contain md:w-auto md:max-w-full md:shadow-sm" play controls />
                 <Button variant="outline" size="icon" className="absolute top-1/2 left-3 size-11 -translate-y-1/2 rounded-full max-md:hidden" onClick={() => step(-1)} aria-label="Previous picture"><ChevronLeft /></Button>
                 <Button variant="outline" size="icon" className="absolute top-1/2 right-3 size-11 -translate-y-1/2 rounded-full max-md:hidden" onClick={() => step(1)} aria-label="Next picture"><ChevronRight /></Button>
                 <button type="button" className="absolute inset-y-0 left-0 w-2/5 md:hidden" onClick={() => step(-1)} aria-label="Previous picture" />
@@ -209,8 +244,9 @@ export function RendersViewer({ repo, r, index, onIndex, onClose }: { repo: stri
               <div className="flex gap-1.5 overflow-x-auto px-4 pb-3 md:justify-center md:gap-2 md:pb-4">
                 {r.pictures.map((q, i) => (
                   <button key={q.name} type="button" onClick={() => onIndex(i)} aria-label={q.label} aria-current={i === index}
-                    className={cn('shrink-0 overflow-hidden rounded-md border-2', i === index ? 'border-neutral-50 md:border-foreground' : 'border-transparent')}>
+                    className={cn('relative shrink-0 overflow-hidden rounded-md border-2', i === index ? 'border-neutral-50 md:border-foreground' : 'border-transparent')}>
                     <Picture repo={repo} r={r} p={q} className="h-9 w-14 md:h-16 md:w-[104px]" alt="" />
+                    <VideoMark p={q} />
                   </button>
                 ))}
               </div>
@@ -230,14 +266,14 @@ export function RendersViewer({ repo, r, index, onIndex, onClose }: { repo: stri
                 <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button>
               </div>
               <div className="flex flex-col gap-2">
-                <Button onClick={one} disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : <Download />} Download this picture</Button>
+                <Button onClick={one} disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : <Download />} {isVideo(p.shot) ? 'Download this video' : 'Download this picture'}</Button>
                 <Button variant="outline" onClick={zip.run} disabled={!!zip.step}>{zip.step ? `Fetching ${Math.min(zip.step[0] + 1, zip.step[1])} of ${zip.step[1]}` : `Download all ${n} (.zip)`}</Button>
               </div>
               <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-3 gap-y-2.5 text-sm">
                 <dt className="text-muted-foreground">File</dt><dd className="font-mono text-xs break-all">{p.name}</dd>
                 <dt className="text-muted-foreground">Revision</dt><dd>{r.revision}, cut {dayWords(r.date)}</dd>
                 {r.commit && <><dt className="text-muted-foreground">Made from</dt><dd>board <span className="font-mono text-xs">{r.commit.slice(0, 7)}</span>{r.case ? ` and its case (${LOOK[r.case] ?? r.case})` : ''}</dd></>}
-                {p.width && p.height && <><dt className="text-muted-foreground">Size</dt><dd>{p.width} × {p.height}</dd></>}
+                {p.width && p.height && <><dt className="text-muted-foreground">Size</dt><dd>{p.width} × {p.height}{isVideo(p.shot) ? ', 24 fps' : ''}</dd></>}
               </dl>
               <div>
                 <p className="text-sm font-semibold">Colours</p>

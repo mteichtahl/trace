@@ -125,6 +125,9 @@ test-esp32_rev-B_2026-11-04_turntable.mp4
    - **A revision still being made** shows what the rendering agent is doing, and its log.
    - **The viewer** steps through a revision's pictures with the arrow keys. It shows the file, the revision, the
      commit, the case's material, the size and the colours. On a phone it opens full screen.
+   - **The turntable** plays muted and looping beside the exploded view, and with the player's controls in the viewer.
+     A thumbnail shows its first frame with a play mark. Someone who asks their device for reduced motion sees it
+     still until they press play. It downloads as its MP4 and is in the zip with the pictures.
    - **Downloads.** One picture, or all of them as a zip. The browser makes the zip from the pictures, because a full
      set at 2560 × 1600 is over the API's 8 MB answer limit.
    - **When they are ready**, people get a push notification and an item in Next.
