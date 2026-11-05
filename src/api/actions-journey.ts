@@ -61,7 +61,7 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  type AgentFacts, type CriterionRow, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
@@ -86,6 +86,7 @@ import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafti
 import type { JobRow } from '../core/job-index.js'
 import { type Followup, carryOnPlace, followupStatus, landedOn, loadFollowups, putFollowup, updateFollowup } from '../core/answer-followups.js'
 import { assertNotHeld } from './held.js'
+import { type ReopenedWork, finishRequest, keptOf, readTrace, reopenedWork, resignBasis, resignPlan, scopedRequest } from './reopen-scope.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -520,6 +521,24 @@ async function changedFirst(ctx: Context, repo: string, r: JourneyRecord, next: 
   return changedStep(next, r.journey.currentStage, open)
 }
 
+/**
+ * What a stage kept after a change of requirements still asks of its agent, or undefined when nothing: its criteria
+ * trace owns are met again on the evidence it kept, read as journey.get reads them (the agents' facts in, evidence gone
+ * out of date not counting). A stage that was in progress when the change came, or whose evidence went out of date,
+ * finishes only what is left (finishRequest); a person's criterion left is the person's. Unreadable: the request whole.
+ */
+async function leftToDo(ctx: Context, repo: string, request: string, w: ReopenedWork): Promise<string | undefined> {
+  try {
+    const rec = await recordNow(ctx, repo)
+    if (!rec) return request
+    const stale = await evidenceStaleness(ctx, repo, rec)
+    const left = designWorkLeft(stale ? withStaleEvidence(rec, stale) : rec).filter((c) => c.owner === 'trace')
+    return left.length ? finishRequest(request, w.scope, left) : undefined
+  } catch {
+    return request
+  }
+}
+
 /** The stage's design work left before a person's act (docsAfterDesign compares after it); null when unreadable. */
 export const designBefore = (ctx: Context, repo: string): Promise<CriterionRow[] | null> =>
   recordNow(ctx, repo).then((r) => (r ? designWorkLeft(r) : null), () => null)
@@ -546,6 +565,10 @@ export const JOURNEY_ACTIONS = {
     if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
+    // after a change of requirements: the gates to sign again, and whether each one's evidence stands, so re-signing
+    // is seen to be quick (src/api/reopen-scope.ts). The design record is read only while there is such a list
+    const rec = r
+    const resign = resignBasis(rec) ? await withRecordDb(ctx, repo, (db) => resignPlan(rec, (ids, at) => readTrace(db, ids, at))).catch(() => null) : null
     // the open changes trace made, as steps and (when one is ready) the next step (docs/guided-flow.md). GitHub is
     // asked for the open pull requests and the status of the oldest MAX_STATUS only, through the same short-lived
     // cache as changes.list (src/api/github-cache.ts), so a journey and a list together cost one look; when it cannot be reached the
@@ -572,6 +595,7 @@ export const JOURNEY_ACTIONS = {
       ...(drafting ? { drafting: { state: drafting.state, job: drafting.job, why: drafting.why || null } } : {}),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}), ...(kept.length ? { answers_restarted: kept } : {}),
       ...(seen && staleCriteria(seen).length ? { stale_evidence: staleCriteria(seen) } : {}),
+      ...(resign ? { resign } : {}),
       ...(open.error ? { changes_unavailable: open.error.slice(0, 200) } : {}),
     }
   }),
@@ -643,39 +667,68 @@ export const JOURNEY_ACTIONS = {
     }
     // a criterion met on evidence that is now out of date does not count until it is checked again
     const staleRun = now0 ? await evidenceStaleness(ctx, a.repo, facts ? mergeAgentFacts(now0, facts) : now0) : undefined
+    // the stage this signature opens again after a change of requirements, and what the change reaches in it: a stage
+    // it does not reach keeps its evidence and starts no agent (src/api/reopen-scope.ts; test-esp32 #71, #114, #116)
+    const again: ReopenedWork | null = now0 ? await reopenedWork(ctx, a.repo, now0, a.gate).catch(() => null) : null
     const { ready_at: readyAt, signed_at: signedAt, ...signed } = await journeyWrite(ctx, a.repo, (db) => {
       // when the gate became ready, from the record as it stood before the signature (its criteria and waivers)
       const before = loadJourney(db)
       const at = Date.now() / 1000
       const ready = before ? gateReadyAt(facts ? mergeAgentFacts(before, facts) : before, a.gate, at) : null
       const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts, pending, staleRun })
+      if (again && r.advanced_to === again.stage) {
+        const name = STAGE_NAMES[again.stage]
+        if (again.scope.kept) {
+          carryStage(db, again.stage, keptOf(again.reopens), again.reopens.map((x) => x.at), {
+            by: 'trace', summary: `${name} keeps its work after the change of requirements: ${again.scope.why} Its gate is signed again on the same evidence.`, detail: { requirements: again.ids },
+          })
+        } else {
+          decide(db, { kind: 'stage.rework', stage: again.stage, ref: again.stage, by: 'trace', summary: `${name} redoes only what the change of requirements reaches: ${again.scope.why}.`, detail: { requirements: again.ids, reach: again.scope.reach } })
+        }
+      }
       return { result: { repo: a.repo, ...r, ready_at: ready, signed_at: at } }
     })
     // saved: the wait from ready to signed (src/api/process-metrics.ts)
     recordWait(a.repo, 'gate', readyAt, signedAt)
+    const reopened = again && signed.advanced_to === again.stage ? again : null
     // the stage the signature opened starts its agents' work (docs/user-journey.md, each stage's "trace:"); the
-    // signature stands even when the job cannot start
+    // signature stands even when the job cannot start. Opened again after a change of requirements, it is asked to
+    // redo only what the change reaches; a stage the change does not reach starts nothing unless it has work left
     const work = signed.advanced_to ? STAGE_WORK[signed.advanced_to] : undefined
+    let request = work?.request
+    if (work && reopened) request = reopened.scope.kept ? await leftToDo(ctx, a.repo, work.request, reopened) : scopedRequest(work.request, reopened.scope, reopened.ids, reopened.trace)
     let kickoff: { jobId?: string; started?: string[]; jobError?: string } = {}
-    if (work) {
+    if (work && request) {
       try {
-        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request: work.request, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
         kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
       } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
     }
+    // what the person is told: what the stage kept, or what it redoes
+    const told = reopened ? {
+      stage: reopened.stage, kept: reopened.scope.kept, why: reopened.scope.why, requirements: reopened.ids,
+      words: reopened.scope.kept
+        ? `${reopened.scope.why}${request ? ' trace finishes what was still to do.' : ' Sign its gate again; nothing is redone.'}`
+        : `Only what the change reaches is redone: ${reopened.scope.why}.`,
+    } : null
+    if (told) signed.summary = `${signed.summary} ${told.words}`
     // the stage that opened may need new documents or sections, but they are written from its design: while it has
     // design work to do (nearly always, on opening) Scribe waits for it, and the push or the person's act that lands
     // the last of it starts Scribe (docs-follow.ts docsAfterDesign). A stage with no design work of its own starts it
     // now; a stage that needs no documents starts nothing, and the signature stands whatever happens here
     // (a signature that cuts a release asks for the release copies instead, below: one Scribe job does both)
+    // A stage kept after a change of requirements has its documents already: they are written from its design, which
+    // the change did not reach (test-esp32 #114, #116: a docs change each re-sign, locking the gate). The stage whose
+    // work is redone writes them when its work lands, and the nightly check catches anything else
     const stageDocs = async (): Promise<void> => {
-      if (!signed.advanced_to || !docsFor(signed.advanced_to, true).length) return
+      if (!signed.advanced_to || !docsFor(signed.advanced_to, true).length || reopened?.scope.kept) return
       const d = await startStageScribe(ctx, a.repo, `The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { also: ['journey'] })
       if (d.started) kickoff = { ...kickoff, started: [...(kickoff.started ?? []), d.started] }
     }
+    const reopen = told ? { reopen: told } : {}
     if (!signed.released) {
       await stageDocs()
-      return { ...signed, ...kickoff, snapshot: null }
+      return { ...signed, ...kickoff, ...reopen, snapshot: null }
     }
     // the signature cut a release: the record goes into the repository with it
     try {
