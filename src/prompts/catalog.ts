@@ -165,6 +165,20 @@ add({ id: 'specialist.job.stacked', mode: 'locked', prompt: 'specialist',
     'is stacked on that change, so it shows and is reviewed for your commits only, and lands after it. Keep to your own work: do',
     'not redo or revert that change; if it is wrong for what you need, say so (journey.ask) rather than change it here.',
   ].join('\n') })
+add({ id: 'specialist.job.after-discard', mode: 'locked', prompt: 'specialist',
+  vars: {
+    number: V.number, old_branch: text('the branch of the discarded change'), branch: V.branch, by: text('who discarded it'),
+    reason: text('their reason, quoted, in their words'),
+  },
+  description: 'For a job that would have worked on the branch of a change a person discarded (src/core/discarded.ts, test-esp32 log #75): it works on a new branch, and addresses their reason.',
+  default: [
+    'THIS WORK FOLLOWS A DISCARDED CHANGE. {{by}} discarded change #{{number}} (branch `{{old_branch}}`), so trace does not use that',
+    'branch again: your work goes on `{{branch}}`, a new branch started without its commits, and becomes a new change that links #{{number}}.',
+    'Their reason, in their words:',
+    '{{reason}}',
+    'Address it: do not make again what they rejected. If, given their reason, the work is no longer wanted, change nothing and say so in',
+    'your report.',
+  ].join('\n') })
 add({ id: 'specialist.job.revision', mode: 'locked', prompt: 'specialist',
   vars: {
     by: text('who asked for changes'), number: V.number, branch: V.branch, note: text('their note, in their words'),
@@ -253,6 +267,9 @@ add({ id: 'specialist.journey.people', mode: 'locked', prompt: 'specialist', var
     'People decide; agents prepare. You cannot sign a gate, take a waiver or answer a question, and a criterion a person',
     'owns is met only by their own act. An unanswered question is not an answer: never act on the recommended option as',
     'if it had been chosen.',
+    'To let a person waive findings or a criterion, offer it as an option with waives (each finding or criterion by id,',
+    'the risk and severity): their choosing it records the waiver in their name. Do not ask them to go and waive by hand',
+    'what that option records, and do not ask again what an open question already asks.',
   ].join('\n') })
 add({ id: 'specialist.handoff', mode: 'editable', prompt: 'specialist', then: ['specialist.handoff.rules'],
   vars: { tool: text('the hand-off tool, by MCP name'), status_tool: text('the journey status tool, by MCP name'), ask_tool: text('the journey question tool, by MCP name'), specialists: list('the specialists it may ask, one "- <kind>: the <name> specialist" per line') },

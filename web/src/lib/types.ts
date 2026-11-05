@@ -350,6 +350,11 @@ export interface ChangeDetail extends ChangeSummary {
    * why. The page offers "Run the check again" (change.rerun) instead of "Ask for changes". Absent from an older API.
    */
   infra_failed?: { checks: { id: string; name: string }[]; why: string }
+  /**
+   * A discarded change: who discarded it, when, their reason, and what happened to the jobs that were working on its
+   * branch. trace never opens that branch as a change again. Absent: not discarded, or from an older API.
+   */
+  discarded?: { by: string; at: string; reason: string; jobs: string[] }
   /** the accepted requirements its database edits, said before it is accepted; absent: it edits none */
   requirement_edits?: RequirementEdits
 }
@@ -431,7 +436,8 @@ export interface Question {
   askedAt: string
   blocks?: string
   recommended?: { id: string; label: string }
-  options?: { id: string; label: string }[]
+  /** `waiver`: choosing it records a waiver in the person's name (what, risk, severity), in words */
+  options?: { id: string; label: string; detail?: string; waiver?: string }[]
   sources?: EvidenceRef[]
 }
 
@@ -558,6 +564,12 @@ export interface Journey {
   changesUnavailable?: string
   /** criteria met on evidence that has since gone out of date, each with its gate and why (journey.get `stale_evidence`) */
   staleEvidence?: { criterion: string; gate: string; text: string; why: string }[]
+  /**
+   * After a change of requirements took the project back (journey.get `resign`, src/api/reopen-scope.ts): the gates
+   * to sign again, each `agree` (the changed requirements agreed first), `kept` (its evidence stands, nothing is
+   * redone), `redo` (the part the change reaches is done again) or `signed` (signed again already), with why
+   */
+  resign?: { requirements: string[]; edits: string; gates: { gate: string; name: string; stage: string; state: 'agree' | 'kept' | 'redo' | 'signed'; why: string }[] }
   /**
    * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
    * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it

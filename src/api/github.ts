@@ -85,6 +85,8 @@ export interface CommitSummary { sha: string; at: string | null; by: string | nu
 
 export interface GitHubApi {
   defaultBranch(repo: string): Promise<{ branch: string; sha: string }>
+  /** Whether the repository is there (and this token may see it). Optional: absent, trace cannot say before it tries. */
+  repoExists?(repo: string): Promise<boolean>
   /** The commit sha a branch points at, or null when there is no such branch. */
   branchSha(repo: string, branch: string): Promise<string | null>
   /** Every file (blobs only) in the tree at `ref`, recursively; `truncated` when GitHub cut the listing short. */
@@ -301,6 +303,13 @@ export class HttpGitHub implements GitHubApi {
   private p(repo: string): string {
     const [o, n] = repo.split('/')
     return `/repos/${encodeURIComponent(o ?? '')}/${encodeURIComponent(n ?? '')}`
+  }
+
+  async repoExists(repo: string): Promise<boolean> {
+    const r = await this.req('GET', this.p(repo))
+    if (r.status === 404) return false
+    if (!r.ok) throw new GitHubError(r.status, `GitHub GET repository: ${r.status}`, await saidBy(r))
+    return true
   }
 
   async defaultBranch(repo: string): Promise<{ branch: string; sha: string }> {

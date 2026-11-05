@@ -396,8 +396,11 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
     case 'change.discard':
       if (reviewer) return fail('Only contributors can discard a change.')
       c.state = 'closed'
+      // as the API: the job still working on it is stopped, and the page says so (test-esp32 log #75)
+      c.discarded = { by: 'you@example.com', at: new Date().toISOString(), reason: String(a.reason ?? ''), jobs: c.working ? [`The ${c.from.replace(/^the /, '').replace(/ specialist.*$/, '')} job that was working on it was stopped.`] : [] }
+      c.working = false
       done(repo, c.number)
-      return later(ok({ closed: true }))
+      return later(ok({ closed: true, jobs: c.discarded.jobs }))
     default:
       return undefined
   }

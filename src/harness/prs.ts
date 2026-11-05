@@ -3,6 +3,8 @@
  *
  *   openPr       a pushed branch that is ahead of the default branch and has no open PR gets one. A branch built on
  *                another open PR's branch is stacked on it (stack.ts): its PR targets that branch, not the default one.
+ *                A branch whose change a person discarded gets none (src/core/discarded.ts), and a branch that
+ *                follows a discarded change says so in its PR, with the person's reason.
  *                It is titled by the first commit that is not a specialist's record (src/core/change-contents.ts),
  *                and a PR still titled as a record is titled again once a push brings work into it.
  *   automerge    every PR to the default branch merges itself once its required checks pass (unless held).
@@ -14,6 +16,7 @@
  * Actions that must start other workflows (opening a PR, merging, updating a branch) are taken with the repository's
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
+import { type Discarded, afterBranch, discardedBranch, discardedChange, followsOf } from '../core/discarded.js'
 import { changeTitle, recordTitle } from '../core/change-contents.js'
 import { commentOnce, globMatch } from './util.js'
 import { resolveDbConflict } from './db-conflict.js'
@@ -35,6 +38,17 @@ export async function openPr({ github, author, context, core, cfg, env }: Deps):
 
   const open = (await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 1 })).data
   if (open[0]) return retitle(github, { owner, repo, pr: open[0], ownToken: Boolean(env.OWN_TOKEN) }, say)
+  // a change a person discarded stays discarded: a job that pushed to its branch afterwards does not bring it back
+  // (test-esp32 log #75). Any doubt opens nothing, like the stack check below
+  let retired: Discarded | null
+  try {
+    retired = await discardedBranch(github, owner, repo, branch)
+  } catch (e) {
+    const why = `trace could not check whether \`${branch}\` belongs to a discarded change (${errorMessage(e)}), so no PR was opened. Push again, or re-run this job, to try again.`
+    core.warning(why)
+    return say(why)
+  }
+  if (retired) return say(`\`${branch}\` belongs to #${retired.number}, which ${retired.by} discarded: no PR opened. Work that is still wanted goes on a new branch (such as \`${afterBranch(branch, retired.number)}\`); reopen #${retired.number} to bring it back.`)
   const toDefault = await github.rest.repos.compareCommits({ owner, repo, base: cfg.branch, head: branch }).catch(() => null)
   if (!toDefault || toDefault.data.ahead_by === 0) return say(`\`${branch}\` has nothing that ${cfg.branch} lacks: no PR opened.`)
   // built on another open PR's branch: stacked on it, so the PR shows only this branch's own commits. Any doubt opens
@@ -66,8 +80,13 @@ export async function openPr({ github, author, context, core, cfg, env }: Deps):
   // named by the work in it, not by a specialist's record that came first (test-esp32 log #144)
   const title = changeTitle(commits.map((c) => c.commit.message)) || branch
   const rest = commits.length === 1 ? (commits[0]?.commit.message ?? '').split('\n').slice(1).join('\n').trim() : ''
+  // work that follows a discarded change (src/agents/runtime/job.ts moved it to <branch>-after-<number>): its PR links
+  // that change and carries the person's reason, so whoever reviews it sees what was rejected. Not readable: no line
+  const n = followsOf(branch)
+  const follows = n ? await discardedChange(github, owner, repo, n).catch(() => null) : null
   const body = [
     `Opened automatically for \`${branch}\` when it was pushed.${cfg.prs.auto_merge ? ` It merges itself once \`${cfg.build.required_check}\` passes${parent ? ` and it targets \`${cfg.branch}\`` : ''}; add the \`${cfg.labels.hold}\` label to hold it.` : ''}`,
+    ...(follows ? ['', followsLine(follows)] : []),
     ...(parent ? ['', stackLine(parent, cfg.branch)] : []),
     '',
     '### Commits',
@@ -78,6 +97,12 @@ export async function openPr({ github, author, context, core, cfg, env }: Deps):
   // opened them (TRACE_AGENT_LOGIN), and one request a branch spends little of the person's quota
   const pr = await (author ?? github).rest.pulls.create({ owner, repo, head: branch, base, title: title.slice(0, 250), body })
   return say(`Opened #${pr.data.number}${parent ? `, stacked on #${parent.number}` : ''}: ${pr.data.html_url}`)
+}
+
+/** The line a PR that follows a discarded change carries: which one, who discarded it, and their reason as a quote. */
+export function followsLine(d: Discarded): string {
+  const reason = d.reason ? `, with this reason:\n\n${d.reason.split('\n').map((l) => `> ${l}`).join('\n')}` : '.'
+  return `This follows #${d.number}, which ${d.by} discarded${reason}`
 }
 
 /**

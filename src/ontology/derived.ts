@@ -7,6 +7,11 @@
  *   isCurrentOption  on each ArchitectureOption: the option the design goes ahead with (architectureView's `current`:
  *                    the chosen one, else the recommended one, else the first)
  *   buildQuantity    on the journey: how many boards the build plan makes (the stock checks are read at it)
+ *   needsInCase      on each Requirement whose words ask the case for more than the bare board: a window, or a part
+ *                    off the board such as a display module on a header (./case-needs.ts), in words; the fit
+ *                    criterion holds until a person checks the case for it (the fit check does not model either)
+ *   needsOffBoardPart on each Requirement whose words depend on a part off the board ('display', 'module', 'battery'):
+ *                    the requirement is mapped only when a block serving it names such a part with its size
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { DataFactory, type Store } from 'n3'
@@ -14,6 +19,7 @@ import { loadJourney } from '../core/journey.js'
 import { loadDesignDecisions } from '../tools/design/decisions.js'
 import { readDesignRows } from '../tools/design/db.js'
 import { architectureView, requirementDecisions, requirementsNow } from '../tools/design/record.js'
+import { caseNeed, caseNeedWords } from './case-needs.js'
 import { NS } from './vocab.js'
 import { nodeIri, type GraphOptions } from './graph.js'
 
@@ -33,7 +39,12 @@ export function addDerived(store: Store, o: GraphOptions, project: DatabaseSync,
     for (const q of all) {
       const d = decided.get(String(q.id))
       const live = d ? d.choice !== 'struck' : q.status !== 'rejected' && q.status !== 'obsolete'
-      store.addQuad(quad(namedNode(nodeIri(o, 'requirement', String(q.id))), namedNode(`${NS}isLive`), literal(String(live), BOOL)))
+      const r = namedNode(nodeIri(o, 'requirement', String(q.id)))
+      store.addQuad(quad(r, namedNode(`${NS}isLive`), literal(String(live), BOOL)))
+      const n = caseNeed(q.text as string | null, q.acceptance as string | null)
+      const need = caseNeedWords(n)
+      if (need) store.addQuad(quad(r, namedNode(`${NS}needsInCase`), literal(need)))
+      if (n.offBoard) store.addQuad(quad(r, namedNode(`${NS}needsOffBoardPart`), literal(n.offBoard)))
     }
   }
   if (has(project, 'arch_options')) {
