@@ -69,6 +69,7 @@ import { type WorkItem, WorkItemSchema, pick } from '../../harness/worker.js'
 import { type JobContext, JobPaused, type JobRunner } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
+import { toolSteps } from './tool-steps.js'
 import { type ModelUse, recordModelUse } from '../../core/cost.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, memoryLine, noMemory, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { composeTask, taskBranch } from '../worker/prompt.js'
@@ -466,8 +467,11 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   let last: z.infer<typeof ResultMessage> | null = null
   let session: string | undefined
   let thrown: unknown
+  // each tool call in the job's log as it is made, so its silence means a hang, not work (src/agents/runtime/tool-steps.ts)
+  const steps = toolSteps(o.log, o.redact)
   try {
     for await (const m of d.claude({ prompt: o.prompt, options })) {
+      steps.observe(m)
       try { o.onMessage?.(m) } catch { /* an observer never stops the job */ }
       tel.observe(m)
       session ??= SessionOf.safeParse(m).data?.session_id
@@ -480,6 +484,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     throw e
   } finally {
     clearTimeout(timer)
+    steps.stop()
     o.signal.removeEventListener('abort', onAbort)
     tel.end({ aborted: abort.signal.aborted, ...(abort.signal.aborted ? { error: abort.signal.reason } : thrown !== undefined ? { error: thrown } : {}) })
     // what the run cost, per model, into the project's ledger (best effort: never fails the run)
