@@ -195,6 +195,7 @@ function Review() {
             <h3 id="reqs" className="section-label">Requirements it covers</h3>
             <ChangeRequirements
               ids={d.requirements}
+              unknown={d.requirements_unknown}
               rows={coverage.data?.requirements}
               loading={coverage.isPending}
               link={(rid, children, className) => <Link to="/p/$id/requirements/$rid" params={{ id, rid }} className={className}>{children}</Link>}

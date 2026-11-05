@@ -173,6 +173,8 @@ export function readChange(raw: unknown): ChangeDetail {
     })),
     checks_list: arr(c.checks_list).map((k) => ({ name: String(k.name ?? ''), state: (['passed', 'failed', 'running', 'skipped'].includes(String(k.state)) ? k.state : 'running') as ChangeCheck['state'], summary: str(k.summary) ?? null, id: str(k.id) ?? null })),
     requirements: (Array.isArray(c.requirements) ? c.requirements : []).map(String),
+    // what it cites that the project has no requirement for: absent from an older API
+    ...(Array.isArray(c.requirements_unknown) && c.requirements_unknown.length ? { requirements_unknown: c.requirements_unknown.map(String) } : {}),
     recommendation: { verdict, why: str(rec.why) ?? '' },
     may_accept: c.may_accept === true,
     blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),
