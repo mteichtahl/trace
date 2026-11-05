@@ -17,7 +17,11 @@ interface Answer { session?: string; next?: string; signedIn?: boolean }
 const post = (page: Page, path: string, body: unknown) =>
   page.evaluate(
     async ({ path, body }) => {
-      const r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      // CloudFront signs the request for the API's function URL and needs the body's SHA-256 (as src/lib/http.ts sends it)
+      const json = JSON.stringify(body)
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json))
+      const hash = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+      const r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json', 'x-amz-content-sha256': hash }, body: json })
       const text = await r.text()
       if (!r.ok) throw new Error(`${path} answered ${r.status}: ${text.slice(0, 200)}`)
       return JSON.parse(text) as Answer
