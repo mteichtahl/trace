@@ -58,7 +58,7 @@ describe('a rule check criterion counts warnings, not only errors (#51)', () => 
     const ids = (ruleCheck(db, 'erc', rec())?.findings ?? []).map((f) => f.ref)
     expect(ids).toHaveLength(3)
     for (const id of ids) {
-      addWaiver(db, { target: { kind: 'finding', id }, reason: 'The library tables are fixed in the next change.', risk: 'A footprint is not found at layout.', severity: 'cosmetic', scope: 'this revision only' }, { hash: VIEWER.hash, label: VIEWER.label })
+      addWaiver(db, { target: { kind: 'finding', id }, reason: 'The library tables are fixed in the next change.', risk: 'A footprint is not found at layout.', severity: 'cosmetic', caught_where: 'Layout: the footprints are placed', scope: 'this revision only' }, { hash: VIEWER.hash, label: VIEWER.label })
     }
     const c = capture(withStaleEvidence(rec(), acceptedRecord(db, rec(), new Map())))['capture.erc']
     expect(c?.status).toBe('met')
