@@ -68,10 +68,15 @@ export function ownerWord(s: Pick<StageStep, 'owner' | 'who'>): string {
   }
 }
 
-/** The small label beside a step: "trace · done", "You · now", "trace · after you", "An admin". */
+/** The small label beside a step: "trace · done", "You · now", "trace · after you", "trace · alongside you", "An admin". */
 export function stepLabel(steps: StageStep[], i: number): string {
   const s = steps[i]!
   const who = ownerWord(s)
+  // trace works on it while the person reviews a change it does not wait on: never "after you"
+  if (s.alongside && s.state !== 'done' && s.state !== 'waived' && s.state !== 'now') {
+    const now = steps.find((x) => x.state === 'now')
+    return now?.owner === 'you' ? `${who} · alongside you` : `${who} · working`
+  }
   switch (s.state) {
     case 'done': return `${who} · done`
     case 'waived': return `${who} · waived`

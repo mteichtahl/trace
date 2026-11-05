@@ -61,7 +61,7 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  type AgentFacts, type CriterionRow, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
@@ -75,7 +75,7 @@ import { loadJobs } from '../core/job-index.js'
 import { evidenceStaleness } from './evidence-freshness.js'
 import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { docsFor } from '../docs/catalog.js'
-import { docsReleaseRequest, docsRequest, startScribe } from './docs-follow.js'
+import { docsAfterDesign, docsReleaseRequest, recordNow, startScribe, startStageScribe } from './docs-follow.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
@@ -304,6 +304,7 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
       'Check it: kicad.drc clean (or each finding explained), every connection routed, matched lengths where the design names any (pcb.length_match, kicad.net_length). Record layout.routed, layout.drc and layout.lengths with journey.check, and layout.pins if the pin plan applies.',
       'Render the board (render.board) so a person can approve the renders. Do not approve them yourself: ask with journey.ask, naming layout.renders, the render run as a source, and a recommended option labelled "Approve the renders". The person\'s answer meets the criterion.',
       'A change the layout forces on the schematic or a requirement is a question for a person (journey.ask), not yours to make.',
+      'Leave the case: trace starts it for the board once this layout is accepted.',
     ].join('\n'),
   },
   signoff: {
@@ -317,6 +318,71 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
       'Write the release report with verify.report: coverage, interference estimates, the parts list and its cost, and every open waiver, for a person to review. Do not sign or waive anything yourself.',
     ].join('\n'),
   },
+}
+
+/**
+ * Design work a stage starts part way through, once the work it builds on is accepted: the criterion it meets, the
+ * criteria it waits for (met or waived), and the specialist and what it is asked. Layout's case is built for the
+ * accepted board, so it starts when the layout lands, not after the documents (test-esp32 #132: the fit criterion
+ * waited behind a docs change, though the documents are written from the case, not the other way round).
+ */
+export const FOLLOW_ON: Readonly<Record<string, { after: readonly string[]; agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
+  'layout.fit': {
+    after: ['layout.routed', 'layout.drc'],
+    agent: 'impl',
+    started: 'The Implementation agent designs the case for the accepted board and checks that the board fits it.',
+    request: [
+      'The board layout is accepted: the project is in Layout. Design its enclosure and check that the board fits it.',
+      'Read the accepted requirements (verify.requirements list) for the size, mounting, openings and environment the case must meet, and the board as it now is on the default branch.',
+      'With no mechanical/case.json yet: mech_board first (a part at the 5 mm default height needs its Height from its datasheet or a person), then mech_options with ask: true, and mech_init with the design the answer names. With a case already there, mech_fit says whether its last build is stale.',
+      'mech_build, then read every clash and gap by part and fix it (mech_settings with its reason, or an edit to mechanical/case.py), rebuilding after each change. After each build, shape_check layout.fit records the criterion; never journey_check it.',
+      'A change the case forces on the board or a requirement is a question for a person (journey.ask), not yours to make.',
+    ].join('\n'),
+  },
+}
+
+/** The FOLLOW_ON work the record is ready for: its criterion unmet in the current stage, what it waits for landed. Pure. */
+export function followOnDue(r: JourneyRecord): string[] {
+  const met = (id: string): boolean => {
+    const c = r.criteria.find((x) => x.id === id)
+    return !c || c.status === 'met' || r.waivers.some((w) => w.targetKind === 'criterion' && w.target === id && w.closedAt === null)
+  }
+  const stage = r.stages.find((s) => s.id === r.journey.currentStage)
+  return Object.entries(FOLLOW_ON).filter(([id, f]) => {
+    const c = r.criteria.find((x) => x.id === id)
+    if (!c || !stage || !r.gates.some((g) => g.id === c.gate && g.stage === stage.id) || met(id) || !f.after.every(met)) return false
+    // once a stage opening (or reopening): a decision says it was started since
+    const since = Math.max(stage.started ?? 0, stage.reopenedAt ?? 0)
+    return !r.decisions.some((d) => d.kind === 'work.started' && d.ref === id && d.at >= since)
+  }).map(([id]) => id)
+}
+
+/**
+ * Start the FOLLOW_ON work the stage is ready for (a push to the default branch, hook.docs: the accept that landed what
+ * it waits for). Skipped while its specialist has a job queued or running on the project, which may be doing it; the
+ * next push tries again. Each start is logged, so it starts once a stage.
+ */
+export async function startFollowOn(ctx: Context, repo: string, r: JourneyRecord): Promise<{ started: string[]; jobs: string[]; errors: string[] }> {
+  const out = { started: [] as string[], jobs: [] as string[], errors: [] as string[] }
+  const due = followOnDue(r)
+  if (!due.length) return out
+  const jobs = await ctx.deps.jobs()
+  const busy = await jobs.jobStatus()
+  for (const id of due) {
+    const f = FOLLOW_ON[id]!
+    if (busy.some((j) => j.repository === repo && j.agent === f.agent && (j.state === 'queued' || j.state === 'running'))) continue
+    try {
+      const s = await jobs.startJob({ kind: 'task', repository: repo, request: f.request, agent: f.agent, requestedBy: 'trace', requestedBySub: ctx.principal.sub })
+      if (!s.accepted) { out.errors.push(s.reason ?? 'trace did not accept the job.'); continue }
+      await writeJourney(ctx, repo, (db) => {
+        decide(db, { kind: 'work.started', stage: r.journey.currentStage, ref: id, by: 'trace', summary: f.started, detail: { job: s.jobId, agent: f.agent } })
+        return { result: null }
+      })
+      out.started.push(f.started)
+      if (s.jobId) out.jobs.push(s.jobId)
+    } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)) }
+  }
+  return out
 }
 
 /**
@@ -343,6 +409,10 @@ async function changedFirst(ctx: Context, repo: string, r: JourneyRecord, next: 
   const open = await withRecordDb(ctx, repo, (db) => requirementEvidence(db, r).filter((q) => q.status === 'proposed').map((q) => q.id)).catch(() => [] as string[])
   return changedStep(next, r.journey.currentStage, open)
 }
+
+/** The stage's design work left before a person's act (docsAfterDesign compares after it); null when unreadable. */
+export const designBefore = (ctx: Context, repo: string): Promise<CriterionRow[] | null> =>
+  recordNow(ctx, repo).then((r) => (r ? designWorkLeft(r) : null), () => null)
 
 export const JOURNEY_ACTIONS = {
   'journey.get': def('read', Repo, async ({ repo }, ctx) => {
@@ -481,12 +551,14 @@ export const JOURNEY_ACTIONS = {
         kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
       } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
     }
-    // the stage that opened may need new documents or sections: Scribe brings them up to date (docs/scribe.md); a
-    // stage that needs none starts nothing, and the signature stands whatever happens here
+    // the stage that opened may need new documents or sections, but they are written from its design: while it has
+    // design work to do (nearly always, on opening) Scribe waits for it, and the push or the person's act that lands
+    // the last of it starts Scribe (docs-follow.ts docsAfterDesign). A stage with no design work of its own starts it
+    // now; a stage that needs no documents starts nothing, and the signature stands whatever happens here
     // (a signature that cuts a release asks for the release copies instead, below: one Scribe job does both)
     const stageDocs = async (): Promise<void> => {
       if (!signed.advanced_to || !docsFor(signed.advanced_to, true).length) return
-      const d = await startScribe(ctx, a.repo, docsRequest(`The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { stage: signed.advanced_to, also: ['journey'] }))
+      const d = await startStageScribe(ctx, a.repo, `The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { also: ['journey'] })
       if (d.started) kickoff = { ...kickoff, started: [...(kickoff.started ?? []), d.started] }
     }
     if (!signed.released) {
@@ -530,11 +602,16 @@ export const JOURNEY_ACTIONS = {
     })),
 
   // a criterion an admin added to the template, which a person signs off by saying what they checked (no skill meets it)
-  'criterion.confirm': def('write', Repo.extend({ criterion: Id, met: z.boolean().default(true), note: z.string().trim().max(300).default('') }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, (db) => {
+  'criterion.confirm': def('write', Repo.extend({ criterion: Id, met: z.boolean().default(true), note: z.string().trim().max(300).default('') }), async (a, ctx) => {
+    const before = await designBefore(ctx, a.repo)
+    const out = await journeyWrite(ctx, a.repo, (db) => {
       confirmCriterion(db, a.criterion, { met: a.met, note: a.note }, signer(ctx))
       return { result: { repo: a.repo, criterion: a.criterion, met: a.met, summary: a.met ? 'Signed off.' : 'Taken back: it is not met.' } }
-    })),
+    })
+    // the last of the stage's design work signed off: its documents are written now
+    const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
+    return docs.started ? { ...out, started: [docs.started] } : out
+  }),
 
   'question.answer': def('write', Repo.extend({
     question: Id, option: Id.optional(), answer: z.string().trim().max(4000).optional(), reason: z.string().trim().max(2000).optional(),
@@ -543,6 +620,7 @@ export const JOURNEY_ACTIONS = {
   }), async (a, ctx) => {
     // an agent's question lives in its facts; the answer is written here, in the record, under the same id
     const facts = await agentFacts(ctx, a.repo)
+    const before = await designBefore(ctx, a.repo)
     const answered = await journeyWrite(ctx, a.repo, (db) => {
       const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason }, { facts })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
@@ -551,10 +629,13 @@ export const JOURNEY_ACTIONS = {
     recordAnswered(a.repo, answered.question)
     // an agent that asked and then ended (its question left in its report) reads the answer only in a next job: start
     // that job, on the asking job's branch, so the answer is acted on now; the answer stands whatever happens here
+    // an answer that approves the last of the stage's design work (the board renders): its documents are written now
+    const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     const asked = askedBy(facts, a.question)
-    if (!asked?.jobId) return answered
-    const carried = await carryOn(ctx, a.repo, asked, answered.question, a.lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
-    return { ...answered, ...carried }
+    if (!asked?.jobId) return docs.started ? { ...answered, started: [docs.started] } : answered
+    const carried: { started?: string[]; jobError?: string } = await carryOn(ctx, a.repo, asked, answered.question, a.lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
+    const started = [...(carried.started ?? []), ...(docs.started ? [docs.started] : [])]
+    return { ...answered, ...carried, ...(started.length ? { started } : {}) }
   }),
 
   'stuck.dismiss': def('write', Repo.extend({ job: Id, reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {
@@ -575,10 +656,14 @@ export const JOURNEY_ACTIONS = {
     scope: z.string().trim().min(1).max(300).default('this revision only'),
   }), async (a, ctx) => {
     const facts = await agentFacts(ctx, a.repo)
-    return journeyWrite(ctx, a.repo, (db) => {
+    const before = a.target.kind === 'criterion' ? await designBefore(ctx, a.repo) : null
+    const out = await journeyWrite(ctx, a.repo, (db) => {
       const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx), { facts })
       return { result: { repo: a.repo, waiver: w } }
     })
+    // a criterion waived may be the last of the stage's design work: its documents are written now
+    const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
+    return docs.started ? { ...out, started: [docs.started] } : out
   }),
 
   'journey.time': def('read', Repo, async ({ repo }, ctx) => {

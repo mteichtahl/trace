@@ -646,6 +646,9 @@ export type StepState = 'done' | 'now' | 'next' | 'later' | 'waived'
 export interface StepView {
   id: string; text: string; owner: StepOwner; state: StepState
   ref: { kind: 'criterion' | 'gate' | 'question' | 'change'; id: string } | null
+  /** trace's step it works on at the same time as the person's step `now` (a change to review that it does not wait
+   * on): "trace · alongside you", never "after you" (withChanges) */
+  alongside?: true
 }
 export interface StageView {
   id: StageId; name: string; optional: boolean; state: StageState; met: number; total: number; progress: string
@@ -1383,8 +1386,8 @@ export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer
   const stages = view.stages.map((s) => ({ ...s, steps: [...s.steps] }))
   for (const c of changes) {
     const step: StepView = { id: `change:${c.number}`, text: `Review "${c.title}" from ${c.from}.`, owner, state: 'later', ref: { kind: 'change', id: String(c.number) } }
-    // before the first criterion it names that is not done yet, wherever it is; else first among the current stage's
-    // not-done steps (a stage already done is not reopened by a change)
+    // before the first criterion it names that is not done yet, wherever it is (a stage already done is not reopened
+    // by a change)
     const target = stages.find((s) => s.state !== 'done' && s.steps.some((x) => pending(x) && x.ref?.kind === 'criterion' && c.criteria.includes(x.ref.id)))
     if (target) {
       target.steps.splice(target.steps.findIndex((x) => pending(x) && x.ref?.kind === 'criterion' && c.criteria.includes(x.ref.id)), 0, step)
@@ -1392,9 +1395,11 @@ export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer
     }
     const here = stages.find((s) => s.id === cur)
     if (!here) continue
-    // after the changes already placed there, so they stay oldest first
-    const first = here.steps.findIndex((x) => pending(x) && x.ref?.kind !== 'change')
-    here.steps.splice(first < 0 ? here.steps.length : first, 0, step)
+    // a change that meets no criterion (the documents) follows the stage's design work, before signing its gate: the
+    // documents are written from that work, and the work never waits for them (test-esp32 #132, where the case
+    // showed "trace · after you" behind a docs change). After the changes already placed there, oldest first
+    const sign = here.steps.findIndex((x) => pending(x) && x.ref?.kind === 'gate')
+    here.steps.splice(sign < 0 ? here.steps.length : sign, 0, step)
   }
   let next: Omit<NextStep, 'step' | 'after'> = view.next
   const ready = changes.find((c) => c.ready)
@@ -1408,7 +1413,16 @@ export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer
   const here = stages.find((s) => s.id === cur)
   if (!here) return { ...view, stages }
   here.steps = markSteps(here.steps, next.ref)
-  return { ...view, stages, next: { ...next, step: stepPlace(here.steps), after: afterWords(r, next, here.steps) } }
+  // trace was working on a criterion the change under review does not meet: it goes on with it meanwhile, so that
+  // step is trace's alongside the review, not after it
+  const working = view.next.kind === 'working' && view.next.ref?.kind === 'criterion' ? view.next.ref.id : null
+  const reviewed = next.kind === 'review' ? changes.find((c) => String(c.number) === next.ref?.id) : undefined
+  const along = working && reviewed && !reviewed.criteria.includes(working) ? here.steps.find((s) => pending(s) && s.ref?.kind === 'criterion' && s.ref.id === working) : undefined
+  if (along) along.alongside = true
+  const after = along
+    ? `Once you accept it, its work counts in the design. Meanwhile, trace goes on with: ${lowerFirst(along.text)}.`
+    : afterWords(r, next, here.steps)
+  return { ...view, stages, next: { ...next, step: stepPlace(here.steps), after } }
 }
 
 // ------------------------------------------------------------------ writes
@@ -1617,6 +1631,24 @@ export function reviewWaitsOn(r: JourneyRecord, id: string): CriterionRow[] {
   const waived = waiverFor(r)
   const ids = new Set(def.after.map((k) => `${c.gate}.${k}`))
   return r.criteria.filter((x) => ids.has(x.id) && x.status !== 'met' && !waived.has(x.id))
+}
+
+/**
+ * The current stage's design work still to land: the criteria of its unsigned gates that are not met or waived, except
+ * the documents criterion (signoff.docs) and the reviews that come after it (signoff.report). The stage's documents
+ * are written from this work, so Scribe starts only once it is empty (src/api/docs-follow.ts): started when a stage
+ * opened, it wrote "pending" in every section the stage was about and asked how to write the rest (test-esp32 #58,
+ * #98, #120). Pass the record with the agents' facts merged in, or trace's own criteria always read as unmet.
+ */
+export function designWorkLeft(r: JourneyRecord): CriterionRow[] {
+  const stage = r.journey.currentStage
+  const waived = waiverFor(r)
+  const open = new Set(r.gates.filter((g) => g.stage === stage && !liveSignature(r, g.id)).map((g) => g.id))
+  const docsWork = (c: CriterionRow): boolean => {
+    const def = GATES.find((g) => g.id === c.gate)?.criteria.find((d) => `${c.gate}.${d.key}` === c.id)
+    return def?.key === 'docs' || Boolean(def?.after?.includes('docs'))
+  }
+  return r.criteria.filter((c) => open.has(c.gate) && c.status !== 'met' && !waived.has(c.id) && !docsWork(c))
 }
 
 export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }

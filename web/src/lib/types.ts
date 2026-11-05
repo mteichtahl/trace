@@ -139,6 +139,8 @@ export interface StageStep {
   ref: { kind: 'criterion' | 'gate' | 'question' | 'change'; id: string } | null
   /** a named person's name, when owner is person */
   who?: string
+  /** trace's step it works on at the same time as the person's step now (a change it does not wait on) */
+  alongside?: boolean
   /** an in-app address that does the step (its guided skill, gate or change), worked out by the reader */
   to?: string
 }
