@@ -177,7 +177,14 @@ export function readChange(raw: unknown): ChangeDetail {
     blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),
     base: ref(c.base), head: ref(c.head),
     ...(readRequirementEdits(c.requirement_edits) ? { requirement_edits: readRequirementEdits(c.requirement_edits)! } : {}),
+    ...(readDiscarded(c.discarded) ? { discarded: readDiscarded(c.discarded)! } : {}),
   }
+}
+
+/** change.get's discarded: who discarded it, why, and the jobs it stopped; nothing when not discarded (or an older API). */
+function readDiscarded(v: unknown): ChangeDetail['discarded'] | null {
+  if (!isObj(v) || !str(v.by)) return null
+  return { by: String(v.by), at: str(v.at) ?? '', reason: str(v.reason) ?? '', jobs: (Array.isArray(v.jobs) ? v.jobs : []).filter((j): j is string => typeof j === 'string') }
 }
 
 /** change.get's requirement_edits: the accepted requirements it edits, or nothing (none, or an older API). */
