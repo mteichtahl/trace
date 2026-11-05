@@ -285,6 +285,8 @@ export interface ChangeSummary {
   builds_on?: ChangeLink
   /** the open changes built on this one, which follow it into the design */
   built_on_by?: ChangeLink[]
+  /** the job behind it is still working: it is not ready to review yet, whatever its checks say */
+  working?: boolean
 }
 
 /** An answer a change still waits on (ChangeSummary.answers). */

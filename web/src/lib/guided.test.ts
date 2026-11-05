@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { READERS, changeWords, readChange, readChangeDiff, readChanges, readGuide, readJourney, readSteps, splitRecommendation, verdictOf } from './readers'
-import { changeLine, changeOf, checksWords, currentStage, decisionMode, gateMeter, nextPlace, ownerWord, stageSteps, stepLabel, stepPlace, stepWords } from './guided'
+import { changeLine, changeOf, checksWords, recommendationWords, currentStage, decisionMode, gateMeter, nextPlace, ownerWord, stageSteps, stepLabel, stepPlace, stepWords } from './guided'
 import type { Gate, Journey, Stage, StageStep } from './types'
 
 const stage = (id: string, state: Stage['state'], extra: Partial<Stage> = {}): Stage => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1), state, criteria: { met: 0, total: 0 }, ...extra })
@@ -202,6 +202,17 @@ describe('changes in words, and what the decision bar may do', () => {
     expect(changeLine({ verdict: 'conflict', checks: null } as never)).toMatch(/trace will bring it up to date/)
     // a stacked change waits for the one below it, named
     expect(changeLine({ verdict: 'blocked', state: 'open', checks: null, builds_on: { number: 4, title: 'Pin plan' } } as never)).toBe('Builds on "Pin plan". Accept that one first; this one follows it.')
+  })
+
+  // log #68: "2 checks passed, trace recommends accepting" while the job behind the change was still running
+  it('says trace is still working on a change whose job has not finished, whatever its checks say', () => {
+    const passed = { ...c, passed: 2, total: 2, running: 0 }
+    expect(changeLine({ verdict: 'checking', state: 'open', checks: passed, working: true } as never)).toBe('trace is still working on this change. Ready to review when its job finishes.')
+    expect(changeLine({ verdict: 'ready', state: 'open', checks: passed } as never)).toBe('Ready to review. 2 checks passed.')
+    expect(recommendationWords({ verdict: 'wait', why: '' }, true)).toBe('trace is still working on this change.')
+    expect(recommendationWords({ verdict: 'wait', why: '' })).toBe('trace recommends waiting for the checks.')
+    expect(readChanges({ changes: [{ number: 3, title: 'x', verdict: 'checking', working: true }] }).changes[0]!.working).toBe(true)
+    expect(readChanges({ changes: [{ number: 3, title: 'x', verdict: 'ready' }] }).changes[0]!.working).toBeUndefined()
   })
 
   it('decisionMode: reviewers read only; a closed change is closed; may_accept decides the rest', () => {
