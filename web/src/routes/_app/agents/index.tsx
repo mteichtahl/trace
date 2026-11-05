@@ -1,36 +1,49 @@
 /**
- * Agents and tools (/agents): every agent and every tool trace has, what is happening right now, and whether each can
- * work. From the API: the work running, paused and queued on the person's projects and each agent's status there
- * (jobs.list: the projects' job indexes, with the journey's questions and stuck reports; live through job.updated
- * events), what needs a person (inbox), and the tool list with runs. Each agent's row: its status (Working, Queued,
- * Waiting on a person, Stuck, Idle; the most pressing across the person's projects), what it is doing now, its queue
- * (with Move up), and its last day's runs. The hand-offs between agents (jobs.list `handoffs`): who asked whom, for what,
- * open or answered, with Decline (a reason in one line) for people who may change the project. Which instruction
- * layer is in force is not reported yet: a dash, said so.
+ * Agents and tools (/agents), redesigned as a picture (docs/agents-screen.md): what every agent is doing on every
+ * project and who has asked whom, at a glance.
+ *
+ * - **Project filter** (`?project=owner/name`): All projects summarises every project; one project shows only its
+ *   work. The filter is in the address, so a link keeps it.
+ * - **Projects at a glance** (All projects, more than one project): each project's agents by state, its jobs, its open
+ *   hand-offs and what it has on Next, with "Show only this project".
+ * - **The map** (agent-map.tsx): each agent a box listing its work one line per project (step, progress, queue and
+ *   today), the hand-offs between agents as arrows counting the hand-offs on each. On a phone the boxes stack as cards.
+ * - **Needs you or stuck**, beside the map: the questions and stuck reports on Next for the projects in view, answered
+ *   or dismissed here.
+ * - **Hand-offs**, grouped by arrow, each declinable (a reason in one line) by people who may change its project;
+ *   older ones fold away.
+ * - **trace is doing now**: the running, paused and queued jobs with their controls (Pause, Resume, Move up, Cancel).
+ * - The tool catalogue, as before.
+ *
+ * Everything is live through job.updated events (jobs.list), as the screen it replaces was.
  */
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import type { ColumnDef } from '@tanstack/react-table'
-import { Info } from 'lucide-react'
+import { ArrowRight, Info } from 'lucide-react'
+import { useMemo } from 'react'
+import { toast } from 'sonner'
 import { z } from 'zod'
-import { DataTable, Highlight, useUrlView } from '@/components/data-table'
+import { AgentCards, AgentMap, type AgentView, LINK_LOOK, STATUS_OF } from '@/components/agents/agent-map'
+import { type AgentLink, countsText, glanceOf, handoffText, linksOf, onMap, type ProjectGlance, projectTone } from '@/components/agents/map-model'
 import { ToolsCatalogue } from '@/components/agents/tools-catalogue'
-import { useWork } from '@/components/agents/use-agents'
+import { mergeAgents, useWork } from '@/components/agents/use-agents'
 import { useTraceContext } from '@/components/chat/context'
+import { useDismissStuck } from '@/components/dismiss-stuck'
+import { FoldRows } from '@/components/fold-row'
+import { HandoffRow, useDeclineHandoffs } from '@/components/handoff'
+import { NeedsYouCard } from '@/components/needs-you-card'
+import { offerPush } from '@/components/push-prompt'
 import { RunLine, runControls } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
-import { NeedsBuilding } from '@/components/side-sheet'
 import { EmptyState, Loading, Partial, QueryError, SkeletonRows } from '@/components/states'
-import { type Status, StatusBadge } from '@/components/status-badge'
-import { type AgentWork } from '@/components/agents/use-agents'
-import { duration } from '@/lib/format'
-import { DismissStuck, useDismissStuck } from '@/components/dismiss-stuck'
-import { HandoffRow, isOpen, useDeclineHandoffs } from '@/components/handoff'
-import { useAuth } from '@/lib/auth'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { projectName } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
+import { plural } from '@/lib/format'
 import { AGENTS } from '@/lib/knowledge'
-import { useInbox, useProjects } from '@/lib/queries'
+import { useCall, useInbox, useProjects } from '@/lib/queries'
+import type { InboxItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/agents/')({
@@ -39,32 +52,6 @@ export const Route = createFileRoute('/_app/agents/')({
   component: Agents,
 })
 
-interface Row {
-  id: string
-  name: string
-  does: string
-  status: string
-  now: string
-  queue: string
-  today: string
-  instructions: string
-  work: AgentWork | undefined
-}
-
-const STATUS_WORD: Record<AgentWork['status'], { status: Status; label: string }> = {
-  working: { status: 'working', label: 'Working' },
-  queued: { status: 'queued', label: 'Queued' },
-  waiting_person: { status: 'yours', label: 'Waiting on a person' },
-  stuck: { status: 'stuck', label: 'Stuck' },
-  idle: { status: 'idle', label: 'Idle' },
-}
-
-/** "3 runs, 2 succeeded, median 4 min" */
-export function todayText(t: AgentWork['today'] | undefined): string {
-  if (!t || t.runs === 0) return 'No runs'
-  return `${t.runs} run${t.runs === 1 ? '' : 's'}, ${t.succeeded} succeeded${t.medianS !== null ? `, median ${duration(t.medianS, { short: true })}` : ''}`
-}
-
 function Agents() {
   const work = useWork()
   const watch = useWatchRun()
@@ -72,108 +59,197 @@ function Agents() {
   const projects = useProjects()
   const { user } = useAuth()
   const navigate = useNavigate()
-  const url = useUrlView('agents')
+  const search = Route.useSearch()
+  const phone = useMediaQuery('(max-width: 767px)')
+  const dismiss = useDismissStuck()
+  const decline = useDeclineHandoffs()
+  const answer = useCall('question.answer', (a) => [['inbox'], ['journey.get', a.repo], ['jobs.list', a.repo]])
   const admin = user?.class === 'admin'
   const reviewerOnly = !admin && (projects.data ?? []).every((p) => (p.part ?? 'contributor') === 'reviewer')
-  const stuck = (inbox.data ?? []).filter((i) => i.kind === 'stuck')
-  const dismiss = useDismissStuck()
-  const questions = (inbox.data ?? []).filter((i) => i.kind === 'question')
-  const decline = useDeclineHandoffs()
-  const openHandoffs = work.handoffs.filter((h) => isOpen(h.handoff)).length
 
-  const rows: Row[] = AGENTS.map((a) => {
-    const w = work.agents.get(a.id)
-    const st = STATUS_WORD[w?.status ?? 'idle']
-    return {
-      id: a.id, name: a.name, does: a.does, status: st.label, work: w,
-      now: w?.now.map((x) => `${x.project}: ${x.run.title}`).join('; ') ?? '', queue: String(w?.queue.length ?? 0), today: todayText(w?.today), instructions: '',
-    }
-  })
-  const columns: ColumnDef<Row, any>[] = [
-    { accessorKey: 'name', header: 'Agent', size: 190, meta: { label: 'Agent', kind: 'text' }, cell: ({ row }) => <Link to="/agents/$agent" params={{ agent: row.original.id }} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}><Highlight text={row.original.name} /></Link> },
-    {
-      accessorKey: 'status', header: 'Status', size: 190, meta: { label: 'Status', kind: 'enum' },
-      cell: ({ row }) => {
-        const w = row.original.work
-        const st = STATUS_WORD[w?.status ?? 'idle']
-        return (
-          <span className="flex flex-col gap-1">
-            <StatusBadge status={st.status} label={st.label} />
-            {w && (w.status === 'stuck' || w.status === 'waiting_person') && <span className="line-clamp-2 text-xs text-muted-foreground">{w.project ? `${w.project}: ` : ''}{w.says.replace(/^(Stuck|Waiting on a person): /, '')}</span>}
-          </span>
-        )
-      },
-    },
-    {
-      accessorKey: 'now', header: 'Now', size: 300, meta: { label: 'Now', kind: 'text' },
-      cell: ({ row }) => (row.original.now ? <span className="line-clamp-2"><Highlight text={row.original.now} /></span> : <span className="text-muted-foreground">{row.original.does}</span>),
-    },
-    { accessorKey: 'queue', header: 'Queue', size: 90, meta: { label: 'Queue', kind: 'text' }, cell: ({ row }) => <span className={row.original.queue === '0' ? 'text-muted-foreground' : ''}>{row.original.queue === '0' ? '—' : `${row.original.queue} waiting`}</span> },
-    { accessorKey: 'today', header: 'Today', size: 200, meta: { label: 'Today', kind: 'text' }, cell: ({ row }) => <span className="text-muted-foreground">{row.original.today}</span> },
-    { accessorKey: 'instructions', header: 'Instructions', size: 120, meta: { label: 'Instructions', kind: 'text' }, cell: () => <span className="text-muted-foreground">—</span> },
-  ]
+  // the filter: a project the person has, or All projects
+  const repos = work.per.map((p) => p.repo)
+  const asked = typeof search.project === 'string' ? search.project : null
+  const only = asked && repos.includes(asked) ? asked : null
+  const scope = useMemo(() => (only ? work.per.filter((p) => p.repo === only) : work.per), [work.per, only])
+  const inScope = (repo: string) => !only || repo === only
+  const setOnly = (repo: string | null) => void navigate({ to: '/agents', search: (s: Record<string, unknown>) => ({ ...s, project: repo ?? undefined }), replace: true })
 
+  // each project's colour, by its place in the person's list, so it holds still when the filter changes
+  const tones = useMemo(() => new Map(repos.map((r, i) => [r, projectTone(i)])), [repos.join(',')])
+  const now = Date.now()
+  const merged = useMemo(() => mergeAgents(scope), [scope])
+  const views: AgentView[] = useMemo(() => {
+    const known = AGENTS.map((a) => ({ id: a.id as string, name: a.name as string, does: a.does as string, work: merged.get(a.id) }))
+    // agents trace reports that the app does not list yet still get a box, when they have work
+    const extra = [...merged.values()].filter((w) => !AGENTS.some((a) => a.id === w.id) && w.status !== 'idle')
+      .map((w) => ({ id: w.id, name: scope.flatMap((p) => p.agents).find((a) => a.id === w.id)?.name ?? w.id, does: '', work: w }))
+    return [...known, ...extra]
+  }, [merged, scope])
+  const handoffs = work.handoffs.filter((x) => inScope(x.repo))
+  const links = useMemo(() => linksOf(handoffs, now), [handoffs.map((x) => `${x.repo}:${x.handoff.id}:${x.handoff.state}`).join(',')])
+  const earlier = handoffs.filter((x) => !onMap(x.handoff, now))
+  const running = work.running.filter((x) => inScope(x.repo))
+  const queued = work.queued.filter((x) => inScope(x.repo))
+  const needs = (inbox.data ?? []).filter((i) => (i.kind === 'question' || i.kind === 'stuck') && inScope(i.repo))
+  const glance = useMemo(() => glanceOf(work.per, inbox.data ?? [], now, tones), [work.per, inbox.data, tones])
+
+  const counts = { working: 0, waiting_person: 0, stuck: 0, queued: 0, idle: 0 }
+  for (const v of views) counts[v.work?.status ?? 'idle']++
+  const open = handoffs.filter((x) => x.handoff.state === 'requested' || x.handoff.state === 'queued' || x.handoff.state === 'running').length
+  const questions = needs.filter((i) => i.kind === 'question').length
+  const where = only ? projectName(only) : scope.length === 1 ? scope[0]!.project : `across ${plural(scope.length, 'project')}`
   const summary = work.loading
     ? ' '
     : work.projectsError
       ? 'trace could not read your projects, so what its agents are doing is not known just now.'
-      : `${work.running.length === 0 ? 'Nothing is running' : `${work.running.length} ${work.running.length === 1 ? 'job is' : 'jobs are'} running`}${work.queued.length ? `, ${work.queued.length} queued` : ''}${stuck.length ? `, and ${stuck.length} ${stuck.length === 1 ? 'agent is' : 'agents are'} stuck` : ''}. ${questions.length === 0 ? 'No question is waiting on a person.' : `${questions.length === 1 ? 'One question is' : `${questions.length} questions are`} waiting on a person.`}`
+      : `${running.length === 0 ? 'Nothing is running' : `${plural(running.length, 'job')} ${running.length === 1 ? 'is' : 'are'} running`}${queued.length ? `, ${queued.length} queued` : ''} ${only ? `on ${where}` : where}. ${questions === 0 ? 'No question is waiting on you' : `${questions === 1 ? 'One question is' : `${questions} questions are`} waiting on you`}${counts.stuck ? `, and ${plural(counts.stuck, 'agent is', 'agents are')} stuck` : ''}.`
 
-  useTraceContext({ label: 'Agents and tools', description: 'The screen the person is on: agents, their work, and the tools', value: { running: work.running.map((w) => `${w.project}: ${w.run.title}`), queued: work.queued.length, stuck: stuck.length } }, 'screen')
+  const onAnswer = (item: InboxItem) => {
+    if (!item.questionId || !item.recommended) return
+    answer.mutate(
+      { repo: item.repo, question: item.questionId, option: item.recommended.id },
+      {
+        onSuccess: (r) => {
+          toast(`Answered: ${item.recommended!.label}`, { description: `${item.project}: ${r.summary?.replace(/^Answered\. /, '') ?? 'the agent carries on.'}` })
+          void offerPush()
+        },
+        onError: (e) => toast.error('Could not send the answer', { description: `${e.message} Nothing was lost; try again.` }),
+      },
+    )
+  }
+
+  useTraceContext({
+    label: 'Agents and tools',
+    description: 'The screen the person is on: every agent\'s work on each project, and the hand-offs between them',
+    value: { project: only ? projectName(only) : 'All projects', running: running.map((w) => `${w.project}: ${w.run.title}`), queued: queued.length, stuck: counts.stuck, handoffsOpen: open },
+  }, 'screen')
   useCommands([
     { id: 'a-tools', label: 'Search the tools', group: 'Agents', run: () => document.querySelector<HTMLInputElement>('[aria-label="Search tools"]')?.focus() },
+    { id: 'a-all', label: 'Agents: show all projects', group: 'Agents', run: () => setOnly(null) },
+    ...work.per.map((p) => ({ id: `a-p-${p.repo}`, label: `Agents: show only ${p.project}`, group: 'Agents', run: () => setOnly(p.repo) })),
     ...AGENTS.map((a) => ({ id: `a-${a.id}`, label: `Open the ${a.name} agent`, group: 'Agents', run: () => void navigate({ to: '/agents/$agent', params: { agent: a.id } }) })),
   ])
 
   return (
     <Column wide>
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="min-w-0 flex-1 basis-[420px]">
           <h1 className="text-2xl font-semibold tracking-tight">Agents and tools</h1>
           <p className="mt-1 text-sm text-muted-foreground" aria-live="polite">{summary}</p>
         </div>
         <nav aria-label="Jump to" className="inline-flex rounded-lg bg-muted p-1 text-sm">
-          <a href="#agents" className="rounded-md bg-background px-3 py-1.5 font-medium shadow-sm">Agents ({AGENTS.length})</a>
+          <a href="#map" className="rounded-md bg-background px-3 py-1.5 font-medium shadow-sm">Agents ({views.length})</a>
           <a href="#tools-h" className="rounded-md px-3 py-1.5 text-muted-foreground hover:text-foreground">Tools</a>
         </nav>
+        {work.per.length > 1 && (
+          <div role="radiogroup" aria-label="Projects shown" className="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1 text-sm">
+            <ProjectChip on={!only} onClick={() => setOnly(null)}>All projects</ProjectChip>
+            {work.per.map((p) => (
+              <ProjectChip key={p.repo} on={only === p.repo} onClick={() => setOnly(p.repo)}>
+                <span className="size-2 rounded-full" style={{ background: tones.get(p.repo) }} aria-hidden />
+                {p.project}
+              </ProjectChip>
+            ))}
+          </div>
+        )}
       </div>
 
-      {stuck.length > 0 && (
-        <Section label="Stuck" count={stuck.length} className="mt-8">
-          <ul className="space-y-2">
-            {stuck.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-warning/40 bg-warning/5 px-4 py-3 text-sm">
-                <StatusBadge status="stuck" />
-                <span className="font-medium">{s.project}</span>
-                <span className="min-w-0 flex-1">{s.summary.replace(/\*\*/g, '')}</span>
-                {s.action.to && <Link to={s.action.to} className="text-primary hover:underline">{s.action.label}</Link>}
-                {!reviewerOnly && s.questionId && <DismissStuck item={s} onDismiss={dismiss} className="basis-full sm:basis-auto" />}
-              </li>
-            ))}
-          </ul>
+      {work.projectsError && <div className="mt-6"><QueryError error={work.projectsError} what="your projects, so this page cannot show what the agents are doing" onRetry={work.retry} /></div>}
+      {work.failed.length > 0 && <div className="mt-4"><Partial>Could not read what is running on {work.failed.map(projectName).join(', ')}.</Partial></div>}
+
+      {!work.projectsError && (
+        <div className="mt-5 flex flex-wrap gap-2 text-sm" aria-label="Agents by state">
+          {(['working', 'waiting_person', 'stuck', 'queued', 'idle'] as const).map((s) => (
+            <span key={s} className={cn('inline-flex items-center gap-2 rounded-lg border px-3 py-1.5',
+              s === 'waiting_person' && counts[s] ? 'border-primary/30 bg-primary-soft text-primary' : s === 'stuck' && counts[s] ? 'border-warning/40 bg-warning/10 text-warning-foreground' : 'bg-card text-muted-foreground')}>
+              <span className={cn('size-2.5 rounded-full', s === 'working' ? 'bg-foreground' : s === 'waiting_person' ? 'bg-primary' : s === 'stuck' ? 'bg-warning' : s === 'queued' ? 'border-2 border-muted-foreground' : 'bg-muted-foreground/30')} aria-hidden />
+              <b className="text-foreground">{counts[s]}</b> {STATUS_OF[s].label}
+            </span>
+          ))}
+          <a href="#handoffs" className="inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-muted-foreground hover:text-foreground"><b className="text-foreground">{open}</b> {open === 1 ? 'hand-off' : 'hand-offs'} open</a>
+        </div>
+      )}
+
+      {!only && work.per.length > 1 && !work.loading && (
+        <Section label="Projects at a glance" count={glance.length} className="mt-8">
+          <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]">
+            {glance.map((g) => <ProjectTile key={g.repo} g={g} onOnly={() => setOnly(g.repo)} />)}
+          </div>
         </Section>
       )}
 
-      {work.projectsError && (
-        <QueryError error={work.projectsError} what="your projects, so this page cannot show what the agents are doing" onRetry={work.retry} />
+      {needs.length > 0 && (
+        <section id="needs" aria-labelledby="needs-h" className="mt-8 scroll-mt-20 rounded-xl border border-primary/20 bg-primary-soft/60 p-3">
+          <h2 id="needs-h" className="flex items-center gap-2 px-1 pb-2 text-sm font-semibold">
+            <span className="size-2.5 rounded-full bg-primary" aria-hidden />Needs you or stuck
+            <span className="ml-auto font-normal text-muted-foreground">{needs.length}</span>
+          </h2>
+          <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,520px),1fr))]">
+            {needs.map((i) => (
+              <NeedsYouCard
+                key={i.id} item={i} compact={phone}
+                onAnswer={reviewerOnly ? undefined : onAnswer}
+                answering={answer.isPending && answer.variables?.question === i.questionId}
+                onDismiss={reviewerOnly ? undefined : dismiss}
+                onOther={(it) => it.action.to && void navigate({ to: it.action.to })}
+                className="bg-card"
+              />
+            ))}
+          </div>
+        </section>
       )}
 
-      <Section label="trace is doing now" count={work.running.length + work.queued.length} className="mt-8">
-        {/* running and paused first, then each agent's queue in order; the controls each job's view allows */}
-        {work.failed.length > 0 && <Partial>Could not read what is running on {work.failed.map(projectName).join(', ')}.</Partial>}
+      <section id="map" aria-label="Agents map" className="mt-8 scroll-mt-20">
+        {work.loading ? (
+          <Loading><SkeletonRows rows={4} /></Loading>
+        ) : phone ? (
+          <>
+            <h2 className="section-label mb-3">Agents ({views.length})</h2>
+            <AgentCards views={views} tones={tones} showProject={!only} />
+          </>
+        ) : (
+          <AgentMap views={views} links={links} tones={tones} showProject={!only} title="Who is working with whom" subtitle={only ? projectName(only) : 'All projects'} />
+        )}
+        {!phone && !work.loading && <MapLegend scope={only ? [] : scope.map((p) => ({ name: p.project, tone: tones.get(p.repo)! }))} />}
+      </section>
+
+      <Section label="Hand-offs" count={links.reduce((n, l) => n + l.items.length, 0)} className="mt-10">
+        <div id="handoffs" className="scroll-mt-20" />
+        <p className="mb-3 flex gap-2 text-sm text-muted-foreground">
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>A specialist asks another only through a recorded request; the asked one runs it as a queued job, and its answer is kept for the one that asked. Grouped by arrow, as on the map: open ones, and ones that ended in the last hour.</span>
+        </p>
+        {work.loading ? <Loading><SkeletonRows rows={2} /></Loading> : links.length === 0 ? (
+          <EmptyState>No hand-off is open{only ? ` on ${projectName(only)}` : ''}. When one specialist needs another's answer, it asks in writing and the request shows here.</EmptyState>
+        ) : (
+          <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr))]">
+            {links.map((l) => <LinkCard key={l.id} link={l} tones={tones} showProject={!only} write={work.write} onDecline={(repo, h, why) => decline(repo, h, why)} />)}
+          </div>
+        )}
+        {earlier.length > 0 && (
+          <FoldRows label={`Earlier hand-offs (${earlier.length})`} className="mt-3">
+            <div className="divide-y rounded-xl border">
+              {earlier.map((x) => <HandoffRow key={`${x.repo}:${x.handoff.id}`} handoff={x.handoff} project={only ? undefined : x.project} />)}
+            </div>
+          </FoldRows>
+        )}
+      </Section>
+
+      <Section label="trace is doing now" count={running.length + queued.length} className="mt-10">
         {work.loading ? (
           <Loading><SkeletonRows rows={2} /></Loading>
         ) : work.projectsError ? (
           <EmptyState>Not known until trace can read your projects.</EmptyState>
-        ) : work.running.length + work.queued.length === 0 ? (
-          <EmptyState>Nothing is running or queued on your projects.</EmptyState>
+        ) : running.length + queued.length === 0 ? (
+          <EmptyState>Nothing is running or queued{only ? ` on ${projectName(only)}` : ' on your projects'}.</EmptyState>
         ) : (
           <div className="divide-y rounded-xl border">
-            {[...work.running, ...work.queued].map((w) => (
+            {[...running, ...queued].map((w) => (
               <RunLine
                 key={`${w.repo}:${w.run.id}`}
                 run={{ ...w.run, title: w.run.agentName ? `${w.run.agentName}: ${w.run.title}` : w.run.title }}
-                project={w.project}
+                project={only ? undefined : w.project}
                 {...runControls(work.write.has(w.repo))}
                 onWatch={(r) => watch.onWatch(r, w.repo)}
               />
@@ -183,41 +259,10 @@ function Agents() {
         )}
       </Section>
 
-      <Section label="Hand-offs between agents" count={work.handoffs.length} className="mt-10">
-        {/* one specialist asked another, in writing: open ones first; a pending one can be declined with a reason */}
-        <p className="mb-3 flex gap-2 text-sm text-muted-foreground">
-          <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <span>
-            {work.handoffs.length === 0
-              ? 'When one specialist needs another\'s answer, it asks in writing and the answer is recorded here.'
-              : `${openHandoffs === 0 ? 'None open' : `${openHandoffs} open`}. A specialist asks another only through a recorded request; the asked one runs as a queued job, and its answer is kept for the one that asked.`}
-          </span>
-        </p>
-        {work.handoffs.length > 0 && (
-          <div className="divide-y rounded-xl border">
-            {work.handoffs.map((x) => (
-              <HandoffRow key={`${x.repo}:${x.handoff.id}`} handoff={x.handoff} project={x.project} {...(work.write.has(x.repo) ? { onDecline: (h, why) => decline(x.repo, h, why) } : {})} />
-            ))}
-          </div>
-        )}
-      </Section>
-
-      <Section label="Agents" count={AGENTS.length} className="mt-10">
-        <div id="agents" className="scroll-mt-20" />
-        <p className="mb-3 flex gap-2 text-sm text-muted-foreground">
-          <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <span>
-            Each agent's status is the most pressing one across your projects: Stuck, then Waiting on a person, Working, Queued, Idle. Today is the last 24 hours. Its queue, with Move up, is on its page and above.
-          </span>
-        </p>
-        <DataTable id="agents" data={rows} columns={columns} getRowId={(r) => r.id} url={url} noun="agents" onRowClick={(r) => void navigate({ to: '/agents/$agent', params: { agent: r.id } })} />
-        <NeedsBuilding className="mt-2">which layer of each agent's instructions is in force (trace's default, the installation's, the project's): trace's API does not report it yet.</NeedsBuilding>
-      </Section>
-
       <div id="tools" className="scroll-mt-20" />
       <ToolsCatalogue />
 
-      <p className={cn('mt-8 flex gap-2 text-sm text-muted-foreground')}>
+      <p className="mt-8 flex gap-2 text-sm text-muted-foreground">
         <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
         {admin
           ? 'You see every project\'s agents because you are an admin. Others see their projects\' work, and other projects\' work only as "Busy".'
@@ -228,3 +273,87 @@ function Agents() {
     </Column>
   )
 }
+
+function ProjectChip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button" role="radio" aria-checked={on} onClick={onClick}
+      className={cn('inline-flex min-h-9 items-center gap-1.5 rounded-md px-3 py-1.5', on ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** One project in "Projects at a glance": its agents by state as a bar, its work and hand-offs in words. */
+function ProjectTile({ g, onOnly }: { g: ProjectGlance; onOnly: () => void }) {
+  const c = g.counts
+  const segments = [
+    { n: c.working, cls: 'bg-foreground' }, { n: c.waiting_person, cls: 'bg-primary' }, { n: c.stuck, cls: 'bg-warning' }, { n: c.queued, cls: 'bg-muted-foreground/40' },
+  ].filter((s) => s.n > 0)
+  const pressing = c.waiting_person > 0 || c.stuck > 0
+  return (
+    <article className={cn('rounded-xl border bg-card p-4', pressing && 'border-primary ring-1 ring-primary/40')}>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="size-2.5 shrink-0 rounded-full" style={{ background: g.tone }} aria-hidden />
+        <b className="min-w-0 flex-1 truncate" title={g.project}>{g.project}</b>
+        {g.paused && <span className="shrink-0 rounded-full bg-muted px-2 text-xs leading-5 text-muted-foreground">Paused</span>}
+        {g.needs > 0 && <span className="shrink-0 rounded-full bg-primary/15 px-2 text-xs leading-5 text-primary">{g.needs} on Next</span>}
+      </div>
+      <div className="mt-3 flex h-2 gap-0.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={countsText(c)}>
+        {segments.map((s, i) => <span key={i} className={s.cls} style={{ flex: s.n }} />)}
+      </div>
+      <p className="mt-2 truncate text-sm" title={countsText(c)}>{countsText(c)}</p>
+      <p className="truncate text-xs text-muted-foreground">{plural(g.running, 'job')} running · {g.queued} queued · {handoffText(g.open, g.recent)}</p>
+      <button type="button" onClick={onOnly} className="mt-2 inline-flex min-h-9 items-center gap-1 text-sm font-medium text-primary hover:underline">
+        Show only this project<ArrowRight className="size-3.5" aria-hidden />
+      </button>
+    </article>
+  )
+}
+
+/** One arrow's hand-offs: asker → asked, how many, and each hand-off with its project and Decline. */
+function LinkCard({ link: l, tones, showProject, write, onDecline }: { link: AgentLink; tones: ReadonlyMap<string, string>; showProject: boolean; write: Set<string>; onDecline: (repo: string, h: AgentLink['items'][number]['handoff'], why: string) => Promise<string> }) {
+  const look = LINK_LOOK[l.state]
+  return (
+    <article className={cn('overflow-hidden rounded-xl border bg-card', l.state === 'waiting' && 'border-dashed', l.state === 'answered' && 'border-verified/40')}>
+      <header className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-4 py-2.5 text-sm font-medium">
+        <span className="rounded-md border bg-background px-2 py-0.5">{l.fromName}</span>
+        <ArrowRight className="size-4" style={{ color: look.color }} aria-label="asked" />
+        <span className="rounded-md border bg-background px-2 py-0.5">{l.toName}</span>
+        <span className="ml-auto text-xs font-normal text-muted-foreground">{look.word} · {l.items.length}</span>
+      </header>
+      <div className="divide-y">
+        {l.items.map((x) => (
+          <div key={`${x.repo}:${x.handoff.id}`} className="flex">
+            {showProject && <span className="mt-[22px] ml-4 hidden size-2 shrink-0 rounded-full sm:block" style={{ background: tones.get(x.repo) }} aria-hidden />}
+            <HandoffRow
+              handoff={x.handoff} project={showProject ? x.project : undefined} className="min-w-0 flex-1 px-4 py-3"
+              {...(write.has(x.repo) ? { onDecline: (h, why) => onDecline(x.repo, h, why) } : {})}
+            />
+          </div>
+        ))}
+      </div>
+    </article>
+  )
+}
+
+/** What the arrows' lines, their numbers and the dots mean. */
+function MapLegend({ scope }: { scope: { name: string; tone: string }[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-xs text-muted-foreground">
+      {(['running', 'waiting', 'answered'] as const).map((s) => (
+        <span key={s} className="inline-flex items-center gap-2">
+          <span className="w-7 border-t-2" style={{ borderColor: LINK_LOOK[s].color, borderStyle: LINK_LOOK[s].dashed ? 'dashed' : 'solid' }} aria-hidden />
+          {LINK_LOOK[s].word}
+        </span>
+      ))}
+      <span className="inline-flex items-center gap-1.5"><span className="inline-flex size-[18px] items-center justify-center rounded-full border text-[10px] font-semibold text-foreground">2</span>Hand-offs on that arrow</span>
+      {scope.map((p) => (
+        <span key={p.name} className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: p.tone }} aria-hidden />{p.name}</span>
+      ))}
+      <Link to="/agents" hash="handoffs" className="ml-auto text-primary hover:underline">All hand-offs</Link>
+    </div>
+  )
+}
+
