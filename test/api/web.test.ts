@@ -667,6 +667,37 @@ describe('projects.create', () => {
     }
   })
 
+  // test-esp32 log #78: after retiring run 1's project, the wizard proposed a new repository with the same name, which
+  // GitHub already had (retiring keeps it); creating would have pushed the starter onto run 1's repository and record
+  it('a new repository that exists is refused, saying whose it is and a free name beside it', async () => {
+    const before = onboarded.length
+    expect(await run(ADMIN, 'projects.repo_check', { repo: 'acme/ident' })).toMatchObject({ exists: true, project: null, suggestion: 'acme/ident-2', text: 'acme/ident already exists on GitHub. acme/ident-2 is free.' })
+    await expect(run(ADMIN, 'projects.create', { repo: 'acme/ident', name: 'Ident', template: 'board', new: { private: true } }))
+      .rejects.toThrow(/^acme\/ident already exists on GitHub\. acme\/ident-2 is free\. Choose another name, or choose "An existing repository"/)
+    expect(onboarded.length).toBe(before)
+    // a name nobody has: free, nothing to suggest, and it is created
+    expect(await run(ADMIN, 'projects.repo_check', { repo: 'acme/brand-new' })).toMatchObject({ exists: false, project: null, suggestion: null, text: null })
+    const r = await run(ADMIN, 'projects.create', { repo: 'acme/brand-new', name: 'Brand new', template: 'board', new: { private: true } }) as { steps: { id: string; state: string }[] }
+    expect(r.steps[0]).toMatchObject({ id: 'repository', state: 'done' })
+    expect(onboarded.at(-1)).toMatchObject({ repo: 'acme/brand-new', create: { private: true } })
+    await expect(run(USER, 'projects.repo_check', { repo: 'acme/brand-new' })).rejects.toThrow(AccessDenied)
+  })
+
+  it('a retired project\'s repository is named as such, and neither made again nor used as an existing one', async () => {
+    github.repos.push('acme/oldsensor', 'acme/oldsensor-2')
+    await run(ADMIN, 'projects.create', { repo: 'acme/oldsensor', name: 'Old sensor', template: 'board' })
+    await run(ADMIN, 'project.retire', { repo: 'acme/oldsensor', reason: 'run 1' })
+    const before = onboarded.length
+    // the retired project is not among the names in use, but its repository is: -2 is on GitHub too, so -3
+    expect(await run(ADMIN, 'projects.repo_check', { repo: 'acme/oldsensor' })).toMatchObject({
+      exists: true, project: { name: 'Old sensor', retired: true }, suggestion: 'acme/oldsensor-3',
+      text: 'acme/oldsensor already exists: it holds the retired project Old sensor. acme/oldsensor-3 is free.',
+    })
+    await expect(run(ADMIN, 'projects.create', { repo: 'acme/oldsensor', name: 'Old sensor', template: 'board', new: { private: true } })).rejects.toThrow(/holds the retired project Old sensor/)
+    await expect(run(ADMIN, 'projects.create', { repo: 'acme/oldsensor', name: 'Old sensor', template: 'board' })).rejects.toThrow(/restore it from Admin, Retired projects/)
+    expect(onboarded.length).toBe(before)
+  })
+
   it('stops the dependent steps when onboarding fails', async () => {
     const failing: ActionDeps = { ...deps, onboard: async () => { throw new Error('git: not found (install git)') } }
     const r = (await perform('projects.create', { repo: 'acme/secret', name: 'S', template: 'board' }, { principal: ADMIN, deps: failing })).result as { ok: boolean; steps: { state: string }[] }

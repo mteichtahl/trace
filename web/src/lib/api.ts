@@ -76,6 +76,9 @@ export interface Actions {
     /** read from the API's steps (lib/readers.ts readCreated): what was done, what failed, what waits */
     result: { repo: string; ok: boolean; done: string[]; failed: string[]; waits: Wait[] }
   }
+  /** admin: whether a repository is free for a new project: on GitHub already (null: GitHub could not be asked), the
+   * project trace knows there (retired too), a free name beside it, and the line to show when it is taken */
+  'projects.repo_check': { args: Repo; result: import('@/components/new-project/rules').RepoCheck }
   /** admin: what the project is (Settings): written to the journey record, not the repository */
   'project.update': {
     args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; hardware?: boolean }; later?: ('certify' | 'produce' | 'sustain')[] }
