@@ -552,3 +552,25 @@ export function checkSkill(skill: string, input: CheckInput): CheckResult[] | nu
       : r
   })
 }
+
+/**
+ * The open questions a guided review must not be submitted over: an agent's question, unanswered, about what the
+ * review agrees. Pin plan review: one that names a part of the plan (J2) or pins at all, since its answer may change
+ * a pin the review would agree (test-esp32 #106: the OLED header's pin order was asked, drawn "pending this answer",
+ * and the plan was agreed over it). Oldest first. Pure.
+ */
+export function questionsOn(skill: string, r: JourneyRecord | null, design: DesignRows | null): QuestionRow[] {
+  if (!r || skill !== 'pin-plan-review') return []
+  const parts = [...new Set((design?.pins ?? []).filter((p) => p.status !== 'withdrawn').map((p) => p.part))]
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const about = new RegExp(`\\b(pins?|pin[- ]?(plan|order|out|map)|pinout${parts.length ? `|${parts.map(esc).join('|')}` : ''})\\b`, 'i')
+  return r.questions.filter((q) => q.kind !== 'stuck' && q.answeredAt === null && about.test(`${q.text} ${q.blocks ?? ''}`)).sort((a, b) => a.askedAt - b.askedAt)
+}
+
+/** Why a review cannot be submitted over its open questions, naming the one to answer first; null when none is open. */
+export function questionsFirst(skill: string, open: readonly QuestionRow[]): string | null {
+  const q = open[0]
+  if (!q) return null
+  const more = open.length > 1 ? ` (and ${open.length - 1} more about it)` : ''
+  return `Answer the open question first${more}: ${q.askedBy} asks "${q.text.replace(/\s+/g, ' ').trim().slice(0, 300)}" Its answer may change what ${skillDef(skill)?.name ?? 'this review'} agrees.`
+}

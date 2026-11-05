@@ -20,7 +20,8 @@
  *
  *   hook.docs      backend   { repo } → what it did: a push to the project's default branch. When the commit changed a record
  *                            a document is written from, Scribe brings the documents up to date (src/api/docs-follow.ts);
- *                            a commit of only the documents, or only Scribe's own runs, starts nothing
+ *                            a commit of only the documents, or only Scribe's own runs, starts nothing, and while the
+ *                            stage still has design work to land the documents wait for it (`waiting` says what)
  *
  *   hook.projects  backend   {} → { projects }: the projects the nightly drift check goes through (not paused, not
  *                            retired), repository names only
@@ -40,7 +41,8 @@ import { z } from 'zod'
 import { def } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
 import { type ConflictReport, resolveConflicts } from './conflicts.js'
-import { docsRequest, driftOf, recordsOfCommit, startScribe } from './docs-follow.js'
+import { driftOf, recordNow, recordsOfCommit, startStageScribe } from './docs-follow.js'
+import { startFollowOn } from './actions-journey.js'
 import { journeyStore } from './action-kit.js'
 import { loadJourney } from '../core/journey.js'
 
@@ -69,15 +71,22 @@ export const HOOK_ACTIONS = {
 
   'hook.docs': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx) => {
     if (!(await projects()).includes(repo) || (await lifecycleOf(repo)).paused) return { repo, records: [], started: null }
-    const rec = (await journeyStore(ctx, repo).read((db) => loadJourney(db))).result
+    // with the agents' facts merged in: their checks meet trace's criteria, which the stage's design work is
+    const rec = await recordNow(ctx, repo)
     // before Architect there are no documents to keep
     if (!rec || ['define'].includes(rec.journey.currentStage)) return { repo, records: [], started: null, why: 'no documents before Architect' }
+    // the push may have landed what the stage's next design work waits for (the case, once the layout is accepted):
+    // it starts now, never behind the documents (FOLLOW_ON)
+    const follow = await startFollowOn(ctx, repo, rec).catch((e: unknown) => ({ started: [], jobs: [], errors: [e instanceof Error ? e.message : String(e)] }))
+    const design = follow.started.length || follow.errors.length ? { design: { started: follow.started, jobs: follow.jobs, ...(follow.errors.length ? { errors: follow.errors } : {}) } } : {}
     const gh = await ctx.deps.github()
     const { sha } = await gh.defaultBranch(repo)
     const { records } = await recordsOfCommit(ctx, repo, sha)
-    if (!records.length) return { repo, commit: sha, records, started: null, why: 'the push changed no record a document is written from' }
-    const r = await startScribe(ctx, repo, docsRequest(`The default branch moved to ${sha.slice(0, 12)}.`, { stage: rec.journey.currentStage, records }))
-    return { repo, commit: sha, records, started: r.started ?? null, ...(r.jobId ? { job: r.jobId } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.jobError ? { error: r.jobError } : {}) }
+    if (!records.length) return { repo, commit: sha, records, started: null, why: 'the push changed no record a document is written from', ...design }
+    // the documents of a stage are written from its design: while some of it is still to land they wait, and the push
+    // (or the person's act) that lands the last of it starts Scribe (docsAfterDesign)
+    const r = await startStageScribe(ctx, repo, `The default branch moved to ${sha.slice(0, 12)}.`, { rec, records })
+    return { repo, commit: sha, records, started: r.started ?? null, ...(r.jobId ? { job: r.jobId } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.waiting ? { waiting: r.waiting } : {}), ...(r.jobError ? { error: r.jobError } : {}), ...design }
   }),
 
   'hook.projects': def('backend', z.object({}), async () => {
@@ -97,7 +106,7 @@ export const HOOK_ACTIONS = {
     const d = await driftOf(ctx, repo, rec.journey.currentStage)
     return {
       repo, commit: d.head, records: d.records, missing: d.missing, since: d.since, started: d.started ?? null,
-      ...(d.jobId ? { job: d.jobId } : {}), ...(d.skipped ? { skipped: d.skipped } : {}), ...(d.jobError ? { error: d.jobError } : {}),
+      ...(d.jobId ? { job: d.jobId } : {}), ...(d.skipped ? { skipped: d.skipped } : {}), ...(d.waiting ? { waiting: d.waiting } : {}), ...(d.jobError ? { error: d.jobError } : {}),
     }
   }),
 }

@@ -173,6 +173,17 @@ describe('the steps and the now-step', () => {
     expect(ownerWord({ owner: 'contributors' })).toBe('A contributor')
   })
 
+  it('trace\'s step it works on while you review a change it does not wait on is alongside you, never after you (test-esp32 #132)', () => {
+    const steps: StageStep[] = [
+      { id: 'layout.routed', text: '', owner: 'trace', state: 'done', ref: null }, { id: 'layout.fit', text: '', owner: 'trace', state: 'later', ref: null, alongside: true },
+      { id: 'change:18', text: '', owner: 'you', state: 'now', ref: { kind: 'change', id: '18' } }, { id: 'sign:layout', text: '', owner: 'admins', state: 'next', ref: null },
+    ]
+    expect(steps.map((_, i) => stepLabel(steps, i))).toEqual(['trace · done', 'trace · alongside you', 'You · now', 'An admin · after you'])
+    // read from journey.get as it is sent
+    expect(readSteps([{ id: 'layout.fit', text: 'Fits', owner: 'trace', state: 'later', ref: null, alongside: true }])?.[0]).toMatchObject({ alongside: true })
+    expect(readSteps([{ id: 'layout.fit', text: 'Fits', owner: 'trace', state: 'later', ref: null }])?.[0]).not.toHaveProperty('alongside')
+  })
+
   it('the gate meter counts waived criteria as met', () => {
     expect(gateMeter(gate('capture', ['met', 'waived', 'not_met', 'not_met']), stage('capture', 'current'))).toEqual({ met: 2, total: 4, frac: 0.5 })
     expect(gateMeter(undefined, stage('capture', 'current', { criteria: { met: 1, total: 3 } }))).toMatchObject({ met: 1, total: 3 })

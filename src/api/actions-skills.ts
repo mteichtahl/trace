@@ -35,7 +35,8 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
-import { type Lasts, askedBy, carryOn, viewerOf } from './actions-journey.js'
+import { type Lasts, askedBy, carryOn, designBefore, viewerOf } from './actions-journey.js'
+import { docsAfterDesign } from './docs-follow.js'
 import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
@@ -84,11 +85,13 @@ function skillBench(skill: string, i: CheckInput) {
     readings: rs.filter((r) => r.board === board).map(readingView),
   }
 }
-import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js'
+import { type CheckInput, type CheckResult, checkSkill, questionsFirst, questionsOn } from './skill-checks.js'
 import { changeImpact } from './change-impact.js'
 
 /** The skills whose Submit records design decisions. */
 const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
+/** The skills whose submission can meet or waive a criterion past Define, so can land the last of a stage's design work. */
+const DESIGN_SETTLING = new Set(['architecture-choice', 'pin-plan-review', 'question-answer', 'waiver'])
 
 const SkillId = z.string().regex(/^[a-z][a-z-]{1,40}$/).refine((s) => SKILL_IDS.includes(s), 'one of the twenty guided skills')
 const Data = z.record(z.string(), z.unknown())
@@ -124,6 +127,9 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
         recordDesignDecision(db, prepare(d, des.rows, requirementTexts(db), des.decisions), { label: viewer.label, hash: viewer.hash })
       } catch (e) { pendingErrors.push(e instanceof Error ? e.message : String(e)) }
     }
+    // a review is not submitted over an open question about what it agrees: it names the one to answer first
+    const asked = questionsFirst(skill, questionsOn(skill, r, designOf(db).rows))
+    if (asked) pendingErrors.push(asked)
     const live = requirementEvidence(db, r)
     const struck = struckRequirements(db)
     const erc = checkFindings(db, 'erc', r)
@@ -443,6 +449,9 @@ export const SKILL_ACTIONS = {
       jobId = r.jobId
       started = ['The agents raise the change request for approval.']
     }
+    // the skills whose submission can land the last of a stage's design work (a person's criterion met, a question
+    // answered that approves one, a criterion waived): the stage's documents are written then (docsAfterDesign)
+    const before = DESIGN_SETTLING.has(a.skill) ? await designBefore(ctx, a.repo) : null
     const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: requirementTexts(db) })) : { rows: null as unknown as DesignRows, reqIds: new Map<string, RequirementWords>() }
     const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
       let ref: string | null = null
@@ -545,6 +554,8 @@ export const SKILL_ACTIONS = {
       } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
     }
     if (carried.jobError) jobError = carried.jobError
+    const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
+    if (docs.started) started = [...started, docs.started]
     if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
     return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(carried.summary ? { summary: carried.summary } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),
