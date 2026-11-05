@@ -47,12 +47,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends blender python3
 # Printing the project's documents (docs/scribe.md "Rendering", the `docs` job kind, python -m tracebridge.docs):
 # pandoc writes Typst, Mermaid's command line draws the diagrams in a headless Chromium (Playwright's arm64 build:
 # Puppeteer has none for linux/arm64), Typst (the venv's `typst` module) makes the PDF in the Liberation and DejaVu
-# fonts. trace-chromium points at the browser whatever its version folder; Mermaid never downloads its own.
+# fonts. trace-chromium points at the browser whatever its version folder; Mermaid never downloads its own. It is
+# Chromium's headless shell, built to run with no display, D-Bus or GPU (Lambda has none of them: the full browser
+# died there, log #34 and #94), and the full browser only where there is no shell.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers PUPPETEER_SKIP_DOWNLOAD=1
 RUN apt-get update && apt-get install -y --no-install-recommends pandoc fonts-liberation fonts-dejavu-core \
  && npm install -g --no-fund --no-audit '@mermaid-js/mermaid-cli@11.16.0' \
- && npx -y 'playwright@1.64.1' install --with-deps chromium \
- && ln -s "$(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome | head -1)" /usr/local/bin/trace-chromium \
+ && npx -y 'playwright@1.64.1' install --with-deps chromium chromium-headless-shell \
+ && shell="$(ls -d /opt/pw-browsers/chromium_headless_shell-*/chrome-*/chrome-headless-shell /opt/pw-browsers/chromium_headless_shell-*/chrome-*/headless_shell 2>/dev/null | head -1)" \
+ && ln -s "${shell:-$(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome | head -1)}" /usr/local/bin/trace-chromium \
  && chmod -R a+rX /opt/pw-browsers \
  && pandoc --version | head -1 && mmdc --version && trace-chromium --version \
  && rm -rf /var/lib/apt/lists/* /root/.npm
@@ -111,5 +114,8 @@ ENV PATH=/opt/trace-venv/bin:$PATH \
     NODE_ENV=production
 WORKDIR /tmp
 RUN test -f /app/dist/gpu/lambda.js && test -f /app/dist/gpu/kicad-job.js && test -d /app/python/blender && command -v kicad-cli blender ffmpeg yosys verilator ccx cocotb-config gowin_pack pandoc mmdc trace-chromium \
- && /opt/trace-venv/bin/python -c "import build123d, tracebridge.mech, typst, tracebridge.docs"
+ && /opt/trace-venv/bin/python -c "import build123d, tracebridge.mech, typst, tracebridge.docs" \
+# Mermaid draws a diagram here the way docs.publish does on the function (no D-Bus, no display): an image whose browser
+# cannot start fails its build instead of every print
+ && /opt/trace-venv/bin/python -m tracebridge.docs smoke
 CMD ["node", "/app/dist/gpu/lambda.js"]
