@@ -64,6 +64,18 @@ describe('kicad tools (offline)', () => {
     expect(w.run(r.run_id as string)?.measurements).toContainEqual({ name: 'parts', value: 7, unit: '' })
   })
 
+  it('kicad.bom gives the hardware list only when asked, as its own file', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'bom-'))
+    const plain = await call('kicad.bom', { project: DEMO_SCH, out_dir: out })
+    expect(plain).not.toHaveProperty('hardware')
+    expect(existsSync(join(out, 'demo-hardware.csv'))).toBe(false)
+    const r = await call('kicad.bom', { project: DEMO_SCH, out_dir: out, hardware: true })
+    expect(r).toMatchObject({ total_parts: 7, hardware: { case_built: false } })
+    expect(readFileSync(join(out, 'demo-hardware.csv'), 'utf8')).toMatch(/^Quantity,Item,Kind/)
+    expect(readFileSync(join(out, 'demo-bom.csv'), 'utf8')).not.toMatch(/screw/)
+    expect(new Work().getArtifact(r.run_id as string, 'hardware.csv')).toBeTruthy()
+  })
+
   it('kicad.board summarises the board and lists footprints', async () => {
     const r = await call('kicad.board', { project: DEMO_PCB, trace_width_mm: 0.2, refs: ['C1'] })
     expect(r).toMatchObject({ outline: { width_mm: 50, height_mm: 30 }, copper_layers: 4, stackup_known: true, nets: 4, vias: 2,

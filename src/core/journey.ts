@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS journey (
   later TEXT NOT NULL,            -- JSON list: certify, produce, sustain
   start TEXT NOT NULL,            -- idea | import
   name TEXT, description TEXT, icon TEXT,
-  build TEXT,                     -- JSON: { quantity, unit_cost, budget, fab, currency }
+  build TEXT,                     -- JSON: { quantity, unit_cost, budget, fab, currency, hardware }
   created REAL NOT NULL, updated REAL NOT NULL, by TEXT
 );`, merge: newer('journey', 'id', JOURNEY_COLS) })
 
@@ -476,6 +476,8 @@ export const BuildSchema = z.object({
   budget: z.number().min(0).nullable().default(null),
   currency: z.string().regex(/^[A-Z]{3}$/).default('USD'),
   fab: z.string().min(1).max(60).default('JLCPCB'),
+  /** also prepare the panel and mounting hardware list (the case parts, screws, knobs…), kept apart from the parts list */
+  hardware: z.boolean().default(false),
 })
 export type Build = z.output<typeof BuildSchema>
 

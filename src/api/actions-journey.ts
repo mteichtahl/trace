@@ -313,6 +313,7 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
       'The layout review gate was signed: the project is in Sign-off. Prepare the release report.',
       'Run what the layout made possible (the items planned for after layout), then close coverage (verify.coverage): every requirement verified or waived, the gaps named. Record signoff.coverage with journey.check.',
       'Hand the parts list check (cost and stock at the build quantity, then shape.check signoff.bom) to the Implementation specialist, and the interference prechecks (then signoff.emc) to the EMC specialist, each with journey.handoff, and put their answers in the report.',
+      'When the build plan includes panel and mounting hardware, the parts list hand-off also asks for the hardware list (the parts list tool with hardware: true). Put it in the report as its own list (case parts, screws, panel parts), never added to the parts list or its cost check.',
       'Write the release report with verify.report: coverage, interference estimates, the parts list and its cost, and every open waiver, for a person to review. Do not sign or waive anything yourself.',
     ].join('\n'),
   },

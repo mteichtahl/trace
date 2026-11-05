@@ -4,7 +4,9 @@
  * A BOM line is one buyable part: placements are grouped by value, footprint and part number (MPN, manufacturer and
  * LCSC fields, under whatever names the design uses, see schematic.ts). Multi-unit symbols count once per reference.
  * Parts marked DNP, excluded from the BOM, or not on the board are kept out of the quantities and listed separately,
- * so nothing disappears silently. References within a line are in natural order (R2 before R10).
+ * so nothing disappears silently. Parts marked as panel or mounting hardware (hardware.ts) are kept out too, with the
+ * reason "hardware": they go in the separate hardware list, never to the board assembler. References within a line are
+ * in natural order (R2 before R10).
  *
  * JLCPCB's assembly service takes a BOM with columns Comment, Designator, Footprint, "LCSC Part #" and a placement
  * (CPL) file with Designator, Mid X, Mid Y, Layer, Rotation. The CPL comes from `kicad-cli pcb export pos --format csv
@@ -14,6 +16,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
+import { hardwareKindOf } from './hardware.js'
 import { runCli } from './project.js'
 import { isVirtual, lcscOf, manufacturerOf, mpnOf, naturalCompare, type Schematic, type Symbol } from './schematic.js'
 
@@ -31,7 +34,7 @@ export interface BomLine {
 export interface Bom {
   lines: BomLine[]
   /** parts kept out of the quantities, with the reason */
-  excluded: { ref: string; value: string; reason: 'dnp' | 'not_in_bom' | 'not_on_board' }[]
+  excluded: { ref: string; value: string; reason: 'dnp' | 'not_in_bom' | 'not_on_board' | 'hardware' }[]
   total_parts: number
   unique_lines: number
   /** lines with no MPN or LCSC code (cannot be ordered as written) */
@@ -51,7 +54,7 @@ export function buildBom(sch: Schematic): Bom {
   const excluded: Bom['excluded'] = []
   const groups = new Map<string, BomLine>()
   for (const s of [...byRef.values()].sort((a, b) => naturalCompare(a.ref, b.ref))) {
-    const reason = s.dnp ? 'dnp' : !s.in_bom ? 'not_in_bom' : !s.on_board ? 'not_on_board' : null
+    const reason = s.dnp ? 'dnp' : !s.in_bom ? 'not_in_bom' : hardwareKindOf(s) ? 'hardware' : !s.on_board ? 'not_on_board' : null
     if (reason) {
       excluded.push({ ref: s.ref, value: s.value, reason })
       continue

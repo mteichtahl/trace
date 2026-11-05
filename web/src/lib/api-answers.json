@@ -25,7 +25,8 @@
         "unit_cost": null,
         "budget": null,
         "currency": "USD",
-        "fab": "JLCPCB"
+        "fab": "JLCPCB",
+        "hardware": false
       },
       "stages": [
         {

@@ -123,6 +123,35 @@ function orderView(o: OrderRow, tracking: ReturnType<typeof loadTracking>, w: Wa
   }
 }
 
+/** One line of the panel and mounting hardware list, as the order sheet shows it. */
+export interface HardwareView { qty: number; item: string; kind: 'panel' | 'mounting'; size: string | null; length_mm: number | null; for: string[]; mpn: string | null; lcsc: string | null; source: string; note: string | null }
+
+/**
+ * The hardware list a run made (kicad.fab's, else the newest kicad.bom run that made one): its lines, notes and whether
+ * its case is stale, or null when no run made one.
+ */
+export function hardwareOf(fabResult: Record<string, unknown> | null, db: Parameters<typeof latestRun>[0]): { lines: HardwareView[]; notes: string[]; case_stale: boolean; run: string | null } | null {
+  const pick = (res: Record<string, unknown> | null): Record<string, unknown> | null => {
+    const h = res?.hardware
+    return h && typeof h === 'object' && Array.isArray((h as { lines?: unknown }).lines) ? h as Record<string, unknown> : null
+  }
+  let h = pick(fabResult)
+  let run: string | null = h ? (latestRun(db, 'kicad.fab')?.id ?? null) : null
+  if (!h) {
+    const bom = latestRun(db, 'kicad.bom')
+    h = bom ? pick(runResult(db, bom.id)) : null
+    run = h ? (bom?.id ?? null) : null
+  }
+  if (!h) return null
+  const lines = (h.lines as Record<string, unknown>[]).map((l) => ({
+    qty: Number(l.qty ?? 0), item: String(l.item ?? ''), kind: l.kind === 'panel' ? 'panel' as const : 'mounting' as const,
+    size: typeof l.size === 'string' ? l.size : null, length_mm: typeof l.length_mm === 'number' ? l.length_mm : null,
+    for: Array.isArray(l.for) ? (l.for as unknown[]).map(String) : [], mpn: typeof l.mpn === 'string' ? l.mpn : null,
+    lcsc: typeof l.lcsc === 'string' ? l.lcsc : null, source: String(l.source ?? ''), note: typeof l.note === 'string' ? l.note : null,
+  }))
+  return { lines, notes: Array.isArray(h.notes) ? (h.notes as unknown[]).map(String) : [], case_stale: h.case_stale === true, run }
+}
+
 // ------------------------------------------------------------------ the actions
 
 const OrderRef = z.string().trim().min(1).max(80)
@@ -149,11 +178,15 @@ export const BUILD_ACTIONS = {
         const res = fab ? runResult(db, fab.id) : null
         const files = Array.isArray(res?.files) ? (res.files as unknown[]).map((f) => (typeof f === 'string' ? f : (f as { path?: string }).path ?? '')).filter(Boolean).map((p) => p.split('/').pop() ?? p) : []
         const total = b.unit_cost !== null ? Math.round(b.unit_cost * b.quantity * 100) / 100 : 0
+        // the panel and mounting hardware list, kept apart from the parts: only when the build plan asks for it
+        const hardware = b.hardware ? hardwareOf(res, db) : null
         orders.unshift({
           id: 'next', release: r.journey.revision, state: 'ready' as never, cancelled: false, boards: b.quantity, total, currency: b.currency, number: '', paid: null, ship: null,
           placedAt: null, placedBy: '', shippedAt: null, deliveredAt: null,
           cost: b.unit_cost !== null ? [{ label: `${b.quantity} boards at the planned unit cost`, amount: total }] : [], options: [], parts: [], files, wait: null,
+          ...(b.hardware ? { hardware } : {}),
         })
+        if (b.hardware && !hardware) notes.push('The build plan includes panel and mounting hardware, but no hardware list is made yet: kicad.fab or kicad.bom with hardware makes it.')
         notes.push('The order sheet\'s board options and today\'s stock and prices per line are not in the record: they come from the release package and a fresh parts check.')
         if (b.unit_cost === null) notes.push('No unit cost is set in the build plan, so the order\'s expected total is unknown.')
       }

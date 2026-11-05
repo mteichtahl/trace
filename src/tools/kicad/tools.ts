@@ -15,6 +15,8 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { buildBom, bomCsv, jlcBomCsv, jlcCplCsv, placements } from './bom.js'
+import { buildHardware, hardwareCsv, readCaseRecords, type Hardware } from './hardware.js'
+import { boardFacts } from '../mech/board.js'
 import { drc, erc, type CheckReport } from './checks.js'
 import { boardHoles, checkFab, type Drawing, EXPORT_KINDS, FAB_TECH_LAYERS, drawingArtifacts, exportOne, type FabSettings, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
 import { describeLayer, designRules, layerOf, loadBoard, Net, netNames, stackupKnown, type Board } from './pcb.js'
@@ -247,20 +249,53 @@ const drcTool = defineTool({
   },
 })
 
+// ------------------------------------------------------------------ the panel and mounting hardware list
+
+const hardwareArg = z.boolean().default(false).describe('also produce the panel and mounting hardware list, separate from the BOM: the case parts and the screws that hold the board (from the newest case build, else the board\'s mounting holes) and parts marked Hardware = panel or mounting (or referenced MP…); written as <name>-hardware.csv')
+
+/** The hardware list for a project: the schematic's marked parts, the newest case build, else the board's mounting holes. */
+async function hardwareFor(p: Project, sch: ReturnType<typeof readSchematic> | null): Promise<Hardware> {
+  const { root } = await candidates()
+  const caseRecords = readCaseRecords(root)
+  let holes: { ref: string | null; d: number }[] = []
+  let sha: string | null = null
+  if (p.pcb && existsSync(p.pcb)) {
+    sha = loadBoard(p.pcb).sha256
+    if (!caseRecords) {
+      try {
+        holes = boardFacts(p.pcb, root ?? undefined).holes.filter((h) => h.kind === 'mounting')
+      } catch { /* no outline yet: no holes to read */ }
+    }
+  }
+  return buildHardware({ symbols: sch?.symbols ?? [], caseRecords, mountingHoles: holes, boardSha256: sha })
+}
+
+const hardwareSummary = (h: Hardware) => ({
+  total_items: h.total_items, case_built: h.case_built, case_stale: h.case_stale, notes: h.notes,
+  lines: h.lines.map((l) => ({ qty: l.quantity, item: l.item, kind: l.kind, size: l.size, length_mm: l.length_mm, for: l.refs, mpn: l.mpn, lcsc: l.lcsc, source: l.source, note: l.note })),
+})
+
 // ------------------------------------------------------------------ kicad.bom / kicad.fab
 
 const bom = defineTool({
   name: 'kicad.bom',
-  description: 'Bill of materials from the schematic: lines grouped by value, footprint and part number (MPN/manufacturer/LCSC fields), quantities, references in natural order; DNP and BOM-excluded parts listed apart. Optionally writes the CSV (and the JLCPCB BOM) to out_dir.',
+  description: 'Bill of materials from the schematic: lines grouped by value, footprint and part number (MPN/manufacturer/LCSC fields), quantities, references in natural order; DNP, BOM-excluded and hardware-marked parts listed apart. Optionally writes the CSV (and the JLCPCB BOM) to out_dir. With hardware: true, also the panel and mounting hardware list as its own list (never mixed into the BOM or sent to the assembler).',
   input: z.object({
     project, limit: limit(150),
     out_dir: z.string().optional().describe('write <name>-bom.csv (and with jlc, <name>-jlc-bom.csv) here'),
     jlc: z.boolean().default(false).describe('also produce the JLCPCB BOM (Comment, Designator, Footprint, LCSC Part #)'),
+    hardware: hardwareArg,
   }),
   run: async (a) => {
     const p = await resolveProject(a.project)
     return recorded('kicad.bom', subject(p), a, async (run) => {
-      const b = buildBom(readSchematic(needSch(p), p.name))
+      const sch = readSchematic(needSch(p), p.name)
+      const b = buildBom(sch)
+      const hw = a.hardware ? await hardwareFor(p, sch) : null
+      if (hw) {
+        run.artifact('hardware.csv', hardwareCsv(hw), 'text/csv')
+        run.measure('hardware_items', hw.total_items)
+      }
       const csv = bomCsv(b)
       run.artifact('bom.csv', csv, 'text/csv')
       run.measure('parts', b.total_parts)
@@ -277,18 +312,23 @@ const bom = defineTool({
           writeFileSync(join(d, `${p.name}-jlc-bom.csv`), jlcBomCsv(b))
           written.push(join(d, `${p.name}-jlc-bom.csv`))
         }
+        if (hw) {
+          writeFileSync(join(d, `${p.name}-hardware.csv`), hardwareCsv(hw))
+          written.push(join(d, `${p.name}-hardware.csv`))
+        }
       }
       const c = cap(b.lines, a.limit)
       const noLcsc = b.lines.filter((l) => !l.lcsc).length
       return {
         status: 'pass' as const,
-        summary: `${b.total_parts} parts in ${b.unique_lines} lines`,
+        summary: `${b.total_parts} parts in ${b.unique_lines} lines${hw ? `; hardware: ${hw.total_items} items in ${hw.lines.length} lines` : ''}`,
         result: {
           project: p.name, total_parts: b.total_parts, unique_lines: b.unique_lines, missing_part_number: b.missing_part_number,
           ...(a.jlc ? { lines_without_lcsc: noLcsc } : {}),
           excluded: b.excluded.slice(0, 100), excluded_total: b.excluded.length, omitted: c.omitted, files: written,
           lines: c.items.map((l) => ({ qty: l.quantity, refs: l.refs.length > 30 ? [...l.refs.slice(0, 30), `…+${l.refs.length - 30}`] : l.refs,
             value: l.value, footprint: l.footprint, mpn: l.mpn, manufacturer: l.manufacturer, lcsc: l.lcsc })),
+          ...(hw ? { hardware: hardwareSummary(hw) } : {}),
         },
       }
     })
@@ -307,6 +347,7 @@ const fab = defineTool({
     subtract_soldermask: z.boolean().optional().describe('remove silkscreen where there is no solder mask (over pads); default true'),
     separate_drill: z.boolean().default(true).describe('plated and unplated holes in separate drill files (<name>-PTH.drl, <name>-NPTH.drl) rather than one merged file'),
     board_plot_settings: z.boolean().default(false).describe('plot the Gerbers with the settings saved in the board file instead; protel_ext and subtract_soldermask cannot be given with it'),
+    hardware: hardwareArg,
   }),
   run: async (a) => {
     if (a.board_plot_settings && (a.protel_ext !== undefined || a.subtract_soldermask !== undefined)) {
@@ -338,8 +379,17 @@ const fab = defineTool({
       const pl = await placements(pcb)
       // the parts the fab will not place: fitted by hand at Incoming inspection (src/core/boards.ts inspectionProblems)
       let handPlaced: string[] = []
+      let hw: Hardware | null = null
       if (p.sch) {
-        const b = buildBom(readSchematic(p.sch, p.name))
+        const sch = readSchematic(p.sch, p.name)
+        const b = buildBom(sch)
+        if (a.hardware) {
+          hw = await hardwareFor(p, sch)
+          writeFileSync(join(dir, `${p.name}-hardware.csv`), hardwareCsv(hw))
+          run.artifact('hardware.csv', hardwareCsv(hw), 'text/csv')
+          run.measure('hardware_items', hw.total_items)
+          if (hw.case_stale) warnings.push('the hardware list\'s case was built for an earlier board: rebuild it (mech.build) before ordering')
+        }
         writeFileSync(join(dir, `${p.name}-bom.csv`), bomCsv(b))
         run.artifact('bom.csv', bomCsv(b), 'text/csv')
         const placed = new Set(pl.map((x) => x.ref))
@@ -351,7 +401,15 @@ const fab = defineTool({
           const noL = b.lines.filter((l) => !l.lcsc)
           if (noL.length) warnings.push(`${noL.length} BOM lines have no LCSC code: ${noL.slice(0, 10).map((l) => `${l.refs[0] ?? ''} ${l.value}`).join('; ')}`)
         }
-      } else warnings.push('no schematic: BOM files not produced')
+      } else {
+        warnings.push('no schematic: BOM files not produced')
+        if (a.hardware) {
+          hw = await hardwareFor(p, null)
+          writeFileSync(join(dir, `${p.name}-hardware.csv`), hardwareCsv(hw))
+          run.artifact('hardware.csv', hardwareCsv(hw), 'text/csv')
+          run.measure('hardware_items', hw.total_items)
+        }
+      }
       if (a.house === 'jlcpcb') {
         writeFileSync(join(dir, `${p.name}-jlc-cpl.csv`), jlcCplCsv(pl))
         run.artifact('jlc-cpl.csv', jlcCplCsv(pl), 'text/csv')
@@ -365,7 +423,8 @@ const fab = defineTool({
       return { status: ok ? 'pass' as const : 'fail' as const,
         summary: ok ? `${out.length} fab files in ${dir}` : `fab package not ready (do not send it): ${check.problems.join('; ')}`,
         result: { project: p.name, out_dir: dir, house: a.house, settings, problems: check.problems, notes: check.notes, holes: check.holes,
-          kicad_cli: commands, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80) } }
+          kicad_cli: commands, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80),
+          ...(hw ? { hardware: hardwareSummary(hw) } : {}) } }
     })
   },
 })
