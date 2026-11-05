@@ -81,6 +81,7 @@ import type { CheckRunDetail } from './github.js'
 import { backToDefine, changedRequirements, pastDefine } from './pending-changes.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
+import { type RecordChanges, betterTitle, contentBullets, recordChanges } from '../core/change-contents.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -299,17 +300,22 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const requirements = requirementIds(pull.title, pull.body, ...commits)
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   // an accepted requirement its database edits: said before it is accepted (src/api/requirement-edits.ts)
-  const edits = pull.state === 'open' && files.some((f) => f.path === PROJECT_DB_PATH)
-    ? await cached(keep, repo, `requirement-edits:${number}:${sha}`, () => requirementEditsOf(ctx, gh, repo, pull, found.rows, stack.stacked?.base ?? null)).catch((e: unknown) => {
+  // and the intent statements and requirements it adds or changes, said in its summary (log #133)
+  const read = pull.state === 'open' && files.some((f) => f.path === PROJECT_DB_PATH)
+    ? await cached(keep, repo, `record-edits:${number}:${sha}`, () => recordEditsOf(ctx, gh, repo, pull, found.rows, stack.stacked?.base ?? null)).catch((e: unknown) => {
       logLine(ctx, { warning: 'change.get: the requirements it edits could not be read', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
       return null
     })
     : null
+  const edits = read?.edits ?? null
   return {
     ...sum,
+    // named by the work in it, not by the record it started as (log #144)
+    title: betterTitle(sum.title, commits),
     verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
-    summary: summaryBullets({ jobSummary: job.summary, body: pull.body, commits }),
+    // what it holds first: design files, and what it adds to the intent and the requirements (log #144, #133)
+    summary: [...contentBullets({ paths: files.map((f) => f.path), record: read?.record ?? null }), ...summaryBullets({ jobSummary: job.summary, body: pull.body, commits })].slice(0, 12),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
     recommendation: withRequirementEdits(recommendationOf(facts, { passed, requirements, from: sum.from }), edits),
@@ -356,27 +362,35 @@ async function failureText(ctx: Context, gh: GitHubApi, repo: string, id: string
 }
 
 /**
- * The accepted requirements change `pull`'s database edits, against the design as it stands (the default branch's
- * database, with people's decisions from the journey record), and what on its branch asked for that. Null when it
- * edits none, or carries no database.
+ * What `pull`'s database edits. `edits`: the accepted requirements it changes, against the design as it stands (the
+ * default branch's database, with people's decisions from the journey record), and what on its branch asked for that
+ * (null when it edits none). `record`: the intent statements and requirements it adds or changes, against the change
+ * it is stacked on when it is (its own review shows its own edits only), else the design. Null when it carries no
+ * database.
  */
-async function requirementEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullDetail, jobs: readonly JobRow[], base: string | null): Promise<RequirementEditsView | null> {
+async function recordEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullDetail, jobs: readonly JobRow[], base: string | null): Promise<{ edits: RequirementEditsView | null; record: RecordChanges } | null> {
   const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, pull.head.sha))
+  // a stacked change is compared with the change it builds on; that copy unreadable, with the design
+  const under = base ? tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, base).catch(() => null)) : null
   try {
     if (!existsSync(t.db)) return null
     const head = new DatabaseSync(t.db, { readOnly: true })
+    const below = under && existsSync(under.db) ? new DatabaseSync(under.db, { readOnly: true }) : null
     try {
       return await withRecordDb(ctx, repo, (design) => {
+        const record = recordChanges(below ?? design, head)
         const edits = requirementEdits(design, head)
-        if (!edits.length) return null
+        if (!edits.length) return { edits: null, record }
         const r = loadJourney(design)
-        return editsView(edits, r ? pastDefine(r) : false, requirementAsked(jobs, [pull.head.ref, ...(base ? [base] : [])], r))
+        return { edits: editsView(edits, r ? pastDefine(r) : false, requirementAsked(jobs, [pull.head.ref, ...(base ? [base] : [])], r)), record }
       })
     } finally {
       head.close()
+      below?.close()
     }
   } finally {
     t.cleanup()
+    under?.cleanup()
   }
 }
 
