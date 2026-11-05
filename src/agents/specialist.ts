@@ -117,6 +117,8 @@ export type SpecialistJob =
       stackedOn?: string | undefined
       /** it carries on a paused job whose conversation was not kept: what was done (src/agents/runtime/job.ts) */
       resumed?: Resumed | undefined
+      /** it starts a lost job again: what that job left on the branch (src/agents/runtime/job.ts) */
+      restarted?: Restarted | undefined
       /** the change a person discarded on the branch it would have used: it works on a new one (src/core/discarded.ts) */
       afterDiscard?: { number: number; branch: string; by: string; reason: string } | undefined }
   /** Another specialist asked for it (journey.handoff): the recorded request, which it answers with journey.handoff_answer. */
@@ -195,6 +197,7 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
         p.add('specialist.job.after-discard', { number: d.number, old_branch: d.branch, branch: job.branch, by: d.by, reason: quoted(d.reason || '(no reason could be read)') })
       }
       if (job.resumed) p.add('specialist.job.resumed', { paused_by: job.resumed.pausedBy, paused_at: job.resumed.pausedAt, commits: job.resumed.commits || '(none)', last_step: job.resumed.lastStep || '(not recorded)' })
+      if (job.restarted) p.add('specialist.job.restarted', { lost_job: job.restarted.lostJob, by: job.restarted.by, commits: job.restarted.commits || '(none)' })
       return
     case 'handoff': {
       const h = job.handoff
@@ -237,7 +240,7 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   p.add(`specialist.${s.kind}.workflow`, role).add('specialist.tools', { tools: tools.map(mcpName).join(', '), mcp_server: MCP_SERVER })
   p.add('specialist.knowledge', { search_tool: mcpName('kb.search'), status_tool: mcpName('kb.status') }).add('specialist.knowledge.data')
   p.add('specialist.journey', { status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), check_tool: mcpName('journey.check'), shape_tool: mcpName('shape.check'), shaped: shapedCriteria().join(', ') || 'none yet', stuck_tool: mcpName('journey.stuck') })
-    .add('specialist.journey.people')
+    .add('specialist.journey.people').add('specialist.journey.recommend')
   if (handoff === 'ask') {
     const others = (c.enabled ?? cfg.agents.enabled).filter((k) => k !== s.kind)
     if (others.length) {
@@ -266,6 +269,9 @@ export function specialistPrompt(s: Specialist, c: PromptContext): string {
 
 /** What a resumed task knows of the paused job it carries on. */
 export interface Resumed { pausedBy: string; pausedAt: string; resumedBy: string; commits: string; lastStep: string }
+
+/** What a restarted task knows of the lost job it starts again: its id, who started it again, its commits on the branch. */
+export interface Restarted { lostJob: string; by: string; commits: string }
 
 /** The message that continues a paused job's own conversation (its transcript was kept and restored). */
 export function composeResumeNote(r: Resumed, branch: string, layers: Layers = NO_LAYERS): Composed {

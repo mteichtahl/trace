@@ -476,6 +476,7 @@ Anything that takes time shows three things at once, everywhere it appears: what
 - A thin progress bar when the work has a known size; otherwise elapsed time and the typical time for this kind of run on this project ("12 min so far, usually 20"), and past it "taking longer than usual" rather than an estimate it has outrun; no typical time without at least three earlier runs of the same kind.
 - Where it runs, in quiet text when it matters ("on a graphics card").
 - A menu with Pause, Cancel and Move up the queue. Cancel asks once, stops within seconds, and then says what was kept ("Stage 1 kept: 48 nets routed and locked").
+- A run trace lost contact with moves to **Ended without finishing**, never a dead end: **Start again** (the same request on the same branch, as a new attempt linked to the lost one) and **Dismiss** (with an optional reason, recorded in the history). While one stands, the next step names it and offers Start again, and trace's step it was doing reads "stopped", never "now". A lost first attempt that left no change is started again once by trace on its own, with a note in Recently.
 
 **The run page** (`/p/:id/runs/:run`) is the Run line at full size: the steps as a timeline with each step's duration, the agent's own log as a chat thread (tool rows, hand-offs to specialists, pictures it made), and the result at the top once it finishes: the verdict in one sentence, the plots, the findings and the files.
 

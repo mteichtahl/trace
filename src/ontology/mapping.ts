@@ -74,6 +74,7 @@ const options: FieldMap = {
     id: { ignore: 'the option\'s id within its question' }, label: { prop: 'label' }, recommended: { prop: 'isRecommended', as: 'bool' },
     why: { prop: 'justification' }, gives_up: { prop: 'givesUp' },
     waives: { ignore: 'what choosing it would waive: the waivers an answer records are their own rows, mapped from waivers' },
+    needs: { ignore: 'the detail the person must give with this option: their answer carries it, mapped with the answer' },
   },
 }
 const revision = { ref: 'revision', type: 'Revision' } as const
@@ -247,7 +248,8 @@ export const TABLES: readonly TableMap[] = [
     db: 'journey', table: 'job_controls', class: 'JobControl', kind: 'job-control', key: 'job',
     columns: {
       job: { prop: 'controlsJob', ref: 'job' }, held: { prop: 'held', as: 'bool' }, ord: { prop: 'order', as: 'decimal' },
-      discarded: { prop: 'discarded', as: 'bool' }, by: { prop: 'recordedBy' }, at: { prop: 'recordedAt', as: 'time' },
+      discarded: { prop: 'discarded', as: 'bool' }, dismissed: { prop: 'dismissed', as: 'bool' }, reason: { prop: 'reason' },
+      restarted_by: { prop: 'restartedBy' }, restarted_at: { prop: 'restartedAt', as: 'time' }, by: { prop: 'recordedBy' }, at: { prop: 'recordedAt', as: 'time' },
     },
   },
   {

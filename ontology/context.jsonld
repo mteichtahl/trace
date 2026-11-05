@@ -412,6 +412,10 @@
       "@id": "trace:resolvedAt",
       "@type": "xsd:dateTime"
     },
+    "restartedAt": {
+      "@id": "trace:restartedAt",
+      "@type": "xsd:dateTime"
+    },
     "restsOn": {
       "@id": "trace:restsOn",
       "@type": "@id"

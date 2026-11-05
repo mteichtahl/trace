@@ -60,13 +60,15 @@ export function lostNow(r: RunSummary, st: ReturnType<typeof runState>): RunSumm
 
 /**
  * A project's jobs as its Overview lists them, by the clock (runState): `doing` is what trace is doing (running, with a
- * silent one saying so, and paused); `ended` the jobs lost in the last day, which are over and need attention, never
- * shown as running. Pure.
+ * silent one saying so, and paused); `ended` the jobs lost in the last day, which are over and need attention (Start
+ * again or Dismiss), never shown as running, until a person settles them. Pure.
  */
 export function splitRuns(jobs: readonly RunSummary[], now: number): { doing: RunSummary[]; ended: RunSummary[] } {
   const doing: RunSummary[] = []
   const ended: RunSummary[] = []
   for (const r of jobs) {
+    // dismissed or started again: settled, so it is no longer a card (the new job shows on its own)
+    if (r.settled) continue
     const st = runState(r, now)
     if (st === 'running' || st === 'silent' || st === 'paused') doing.push(r)
     else if (st === 'lost' && now - Date.parse(r.heard?.at ?? r.startedAt ?? '') < 24 * 3600_000) ended.push(lostNow(r, st))
