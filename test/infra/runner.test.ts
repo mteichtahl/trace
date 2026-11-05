@@ -102,7 +102,11 @@ function expectRunner(t: Template, name: string, repository: string, how: Hook, 
   expect(list(statements.find((s) => s.Sid === 'RunnerRunLogs')?.Resource)).toEqual([
     { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, `:logs:us-east-1:123456789012:log-group:/trace/${prefix}/runs:log-stream:gha/${repository.toLowerCase()}/*`]] },
   ])
-  expect((p.Environment as { EnvironmentVariables?: unknown }).EnvironmentVariables).toEqual([{ Name: 'TRACE_RUNS_LOG_GROUP', Type: 'PLAINTEXT', Value: `/trace/${prefix}/runs` }])
+  // and report auto-discovery is off (the role has no report-group grants)
+  expect((p.Environment as { EnvironmentVariables?: unknown }).EnvironmentVariables).toEqual([
+    { Name: 'CODEBUILD_CONFIG_AUTO_DISCOVER', Type: 'PLAINTEXT', Value: 'false' },
+    { Name: 'TRACE_RUNS_LOG_GROUP', Type: 'PLAINTEXT', Value: `/trace/${prefix}/runs` },
+  ])
   const granted = list(statements.find((s) => s.Sid === 'RunnerConnection')?.Resource)
   if (connection === CONNECTION_ARN) expect(granted.sort()).toEqual([CONNECTION_ARN, CODESTAR_ARN].sort())
   else {

@@ -279,8 +279,14 @@ export class RunnerProject extends Construct {
         image: p.image,
         imagePullCredentialsType: 'CODEBUILD',
         privilegedMode: p.privileged,
-        // every build (every job) knows the runs log group, so trace's own steps write the check's stream there
-        ...(p.runLogs ? { environmentVariables: [{ name: RUNS_LOG_GROUP_ENV, type: 'PLAINTEXT', value: runsLogGroup(p.runLogs.prefix) }] } : {}),
+        environmentVariables: [
+          // CodeBuild otherwise auto-discovers report files a job leaves (a coverage lcov.info, JUnit XML) and creates a
+          // report group for each, which this role is deliberately not allowed (AccessDenied on CreateReportGroup in
+          // CloudTrail): the jobs' results are GitHub's, so the runner reports nothing to CodeBuild
+          { name: 'CODEBUILD_CONFIG_AUTO_DISCOVER', type: 'PLAINTEXT', value: 'false' },
+          // every build (every job) knows the runs log group, so trace's own steps write the check's stream there
+          ...(p.runLogs ? [{ name: RUNS_LOG_GROUP_ENV, type: 'PLAINTEXT', value: runsLogGroup(p.runLogs.prefix) }] : []),
+        ],
       },
       logsConfig: { cloudWatchLogs: { status: 'ENABLED', groupName: this.logGroup.logGroupName }, s3Logs: { status: 'DISABLED' } },
       timeoutInMinutes: RUNNER_TIMEOUT_MINUTES,
