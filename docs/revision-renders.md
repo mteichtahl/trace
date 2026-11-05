@@ -25,14 +25,21 @@ revision, like the journey record that is copied into the repository with it.
 | `board-top` | The board from straight above | Orthographic plan view |
 | `board-bottom` | The underside | Orthographic plan view from below |
 | `case` | The closed case | Three-quarter view |
-| `board-in-case` | The board in the base, lid off | Three-quarter view from higher up, 45° |
+| `board-in-case` | The board in the base, lid off, its screws seated | Three-quarter view from higher up, 45° |
 | `exploded` | Base, board and lid pulled apart along their assembly axis, fasteners between them | Three-quarter view, framed on the whole stack |
 
 **Exploded view.** The board and the case are placed in the case frame from [enclosure-build.md](enclosure-build.md):
 y flipped from KiCad, and the board's bottom face at z = 0. The board model is placed by its own outline, so where
 kicad-cli puts its origin does not matter. The base stays put; the board is lifted until its lowest point clears the
-base's top by half the case's height, and the lid until it clears the board's tallest part by the same gap. Fasteners
-are not drawn yet.
+base's top by half the case's height, and the lid until it clears the board's tallest part by the same gap.
+
+**Screws.** When the board is screwed down, the screws are the ones the case was built for: each `Fastener` and its
+`MountingPoint` in `mechanical/out/case.jsonld` (size, length and hole). Each is drawn as an ISO 7045 pan head screw
+(head height and diameter as the case's fit check uses them, a cross recess, the shank's thread as fine ridges at the
+coarse pitch) in zinc-plated steel. They sit seated in the board-in-case shot. In the exploded view they are lifted out
+of their holes on their own axes, tip clear of the board, and the lid is lifted clear of them. A board held by rests and
+lid posts has no screws to show. A case built before its records were written shows none, and the run says so; the
+records are one of the run's inputs, so the pictures go out of date when the screws change.
 
 ## Look
 

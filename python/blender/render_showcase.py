@@ -21,6 +21,7 @@ where kicad-cli puts the model's origin does not matter. Nothing here edits a mo
 import colorsys
 import math
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -282,9 +283,11 @@ def mesh_children(g):
     return [o for o in g.children_recursive if o.type == "MESH"]
 
 
-def explode(board, bobjs, bparts, lid, lparts, ex):
+def explode(board, bobjs, bparts, lid, lparts, ex, screws=None, sobjs=()):
     """Pull the parts apart along z with a clear gap between each: the board's lowest point above the base's top, the
-    lid's lowest point above the board's tallest part. The gap is a share of the case's height (`gap`, default 0.5)."""
+    screws (when the board is screwed down) lifted out of their holes on their own axes so each tip is clear of the
+    board's top face, and the lid's lowest point above whatever is highest below it. The gap is a share of the case's
+    height (`gap`, default 0.5)."""
     blo, bhi = C.world_bbox(bparts)
     llo, lhi = C.world_bbox(lparts)
     height = max(lhi.z, bhi.z) - min(llo.z, blo.z)
@@ -293,9 +296,149 @@ def explode(board, bobjs, bparts, lid, lparts, ex):
     board.location.z = (bhi.z - lo.z) + gap
     bpy.context.view_layer.update()
     lo, hi = C.world_bbox(bobjs)
+    top = hi.z
+    if screws is not None and sobjs:
+        # seated, a screw's tip is a screw length below the board's top face: lift it that far and a share of the gap
+        slo, _ = C.world_bbox(sobjs)
+        screws.location.z = board.location.z + (board_top(bobjs) - slo.z) + gap * 0.45
+        bpy.context.view_layer.update()
+        top = max(top, C.world_bbox(sobjs)[1].z)
     llo, _ = C.world_bbox(lparts)
-    lid.location.z = (hi.z - llo.z) + gap
+    lid.location.z = (top - llo.z) + gap
     bpy.context.view_layer.update()
+
+
+# ---------------------------------------------------------------------------------------------------- screws
+
+# ISO 7045 pan head envelopes (head height k, head diameter dk, mm), as the case engine's fit check uses them
+# (python/tracebridge/mech/shell.py PAN_HEADS), and the coarse thread pitch (ISO 261)
+PAN_HEADS = {"M2": (1.6, 4.0), "M2.5": (2.1, 5.0), "M3": (2.4, 5.6), "M4": (3.1, 8.0)}
+PITCH = {"M2": 0.4, "M2.5": 0.45, "M3": 0.5, "M4": 0.7}
+SIZE = re.compile(r"^M\d+(\.\d+)?$")
+
+
+def board_top(bobjs):
+    """The board's top face (its body, FR4), where a screw's head sits."""
+    fr4 = [o for o in bobjs if any(s.material and s.material.name.startswith("FR4") for s in o.material_slots)]
+    return C.world_bbox(fr4 or bobjs)[1].z if fr4 else C.world_bbox(bobjs)[0].z + 0.0016
+
+
+def lathe(name, profile, segments=40):
+    """A solid of revolution about z from a profile of (radius, z) points in metres, open ends closed by the axis."""
+    import bmesh
+    me = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    rings = []
+    for i in range(segments):
+        a = 2 * math.pi * i / segments
+        ca, sa = math.cos(a), math.sin(a)
+        rings.append([bm.verts.new((r * ca, r * sa, z)) for r, z in profile])
+    n = len(profile)
+    for i in range(segments):
+        a, b = rings[i], rings[(i + 1) % segments]
+        for j in range(n - 1):
+            quad = [a[j], b[j], b[j + 1], a[j + 1]]
+            if profile[j][0] < 1e-9:
+                bm.faces.new([a[j], b[j + 1], a[j + 1]] if profile[j + 1][0] > 1e-9 else quad)
+            elif profile[j + 1][0] < 1e-9:
+                bm.faces.new([a[j], b[j], a[j + 1]])
+            else:
+                bm.faces.new(quad)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-9)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(me)
+    bm.free()
+    for p in me.polygons:
+        p.use_smooth = True
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    return ob
+
+
+def screw_material():
+    """Zinc-plated steel."""
+    return C.principled("Screw (zinc)", C.hex_rgba("#b9bdc3"), rough=0.3, metal=1.0)
+
+
+def thread_material(pitch_mm):
+    """Zinc-plated steel with fine thread ridges along the shank: a bump in the object's own z, one band a pitch."""
+    m = C.principled(f"Screw thread {pitch_mm}", C.hex_rgba("#b9bdc3"), rough=0.36, metal=1.0)
+    nt = m.node_tree
+    b = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    wave = nt.nodes.new("ShaderNodeTexWave")
+    wave.wave_type = "BANDS"
+    wave.bands_direction = "Z"
+    # Blender's bands are sin(20 · scale · z): one band a pitch
+    wave.inputs["Scale"].default_value = 2 * math.pi / (20 * pitch_mm / 1000.0)
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.6
+    bump.inputs["Distance"].default_value = pitch_mm / 4000.0
+    nt.links.new(coord.outputs["Object"], wave.inputs["Vector"])
+    nt.links.new(wave.outputs["Fac"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    return m
+
+
+def make_screw(f, head_mat, thread_mats):
+    """One pan head screw, seated: its head's underside at z = 0 of its own frame, the shank down to -length."""
+    size = f["size"]
+    d = float(size[1:]) / 1000.0
+    k, dk = (v / 1000.0 for v in PAN_HEADS.get(size, (0.8 * float(size[1:]), 2.0 * float(size[1:]))))
+    L = float(f["length_mm"]) / 1000.0
+    r, R = d / 2, dk / 2
+    # the pan head: flat underside, straight sides, a domed top
+    head = lathe(f"screw {f['ref']} head", [(0.0, 0.0), (R, 0.0), (R, k * 0.45), (R * 0.93, k * 0.78), (R * 0.72, k * 0.95),
+                                             (R * 0.4, k), (0.0, k)])
+    head.data.materials.append(head_mat)
+    # the cross recess (ISO 4757 type H, much simplified): two slots and a cone, cut by a live Boolean, so the mesh
+    # stays as built and Cycles renders the cut
+    cutter = []
+    for w, l in ((dk * 0.14, dk * 0.56), (dk * 0.56, dk * 0.14)):
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, k))
+        c = bpy.context.active_object
+        c.scale = (w, l, k * 1.1)
+        cutter.append(c)
+    for c in cutter:
+        c.name = f"screw {f['ref']} recess"
+        c.hide_render = True
+        c.display_type = "WIRE"
+        c.parent = head
+        mod = head.modifiers.new("recess", "BOOLEAN")
+        mod.operation = "DIFFERENCE"
+        mod.object = c
+        mod.solver = "EXACT"
+    shank = lathe(f"screw {f['ref']} shank", [(0.0, -L), (r * 0.62, -L), (r, -L + d * 0.32), (r, 0.0002), (0.0, 0.0002)])  # 0.2 mm into the head
+    pitch = PITCH.get(size, 0.5)
+    if pitch not in thread_mats:
+        thread_mats[pitch] = thread_material(pitch)
+    shank.data.materials.append(thread_mats[pitch])
+    g = bpy.data.objects.new(f"screw {f['ref']}", None)
+    bpy.context.scene.collection.objects.link(g)
+    for o in (head, shank):
+        o.parent = g
+    return g, [head, shank]
+
+
+def place_screws(job, bobjs):
+    """The case's screws (job.fasteners: ref, size, length_mm, x_mm, y_mm in the case frame), seated in the board's
+    mounting holes with their heads on its top face, in one group that moves as one. None when there are none."""
+    fs = [f for f in job.get("fasteners") or [] if isinstance(f, dict) and SIZE.match(str(f.get("size", "")))]
+    if not fs:
+        return None, []
+    top = board_top(bobjs)
+    group_ob = bpy.data.objects.new("screws", None)
+    bpy.context.scene.collection.objects.link(group_ob)
+    head_mat = screw_material()
+    threads = {}
+    objs = []
+    for f in fs:
+        g, parts = make_screw(f, head_mat, threads)
+        g.location = (float(f["x_mm"]) / 1000.0, float(f["y_mm"]) / 1000.0, top)
+        g.parent = group_ob
+        objs += parts
+    bpy.context.view_layer.update()
+    return group_ob, objs
 
 
 # ---------------------------------------------------------------------------------------------------- shots
@@ -397,10 +540,14 @@ def main():
         base, bparts = import_part(base_path, "base", mat)
         lid, lparts = import_part(lid_path, "lid", mat)
 
+    screws, sobjs = place_screws(job, bobjs) if has_case else (None, [])
+    if sobjs:
+        C.log(f"{len(job['fasteners'])} screw(s) in the board's mounting holes")
+
     gradient_world(scene, palette["background"][0], palette["background"][1])
     cam = C.make_camera(scene)
     images = []
-    every = bobjs + bparts + lparts
+    every = bobjs + bparts + lparts + sobjs
     lo_all, hi_all = C.world_bbox(every)
     fl = floor(scene, lo_all, hi_all)
 
@@ -408,11 +555,15 @@ def main():
         board.location.z = 0.0
         if lid:
             lid.location.z = 0.0
+        if screws:
+            screws.location.z = 0.0
         show(bobjs, True)
         show(bparts, shot in CASE_SHOTS)
         show(lparts, shot in ("case", "exploded"))
+        # the screws where they can be seen: in the open case, and lifted out of their holes in the exploded view
+        show(sobjs, shot in ("board-in-case", "exploded"))
         if shot == "exploded":
-            explode(board, bobjs, bparts, lid, lparts, job.get("explode") or {})
+            explode(board, bobjs, bparts, lid, lparts, job.get("explode") or {}, screws, sobjs)
         bpy.context.view_layer.update()
         subject = [o for o in every if not o.hide_render]
         lo, hi = C.world_bbox(subject)
@@ -427,7 +578,8 @@ def main():
     size = hi - lo
     return {"images": images, "render": used, "notes": notes, "palette": palette, "surfaces": surfaces,
             "bbox_mm": [round(size.x * 1000, 3), round(size.y * 1000, 3), round(size.z * 1000, 3)],
-            "objects": len(every), "blender": bpy.app.version_string}
+            "objects": len(every), "screws": len(job.get("fasteners") or []) if sobjs else 0,
+            "blender": bpy.app.version_string}
 
 
 if __name__ == "__main__":

@@ -10,3 +10,6 @@ For `test/tools/render/showcase.test.ts`: the sample board (`templates/sample/ha
 - `case-base.stl`, `case-lid.stl`: the sample board's case, built by the case engine (build123d 0.13) from
   `test/fixtures/case-build/good` (facts and settings).
 - `logo.png`: a small made-up logo (navy block, red bar, grey band) for the colours.
+- `case-screws.jsonld`: case records naming four M3 × 6 screws at the sample board's corners, as `mech.build` writes
+  them for a board with mounting holes (the sample board has none: its case uses rests), for the screws in the
+  board-in-case and exploded shots.
