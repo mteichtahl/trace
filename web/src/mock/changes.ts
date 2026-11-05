@@ -215,6 +215,18 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'ask', why: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it. Nothing asked for that: no answer said it changes a requirement, and no change request did. Ask for changes so it leaves the requirement as agreed. If the new wording is right, you can still accept it, then agree it in Requirements review and sign the gates again.' },
       may_accept: true,
     }),
+    // a change that cites requirements the project does not have (test-esp32 log #47, #105): its resistors R1 to R7
+    // read as "covers R1-R7"; said once, and the recommendation covers only the real one
+    summary(27, {
+      title: 'Sensor board placed and routed (48 x 30 mm, 2 layers)', from: 'the Implementation specialist', stage: 'layout', opened_at: ago(6 * MIN), updated_at: ago(4 * MIN),
+      checks: { total: 3, passed: 3, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
+      summary: ['Placed every part and routed the board on two layers, 48 × 30 mm.', 'The design rule check passes with no violations.'],
+      files: [{ path: 'docs/renders/front.svg', status: 'modified', additions: 2, deletions: 2, kind: 'image' }],
+      checks_list: [{ name: 'Design rule check', state: 'passed', summary: 'No violations' }, { name: 'build', state: 'passed', summary: 'Built.' }, { name: 'trace-prs', state: 'passed', summary: null }],
+      requirements: ['R-008'], requirements_unknown: ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'],
+      recommendation: { verdict: 'accept', why: 'All 3 checks passed (Design rule check, build and trace-prs), and it can be merged. It covers R-008.' },
+      may_accept: true,
+    }),
   ],
 }
 

@@ -332,8 +332,10 @@ export interface ChangeDetail extends ChangeSummary {
   summary: string[]
   files: ChangeFile[]
   checks_list: ChangeCheck[]
-  /** requirement ids the change names: ["R4", "R7"] */
+  /** the project's requirement ids the change names: ["REQ-9b1b96", "REQ-8fc402"] */
   requirements: string[]
+  /** what it cites as a requirement that the project does not have: ["R3"]; absent: none */
+  requirements_unknown?: string[]
   recommendation: { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
   /** this person, now */
   may_accept: boolean

@@ -128,7 +128,10 @@ export interface ChangeDetail extends ChangeSummary {
   summary: string[]
   files: { path: string; status: PullFile['status']; additions: number; deletions: number; kind: FileKind }[]
   checks_list: CheckLine[]
+  /** the project's requirements it names (requirementsNamed) */
   requirements: string[]
+  /** what it cites as a requirement that the project has none of ("R3"); absent: none */
+  requirements_unknown?: string[]
   recommendation: Recommendation
   may_accept: boolean
   blockers: string[]
@@ -650,23 +653,60 @@ export function checkState(c: { status: string; conclusion: string | null }): Ch
 
 // ------------------------------------------------------------------ what it says
 
+/** "REQ-009" and "REQ-9" are one requirement (as the review page matches them: change-requirements.tsx). */
+const reqKey = (id: string): string => id.trim().toUpperCase().replace(/-0+(\d)/g, '-$1')
+/** A reference designator's shape (R3, U12, C5): a part on the board unless the line says it is a requirement. */
+const DESIGNATOR = /^[A-Z]{1,3}\d{1,4}$/
+/** A line that says it names requirements: "Requirements it covers: …", "covers R3". */
+const SAYS_REQUIREMENT = /\brequirements?\b|\bcover(?:s|ed|ing)?\b/i
+/** A word that may be an id: letters first, then letters, digits and hyphens (REQ-9b1b96, R3, TST-009). */
+const TOKEN = /(?<![\w-])[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*(?![\w-])/g
+/** A short range of designator-shaped ids, "R1-R7", "R1–R3", "R2 to R5", spelled out (at most 50). */
+const RANGE = /(?<![\w-])([A-Z]{1,3})(\d{1,4})\s*(?:-|–|to)\s*(?:\1)?(\d{1,4})(?![\w-])/g
+/** A local name the text gives a real id: "R3 (REQ-9b1b96)", "R3 = REQ-9b1b96", "R3: REQ-9b1b96", "R3 → REQ-9b1b96". */
+const ALIAS = /(?<![\w-])([A-Z]{1,3}\d{1,4})\s*(?:[:=(]|->|→)\s*([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)/g
+
+const spelled = (line: string): string => line.replace(RANGE, (all, p: string, a: string, b: string) => {
+  const x = Number(a)
+  const y = Number(b)
+  return y > x && y - x <= 50 ? Array.from({ length: y - x + 1 }, (_, i) => `${p}${x + i}`).join(' ') : `${p}${a} ${p}${b}`
+})
+
 /**
- * The requirement ids a change names, in order: R4, R7, and ranges (R1-R10, R1–R3) spelled out when they are short
- * enough to be a range of requirements (at most 50). Case matters: "r4" is not an id.
+ * The requirements a change names (its title, description and commit messages), against the project's own ids
+ * (`known`: every requirement in its record). `ids`: the project's ids it names, in order, each as the project writes
+ * it ("REQ-9" finds REQ-009; a local name the text gives one, "R3 (REQ-9b1b96)", finds it too). `unknown`: what it
+ * cites as a requirement that the project has no such requirement for: a word in the project's own id form
+ * (REQ-abc123 when its ids are REQ-…), or a designator-shaped word (R3, R1-R7) on a line that says it names
+ * requirements. Elsewhere R3 is a resistor: in test-esp32 the schematic change's net table ("EN = … R3") read as
+ * "covers R3", and a layout's "R1/R2 sit beside the CC pins" as "covers R1, R2" (log #47, #105), in a project whose
+ * requirements are REQ-xxxxxx. Case matters for the designator shape: "r4" is not one.
  */
-export function requirementIds(...texts: readonly string[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  const add = (n: number): void => { const id = `R${n}`; if (!seen.has(id)) { seen.add(id); out.push(id) } }
-  for (const t of texts) {
-    for (const m of t.matchAll(/\bR(\d{1,4})(?:\s*(?:-|–|to)\s*R?(\d{1,4}))?\b/g)) {
-      const a = Number(m[1])
-      const b = m[2] === undefined ? a : Number(m[2])
-      if (b > a && b - a <= 50) for (let n = a; n <= b; n++) add(n)
-      else add(a)
+export function requirementsNamed(known: Iterable<string>, ...texts: readonly string[]): { ids: string[]; unknown: string[] } {
+  const byKey = new Map<string, string>()
+  for (const id of known) byKey.set(reqKey(id), id)
+  // the project's id forms: "REQ-" for REQ-9b1b96, REQ-PWR-001
+  const prefixes = new Set([...byKey.values()].map((id) => /^([A-Za-z]+-)/.exec(id)?.[1]?.toUpperCase()).filter((p): p is string => Boolean(p)))
+  const lines = texts.flatMap((t) => t.split(/\r?\n/))
+  const alias = new Map<string, string>()
+  for (const l of lines) for (const m of l.matchAll(ALIAS)) { const id = byKey.get(reqKey(m[2]!)); if (id) alias.set(m[1]!, id) }
+  const ids: string[] = []
+  const unknown: string[] = []
+  const push = (xs: string[], x: string): void => { if (!xs.includes(x)) xs.push(x) }
+  for (const line of lines) {
+    const says = SAYS_REQUIREMENT.test(line)
+    for (const [tok] of spelled(line).matchAll(TOKEN)) {
+      const named = alias.get(tok)
+      if (named) { push(ids, named); continue }
+      const id = byKey.get(reqKey(tok))
+      // a project whose ids look like designators (R1): read as one only where the line says so
+      if (id && (!DESIGNATOR.test(id) || (says && tok === id))) { push(ids, id); continue }
+      if (id) continue
+      const ours = [...prefixes].some((p) => tok.toUpperCase().startsWith(p) && /\d/.test(tok.slice(p.length)))
+      if (ours || (says && DESIGNATOR.test(tok) && /^(?:R|REQ)\d/.test(tok))) push(unknown, tok)
     }
   }
-  return out
+  return { ids, unknown }
 }
 
 /** Every criterion id any template has, for finding the ones a job's request names. */

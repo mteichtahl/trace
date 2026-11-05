@@ -387,6 +387,18 @@ add({ id: 'specialist.evidence', mode: 'locked', prompt: 'specialist', vars: {},
     '  state a pass, a margin or a coverage figure you did not measure. A simulation result is a simulation result:',
     '  say what it models and what it does not.',
   ].join('\n') })
+// test-esp32 log #47, #105: a change "covered R1-R7" in a project whose requirements are REQ-xxxxxx (R1-R7 were its
+// resistors). trace reads only the project's own ids as requirements (src/api/changes.ts requirementsNamed).
+const REQUIREMENT_IDS_BODY = [
+  'When a brief, a commit message or a pull request names a requirement, use its id exactly as the record writes it,',
+  'and name the ones a change serves on one line of its commit message and pull request body: "Requirements: <id>,',
+  '<id>". Never number requirements yourself (R1, R2): R1 is a part on the board, and trace shows a change citing an',
+  'id the project does not have as citing a requirement that does not exist.',
+]
+add({ id: 'specialist.requirements', mode: 'locked', prompt: 'specialist', vars: { ids: text("the project's requirement ids, comma separated") },
+  description: "The project's requirement ids, and that briefs and pull requests name requirements by them only.",
+  default: ["REQUIREMENT IDS: this project's requirements are {{ids}} (verify_requirements action=list gives each one's words).", ...REQUIREMENT_IDS_BODY,
+    'Put the ids the work serves in your brief, so the worker cites them.'].join('\n') })
 add({ id: 'specialist.escalate', mode: 'locked', prompt: 'specialist', vars: { posted_to: text('mention.to when worker.escalate_to is set, else empty') },
   description: 'The escalation contract: the "ESCALATE:" line the harness looks for, and the cases every specialist escalates.',
   default: [
@@ -469,6 +481,9 @@ add({ id: 'worker.task', mode: 'editable', prompt: 'worker.task',
     '(the pull request opens itself; if none is open after a minute, open it with `gh pr create --base {{base}}`).',
     'Commit messages and the pull request body say: Requested by {{requested_by}}.',
   ].join('\n') })
+add({ id: 'worker.requirements', mode: 'locked', prompt: 'worker.task', vars: { ids: text("the project's requirement ids, comma separated") },
+  description: "The project's requirement ids, and that commits and pull requests name requirements by them only.",
+  default: ["REQUIREMENT IDS: this project's requirements are {{ids}}.", ...REQUIREMENT_IDS_BODY].join('\n') })
 add({ id: 'worker.validate.command', mode: 'editable', prompt: 'worker.task', then: ['worker.tests'], vars: { command: text('worker.validate') },
   description: 'How the worker validates, when worker.validate is set.', default: 'Validate before every push by running: {{command}}' })
 add({ id: 'worker.validate.generic', mode: 'editable', prompt: 'worker.task', then: ['worker.tests'], vars: {},
