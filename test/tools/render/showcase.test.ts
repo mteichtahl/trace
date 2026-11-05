@@ -4,14 +4,14 @@
  * read back by the ontology as the revision's renders.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { buildGraph } from '../../../src/ontology/graph.js'
 import { findBlender } from '../../../src/tools/render/blender.js'
-import { caseLook, dayIn, outlineBounds, projectSlug, shotName, showcase, svgColours } from '../../../src/tools/render/showcase.js'
+import { caseLook, caseScrews, dayIn, outlineBounds, projectSlug, shotName, showcase, svgColours } from '../../../src/tools/render/showcase.js'
 
 /** A small SVG logo in the same colours as logo.png: navy block (used twice), red bar, grey band, white text. */
 const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 256">
@@ -28,7 +28,7 @@ const PCB = 'hardware/trace-sample.kicad_pro'
 const run = (a: Record<string, unknown>) => showcase.run(showcase.input.parse(a) as never, { hardware: false, via: 'test' }) as Promise<Record<string, unknown>>
 
 /** The sample project in a fresh repository, with its case and logo when asked. */
-function sample(o: { case?: boolean; logo?: boolean | 'svg' } = {}): string {
+function sample(o: { case?: boolean; screws?: boolean; logo?: boolean | 'svg' } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'trace-showcase-'))
   cpSync(join(ROOT, 'templates', 'sample', 'hardware'), join(dir, 'hardware'), { recursive: true })
   mkdirSync(join(dir, '.git'))
@@ -37,6 +37,7 @@ function sample(o: { case?: boolean; logo?: boolean | 'svg' } = {}): string {
     mkdirSync(join(dir, 'mechanical', 'out'), { recursive: true })
     for (const f of ['case-base.stl', 'case-lid.stl']) copyFileSync(join(FIX, f), join(dir, 'mechanical', 'out', f))
     copyFileSync(join(ROOT, 'test', 'fixtures', 'case-build', 'good', 'case.json'), join(dir, 'mechanical', 'case.json'))
+    if (o.screws) copyFileSync(join(FIX, 'case-screws.jsonld'), join(dir, 'mechanical', 'out', 'case.jsonld'))
   }
   if (o.logo) {
     mkdirSync(join(dir, 'docs', 'design'), { recursive: true })
@@ -82,6 +83,19 @@ describe('names, days and looks', () => {
     expect(outlineBounds([[100, 100], [160, 100], [160, 140], [100, 140]])).toEqual([100, -140, 160, -100])
   })
 
+  it('reads the case\'s screws from its records, in the case frame', () => {
+    const jsonld = JSON.parse(readFileSync(join(FIX, 'case-screws.jsonld'), 'utf8'))
+    expect(caseScrews(jsonld)).toEqual([
+      { ref: 'H1', size: 'M3', length_mm: 6, x_mm: 104, y_mm: -104 }, { ref: 'H2', size: 'M3', length_mm: 6, x_mm: 140, y_mm: -104 },
+      { ref: 'H3', size: 'M3', length_mm: 6, x_mm: 104, y_mm: -136 }, { ref: 'H4', size: 'M3', length_mm: 6, x_mm: 156, y_mm: -136 },
+    ])
+    // a case held by rests and lid posts, a record without its fastener, an odd size: no screws
+    expect(caseScrews(JSON.parse(readFileSync(join(ROOT, 'test', 'fixtures', 'case-build', 'good', 'case.jsonld'), 'utf8')))).toEqual([])
+    expect(caseScrews({ '@graph': [{ '@type': 'MountingPoint', positionX: 1, positionY: 2, fastener: { '@id': 'fastener:x' } }] })).toEqual([])
+    expect(caseScrews({ '@graph': [{ '@id': 'f', '@type': 'Fastener', size: '#4-40', length: 6 }, { '@type': 'MountingPoint', positionX: 1, positionY: 2, fastener: { '@id': 'f' } }] })).toEqual([])
+    expect(caseScrews(null)).toEqual([])
+  })
+
   it('refuses a case shot when the case has not been built', async () => {
     process.chdir(sample())
     await expect(run({ revision: 'A', project: PCB, board_model: 'board.glb', shots: ['exploded'] })).rejects.toThrow(/mech\.build/)
@@ -106,7 +120,8 @@ describe.skipIf(!works)('with Blender', () => {
     expect(pal.base).toBe('#1d3557')
     expect(pal.accent).toBe('#e63946')
     expect((pal.logo as Record<string, unknown>).path).toBe('docs/design/logo.png')
-    expect(r.case).toEqual({ look: 'nylon' })
+    expect(r.case).toEqual({ look: 'nylon', screws: [] })
+    expect(r.notes).toContain('mechanical/out/case.jsonld is not there (build the case again with mech.build): no screws shown')
     // the run record (test/setup.ts points every test's at TRACE_PROJECT_DB), with this run alone in the graph
     const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
     const { store: all } = buildGraph({ project: db }, { installation: 't', project: 'p' })
@@ -116,6 +131,15 @@ describe.skipIf(!works)('with Blender', () => {
     expect(store.getSubjects('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', `${T}Render`)).toHaveLength(2)
     const inputs = db.prepare('SELECT ref FROM run_inputs WHERE run_id=? ORDER BY ord').all(String(r.run_id)).map((x) => (x as { ref: string }).ref)
     expect(inputs).toEqual(['hardware/trace-sample.kicad_pcb', 'mechanical/out/case-base.stl', 'mechanical/out/case-lid.stl', 'docs/design/logo.png'])
+  }, 600_000)
+
+  it('shows the case\'s screws seated in the open case and lifted out of their holes in the exploded view', async () => {
+    process.chdir(sample({ case: true, screws: true }))
+    const r = await run({ revision: 'B', date: '2026-11-05', project: PCB, board_model: 'board.glb', quality: 'draft', width: 160, height: 100, samples: 4, device: 'cpu', shots: ['board-in-case', 'exploded'] })
+    expect(r.case).toEqual({ look: 'nylon', screws: ['M3x6', 'M3x6', 'M3x6', 'M3x6'] })
+    const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
+    const inputs = db.prepare('SELECT ref FROM run_inputs WHERE run_id=? ORDER BY ord').all(String(r.run_id)).map((x) => (x as { ref: string }).ref)
+    expect(inputs).toContain('mechanical/out/case.jsonld')
   }, 600_000)
 
   it('takes the colours of an SVG logo from the colours it paints with', async () => {

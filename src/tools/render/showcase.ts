@@ -1,8 +1,9 @@
 /**
  * render.showcase: a revision's photorealistic renders (docs/revision-renders.md). The board, the board from above
  * and below, the closed case, the board in the case and an exploded view, rendered by Blender (Cycles) from the board
- * kicad-cli exports and the case mech.build wrote (mechanical/out/case-base.stl and case-lid.stl), lit and backed with
- * colours taken from the project's logo, or trace's neutral studio look when it has none.
+ * kicad-cli exports and the case mech.build wrote (mechanical/out/case-base.stl and case-lid.stl, and the screws its
+ * records name in case.jsonld), lit and backed with colours taken from the project's logo, or trace's neutral studio
+ * look when it has none.
  *
  * Each picture is named <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png and kept as an artifact of one recorded run,
  * whose result (revision, date, palette, shots) the ontology reads as the revision's renders (src/ontology/renders.ts).
@@ -29,6 +30,32 @@ import { freeName, RenderResult } from './tools.js'
 export const CASE_SHOTS: readonly Shot[] = ['case', 'board-in-case', 'exploded']
 export const BOARD_SHOTS: readonly Shot[] = ['board', 'board-top', 'board-bottom']
 export const CASE_FILES = { base: `${OUT_DIR}/case-base.stl`, lid: `${OUT_DIR}/case-lid.stl` } as const
+/** The case's records (python/tracebridge/mech/records.py), which name its screws and where each goes. */
+export const CASE_RECORDS = `${OUT_DIR}/case.jsonld`
+
+/** A screw as the pictures show it: its size and length, and its mounting hole in the case frame (mm, y flipped). */
+export interface ShowcaseScrew { ref: string; size: string; length_mm: number; x_mm: number; y_mm: number }
+
+/**
+ * The screws a built case holds the board with, from its records: each Fastener (size, length) and the MountingPoint
+ * that names it (the hole's KiCad position). A case held by rests and lid posts has none.
+ */
+export function caseScrews(jsonld: unknown): ShowcaseScrew[] {
+  const graph = Array.isArray(jsonld) ? jsonld : (jsonld as { '@graph'?: unknown } | null)?.['@graph']
+  if (!Array.isArray(graph)) return []
+  const nodes = graph.filter((n): n is Record<string, unknown> => !!n && typeof n === 'object')
+  const fasteners = new Map(nodes.filter((n) => n['@type'] === 'Fastener' && typeof n['@id'] === 'string').map((n) => [n['@id'] as string, n]))
+  const out: ShowcaseScrew[] = []
+  for (const m of nodes.filter((n) => n['@type'] === 'MountingPoint')) {
+    const f = fasteners.get(String((m.fastener as { '@id'?: unknown } | undefined)?.['@id'] ?? ''))
+    const x = Number(m.positionX)
+    const y = Number(m.positionY)
+    const length = Number(f?.length)
+    if (!f || typeof f.size !== 'string' || !/^M\d+(\.\d+)?$/.test(f.size) || !Number.isFinite(x) || !Number.isFinite(y) || !(length > 0)) continue
+    out.push({ ref: String(m.reference ?? f['@id']), size: f.size, length_mm: length, x_mm: x, y_mm: -y })
+  }
+  return out
+}
 
 /**
  * The project's logo is the documentation module's (docs/scribe.md "Project logo", src/docs/logo.ts): one logo for the
@@ -151,6 +178,14 @@ export const showcase = defineTool({
       try { look = caseLook(readSettings(root)?.process) } catch (e) { notes.push(`${CASE_JSON} could not be read (${e instanceof Error ? e.message : String(e)}): the case is shown in grey nylon`) }
     }
     if (!hasCase && !a.shots) notes.push('the project has no built case (mech.build): board shots only')
+    // the screws, when the board is screwed down: seated in the open case, lifted out of their holes in the exploded view
+    const recordsPath = join(root, CASE_RECORDS)
+    let screws: ShowcaseScrew[] = []
+    if (hasCase && existsSync(recordsPath)) {
+      try { screws = caseScrews(JSON.parse(readFileSync(recordsPath, 'utf8'))) } catch (e) { notes.push(`${CASE_RECORDS} could not be read (${e instanceof Error ? e.message : String(e)}): no screws shown`) }
+    } else if (hasCase) {
+      notes.push(`${CASE_RECORDS} is not there (build the case again with mech.build): no screws shown`)
+    }
 
     // the project's logo (the documentation module's): a PNG Blender reads, or an SVG whose colours are read here
     const logoRel = LOGO_PATHS.find((l) => existsSync(join(root, l))) ?? null
@@ -180,7 +215,7 @@ export const showcase = defineTool({
       // what the pictures are made from, for freshness (src/ontology/lineage.ts)
       const rel = (abs: string): string => abs.startsWith(resolve(root)) ? resolve(abs).slice(resolve(root).length + 1) : abs
       const fileInput = (abs: string): RunInput => ({ kind: 'file', ref: rel(abs), sha256: normalisedHash(rel(abs), readFileSync(abs)) })
-      work.inputs(id, [fileInput(pcb), ...(hasCase ? [fileInput(base), fileInput(lid)] : []), ...(logoRel ? [fileInput(join(root, logoRel))] : [])])
+      work.inputs(id, [fileInput(pcb), ...(hasCase ? [fileInput(base), fileInput(lid)] : []), ...(screws.length ? [fileInput(recordsPath)] : []), ...(logoRel ? [fileInput(join(root, logoRel))] : [])])
 
       // the board's model: exported by kicad-cli (GLB), or one handed in
       let model: { path: string; format: string; note?: string }
@@ -200,7 +235,7 @@ export const showcase = defineTool({
       const q = QUALITY[a.quality]
       const job = {
         shots, board_xy_mm: bounds, format: model.format, up_axis: 'Z',
-        ...(hasCase ? { case: { look } } : {}), ...(logoRel && !svg ? { logo: true } : {}), ...(svg?.length ? { logo_colours: svg.slice(0, 32).map((c) => [c.hex, c.uses]) } : {}),
+        ...(hasCase ? { case: { look } } : {}), ...(screws.length ? { fasteners: screws } : {}), ...(logoRel && !svg ? { logo: true } : {}), ...(svg?.length ? { logo_colours: svg.slice(0, 32).map((c) => [c.hex, c.uses]) } : {}),
         mask_color: a.mask_color, silk_color: a.silk_color,
         ...(a.width ? { width: a.width } : {}), ...(a.height ? { height: a.height } : {}), ...(a.samples ? { samples: a.samples } : {}),
         defaults: q, denoise: true, device: want, engine: 'cycles',
@@ -256,7 +291,7 @@ export const showcase = defineTool({
           ...(run.jobId ? { job_id: run.jobId } : {}),
           render: { width: r.render.width, height: r.render.height, samples: r.render.samples, denoiser: r.render.denoiser },
           render_seconds: renderSeconds,
-          case: hasCase ? { look } : null,
+          case: hasCase ? { look, screws: screws.map((x) => `${x.size}x${x.length_mm}`) } : null,
           commit,
           blender: r.blender,
           notes,

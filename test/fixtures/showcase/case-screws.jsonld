@@ -1,0 +1,96 @@
+{
+  "@context": {
+    "@vocab": "https://trace-eda.com/ns/trace#"
+  },
+  "@graph": [
+    {
+      "@id": "case:base",
+      "@type": "EnclosurePart",
+      "partKind": "base"
+    },
+    {
+      "@id": "fastener:H1",
+      "@type": "Fastener",
+      "fastenerKind": "screw",
+      "size": "M3",
+      "length": 6,
+      "pilotDiameter": 2.4,
+      "unit": "mm"
+    },
+    {
+      "@id": "mount:H1",
+      "@type": "MountingPoint",
+      "reference": "H1",
+      "positionX": 104,
+      "positionY": 104,
+      "diameter": 3.2,
+      "fastener": {
+        "@id": "fastener:H1"
+      },
+      "unit": "mm"
+    },
+    {
+      "@id": "fastener:H2",
+      "@type": "Fastener",
+      "fastenerKind": "screw",
+      "size": "M3",
+      "length": 6,
+      "pilotDiameter": 2.4,
+      "unit": "mm"
+    },
+    {
+      "@id": "mount:H2",
+      "@type": "MountingPoint",
+      "reference": "H2",
+      "positionX": 140,
+      "positionY": 104,
+      "diameter": 3.2,
+      "fastener": {
+        "@id": "fastener:H2"
+      },
+      "unit": "mm"
+    },
+    {
+      "@id": "fastener:H3",
+      "@type": "Fastener",
+      "fastenerKind": "screw",
+      "size": "M3",
+      "length": 6,
+      "pilotDiameter": 2.4,
+      "unit": "mm"
+    },
+    {
+      "@id": "mount:H3",
+      "@type": "MountingPoint",
+      "reference": "H3",
+      "positionX": 104,
+      "positionY": 136,
+      "diameter": 3.2,
+      "fastener": {
+        "@id": "fastener:H3"
+      },
+      "unit": "mm"
+    },
+    {
+      "@id": "fastener:H4",
+      "@type": "Fastener",
+      "fastenerKind": "screw",
+      "size": "M3",
+      "length": 6,
+      "pilotDiameter": 2.4,
+      "unit": "mm"
+    },
+    {
+      "@id": "mount:H4",
+      "@type": "MountingPoint",
+      "reference": "H4",
+      "positionX": 156,
+      "positionY": 136,
+      "diameter": 3.2,
+      "fastener": {
+        "@id": "fastener:H4"
+      },
+      "unit": "mm"
+    }
+  ]
+}
