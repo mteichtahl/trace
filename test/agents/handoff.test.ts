@@ -148,6 +148,59 @@ describe('the receiving job', () => {
     expect(p.request).toMatch(/you are on that branch.*push to the same branch/s)
     expect(p.request).toMatch(/ask a person \(journey\.ask\) rather than hand the same question back/)
   })
+
+  // log #93: the Implementation specialist's architecture proposal (change #4) waited for review when another
+  // specialist, reading an empty architecture record on main, handed off "propose the architecture" again
+  it('is not started when the specialist asked already has the same deliverable going or waiting for review', async () => {
+    const b = new S3Backend('bucket', 'projects', new FakeS3())
+    const s = { facts: new AgentFactsStore(b, 'o/r'), journey: new JourneyStore(b, 'o/r') }
+    const jobs = new JobIndexStore(b, 'o/r')
+    const at = 1_800_000_000
+    const rt = createHandoffRuntime({ ...s, jobs, repository: 'o/r', now: () => at })
+    const ARCH = { ...REQ, to: 'impl', question: 'Propose the architecture for the board: compare the options for the regulator and the radio module, with scores.', blocks: 'writing the high level design sections', acceptance: ['the options compared, with the criteria and scores'] }
+    const open = [{ number: 4, title: 'Architecture options A/B/C with 6 criteria', head: 'claude/task-architecture' }]
+    const token = rt.register({ ...ASKER, openChanges: async () => open })
+    // the Implementation specialist's job ended; its change waits for review
+    await jobs.update((db) => { putJob(db, 'job-im1', { state: 'succeeded', kind: 'task', agent: 'impl', title: 'Propose the architecture', branch: 'claude/task-architecture', startedAt: at - 900, endedAt: at - 600 }, at); return { result: null } })
+    const h = await raise(s, 'job-th1', ARCH)
+    const started: JobPayload[] = []
+    const startJob = (p: JobPayload) => { started.push(p); return { accepted: true, jobId: 'job-a1' } }
+    const r = await rt.start(token, h.id, startJob)
+    expect(r).toMatchObject({ accepted: false, jobId: 'job-im1', covered: { job: 'job-im1', change: { number: 4 }, state: 'review' } })
+    expect(r.reason).toMatch(/Implementation specialist is already doing the architecture proposal: change #4 .* waits for a person's review/)
+    expect(started).toHaveLength(0)
+    const row = (await s.facts.read((db) => loadHandoffs(db))).result.find((x) => x.id === h.id)
+    expect(row).toMatchObject({ state: 'failed', why: expect.stringMatching(/^not started: /) })
+    // asking the same again is refused by the guards (it is closed, not answered)
+    await expect(raise(s, 'job-th1', ARCH)).rejects.toThrow(/asked the Implementation specialist this before/)
+
+    // once that change is accepted (no longer open), a new proposal may be asked for
+    open.length = 0
+    const again = await raise(s, 'job-th1', { ...ARCH, question: `${ARCH.question} Include the battery option.` })
+    expect(await rt.start(token, again.id, startJob)).toMatchObject({ accepted: true })
+    expect(started).toHaveLength(1)
+  })
+
+  it('is not started while a job of the asked specialist is still working on the same document; other work is started', async () => {
+    const b = new S3Backend('bucket', 'projects', new FakeS3())
+    const s = { facts: new AgentFactsStore(b, 'o/r'), journey: new JourneyStore(b, 'o/r') }
+    const jobs = new JobIndexStore(b, 'o/r')
+    const at = 1_800_000_000
+    const rt = createHandoffRuntime({ ...s, jobs, repository: 'o/r', now: () => at })
+    const token = rt.register(ASKER)
+    await jobs.update((db) => { putJob(db, 'job-v1', { state: 'running', kind: 'task', agent: 'verify', title: 'Write the test plan section of high-level-design.md', startedAt: at - 60, beatAt: at - 10 }, at); return { result: null } })
+    const started: JobPayload[] = []
+    const startJob = (p: JobPayload) => { started.push(p); return { accepted: true, jobId: `job-a${started.length + 1}` } }
+    const doc = await raise(s, 'job-th1', { ...REQ, to: 'verify', question: 'Add the thermal limits to the verification table of the high level design document.' })
+    expect(await rt.start(token, doc.id, startJob)).toMatchObject({ accepted: false, covered: { job: 'job-v1', change: null, state: 'working' } })
+    // a question about something else goes ahead, though the same specialist is busy
+    const other = await raise(s, 'job-th1', { ...REQ, to: 'verify', question: 'Which test covers the 85 °C ambient corner of the LDO U3?' })
+    expect(await rt.start(token, other.id, startJob)).toMatchObject({ accepted: true })
+    // a lost job (no heartbeat) covers nothing
+    await jobs.update((db) => { putJob(db, 'job-v1', { beatAt: at - 3600 }, at); return { result: null } })
+    const third = await raise(s, 'job-th1', { ...REQ, to: 'verify', question: 'Add the thermal limits to the verification table of the high level design, at 85 °C.' })
+    expect(await rt.start(token, third.id, startJob)).toMatchObject({ accepted: true })
+  })
 })
 
 describe('POST /handoff', () => {

@@ -370,6 +370,17 @@ export const openChangeIn = (gh: { rest: { pulls: { list(a: { owner: string; rep
     return open.some((p) => p.head.repo?.full_name?.toLowerCase() === repository.toLowerCase())
   }
 
+/**
+ * The open pull requests of `repository` itself (not a fork's), newest first, as their number, title and head branch:
+ * what a hand-off reads to see whether the specialist asked already has the same work waiting for review.
+ */
+export const openChangesIn = (gh: { rest: { pulls: { list(a: { owner: string; repo: string; state: 'open'; per_page: number; sort: 'created'; direction: 'desc' }): Promise<{ data: Array<{ number: number; title: string; head: { ref: string; repo: { full_name: string } | null } }> }> } } }, repository: string) =>
+  async (): Promise<{ number: number; title: string; head: string }[]> => {
+    const [owner = '', repo = ''] = repository.split('/')
+    const open = (await gh.rest.pulls.list({ owner, repo, state: 'open', per_page: 100, sort: 'created', direction: 'desc' })).data
+    return open.filter((p) => p.head.repo?.full_name?.toLowerCase() === repository.toLowerCase()).map((p) => ({ number: p.number, title: p.title, head: p.head.ref }))
+  }
+
 // ------------------------------------------------------------------ Claude
 
 const ResultMessage = z.object({
@@ -771,7 +782,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const dtoken = delegate && delegations
       ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes, prompts: layers })
       : undefined
-    const htoken = role === 'ask' && handoffs ? handoffs.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, enabled: cfg.agents.enabled, limits, ...(branch !== base.defaultBranch ? { branch } : {}) }) : undefined
+    const htoken = role === 'ask' && handoffs ? handoffs.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, enabled: cfg.agents.enabled, limits, openChanges: openChangesIn(gh, p.repository), ...(branch !== base.defaultBranch ? { branch } : {}) }) : undefined
     const handoffEnvOf: Record<string, string> = role === 'answer' && answering ? { TRACE_HANDOFF_ID: answering.id }
       : htoken && d.delegateUrl ? handoffAskEnv({ url: d.delegateUrl, token: htoken, enabled: cfg.agents.enabled, limits }) : {}
     const waits = openWaitRelay(d, ctx.jobId)

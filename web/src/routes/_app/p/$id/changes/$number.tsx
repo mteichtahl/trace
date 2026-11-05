@@ -201,7 +201,7 @@ function Review() {
             />
           </section>
           <section className={cn('rounded-xl border p-5', d.recommendation.verdict === 'accept' ? 'border-primary/40 bg-primary-soft' : 'bg-card')} aria-labelledby="rec">
-            <h3 id="rec" className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary"><Sparkles className="size-3.5" aria-hidden /> {recommendationWords(d.recommendation)}</h3>
+            <h3 id="rec" className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary"><Sparkles className="size-3.5" aria-hidden /> {recommendationWords(d.recommendation, d.working)}</h3>
             <p className="mt-2 text-sm">{d.recommendation.why || 'trace will recommend once the checks have run.'}</p>
           </section>
         </aside>

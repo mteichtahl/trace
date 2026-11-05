@@ -94,7 +94,7 @@ export function readSteps(v: unknown): StageStep[] | undefined {
       id: str(s.id) ?? `step-${i + 1}`, text: String(s.text),
       owner: STEP_OWNERS.has(s.owner as StepOwner) ? (s.owner as StepOwner) : 'contributors',
       state: STEP_STATES.has(s.state as StepState) ? (s.state as StepState) : 'later',
-      ref, ...(str(s.who) ? { who: String(s.who) } : {}),
+      ref, ...(str(s.who) ? { who: String(s.who) } : {}), ...(s.alongside === true ? { alongside: true } : {}),
     }
   })
 }
@@ -141,6 +141,7 @@ export function readChangeSummary(c: Obj): ChangeSummary {
     verdict: verdictOf({ checks, mergeable, verdict: c.verdict }),
     ...(readLink(c.builds_on) ? { builds_on: readLink(c.builds_on)! } : {}),
     ...(arr(c.built_on_by).length ? { built_on_by: arr(c.built_on_by).map(readLink).filter((l): l is ChangeLink => l !== null) } : {}),
+    ...(c.working === true ? { working: true } : {}),
   }
 }
 

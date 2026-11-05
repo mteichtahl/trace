@@ -139,6 +139,8 @@ export interface StageStep {
   ref: { kind: 'criterion' | 'gate' | 'question' | 'change'; id: string } | null
   /** a named person's name, when owner is person */
   who?: string
+  /** trace's step it works on at the same time as the person's step now (a change it does not wait on) */
+  alongside?: boolean
   /** an in-app address that does the step (its guided skill, gate or change), worked out by the reader */
   to?: string
 }
@@ -283,6 +285,8 @@ export interface ChangeSummary {
   builds_on?: ChangeLink
   /** the open changes built on this one, which follow it into the design */
   built_on_by?: ChangeLink[]
+  /** the job behind it is still working: it is not ready to review yet, whatever its checks say */
+  working?: boolean
 }
 
 /** An answer a change still waits on (ChangeSummary.answers). */

@@ -60,7 +60,14 @@ Two rules keep it trustworthy:
      commit changed a record a document is written from: the hooks function asks `hook.docs`, which reads the commit's
      files and compares its project database with its parent's table by table. A commit of only the documents, or of
      only the runs Scribe makes for them, starts nothing, so Scribe's own change never starts Scribe again;
-   - **a gate signed** whose new stage needs documents (from Architect on).
+   - **a stage's design work landed**: a stage's documents are written from its design, so they wait for it. While a
+     criterion of the current stage (other than the documents criterion and the release report's review after it) is
+     not met or waived, a push, a gate signed and the nightly drift check start nothing and say what the documents
+     wait for. The push that lands the last of it starts Scribe, and so does the person's act that does (a guided
+     review submitted, a question answered, a criterion waived or signed off), since no push follows those. A gate
+     signed starts Scribe at once only when the stage it opens has no design work of its own. Started when a stage
+     opened, Scribe wrote "pending" in every section the stage was about and asked how to write the rest (test-esp32
+     #58, #98, #120).
    One Scribe job runs per project at a time. It compares with the commit the documents were last written at (their
    front matter), not with the push that started it, so a missed or skipped event is caught by the next one.
 3. **Surgical updates.** Scribe works out which sections the change touched and rewrites only those, then opens a

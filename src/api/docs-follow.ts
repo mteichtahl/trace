@@ -7,7 +7,12 @@
  *                                  database compared with its parent's table by table, src/docs/stale.ts). A commit
  *                                  that changed only the documents, or only runs Scribe makes for them, starts nothing,
  *                                  so Scribe's own change never starts Scribe again
- *   a gate signed                  (gate.sign): the stage that opens may need new documents or new sections
+ *   a stage's design work landed   (docsAfterDesign): the stage's documents are written from its design, so they
+ *                                  start once its criteria (but the documents' own) are met or waived: a push that
+ *                                  meets the last of them (hook.docs), or the person's act that does (a guided
+ *                                  review submitted, a question answered, a criterion signed off). A stage opening
+ *                                  starts nothing while it has design work to do (gate.sign): started then, Scribe
+ *                                  wrote "pending" in every section the stage was about (test-esp32 #58, #98, #120)
  *   a revision cut                 (gate.sign's release, journey.snapshot): the documents brought up to date and
  *                                  printed as the revision's release copies (docsReleaseRequest, src/docs/printed.ts)
  *   the nightly drift check        (hook.drift, the hooks function's schedule at DRIFT_HOUR_UTC): anything that
@@ -26,7 +31,10 @@ import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { DOC_KINDS, DOCS, docsFor, type DocKind, type SourceKind } from '../docs/catalog.js'
 import { parseDoc } from '../docs/markers.js'
 import { sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
-import { type Context, label, PROJECT_DB_PATH } from './action-kit.js'
+import { designWorkLeft, loadJourney, mergeAgentFacts, type CriterionRow, type JourneyRecord } from '../core/journey.js'
+import { type Context, agentFacts, journeyStore, label, PROJECT_DB_PATH } from './action-kit.js'
+import { tracePulls } from './actions-changes.js'
+import { creditedAgent } from './changes.js'
 
 /** What Scribe is asked. `why`: what happened, in a person's words. Pure. */
 export function docsRequest(why: string, o: { stage?: StageId | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): string {
@@ -107,17 +115,86 @@ export async function documentsAt(ctx: Context, repo: string, ref: string, stage
   return { missing, written }
 }
 
-/** Start Scribe on the project, unless one of its jobs is already queued or running (`queue`: start it anyway, behind). */
-export async function startScribe(ctx: Context, repo: string, request: string, o: { queue?: boolean } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string }> {
+/**
+ * Scribe's change still waiting for review, when there is one (the newest): a second Scribe job on its own branch would
+ * edit the same documents, and once one is accepted the other is in a text conflict nothing merges by itself (log
+ * #110). None when the changes cannot be read: Scribe then starts on its own branch as before.
+ */
+export async function openScribeChange(ctx: Context, repo: string): Promise<{ number: number; title: string; branch: string; defaultBranch: string } | null> {
+  const { changes, rule } = await tracePulls(ctx, repo)
+  const docs = changes.filter(({ job }) => creditedAgent(job) === 'docs' || job.agent === 'docs').at(-1)
+  return docs && rule.defaultBranch ? { number: docs.pull.number, title: docs.pull.title, branch: docs.pull.head, defaultBranch: rule.defaultBranch } : null
+}
+
+/** What Scribe is asked when it carries on on its open change: bring that branch up to date first, then the request. */
+export function onOpenChangeRequest(request: string, c: { number: number; title: string; branch: string; defaultBranch: string }): string {
+  return [
+    `Your change #${c.number} ("${c.title}") still waits for a person's review and edits the same documents, so this work goes on its branch, ${c.branch}, and lands with it: two changes to one document would conflict once either is accepted.`,
+    `First bring the branch up to date: git fetch origin ${c.defaultBranch}, then git merge origin/${c.defaultBranch} (never a rebase or a force-push). The project database merges by itself; if a document's text conflicts, keep what each side added and write the section again from the records, then commit the merge.`,
+    'Then:',
+    request,
+    `Push to ${c.branch}, so its change carries both.`,
+  ].join('\n')
+}
+
+/**
+ * Start Scribe on the project, unless one of its jobs is already queued or running (`queue`: start it anyway, behind).
+ * When Scribe's last change still waits for review, it carries on on that change's branch rather than open a second
+ * change on the same documents (log #110).
+ */
+export async function startScribe(ctx: Context, repo: string, request: string, o: { queue?: boolean } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; change?: number }> {
   try {
     const jobs = await ctx.deps.jobs()
     const busy = o.queue ? undefined : (await jobs.jobStatus()).find((j) => j.repository === repo && j.agent === 'docs' && (j.state === 'queued' || j.state === 'running'))
     if (busy) return { skipped: `Scribe is already working on this project (job ${busy.id}); it compares with the documents' last commit, so it sees this too.` }
-    const r = await jobs.startJob({ kind: 'task', repository: repo, request, agent: 'docs', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
-    return r.accepted ? { jobId: r.jobId, started: 'The Documentation agent brings the project\'s documents up to date.' } : { jobError: r.reason ?? 'trace did not accept the job.' }
+    // a revision's release copies (queue) are printed on their own change, from the default branch as accepted
+    const open = o.queue ? null : await openScribeChange(ctx, repo).catch(() => null)
+    const r = await jobs.startJob({
+      kind: 'task', repository: repo, request: open ? onOpenChangeRequest(request, open) : request, agent: 'docs', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub,
+      ...(open ? { branch: open.branch } : {}),
+    })
+    if (!r.accepted) return { jobError: r.reason ?? 'trace did not accept the job.' }
+    return open
+      ? { jobId: r.jobId, change: open.number, started: `The Documentation agent brings the documents up to date on its change #${open.number}, which still waits for review, so the two never conflict.` }
+      : { jobId: r.jobId, started: 'The Documentation agent brings the project\'s documents up to date.' }
   } catch (e) {
     return { jobError: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/** The project's record with the agents' facts merged in (their checks meet trace's criteria), or null before a journey. */
+export async function recordNow(ctx: Context, repo: string): Promise<JourneyRecord | null> {
+  const [rec, facts] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), agentFacts(ctx, repo).catch(() => null)])
+  return rec.result && facts ? mergeAgentFacts(rec.result, facts) : rec.result
+}
+
+/** Why the documents wait, in words: the design work of the stage still to land. */
+export const waitWords = (r: JourneyRecord, left: readonly CriterionRow[]): string =>
+  `${STAGE_NAMES[r.journey.currentStage]}'s documents are written once its design work lands; still to come: ${left.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`
+
+/**
+ * Start Scribe on the current stage's documents, unless that stage still has design work to land (designWorkLeft):
+ * then nothing starts and `waiting` says what it waits for; the push or the person's act that lands the last of it
+ * starts Scribe then (docsAfterDesign). `rec`: the record with the agents' facts, when the caller has it.
+ */
+export async function startStageScribe(ctx: Context, repo: string, why: string, o: { rec?: JourneyRecord | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; waiting?: string }> {
+  const r = o.rec ?? await recordNow(ctx, repo)
+  if (!r) return { skipped: 'The project has no journey yet.' }
+  const left = designWorkLeft(r)
+  if (left.length) return { waiting: waitWords(r, left) }
+  return startScribe(ctx, repo, docsRequest(why, { stage: r.journey.currentStage, ...(o.records ? { records: o.records } : {}), ...(o.also ? { also: o.also } : {}) }))
+}
+
+/**
+ * After a person's act that can meet a criterion (a guided review submitted, a question answered, a criterion signed
+ * off): when it landed the last of the stage's design work (`before`: what was left before it, from the same record),
+ * Scribe writes the stage's documents now. No push follows these acts, so hook.docs would not see them.
+ */
+export async function docsAfterDesign(ctx: Context, repo: string, before: readonly CriterionRow[] | null): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; waiting?: string }> {
+  if (!before?.length) return {}
+  const r = await recordNow(ctx, repo)
+  if (!r || r.journey.currentStage === 'define' || designWorkLeft(r).length) return {}
+  return startStageScribe(ctx, repo, `${STAGE_NAMES[r.journey.currentStage]}'s design work is done.`, { rec: r, also: ['journey'] })
 }
 
 /**
@@ -125,7 +202,7 @@ export async function startScribe(ctx: Context, repo: string, request: string, o
  * last written (each document's front-matter commit compared with the default branch), or a document the stage needs
  * is missing; if so, Scribe is started. Before Architect there is nothing to check.
  */
-export async function driftOf(ctx: Context, repo: string, stage: StageId): Promise<{ head: string; records: SourceKind[]; missing: DocKind[]; since: string[]; started?: string; skipped?: string; jobId?: string; jobError?: string }> {
+export async function driftOf(ctx: Context, repo: string, stage: StageId): Promise<{ head: string; records: SourceKind[]; missing: DocKind[]; since: string[]; started?: string; skipped?: string; jobId?: string; jobError?: string; waiting?: string }> {
   const gh = await ctx.deps.github()
   const { sha } = await gh.defaultBranch(repo)
   const docs = await documentsAt(ctx, repo, sha, stage)
@@ -143,5 +220,6 @@ export async function driftOf(ctx: Context, repo: string, stage: StageId): Promi
     out.missing.length ? ` (missing: ${out.missing.map((k) => DOCS[k].title.toLowerCase()).join(', ')})` : '',
     '.',
   ].join('')
-  return { ...out, ...(await startScribe(ctx, repo, docsRequest(why, { stage, records: out.records }))) }
+  // the stage's design work still to land: the documents wait for it, as they do on a push
+  return { ...out, ...(await startStageScribe(ctx, repo, why, { records: out.records })) }
 }

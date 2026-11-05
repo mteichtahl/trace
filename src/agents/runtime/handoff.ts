@@ -31,6 +31,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import { AgentFactsStore, projectsBackend, projectsFromEnv } from '../../core/agent-facts.js'
+import { type Covering, type Work, coveredWords, coveringWork } from '../../core/deliverables.js'
 import { type HandoffFact, HandoffError, type Limits, loadDeclines, loadHandoffs, markFailed, markStarted } from '../../core/handoffs.js'
 import { JourneyStore } from '../../core/journey-store.js'
 import { JobIndexStore, isLive, loadJobs } from '../../core/job-index.js'
@@ -49,6 +50,12 @@ export interface AskingJob {
   /** agents.enabled and the limits, from the default branch's settings */
   enabled: readonly SpecialistKind[]
   limits: Limits
+  /**
+   * The project's open pull requests (number, title, head branch), read with this job's GitHub token: a hand-off is not
+   * started when the specialist asked already has the same deliverable waiting for review (coveringWork). Absent, or
+   * when GitHub cannot be read: only the jobs still working are looked at.
+   */
+  openChanges?: (() => Promise<{ number: number; title: string; head: string }[]>) | undefined
 }
 
 /** What the receiving job's runner asks of the hand-off it answers. */
@@ -72,7 +79,7 @@ export interface HandoffRuntime extends HandoffRunner {
    * Start the receiving job for one of the token's own hand-offs (`startJob` is given the asking job, so the new job
    * can run in its session). Throws HandoffStartError (with an HTTP status).
    */
-  start(token: string, id: string, startJob: (p: JobPayload, asker: AskingJob) => Accepted): Promise<Accepted & { handoff: string }>
+  start(token: string, id: string, startJob: (p: JobPayload, asker: AskingJob) => Accepted): Promise<Accepted & { handoff: string; covered?: Covering }>
   /**
    * The receiving job is about to start its work (after its turn in the queue): its hand-off is marked started with its
    * id (if the runtime has not yet), or, when a person declined it meanwhile, closed and the reason returned.
@@ -110,6 +117,21 @@ export function createHandoffRuntime(o: { facts: AgentFactsStore; journey: Pick<
     for (const e of byJob.values()) if (same(e.token, token)) return e.job
     throw new HandoffStartError('not a running specialist job: a hand-off is refused', 403)
   }
+  /**
+   * The asked specialist's work that already covers hand-off `h` (coveringWork): its jobs from the index, newest first,
+   * each with the open change on its branch. Whatever cannot be read (no index here, GitHub refusing) is left out:
+   * a hand-off is then started as before, never refused on a guess.
+   */
+  const coveredBy = async (h: HandoffFact, asker: AskingJob): Promise<Covering | null> => {
+    if (!o.jobs) return null
+    const [rows, open] = await Promise.all([
+      o.jobs.read((db) => loadJobs(db)).then((x) => x.result, () => []),
+      asker.openChanges ? asker.openChanges().catch(() => []) : Promise.resolve([]),
+    ])
+    const byHead = new Map(open.map((c) => [c.head, { number: c.number, title: c.title }]))
+    const work: Work[] = rows.map((job) => ({ job, change: job.branch ? byHead.get(job.branch) ?? null : null }))
+    return coveringWork([h.question, ...h.acceptance].join('\n'), h.toKind, work, { at: (o.now ?? (() => Date.now() / 1000))(), except: asker.jobId })
+  }
   const declines = async (): Promise<Map<string, { reason: string; by: string }>> =>
     new Map((await o.journey.read((db) => loadDeclines(db))).result.map((d) => [d.handoffId, { reason: d.reason, by: d.by }]))
   return {
@@ -126,6 +148,13 @@ export function createHandoffRuntime(o: { facts: AgentFactsStore; journey: Pick<
       if (h.state !== 'requested') return { accepted: false, jobId: h.jobId ?? '', reason: `it is ${h.state} already`, handoff: id }
       const d = (await declines()).get(id)
       if (d) return { accepted: false, jobId: '', reason: `declined by ${d.by}: ${d.reason}`, handoff: id }
+      // the specialist asked is already doing this (log #93): a second job would make a second, clashing proposal
+      const covering = await coveredBy(h, job)
+      if (covering) {
+        const said = coveredWords(covering, `The ${SPECIALIST_WORDS[h.toKind]} specialist`)
+        await o.facts.update((db) => ({ result: markFailed(db, id, `not started: ${said}`) }))
+        return { accepted: false, jobId: covering.job, reason: said, handoff: id, covered: covering }
+      }
       let r: Accepted
       try {
         r = startJob(handoffPayload(h, o.repository, job.branch), job)

@@ -68,10 +68,15 @@ export function ownerWord(s: Pick<StageStep, 'owner' | 'who'>): string {
   }
 }
 
-/** The small label beside a step: "trace · done", "You · now", "trace · after you", "An admin". */
+/** The small label beside a step: "trace · done", "You · now", "trace · after you", "trace · alongside you", "An admin". */
 export function stepLabel(steps: StageStep[], i: number): string {
   const s = steps[i]!
   const who = ownerWord(s)
+  // trace works on it while the person reviews a change it does not wait on: never "after you"
+  if (s.alongside && s.state !== 'done' && s.state !== 'waived' && s.state !== 'now') {
+    const now = steps.find((x) => x.state === 'now')
+    return now?.owner === 'you' ? `${who} · alongside you` : `${who} · working`
+  }
   switch (s.state) {
     case 'done': return `${who} · done`
     case 'waived': return `${who} · waived`
@@ -137,6 +142,8 @@ export function answersLine(xs: readonly PendingAnswer[]): string {
 export function changeLine(c: ChangeSummary): string {
   if (c.checks_denied) return 'trace may not read its checks: an admin gives trace\'s GitHub token "Actions: read" and "Commit statuses: read".'
   // a stacked change whose own checks are fine: it waits for the one below it
+  // its job is still at it: passed checks say nothing yet about what it pushes next
+  if (c.working && c.state === 'open') return 'trace is still working on this change. Ready to review when its job finishes.'
   if (c.verdict === 'blocked' && c.state === 'open' && c.builds_on) return `Builds on "${c.builds_on.title}". Accept that one first; this one follows it.`
   switch (c.verdict) {
     case 'ready': return `Ready to review. ${checksWords(c.checks)}.`
@@ -162,7 +169,8 @@ export function blockedLine(c: Pick<ChangeSummary, 'state' | 'draft' | 'mergeabl
 }
 
 /** trace's recommendation as the box says it: "trace recommends accepting." */
-export function recommendationWords(r: ChangeDetail['recommendation']): string {
+export function recommendationWords(r: ChangeDetail['recommendation'], working?: boolean): string {
+  if (working && r.verdict === 'wait') return 'trace is still working on this change.'
   switch (r.verdict) {
     case 'accept': return 'trace recommends accepting.'
     case 'ask': return 'trace recommends asking for changes.'
