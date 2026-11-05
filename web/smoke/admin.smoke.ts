@@ -45,8 +45,10 @@ test('operations: dashboards load with a time range', async ({ app, page }) => {
 
 test('agents and tools list with their status', async ({ app, page }) => {
   await app.open('/agents')
-  await expect(page.getByRole('heading', { name: /^Agents \(\d+\)/ })).toBeVisible()
-  await app.tableHasRows()
+  await expect(page.getByRole('heading', { name: 'Agents and tools' })).toBeVisible()
+  // the map: a box per agent, each saying its status
+  await expect(page.getByRole('group', { name: /^Agents map/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Verification: (Working|Queued|Idle|Stuck|Waiting on a person)\./ })).toBeVisible()
   await page.getByRole('navigation', { name: 'Jump to' }).getByRole('link', { name: 'Tools' }).click()
   await expect(page.getByRole('heading', { name: /^Tools/ })).toBeInViewport()
 })

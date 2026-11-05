@@ -138,6 +138,10 @@ function Agents() {
           <h1 className="text-2xl font-semibold tracking-tight">Agents and tools</h1>
           <p className="mt-1 text-sm text-muted-foreground" aria-live="polite">{summary}</p>
         </div>
+        <nav aria-label="Jump to" className="inline-flex rounded-lg bg-muted p-1 text-sm">
+          <a href="#map" className="rounded-md bg-background px-3 py-1.5 font-medium shadow-sm">Agents ({views.length})</a>
+          <a href="#tools-h" className="rounded-md px-3 py-1.5 text-muted-foreground hover:text-foreground">Tools</a>
+        </nav>
         {work.per.length > 1 && (
           <div role="radiogroup" aria-label="Projects shown" className="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1 text-sm">
             <ProjectChip on={!only} onClick={() => setOnly(null)}>All projects</ProjectChip>
@@ -196,7 +200,7 @@ function Agents() {
         </section>
       )}
 
-      <section aria-label="Agents map" className="mt-8">
+      <section id="map" aria-label="Agents map" className="mt-8 scroll-mt-20">
         {work.loading ? (
           <Loading><SkeletonRows rows={4} /></Loading>
         ) : phone ? (
