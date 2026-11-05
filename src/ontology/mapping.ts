@@ -80,7 +80,10 @@ const specialist = { ref: 'specialist', type: 'Specialist' } as const
 const blockParts: FieldMap = {
   class: 'BlockPart',
   typeIf: { field: 'key', class: 'KeyPart' },
-  fields: { mpn: { prop: 'refersToPart', ref: (v) => [`part`, mpnKey(v)] }, role: { prop: 'role' }, key: { ignore: 'whether it is a key part: the node is typed KeyPart' } },
+  fields: {
+    mpn: { prop: 'refersToPart', ref: (v) => [`part`, mpnKey(v)] }, role: { prop: 'role' }, key: { ignore: 'whether it is a key part: the node is typed KeyPart' },
+    off_board: { prop: 'isOffBoard', as: 'bool' }, size_mm: { prop: 'boundingBox', as: 'json' },
+  },
 }
 /** arch_connections.from_block / to_block: a block of the same option */
 const block: RefTarget = (v, row) => ['block', `${String(row.option)}/${v}`]

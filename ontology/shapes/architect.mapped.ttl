@@ -38,6 +38,36 @@ tsh:ArchitectMapped a sh:NodeShape ;
         """ ;
     ] .
 
+# A requirement that depends on a part off the board (needsOffBoardPart, from its words: src/ontology/case-needs.ts),
+# such as a display module on a header, is mapped only when a block serving it names that part, off the board and with
+# its size: a block whose only part is the header leaves the display unchosen until Layout, where the case needs its
+# size (test-esp32 run 2, #136). Waived on its own, like any finding.
+tsh:ArchitectMappedOffBoard a sh:NodeShape ;
+    rdfs:label "A part off the board a requirement depends on is chosen" ;
+    rdfs:comment "Backs the criterion architect.mapped." ;
+    tsh:criterion "architect.mapped" ;
+    sh:targetClass trace:Requirement ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "\"{?text}\" depends on a {?what} off the board, and no block serving it names one with its size. Add it as a key part." ;
+        sh:select """
+            SELECT $this ?text ?what WHERE {
+                $this trace:isLive true ; trace:text ?text ; trace:needsOffBoardPart ?what .
+                ?option a trace:ArchitectureOption ; trace:isCurrentOption true .
+                FILTER EXISTS {
+                    ?b trace:forOption ?option ; trace:servesRequirement $this .
+                    FILTER NOT EXISTS { ?b trace:status "withdrawn" }
+                }
+                FILTER NOT EXISTS {
+                    ?block trace:forOption ?option ; trace:servesRequirement $this ; trace:usesPart ?part .
+                    FILTER NOT EXISTS { ?block trace:status "withdrawn" }
+                    ?part trace:isOffBoard true ; trace:boundingBox ?size .
+                }
+            }
+        """ ;
+    ] .
+
 # Nothing to map is not "every requirement is mapped": with no live requirement, or no architecture proposed, the
 # criterion is not met. Checked once, on the journey.
 tsh:ArchitectMappedHasSomething a sh:NodeShape ;

@@ -167,7 +167,7 @@ export interface CriterionView { id: string; name: string; weight: number; descr
 export interface ScoreView { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }
 export interface OptionView {
   id: string; name: string; summary: string; recommended: boolean; why: string | null; gives_up: string | null; risks: string[]
-  blocks: { id: string; name: string; role: string | null; parts: { mpn: string; role?: string | undefined; key?: boolean | undefined }[]; serves: string[]; x: number; y: number }[]
+  blocks: { id: string; name: string; role: string | null; parts: { mpn: string; role?: string | undefined; key?: boolean | undefined; off_board?: boolean | undefined; size_mm?: number[] | undefined }[]; serves: string[]; x: number; y: number }[]
   connections: { id: string; from: string; to: string; kind: string; label: string }[]
   /** weighted total of its scores on the criteria (the person's where given, else trace's), 0 when unscored */
   total: number

@@ -411,6 +411,7 @@ export const FOLLOW_ON: Readonly<Record<string, { after: readonly string[]; agen
       'Read the accepted requirements (verify.requirements list) for the size, mounting, openings and environment the case must meet, and the board as it now is on the default branch.',
       'With no mechanical/case.json yet: mech_board first (a part at the 5 mm default height needs its Height from its datasheet or a person), then mech_options with ask: true, and mech_init with the design the answer names. With a case already there, mech_fit says whether its last build is stale.',
       'mech_build, then read every clash and gap by part and fix it (mech_settings with its reason, or an edit to mechanical/case.py), rebuilding after each change. After each build, shape_check layout.fit records the criterion; never journey_check it.',
+      'The fit check models the board\'s own parts only. A requirement that puts more in the case (a window for a display, a module on a header, a battery) keeps layout.fit unmet, naming it: build the case to hold it (the part\'s size from its datasheet; the window or mount in mechanical/case.py), then ask the person to check it and waive that one finding. Never report the fit met for the bare board alone.',
       'A change the case forces on the board or a requirement is a question for a person (journey.ask), not yours to make.',
     ].join('\n'),
   },

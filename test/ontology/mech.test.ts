@@ -15,7 +15,8 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { Bridge } from '../../src/core/bridge.js'
 import { normalisedHash } from '../../src/core/normalise.js'
-import { Work } from '../../src/core/store.js'
+import { Work, applyProjectSchema } from '../../src/core/store.js'
+import '../../src/tools/verify/db.js' // the requirements table
 import { buildGraph, checkRecords, nodeIri } from '../../src/ontology/graph.js'
 import { freshness, inputHash } from '../../src/ontology/lineage.js'
 import { ENGINE_CLASSES, ENGINE_PROPERTIES, INTEGER_KEYS, JSON_KEYS, addCaseRecords, latestCaseBuild } from '../../src/ontology/mech.js'
@@ -206,6 +207,33 @@ describe.skipIf(!shacl)('layout.fit over the newest case build (pySHACL)', () =>
     expect((await check(db, files('good', moved('J1', 103, 113)))).findings.map((f) => f.message))
       .toEqual([`The case build is out of date: what the case depends on of ${BOARD} changed since mech.build ran. Run mech.build again.`])
     expect((await check(db)).findings.map((f) => f.message)).toEqual(['trace could not tell whether the case build still stands: check layout.fit where the project\'s files are.'])
+  }, 60_000)
+
+  it('is not met while a requirement puts more than the bare board in the case: a window, a display on a header (#135)', async () => {
+    const { db } = project('good')
+    applyProjectSchema(db)
+    const t = Date.now() / 1000
+    const req = (id: string, text: string, acceptance: string | null = null): void => {
+      db.prepare('INSERT INTO requirements (id, text, kind, acceptance, status, tags, created, updated, by) VALUES (?,?,?,?,?,?,?,?,?)').run(id, text, 'functional', acceptance, 'accepted', '[]', t, t, 'impl')
+    }
+    // test-esp32's: the case's own size is the bare board's to meet, so it asks nothing more
+    req('REQ-572db5', 'The case is no larger than 60 x 45 x 20 mm.')
+    expect(await check(db, files('good'))).toEqual({ conforms: true, findings: [] })
+    req('REQ-bcbf0b', 'A two-part 3D-printed case is in scope, with the OLED visible through a window and the USB-C connector reachable from outside.')
+    req('REQ-f79396', 'The display connects on a 4-pin 2.54 mm header (3.3 V, GND, SCL, SDA); the ESP32 is I2C controller sending to the display at 400 kHz, address 0x3C.')
+    const r = await check(db, files('good'))
+    expect(r.conforms).toBe(false)
+    expect(r.findings.map((f) => [f.focus, f.message])).toEqual([
+      [iri('requirement', 'REQ-bcbf0b'), '"A two-part 3D-printed case is in scope, with the OLED visible through a window and the USB-C connector reachable from outside." needs a window in the case, with the display behind it. The fit check covers the bare board only: check the case holds it, then waive this.'],
+      [iri('requirement', 'REQ-f79396'), '"The display connects on a 4-pin 2.54 mm header (3.3 V, GND, SCL, SDA); the ESP32 is I2C controller sending to the display at 400 kHz, address 0x3C." needs the display off the board, in the case. The fit check covers the bare board only: check the case holds it, then waive this.'],
+    ].sort())
+    // each is waived on its own, by the requirement it is about, so the waiver outlasts a rebuild
+    const ids = r.findings.map((f) => `layout.fit@${f.focus}`).sort()
+    expect(ids).toEqual([`layout.fit@${iri('requirement', 'REQ-bcbf0b')}`, `layout.fit@${iri('requirement', 'REQ-f79396')}`])
+    expect(withWaivers('layout.fit', r.findings as never, new Set(ids.slice(0, 1))).filter((f) => !f.waived).map((f) => f.focus)).toEqual([iri('requirement', 'REQ-f79396')])
+    // a requirement no longer standing asks nothing of the case
+    db.prepare("UPDATE requirements SET status = 'rejected' WHERE id IN ('REQ-bcbf0b', 'REQ-f79396')").run()
+    expect(await check(db, files('good'))).toEqual({ conforms: true, findings: [] })
   }, 60_000)
 
   it('nothing built is not met', async () => {

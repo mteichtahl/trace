@@ -6,6 +6,12 @@
 #   from its lineage against the repository's files), the case closes around the board, and every problem and every
 #   failing rule is gone or waived on its own
 #
+#   and not met while a live requirement asks the case for more than the bare board (needsInCase, worked out from its
+#   words: src/ontology/case-needs.ts): a window, or a part off the board such as a display module on a header. The fit
+#   check models the board's own parts and edge openings only, so "the board fits" would be said of a case the display
+#   cannot fit (test-esp32 run 2, #135). Each such requirement is one finding, waived on its own once a person has
+#   checked the case holds it
+#
 # A problem is named by what it is about (case-finding:clash/J1/lid), so a waiver of it (a waiver of kind finding on
 # layout.fit@<its identifier>) outlasts a rebuild that finds the same problem; a different problem needs its own.
 # Each finding names the part and says what to do next, in plain words (no acronyms).
@@ -74,6 +80,23 @@ tsh:LayoutFitBuild a sh:NodeShape ;
         sh:message "The case does not close around the whole board: change the case and build again." ;
         sh:select """
             SELECT $this WHERE { $this trace:enclosed false }
+        """ ;
+    ] .
+
+tsh:LayoutFitNeeds a sh:NodeShape ;
+    rdfs:label "What the requirements put in the case is checked" ;
+    rdfs:comment "Backs the criterion layout.fit." ;
+    tsh:criterion "layout.fit" ;
+    sh:targetClass trace:Requirement ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "\"{?text}\" needs {?need}. The fit check covers the bare board only: check the case holds it, then waive this." ;
+        sh:select """
+            SELECT $this ?text ?need WHERE {
+                $this trace:isLive true ; trace:needsInCase ?need ; trace:text ?text .
+                FILTER EXISTS { ?f a trace:FitCheck }
+            }
         """ ;
     ] .
 
