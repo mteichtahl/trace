@@ -904,7 +904,7 @@ trace:inRenderSet a owl:ObjectProperty ;
 
 trace:shotKind a owl:DatatypeProperty ;
     rdfs:label "shot" ;
-    rdfs:comment "What the picture shows: board, board-top, board-bottom, case, board-in-case or exploded." ;
+    rdfs:comment "What the picture shows: board, board-top, board-bottom, case, board-in-case, exploded or turntable (a video of the closed case turning once)." ;
     rdfs:domain trace:Render ;
     rdfs:range xsd:string .
 

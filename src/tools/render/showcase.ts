@@ -21,14 +21,17 @@ import { backendFor } from '../../gpu/jobs.js'
 import { needPcb, resolveProject } from '../kicad/project.js'
 import { boardFacts } from '../mech/board.js'
 import { CASE_JSON, OUT_DIR, readSettings } from '../mech/settings.js'
-import { SHOTS, type Shot } from '../../ontology/renders.js'
+import { SHOTS, type Shot, shotExt } from '../../ontology/renders.js'
 import { findBlender, pngSize, runBlender } from './blender.js'
 import { defaultDevice, DeviceWant, probe, selectDevice } from './device.js'
 import { commitOf, exportBoard, inRepo, type BoardFormat } from './model.js'
-import { freeName, RenderResult } from './tools.js'
+import { encodeMp4, freeName, RenderResult } from './tools.js'
 
 export const CASE_SHOTS: readonly Shot[] = ['case', 'board-in-case', 'exploded']
 export const BOARD_SHOTS: readonly Shot[] = ['board', 'board-top', 'board-bottom']
+/** The turntable: the closed case (the board without one) turning once, an MP4 of `frames` frames at FPS. */
+export const TURNTABLE_SHOTS: readonly Shot[] = ['turntable']
+export const FPS = 24
 export const CASE_FILES = { base: `${OUT_DIR}/case-base.stl`, lid: `${OUT_DIR}/case-lid.stl` } as const
 /** The case's records (python/tracebridge/mech/records.py), which name its screws and where each goes. */
 export const CASE_RECORDS = `${OUT_DIR}/case.jsonld`
@@ -90,6 +93,16 @@ export const QUALITY = {
   draft: { cpu: { width: 960, height: 600, samples: 24 }, gpu: { width: 1280, height: 800, samples: 48 } },
 } as const
 
+/**
+ * The turntable's frames: smaller and with fewer samples than a picture (denoised, and a frame is seen for a 24th of a
+ * second), so a release turntable on the GPU queue takes about as long as the pictures. Four seconds at 24 fps; half
+ * that as a draft.
+ */
+export const TURNTABLE = {
+  release: { frames: 96, cpu: { width: 1280, height: 800, samples: 24 }, gpu: { width: 1920, height: 1200, samples: 64 } },
+  draft: { frames: 48, cpu: { width: 640, height: 400, samples: 8 }, gpu: { width: 960, height: 600, samples: 16 } },
+} as const
+
 const REVISION = /^[A-Z]{1,3}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -98,9 +111,9 @@ export function projectSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project'
 }
 
-/** The picture's file name: <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png */
+/** The picture's file name: <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png (the turntable's .mp4) */
 export function shotName(project: string, revision: string, date: string, shot: Shot): string {
-  return `${projectSlug(project)}_rev-${revision}_${date}_${shot}.png`
+  return `${projectSlug(project)}_rev-${revision}_${date}_${shot}.${shotExt(shot)}`
 }
 
 /** Today's date (YYYY-MM-DD) in a time zone (an IANA name), UTC when none is given or it is not one. */
@@ -130,6 +143,7 @@ export function outlineBounds(outline: readonly (readonly [number, number])[] | 
 }
 
 const ShowcaseResult = RenderResult.extend({
+  turntable: z.object({ width: z.number(), height: z.number(), samples: z.number() }).nullable().optional(),
   palette: z.object({
     source: z.enum(['logo', 'neutral']), base: z.string(), accent: z.string(), neutral: z.string(), background: z.tuple([z.string(), z.string()]),
   }),
@@ -139,15 +153,16 @@ const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'a colour is #rrggbb')
 
 export const showcase = defineTool({
   name: 'render.showcase',
-  description: 'A revision\'s photorealistic renders (Blender Cycles): the board, the board from above and below, the closed case, the board in the case and an exploded view, coloured from the project logo (neutral studio look without one), each named <project>_rev-<revision>_<date>_<shot>.png. Case shots need mech.build\'s case files. Slow: minutes per shot on a CPU at release quality. Stored as one run.',
+  description: 'A revision\'s photorealistic renders (Blender Cycles): the board, the board from above and below, the closed case, the board in the case (screws seated) and an exploded view (screws lifted out), and a turntable video of the closed case (the board without a case) turning once, coloured from the project logo (neutral studio look without one), each named <project>_rev-<revision>_<date>_<shot>.png (the turntable .mp4). Case shots need mech.build\'s case files. Slow: minutes per shot on a CPU at release quality, the turntable longest. Stored as one run.',
   input: z.object({
     revision: z.string().regex(REVISION, 'a revision letter such as A or B').describe('the revision the pictures are of'),
     date: z.string().regex(DATE, 'YYYY-MM-DD').optional().describe('the day the revision was cut (default today, in time_zone)'),
     time_zone: z.string().max(64).optional().describe('IANA time zone for the default date (default UTC)'),
     project: z.string().optional().describe('path to a .kicad_pro/.kicad_pcb (or its folder); omit for the configured/only project'),
-    shots: z.array(z.enum(SHOTS)).min(1).max(6).optional().describe('default: every board shot, and the case shots when the project has a built case'),
+    shots: z.array(z.enum(SHOTS)).min(1).max(SHOTS.length).optional().describe('default: every board shot, the case shots when the project has a built case, and the turntable'),
+    turntable_frames: z.number().int().min(8).max(360).optional().describe('the turntable\'s frames, one turn (default 96 at release, 48 as a draft; 24 a second)'),
     quality: z.enum(['release', 'draft']).default('release').describe('release: 2560×1600 at 256 samples on a GPU (1920×1200 at 128 on a CPU); draft: a quick look'),
-    width: z.number().int().min(16).max(7680).optional(),
+    width: z.number().int().min(16).max(7680).optional().describe('every picture\'s and turntable frame\'s width (default by quality and device)'),
     height: z.number().int().min(16).max(4320).optional(),
     samples: z.number().int().min(1).max(4096).optional(),
     device: DeviceWant.optional().describe('auto (default): a GPU when there is one, else the CPU; gpu; cpu'),
@@ -169,7 +184,10 @@ export const showcase = defineTool({
     const base = join(root, CASE_FILES.base)
     const lid = join(root, CASE_FILES.lid)
     const hasCase = existsSync(base) && existsSync(lid)
-    const shots = a.shots ?? [...BOARD_SHOTS, ...(hasCase ? CASE_SHOTS : [])]
+    const shots = a.shots ?? [...BOARD_SHOTS, ...(hasCase ? CASE_SHOTS : []), ...TURNTABLE_SHOTS]
+    const stills = shots.filter((s) => !TURNTABLE_SHOTS.includes(s))
+    const spin = shots.includes('turntable')
+    const frames = spin ? a.turntable_frames ?? TURNTABLE[a.quality].frames : 0
     if (!hasCase && shots.some((s) => CASE_SHOTS.includes(s))) {
       throw new ToolError(`the case shots need the case's files (${CASE_FILES.base} and ${CASE_FILES.lid}): build the case with mech.build first`)
     }
@@ -231,26 +249,30 @@ export const showcase = defineTool({
       const args = ['{in:board.glb}']
       if (hasCase) { inputs['base.stl'] = base; inputs['lid.stl'] = lid; args.push('{in:base.stl}', '{in:lid.stl}') }
       if (logoRel && !svg) { inputs['logo.png'] = join(root, logoRel); args.push('{in:logo.png}') }
-      const outs = shots.map((s) => names[s])
+      const outs = stills.map((s) => names[s])
+      const frameOuts = Array.from({ length: frames }, (_, i) => `turntable_${String(i + 1).padStart(4, '0')}.png`)
       const q = QUALITY[a.quality]
       const job = {
-        shots, board_xy_mm: bounds, format: model.format, up_axis: 'Z',
+        // the turntable's frames come after every picture (python/blender/render_showcase.py)
+        shots: [...stills, ...(spin ? ['turntable'] : [])], board_xy_mm: bounds, format: model.format, up_axis: 'Z',
         ...(hasCase ? { case: { look } } : {}), ...(screws.length ? { fasteners: screws } : {}), ...(logoRel && !svg ? { logo: true } : {}), ...(svg?.length ? { logo_colours: svg.slice(0, 32).map((c) => [c.hex, c.uses]) } : {}),
         mask_color: a.mask_color, silk_color: a.silk_color,
         ...(a.width ? { width: a.width } : {}), ...(a.height ? { height: a.height } : {}), ...(a.samples ? { samples: a.samples } : {}),
         defaults: q, denoise: true, device: want, engine: 'cycles',
+        ...(spin ? { turntable: { frames, defaults: { cpu: TURNTABLE[a.quality].cpu, gpu: TURNTABLE[a.quality].gpu } } } : {}),
       }
       const run = await runBlender({
         script: 'render_showcase.py', job, gpu: true, timeoutSeconds: a.timeout_s, inputs,
-        args: [...args, ...outs.map((o) => `{out:${o}}`)], outputs: outs, schema: ShowcaseResult,
+        args: [...args, ...[...outs, ...frameOuts].map((o) => `{out:${o}}`)], outputs: [...outs, ...frameOuts], schema: ShowcaseResult,
       })
       try {
         const r = run.result
         notes.push(...r.notes)
         const statOf = new Map(r.images.map((im) => [im.view, im]))
-        const artifacts: { name: string; shot: Shot; bytes: number; width?: number; height?: number }[] = []
+        const artifacts: { name: string; shot: Shot; bytes: number; width?: number; height?: number; frames?: number; fps?: number }[] = []
+        const bytesOf = new Map<string, Uint8Array>()
         let blank = 0
-        for (const s of shots) {
+        for (const s of stills) {
           const f = run.outputs[names[s]]
           if (!f) throw new ToolError(`Blender did not write ${names[s]}`)
           const data = readFileSync(f)
@@ -258,6 +280,22 @@ export const showcase = defineTool({
           // release-quality pictures are large: the installation's storage, not the run record in git (src/core/artifact-store.ts)
           await keepOutput(work, id, names[s], data, 'image/png')
           artifacts.push({ name: names[s], shot: s, bytes: data.length, ...(pngSize(data) ?? {}) })
+          bytesOf.set(names[s], data)
+        }
+        if (spin) {
+          const paths = frameOuts.map((n) => run.outputs[n]).filter((x): x is string => typeof x === 'string')
+          if (paths.length !== frames) throw new ToolError(`Blender wrote ${paths.length} of ${frames} turntable frames`)
+          // a turntable that is blank in its first frame is blank throughout: the subject is the same, turned
+          if ((statOf.get('turntable_0001')?.std ?? 1) < 0.002) blank++
+          const mp4 = await encodeMp4(paths, FPS, tmp)
+          if (!mp4) {
+            notes.push('ffmpeg is not installed where the frames were rendered or here: no turntable video')
+          } else {
+            await keepOutput(work, id, names.turntable, mp4, 'video/mp4')
+            const t = r.turntable
+            artifacts.push({ name: names.turntable, shot: 'turntable', bytes: mp4.length, ...(t ? { width: t.width, height: t.height } : {}), frames, fps: FPS })
+            bytesOf.set(names.turntable, mp4)
+          }
         }
         if (blank) notes.push(`${blank} picture(s) look blank (almost no variation): check the board and case models`)
         let written: string[] | undefined
@@ -266,10 +304,11 @@ export const showcase = defineTool({
           mkdirSync(dir, { recursive: true })
           written = artifacts.map((x) => {
             const target = freeName(dir, x.name)
-            writeFileSync(target, readFileSync(run.outputs[x.name] as string), { flag: 'wx' })
+            writeFileSync(target, bytesOf.get(x.name) as Uint8Array, { flag: 'wx' })
             return target
           })
         }
+        const video = artifacts.some((x) => x.shot === 'turntable')
         const dev = r.render.device
         const renderSeconds = Math.round(r.images.reduce((s, im) => s + im.seconds, 0) * 10) / 10
         work.measure(id, 'render_seconds', renderSeconds, 's')
@@ -290,13 +329,14 @@ export const showcase = defineTool({
           where: run.where,
           ...(run.jobId ? { job_id: run.jobId } : {}),
           render: { width: r.render.width, height: r.render.height, samples: r.render.samples, denoiser: r.render.denoiser },
+          ...(video && r.turntable ? { turntable: { ...r.turntable, frames, fps: FPS, seconds: Math.round((frames / FPS) * 10) / 10 } } : {}),
           render_seconds: renderSeconds,
           case: hasCase ? { look, screws: screws.map((x) => `${x.size}x${x.length_mm}`) } : null,
           commit,
           blender: r.blender,
           notes,
         }
-        const summary = `revision ${a.revision} (${date}): ${shots.length} picture(s) ${r.render.width}x${r.render.height}, ${r.render.samples} samples, ${dev.type}, ${renderSeconds} s, ${palette.source === 'logo' ? 'colours from the logo' : 'neutral colours'}`
+        const summary = `revision ${a.revision} (${date}): ${stills.length} picture(s) ${r.render.width}x${r.render.height}, ${r.render.samples} samples${video ? `, a ${frames}-frame turntable` : ''}, ${dev.type}, ${renderSeconds} s, ${palette.source === 'logo' ? 'colours from the logo' : 'neutral colours'}`
         work.finish(id, blank ? 'fail' : 'pass', summary, result)
         return result
       } finally {

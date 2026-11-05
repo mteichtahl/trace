@@ -2,9 +2,10 @@
 exploded view, lit and backed with colours taken from the project's logo (or a neutral studio look without one).
 
     blender -b --factory-startup --python-exit-code 1 -P render_showcase.py -- job.json result.json \\
-        board.glb [base.stl lid.stl] [logo.png] <one output per shot> ...
+        board.glb [base.stl lid.stl] [logo.png] <one output per picture shot> ... [<one per turntable frame> ...]
 
-The job says which inputs are there (`case`, `logo`) and lists the shots in output order. Shots:
+The job says which inputs are there (`case`, `logo`) and lists the shots in output order; the turntable's frames
+(`turntable.frames` of them, rendered last at `turntable.defaults`' size) come after every picture. Shots:
 
     board          the populated board, three-quarter view from the front left
     board-top      the board from straight above (orthographic)
@@ -12,6 +13,8 @@ The job says which inputs are there (`case`, `logo`) and lists the shots in outp
     case           the closed case
     board-in-case  the board in the base, lid off
     exploded       base, board and lid pulled apart along the assembly axis
+    turntable      the closed case (the board when there is no case) turning once on its floor, as numbered frames:
+                   the lights and camera stay still, as on a real turntable
 
 Frames: the case files are in the case frame of docs/enclosure-build.md (millimetres, y flipped from KiCad, the board's
 bottom face at z = 0). The board model is placed in that frame by its own board body: its outline's bounds are moved
@@ -31,7 +34,7 @@ import render_board as RB  # noqa: E402
 import bpy  # noqa: E402
 from mathutils import Matrix, Vector  # noqa: E402
 
-SHOTS = ("board", "board-top", "board-bottom", "case", "board-in-case", "exploded")
+SHOTS = ("board", "board-top", "board-bottom", "case", "board-in-case", "exploded", "turntable")
 CASE_SHOTS = ("case", "board-in-case", "exploded")
 
 # trace's neutral studio look, used when a project has no logo (or its colours cannot be read)
@@ -48,7 +51,8 @@ CASE_LOOKS = {
 }
 
 # camera per shot: (azimuth, elevation) for perspective shots; plan views use common's top/bottom
-ANGLES = {"board": (-135.0, 30.0), "case": (-130.0, 24.0), "board-in-case": (-135.0, 42.0), "exploded": (-128.0, 13.0)}
+ANGLES = {"board": (-135.0, 30.0), "case": (-130.0, 24.0), "board-in-case": (-135.0, 42.0), "exploded": (-128.0, 13.0),
+          "turntable": (-130.0, 22.0)}
 
 
 # ---------------------------------------------------------------------------------------------------- colour
@@ -470,6 +474,54 @@ def shoot_one(scene, cam, job, shot, subject, center, radius, palette, path):
     return st
 
 
+def turntable(scene, cam, job, used, groups, subject, palette, paths):
+    """The subject turning once about its own centre, one frame a path: the camera framed once on everything the turn
+    sweeps (a cylinder round the centre), the lights placed once and left, so the light moves over the case as it turns.
+    The frames render at the turntable's own size and samples (`turntable.defaults` for the device, or the job's own
+    width, height and samples when given)."""
+    tt = job["turntable"]
+    tier = tt["defaults"]["gpu" if used["device"]["gpu"] else "cpu"]
+    scene.render.resolution_x = int(job.get("width") or tier["width"])
+    scene.render.resolution_y = int(job.get("height") or tier["height"])
+    if scene.render.engine == "CYCLES":
+        scene.cycles.samples = int(job.get("samples") or tier["samples"])
+    lo, hi = C.world_bbox(subject)
+    centre = Vector(((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, 0.0))
+    pivot = bpy.data.objects.new("turntable", None)
+    pivot.location = centre
+    scene.collection.objects.link(pivot)
+    bpy.context.view_layer.update()
+    for g in groups:
+        mw = g.matrix_world.copy()
+        g.parent = pivot
+        g.matrix_parent_inverse = pivot.matrix_world.inverted()
+        g.matrix_world = mw
+    bpy.context.view_layer.update()
+    # everything the turn sweeps: a square round the centre as wide as the farthest corner
+    r = max((Vector((x, y, 0.0)) - centre).length for x in (lo.x, hi.x) for y in (lo.y, hi.y))
+    swept = (Vector((centre.x - r, centre.y - r, lo.z)), Vector((centre.x + r, centre.y + r, hi.z)))
+    az, el = ANGLES["turntable"]
+    d, up = C.orbit_dir(az, el), Vector((0, 0, 1))
+    C.place_camera(cam, scene, C.corners(*swept), d, up, ortho=False, margin=0.04, lens=float(job.get("lens", 65.0)))
+    C.studio(scene, (swept[0] + swept[1]) / 2, max((swept[1] - swept[0]).length / 2, 1e-4), d, up)
+    if palette["source"] == "logo":
+        tint_rim(scene, palette["accent"], 0.55)
+    n = len(paths)
+    out = []
+    for i, path in enumerate(paths):
+        # the first frame is the case shot's view; then one full turn, counter-clockwise seen from above
+        pivot.rotation_euler.z = 2 * math.pi * i / n
+        bpy.context.view_layer.update()
+        if i % max(1, n // 8) == 0:
+            C.log(f"turntable frame {i + 1} of {n}")
+        st = C.render_to(scene, path)
+        st["view"] = f"turntable_{i + 1:04d}"
+        out.append(st)
+    pivot.rotation_euler.z = 0.0
+    return out, {"width": scene.render.resolution_x, "height": scene.render.resolution_y,
+                 "samples": scene.cycles.samples if scene.render.engine == "CYCLES" else used["samples"]}
+
+
 def main():
     job, rest = C.load_job()
     shots = list(job.get("shots") or [])
@@ -481,12 +533,18 @@ def main():
     if not has_case and any(s in CASE_SHOTS for s in shots):
         raise C.JobError("a case shot was asked for, but no case was given")
     n_in = 1 + (2 if has_case else 0) + (1 if has_logo else 0)
-    if len(rest) != n_in + len(shots):
-        raise C.JobError(f"{n_in} input(s) and {len(shots)} shot(s) need {n_in + len(shots)} paths, got {len(rest)}")
+    stills = [s for s in shots if s != "turntable"]
+    frames = int((job.get("turntable") or {}).get("frames") or 0) if "turntable" in shots else 0
+    if "turntable" in shots and frames < 2:
+        raise C.JobError("the turntable needs turntable.frames (2 or more)")
+    if len(rest) != n_in + len(stills) + frames:
+        raise C.JobError(f"{n_in} input(s), {len(stills)} picture(s) and {frames} turntable frame(s) need "
+                         f"{n_in + len(stills) + frames} paths, got {len(rest)}")
     board_path = rest[0]
     base_path, lid_path = (rest[1], rest[2]) if has_case else (None, None)
     logo_path = rest[n_in - 1] if has_logo else None
-    outs = rest[n_in:]
+    outs = rest[n_in:n_in + len(stills)]
+    frame_outs = rest[n_in + len(stills):]
 
     notes = []
     palette = dict(NEUTRAL)
@@ -551,7 +609,7 @@ def main():
     lo_all, hi_all = C.world_bbox(every)
     fl = floor(scene, lo_all, hi_all)
 
-    for shot, path in zip(shots, outs):
+    for shot, path in zip(stills, outs):
         board.location.z = 0.0
         if lid:
             lid.location.z = 0.0
@@ -574,9 +632,30 @@ def main():
         C.log(f"render {shot} {used['width']}x{used['height']} {used['samples']} samples on {used['device']['type']}")
         images.append(shoot_one(scene, cam, job, shot, subject, (lo + hi) / 2, (hi - lo).length / 2, palette, path))
 
+    spun = None
+    if frames:
+        # the product as it is held: the closed case (the board inside it, its screws hidden), else the board
+        board.location.z = 0.0
+        if lid:
+            lid.location.z = 0.0
+        if screws:
+            screws.location.z = 0.0
+        show(bobjs, True)
+        show(bparts, has_case)
+        show(lparts, has_case)
+        show(sobjs, False)
+        subject = [o for o in every if not o.hide_render]
+        lo, hi = C.world_bbox(subject)
+        fl.location.z = lo.z - 1e-5
+        fl.hide_render = False
+        groups = [g for g in (board, base, lid, screws) if g is not None]
+        C.log(f"turntable: {len(frame_outs)} frames")
+        shots_t, spun = turntable(scene, cam, job, used, groups, subject, palette, frame_outs)
+        images += shots_t
+
     lo, hi = C.world_bbox(bobjs)
     size = hi - lo
-    return {"images": images, "render": used, "notes": notes, "palette": palette, "surfaces": surfaces,
+    return {"images": images, "render": used, "turntable": spun, "notes": notes, "palette": palette, "surfaces": surfaces,
             "bbox_mm": [round(size.x * 1000, 3), round(size.y * 1000, 3), round(size.z * 1000, 3)],
             "objects": len(every), "screws": len(job.get("fasteners") or []) if sobjs else 0,
             "blender": bpy.app.version_string}

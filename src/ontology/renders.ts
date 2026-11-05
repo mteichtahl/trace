@@ -28,8 +28,12 @@ export const RENDER_PROPERTIES = [
   'backgroundColours', 'path', 'sha256', 'inRenderSet', 'shotKind',
 ] as const
 
-export const SHOTS = ['board', 'board-top', 'board-bottom', 'case', 'board-in-case', 'exploded'] as const
+export const SHOTS = ['board', 'board-top', 'board-bottom', 'case', 'board-in-case', 'exploded', 'turntable'] as const
 export type Shot = (typeof SHOTS)[number]
+/** The shots that are a video (MP4) rather than a picture (PNG). */
+export const VIDEO_SHOTS: readonly Shot[] = ['turntable']
+/** A shot's file extension. */
+export const shotExt = (s: Shot): 'mp4' | 'png' => (VIDEO_SHOTS.includes(s) ? 'mp4' : 'png')
 
 const HEX = /^#[0-9a-f]{6}$/i
 const DATE = /^\d{4}-\d{2}-\d{2}$/
