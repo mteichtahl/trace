@@ -125,6 +125,9 @@ describe('reading the change actions', () => {
     expect(readChange({ ...summary, requirement_edits: edits }).requirement_edits).toEqual(edits)
     expect(readChange({ ...summary }).requirement_edits).toBeUndefined()
     expect(readChange({ ...summary, requirement_edits: { ids: ['x'] } }).requirement_edits).toBeUndefined()
+    // what a change cites that the project has no requirement for (test-esp32 log #47, #105)
+    expect(readChange({ ...summary, requirements: ['REQ-9b1b96'], requirements_unknown: ['R3'] })).toMatchObject({ requirements: ['REQ-9b1b96'], requirements_unknown: ['R3'] })
+    expect(readChange({ ...summary }).requirements_unknown).toBeUndefined()
   })
 
   it('the pill is the API\'s word, else worked out from the checks and mergeable state', () => {

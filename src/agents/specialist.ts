@@ -147,6 +147,17 @@ export interface PromptContext {
   enabled?: readonly SpecialistKind[]
   /** The prompt overrides in force (src/prompts): the installation's and the project's default branch's. */
   prompts?: Layers | undefined
+  /** The project's requirement ids, which it names requirements by (none: the part is left out). */
+  requirements?: readonly string[] | undefined
+}
+
+/** At most this many requirement ids are listed in a prompt; the tool lists the rest. */
+export const MAX_REQUIREMENT_IDS = 80
+
+/** "REQ-1, REQ-2 and 3 more (verify_requirements lists them)" for a prompt. */
+export function requirementIdWords(ids: readonly string[]): string {
+  const shown = ids.slice(0, MAX_REQUIREMENT_IDS).join(', ')
+  return ids.length > MAX_REQUIREMENT_IDS ? `${shown} and ${ids.length - MAX_REQUIREMENT_IDS} more (verify_requirements lists them)` : shown
 }
 
 export const MAX_RULES_CHARS = 20_000
@@ -235,6 +246,7 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   if (delivery === 'actions') p.add('specialist.delivery.actions', { branch_prefix: branchPrefix })
   else p.add('specialist.delivery.delegate', { tool: mcpName(DELEGATE_TOOL), branch_prefix: branchPrefix, timeout: cfg.agents.delegate_timeout_minutes })
   p.add(`specialist.${s.kind}.done`, role).add('specialist.evidence')
+  if (c.requirements?.length) p.add('specialist.requirements', { ids: requirementIdWords(c.requirements) })
   const esc = cfg.worker.escalate_to
   p.add(`specialist.${s.kind}.escalate`, role).add('specialist.escalate', { posted_to: esc ? p.text('mention.to', { escalate_to: esc }) : '' })
   p.add('specialist.report').add('specialist.guardrails')

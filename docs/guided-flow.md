@@ -85,7 +85,10 @@ interface ChangeDetail extends ChangeSummary {
   files: { path: string; status: 'added' | 'modified' | 'removed' | 'renamed'; additions: number; deletions: number
            kind: 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary' }[]
   checks_list: { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }[]
-  requirements: string[]  // requirement ids the change names (title, body, commit messages): ["R4", "R7"]
+  requirements: string[]  // the project's requirement ids the change names (title, body, commit messages), checked
+                          // against its record: ["REQ-9b1b96", "REQ-8fc402"]; a resistor R3 is not one
+  requirements_unknown?: string[]  // what it cites as a requirement the project does not have ("R3"): said once on
+                          // the page, never "covered"
   recommendation: { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
   may_accept: boolean     // this person, now: Contributor part, open, checks read, at least one run, none failing or
                           // running, no conflict

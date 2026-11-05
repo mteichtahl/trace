@@ -61,6 +61,7 @@ import { Octokit } from '@octokit/rest'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { type TraceConfig, load } from '../../core/config.js'
 import { loadConfig } from '../../harness/index.js'
@@ -75,6 +76,7 @@ import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, me
 import { composeTask, taskBranch } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
 import { type Resumed, composeResumeNote, composeSpecialist } from '../specialist.js'
+import { PROJECT_DB } from '../../core/store.js'
 import { type Composed, type Layers, NO_LAYERS, type Provenance, provenanceOf, record } from '../../prompts/resolve.js'
 import { InstallationPrompts, loadLayers } from '../../prompts/store.js'
 import { systemAppend } from '../../prompts/system.js'
@@ -742,6 +744,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const notes = readProjectNotes(base.dir)
     // the prompt overrides: the default branch's (read before the item's branch is checked out) and the installation's
     const layers = await jobLayers(d, base.dir, log)
+    // the ids the specialist cites requirements by (test-esp32 log #47, #105)
+    const requirements = projectRequirementIds(base.dir)
     // a hand-off job works on a branch of its own, never the asker's
     let branch = isHandoff(p) ? `${cfg.worker.own_branch_prefix || 'claude/'}handoff-${p.handoff.id}` : p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     // dependent work stacks on the open change it depends on (docs/stacked-changes.md): a hand-off on the asker's
@@ -804,7 +808,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       const job = prep.job(branch, thread?.text, startedFrom && startedFrom !== base.defaultBranch ? startedFrom : undefined)
       const prompt = continueSession && resumed
         ? composeResumeNote(resumed, branch, layers)
-        : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers })
+        : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers, requirements })
       const system = systemAppend(notes, layers)
       const asked = prep.route === null && r.source === 'model'
       const used = [...(asked ? provenanceOf(['router.classify', 'router.contract'], layers) : []), ...prompt.provenance, ...system.provenance,
@@ -880,6 +884,26 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
 }
 
 /**
+ * The project's requirement ids still in play (not rejected or obsolete), from the database in the checkout `root`:
+ * the ids the agents name requirements by. None without a database, or one trace cannot read.
+ */
+export function projectRequirementIds(root: string): string[] {
+  const path = join(root, PROJECT_DB)
+  if (!existsSync(path)) return []
+  try {
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='requirements'").get()) return []
+      return (db.prepare("SELECT id FROM requirements WHERE status NOT IN ('rejected', 'obsolete') ORDER BY id").all() as { id: unknown }[]).map((r) => String(r.id))
+    } finally {
+      db.close()
+    }
+  } catch {
+    return []
+  }
+}
+
+/**
  * A worker job a specialist delegated (agent.delegate): the retained worker's own prompt (taskPrompt) with the
  * specialist's brief and acceptance criteria as its request, in the specialist's checkout, with the specialist's
  * settings. No route, no final comment (the specialist reports), no agent.delegate (depth 1).
@@ -904,7 +928,8 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
       : parent.branch
     mem = await jobMemory(d, { repository: p.repository, agent: WORKER, session: parent.session, query: p.request.slice(0, 2000), request: p.request }, log, redact)
     const layers = parent.prompts ?? NO_LAYERS
-    const prompt = composeTask(p, parent.cfg, branch, layers, stackedOn)
+    // the specialist's checkout: the requirements its tools added this job are cited by their ids too
+    const prompt = composeTask({ ...p, requirements: projectRequirementIds(parent.dir) }, parent.cfg, branch, layers, stackedOn)
     const system = systemAppend(parent.notes, layers)
     // the brief's wording (delegate.*) was composed when the specialist delegated, with the same layers
     const used = [...provenanceOf(['delegate.brief', 'delegate.request'], layers), ...prompt.provenance, ...system.provenance, ...(mem.context ? provenanceOf(['memory.block']) : [])]

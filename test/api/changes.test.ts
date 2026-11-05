@@ -20,7 +20,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
   readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
@@ -120,11 +120,41 @@ describe('the rules: verdict, recommendation, may_accept', () => {
   })
 
   it('requirement ids from the title, body and commits, ranges spelled out; the summary\'s sources in order', () => {
-    expect(requirementIds('Project purpose and requirements R1-R3', 'Covers R7 and R4.', 'fix R4')).toEqual(['R1', 'R2', 'R3', 'R7', 'R4'])
-    expect(requirementIds('r4 is not one; nor is PR12 or R1-R900')).toEqual(['R1'])
+    const R = ['R1', 'R2', 'R3', 'R4', 'R7']
+    expect(requirementsNamed(R, 'Project purpose and requirements R1-R3', 'Covers R7 and R4.', 'fix R4')).toEqual({ ids: ['R1', 'R2', 'R3', 'R7', 'R4'], unknown: [] })
+    expect(requirementsNamed(R, 'Requirements: r4 is not one; nor is PR12')).toEqual({ ids: [], unknown: [] })
     expect(summaryBullets({ jobSummary: 'Did it:\n- drew the regulator sheet\n- ran the rule check', body: '- other', commits: [] })).toEqual(['drew the regulator sheet', 'ran the rule check'])
     expect(summaryBullets({ jobSummary: null, body: 'Opened automatically.\n\n### Commits\n- abc1234 design: sheets\n- def5678 erc: clean', commits: ['x'] })).toEqual(['design: sheets', 'erc: clean'])
     expect(summaryBullets({ jobSummary: null, body: '', commits: ['first line\n\nbody', 'second'] })).toEqual(['first line', 'second'])
+  })
+
+  // test-esp32 log #47, #105: the project's requirements are REQ-xxxxxx; R1 to R7 are its resistors
+  const ESP32 = ['REQ-1e1e84', 'REQ-27ec55', 'REQ-367d71', 'REQ-8fc402', 'REQ-9b1b96', 'REQ-f79396']
+
+  it('run 1 (#47): a schematic change\'s net table names the resistor R3, which is not a requirement', () => {
+    const body = ['## Checks', '3. `kicad_netlist`: all 15 brief nets exist. EN = U1.3 + Q1.3 (collector) + C6 (1uF) + R3.', '6. `design_sheets`: the sheet is registered with all 16 requirements.'].join('\n')
+    expect(requirementsNamed(ESP32, 'Capture: schematic for architecture option A (flat single sheet)', body, 'Schematic: option A')).toEqual({ ids: [], unknown: [] })
+  })
+
+  it('run 2 (#105): the layout\'s R1 to R7 are parts; the requirements it does name are found as the project writes them', () => {
+    const body = [
+      '- **J1 USB-C:** (34, 30.83) at the bottom edge. D1 is directly behind it on D+/D−. R1/R2 sit beside the CC pins.',
+      '- **J2 OLED socket:** pins in a row at y = 8.6. R6/R7 are left of it.',
+      '| CC1 | J1.A5, R1.1 |', '| DTR | U2.13, R4.1, Q2.E |',
+      'It keeps the board within REQ-9b1b96 (50 x 35 mm) and the USB-C input of req-8FC402.',
+    ].join('\n')
+    expect(requirementsNamed(ESP32, 'Layout: desk-gadget PCB placed and routed (50 x 35 mm, 2 layers)', body)).toEqual({ ids: ['REQ-9b1b96', 'REQ-8fc402'], unknown: [] })
+  })
+
+  it('a change that cites a requirement the project does not have says which, and a local name the text defines is the real one', () => {
+    // a numbering of its own, on a line that says it names requirements: R1 to R7 are none of this project's
+    expect(requirementsNamed(ESP32, 'Requirements it covers: R1-R7')).toEqual({ ids: [], unknown: ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'] })
+    // an id in the project's own form that is not in its record
+    expect(requirementsNamed(ESP32, 'Covers REQ-9b1b96 and REQ-abc123.')).toEqual({ ids: ['REQ-9b1b96'], unknown: ['REQ-abc123'] })
+    // "R3 (REQ-9b1b96)": the brief's local name maps to the real id, wherever it is used
+    expect(requirementsNamed(ESP32, 'Requirements: R3 (REQ-9b1b96), R5 = REQ-f79396', 'covers R3 and R5')).toEqual({ ids: ['REQ-9b1b96', 'REQ-f79396'], unknown: [] })
+    // "REQ-9" is the project's REQ-009; a placeholder with no digits is not an id
+    expect(requirementsNamed(['REQ-009'], 'Covers REQ-9; ids look like REQ-xxxxxx')).toEqual({ ids: ['REQ-009'], unknown: [] })
   })
 
   it('file kinds for the review page, and the merge method: squash first', () => {
@@ -413,7 +443,10 @@ class ChangesGitHub extends FakeGitHub {
   async removeLabel(_r: string, n: number, l: string): Promise<boolean> { this.did.push(`unlabel ${n} ${l}`); const p = this.pulls.get(n); if (!p?.detail.labels.includes(l)) return false; p.detail.labels = p.detail.labels.filter((x) => x !== l); return true }
 }
 
+const REQUIREMENTS_TABLE = 'CREATE TABLE IF NOT EXISTS requirements (id TEXT PRIMARY KEY, text TEXT NOT NULL, kind TEXT NOT NULL, acceptance TEXT, source TEXT, page INTEGER, status TEXT NOT NULL DEFAULT \'proposed\', tags TEXT, created REAL NOT NULL, updated REAL NOT NULL, by TEXT)'
 const github = new ChangesGitHub([REPO])
+/** the seeded project database before its requirements were added */
+let bare: Uint8Array
 const scratch = mkdtempSync(join(tmpdir(), 'trace-changes-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-changes-bucket-'))
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
@@ -436,6 +469,11 @@ beforeAll(async () => {
   mkdirSync(join(dir, '.git'))
   const db = openProject(dir)
   startJourney(db, { template: 'board', by: 'seed', name: 'Changes' })
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  bare = readFileSync(join(dir, '.trace', 'project.db'))
+  // the project's requirements, numbered R1 to R4 here: what a change may name (src/api/changes.ts requirementsNamed)
+  db.exec(REQUIREMENTS_TABLE)
+  for (const id of ['R1', 'R2', 'R3', 'R4']) db.prepare("INSERT INTO requirements (id, text, kind, status, created, updated) VALUES (?, ?, 'functional', 'proposed', 1, 1)").run(id, `Requirement ${id}`)
   db.close()
   github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
   const now = Date.now() / 1000
@@ -546,6 +584,18 @@ describe('changes.list and change.get', () => {
     expect(await run(REVIEWER, 'change.get', { repo: REPO, number: 1 })).toMatchObject({ may_accept: false, blockers: ['Only a contributor on this project can accept a change.'] })
     expect(await run(USER, 'change.get', { repo: REPO, number: 2 })).toMatchObject({ recommendation: { verdict: 'ask' }, may_accept: false })
     await expect(run(USER, 'change.get', { repo: REPO, number: 3 })).rejects.toThrow(/no change #3 from trace/)
+  })
+
+  it('names only the project\'s requirements, says once which it cites that the project has not, and covers the real ones (log #47, #105)', async () => {
+    github.add(1, 'claude/task-reqs', { title: 'Project purpose and requirements R1-R4', body: 'Requirements it covers: R1 to R7.\n\nEN = U1.3 + Q1.3 + R3' })
+    const d = await run(USER, 'change.get', { repo: REPO, number: 1 })
+    expect(d).toMatchObject({ requirements: ['R1', 'R2', 'R3', 'R4'], requirements_unknown: ['R5', 'R6', 'R7'], recommendation: { verdict: 'accept', why: 'Its check passed (build), and it can be merged. It covers R1, R2, R3 and R4.' } })
+    // a change that names none of them: nothing is said to be covered
+    github.add(1, 'claude/task-reqs', { title: 'Requirements: R8', body: 'R1/R2 sit beside the CC pins.' })
+    github.pulls.get(1)!.commits = ['Layout: place R1 and R2']
+    const none = await run(USER, 'change.get', { repo: REPO, number: 1 })
+    expect(none).toMatchObject({ requirements: [], requirements_unknown: ['R8'] })
+    expect((none.recommendation as { why: string }).why).not.toMatch(/covers/)
   })
 
   it('a change its specialist calls unfinished is listed as that, and its page recommends asking for changes', async () => {
@@ -1070,7 +1120,7 @@ describe('a change that edits an accepted requirement (test-esp32 log #112)', ()
   const withRequirement = (acceptance: string): Uint8Array => {
     const dir = mkdtempSync(join(scratch, 'req-'))
     const path = join(dir, 'project.db')
-    writeFileSync(path, original)
+    writeFileSync(path, bare)
     const d = new DatabaseSync(path)
     d.exec(`CREATE TABLE IF NOT EXISTS requirements (id TEXT PRIMARY KEY, text TEXT NOT NULL, kind TEXT NOT NULL, acceptance TEXT, source TEXT, page INTEGER, status TEXT NOT NULL DEFAULT 'proposed', tags TEXT, created REAL NOT NULL, updated REAL NOT NULL, by TEXT)`)
     d.prepare('INSERT OR REPLACE INTO requirements (id, text, kind, acceptance, status, created, updated, by) VALUES (?,?,?,?,?,?,?,?)').run('REQ-367d71', 'The display connector', 'functional', acceptance, 'accepted', 1, acceptance === PIN ? 10 : 20, 'verify')
