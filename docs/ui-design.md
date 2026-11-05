@@ -473,7 +473,7 @@ Anything that takes time shows three things at once, everywhere it appears: what
 **The Run line** (used on Home, the project page, Focus mode and chat):
 
 - A small spinner, the run's name in plain words ("Routing the board"), and the current step ("Stage 1 of 2: the dense core near U4").
-- A thin progress bar when the work has a known size; otherwise elapsed time and the typical time for this kind of run on this project ("12 min so far, usually 20").
+- A thin progress bar when the work has a known size; otherwise elapsed time and the typical time for this kind of run on this project ("12 min so far, usually 20"), and past it "taking longer than usual" rather than an estimate it has outrun; no typical time without at least three earlier runs of the same kind.
 - Where it runs, in quiet text when it matters ("on a graphics card").
 - A menu with Pause, Cancel and Move up the queue. Cancel asks once, stops within seconds, and then says what was kept ("Stage 1 kept: 48 nets routed and locked").
 

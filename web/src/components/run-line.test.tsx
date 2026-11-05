@@ -67,7 +67,7 @@ describe('RunLine', () => {
 
     it('is running while trace hears from it, then says it has not heard from it and when it is declared lost', () => {
       expect(runState(r, t0 + 60_000)).toBe('running')
-      expect(runDetail(r, t0 + 60_000)).toMatch(/so far, usually/)
+      expect(runDetail(r, t0 + 60_000)).toMatch(/2 min so far, about/)
       expect(runState(r, t0 + 10 * 60_000)).toBe('silent')
       expect(runDetail(r, t0 + 10 * 60_000)).toBe(`trace has not heard from it since ${time(heard.at)} (10 min ago). If it stays silent, it is declared lost at ${time(heard.lostAt)}.`)
       expect(runDetail(r, t0 + 10 * 60_000)).not.toMatch(/so far/)

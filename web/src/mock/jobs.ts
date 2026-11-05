@@ -22,7 +22,7 @@ const JOBS: Record<string, RunSummary[]> = {
   'acme/panel-controller': [
     { id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', agent: 'impl', agentName: 'Implementation', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45, controls: ['cancel'] },
     { id: 'job_w1', title: 'Asked by the Implementation specialist: Move the LED driver pins to bank 2', state: 'running', agent: 'worker', agentName: 'Worker', step: 'Editing the pin constraints', stepIndex: 1, stepCount: 3, startedAt: ago(2 * MIN), typicalS: 300, controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_2', from: 'impl', fromName: 'Implementation' } },
-    { id: 'job_v2', title: 'Simulate the LED current limit', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running the transient corners', startedAt: ago(5 * MIN), typicalS: 900, controls: ['pause', 'cancel'], startedBy: 'trace' },
+    { id: 'job_v2', title: 'Simulate the LED current limit', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running the transient corners', startedAt: ago(40 * MIN), typicalS: 900, controls: ['pause', 'cancel'], startedBy: 'trace' },
     { id: 'job_e1', title: 'Asked by the Implementation specialist: Check the antenna keep-out once routing is done', state: 'queued', agent: 'emc', agentName: 'EMC', position: 1, startsWhen: 'starts when the routing job ends', controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_3', from: 'impl', fromName: 'Implementation' } },
   ],
   'acme/motor-driver': [

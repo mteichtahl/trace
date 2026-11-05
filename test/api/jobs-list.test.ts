@@ -82,7 +82,8 @@ describe('jobs.list', () => {
     const r = await run(USER, 'jobs.list', { repo: REPO })
     const jobs = r.jobs as Record<string, unknown>[]
     expect(jobs.map((j) => j.workerJobId)).toEqual(['job-run', 'job-wi', 'job-p', 'job-q1', 'job-q2', 'job-done'])
-    expect(jobs[0]).toMatchObject({ id: `${S('a')}.job-run`, yours: true, typicalS: 600, step: 'running ERC', controls: ['pause', 'cancel'] })
+    // one earlier run of another request is no estimate (#121)
+    expect(jobs[0]).toMatchObject({ id: `${S('a')}.job-run`, yours: true, typicalS: null, step: 'running ERC', controls: ['pause', 'cancel'] })
     expect(jobs[1]).toMatchObject({ id: `p${H}.trace-acme-jobs-5-abcdef1234567890.job-wi`, controls: ['cancel'] })
     expect(jobs[3]).toMatchObject({ queue: { position: 1, of: 2 }, controls: ['pause', 'cancel'] })
     expect(jobs[4]).toMatchObject({ queue: { position: 2, of: 2 }, controls: ['pause', 'move_up', 'cancel'] })

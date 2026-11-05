@@ -22,6 +22,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { about, duration, time } from '@/lib/format'
 import type { RunSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { timeAgainstUsual } from './log-view'
 import { useNow } from './use-now'
 
 export interface RunLineProps {
@@ -90,10 +91,7 @@ export function runDetail(run: RunSummary, now: number): string {
   if (run.stepIndex && run.stepCount) parts.push(`Step ${run.stepIndex} of ${run.stepCount}${run.step ? `: ${run.step}` : ''}`)
   else if (run.step) parts.push(run.step)
   if (run.etaS !== undefined) parts.push(`${about(run.etaS)} left`)
-  else if (run.startedAt) {
-    const el = (now - new Date(run.startedAt).getTime()) / 1000
-    parts.push(`${duration(el, { short: true })} so far${run.typicalS ? `, usually ${duration(run.typicalS, { short: true })}` : ''}`)
-  }
+  else if (run.startedAt) parts.push(timeAgainstUsual(run.startedAt, run.typicalS, now) as string)
   return parts.join(' · ')
 }
 

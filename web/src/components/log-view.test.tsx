@@ -39,6 +39,8 @@ describe('the log\'s pure parts', () => {
     expect(timeAgainstUsual('2026-11-03T10:45:33Z', 180, now)).toBe('2 min so far, about 1 min left')
     expect(timeAgainstUsual('2026-11-03T10:47:00Z', null, now)).toBe('33 s so far')
     expect(timeAgainstUsual(null, 60, now)).toBeNull()
+    // past its usual time it says so, rather than repeat an estimate it has outrun (#121, #125: "50 min so far, usually 1.5 min")
+    expect(timeAgainstUsual('2026-11-03T09:57:33Z', 90, now)).toBe('50 min so far, taking longer than usual')
   })
   it('steps from the log\'s own step lines', () => {
     const lines = [L('▸ Step 1 · Get the design', 'step', '2026-11-03T10:44:02Z'), L('x', null, '2026-11-03T10:44:05Z'), L('▸ Load the board', 'step', '2026-11-03T10:44:08Z')]
