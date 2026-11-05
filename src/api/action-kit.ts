@@ -56,6 +56,8 @@ export interface JobsApi {
     branch?: string; resume?: { job: string; by: string }
     /** a lost task started again (job.control restart): which lost job, and who started it again */
     restart?: { job: string; by: string }
+    /** a new change stacked on this open change's branch (docs/stacked-changes.md), not with `branch` */
+    stackOn?: string
     /** the same request asked again after its job was lost or failed (2 and up): a new session for it (workers.ts taskSession) */
     attempt?: number
   }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>

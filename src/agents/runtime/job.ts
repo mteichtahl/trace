@@ -89,6 +89,7 @@ import { type WaitRelay, defaultWaitRelay } from './wait-relay.js'
 import { type HandoffRuntime, defaultHandoffRuntime, endedWithout } from './handoff.js'
 import { handoffAskEnv } from '../../tools/journey/tools.js'
 import { type HandoffRole } from '../specialist.js'
+import { type DiscardGitHub, type Discarded, afterBranch, discardedBranch } from '../../core/discarded.js'
 import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated, isHandoff } from './schemas.js'
 
 /** How much of a specialist's report its job keeps: its conclusion (what is still open) comes last, so it is not cut short. */
@@ -363,6 +364,36 @@ async function stackBase(o: GitOpts & { defaultBranch: string; base?: string | u
   return { ref: `origin/${base}`, name: base }
 }
 
+/** How many discarded changes in a row a job steps past before it gives up looking (each is a few GitHub reads). */
+const DISCARD_HOPS = 4
+
+/**
+ * The branch a job uses instead of `branch` when a person discarded the change on it (src/core/discarded.ts): its
+ * afterBranch, past any of those discarded too; null when `branch` is not retired. GitHub that cannot be read: the
+ * branch as asked (logged), since the harness opens no pull request for a retired branch whatever a job pushes.
+ */
+export async function retiredFor(gh: DiscardGitHub, repository: string, branch: string, log: (l: string) => void): Promise<{ from: Discarded; to: string } | null> {
+  const { owner, repo } = split(repository)
+  try {
+    const first = await discardedBranch(gh, owner, repo, branch)
+    if (!first) return null
+    // the latest discard's reason is the one to address: the earlier ones were addressed by the work it rejected
+    let last = first
+    let to = afterBranch(branch, first.number)
+    for (let i = 0; i < DISCARD_HOPS; i++) {
+      const next = await discardedBranch(gh, owner, repo, to)
+      if (!next) break
+      last = next
+      to = afterBranch(to, next.number)
+    }
+    log(`${branch} belongs to change #${first.number}, which ${first.by} discarded: working on ${to} instead`)
+    return { from: last, to }
+  } catch (e) {
+    log(`could not check whether ${branch} belongs to a discarded change (${errText(e).slice(0, 200)}): working on it as asked`)
+    return null
+  }
+}
+
 /** Whether `branch` is the head of an open pull request in `repository` itself (not a fork's). */
 export const openChangeIn = (gh: { rest: { pulls: { list(a: { owner: string; repo: string; state: 'open'; head: string; per_page: number }): Promise<{ data: Array<{ head: { repo: { full_name: string } | null } }> }> } } }, repository: string) =>
   async (branch: string): Promise<boolean> => {
@@ -591,9 +622,11 @@ const ITEM_WHAT: Readonly<Record<WorkItem['kind'], string>> = {
  * work. A specialist's delegation, a resumed or restarted task (its agent was settled when it first ran) and a task that carries on
  * an existing branch (a carry-on after an answer, a revision asked for with "Ask for changes": the specialist whose work
  * is on it) go where they say. Checked, a Documentation carry-on whose answer was about firmware was moved to the
- * Implementation specialist and queued behind a layout job (test-esp32 log #122).
+ * Implementation specialist and queued behind a layout job (test-esp32 log #122). A task stacked on an open change is
+ * follow-up work too: a carry-on whose asking job ran on another specialist's branch opens a change of its own on top
+ * of it (src/core/answer-followups.ts carryOnPlace), and stays with the specialist that asked.
  */
-export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.restart && !p.branch
+export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.restart && !p.branch && !p.stackOn
 
 function prepared(p: WorkItemJob | TaskJob): Prepared {
   if (p.kind === 'work-item') {
@@ -747,12 +780,16 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     // dependent work stacks on the open change it depends on (docs/stacked-changes.md): a hand-off on the asker's
     // branch, a task on the change it was given
     const stackOn = isHandoff(p) ? p.handoff.base : p.kind === 'task' ? p.stackOn : undefined
+    // a branch whose change a person discarded is retired: the job works on a new one and is told their reason
+    const discard = prep.from === 'maybe' ? await retiredFor(gh, p.repository, branch, log) : null
+    if (discard) branch = discard.to
     let startedFrom: string | undefined
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from, base: stackOn, isOpenChange: openChangeIn(gh, p.repository), started: (f) => { startedFrom = f } })
     else branch = base.defaultBranch
     ctx.branch?.(branch)
     // a resumed task: the paused job it carries on (its branch is this one: the API resumes it with that branch)
-    const resumeOf = p.kind === 'task' && p.resume ? p.resume : null
+    // (not on a new branch: the paused work was on the discarded one, and is not carried over)
+    const resumeOf = p.kind === 'task' && p.resume && !discard ? p.resume : null
     const prior = resumeOf ? await d.paused?.read(resumeOf.job).catch(() => null) ?? null : null
     // a restarted task: the lost job it starts again, on the same branch (whatever that job pushed is there)
     const restartOf = p.kind === 'task' && p.restart && !resumeOf ? p.restart : null
@@ -809,8 +846,10 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         restarted = { lostJob: restartOf.job, by: restartOf.by, commits }
         log(`starting ${restartOf.job} again on ${branch} (it ended without finishing): ${commits ? `${commits.split('\n').length} commit(s) of it are on the branch` : 'nothing of it is on the branch'}`)
       }
-      const job0 = prep.job(branch, thread?.text, startedFrom && startedFrom !== base.defaultBranch ? startedFrom : undefined)
-      const job = job0.kind === 'task' && (resumed || restarted) ? { ...job0, ...(resumed ? { resumed } : {}), ...(restarted ? { restarted } : {}) } : job0
+      const made = prep.job(branch, thread?.text, startedFrom && startedFrom !== base.defaultBranch ? startedFrom : undefined)
+      const job: SpecialistJob = made.kind === 'task' && (discard || resumed || restarted)
+        ? { ...made, ...(discard ? { afterDiscard: { number: discard.from.number, branch: discard.from.branch, by: discard.from.by, reason: discard.from.reason } } : {}), ...(resumed ? { resumed } : {}), ...(restarted ? { restarted } : {}) }
+        : made
       const prompt = continueSession && resumed
         ? composeResumeNote(resumed, branch, layers)
         : composeSpecialist(s, { cfg, repository: p.repository, job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers })

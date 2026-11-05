@@ -12,7 +12,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { ArrowLeft, ChevronRight, Lightbulb, Lock, Shield, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -26,7 +26,8 @@ import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { useTraceContext } from '@/components/chat/context'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { FlatNote } from '@/components/installation/layout'
-import { checks as allChecks, partsFor, recommendTemplate, slug, STEPS, type StepId } from '@/components/new-project/rules'
+import { checks as allChecks, partsFor, recommendTemplate, repoOf, slug, STEPS, type StepId } from '@/components/new-project/rules'
+import { RepoNote } from '@/components/new-project/repo-note'
 import { IconPicker, ProjectIconView, recommendGlyph } from '@/components/project/project-icon'
 import { RunLine } from '@/components/run-line'
 import { useCommands } from '@/components/shell/command-menu'
@@ -88,8 +89,11 @@ function NewProject() {
   const set = (p: Partial<NewProjectDraft>) => draft.setData((x) => ({ ...x, ...p }))
   const step = STEPS[draft.step]!.id
   const taken = (projects.data ?? []).map((p) => projectName(p.repo))
-  const all = allChecks(d, { taken })
   const reached = new Set(STEPS.slice(0, draft.step + 1).map((s) => s.id))
+  // whether GitHub (or a retired project) has the repository already, asked once typing stops (test-esp32 log #78)
+  const wanted = useSettled(repoOf(d), 400)
+  const repoCheck = useQuery({ ...q('projects.repo_check', { repo: wanted }), enabled: user?.class === 'admin' && reached.has('repository') && /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(wanted), staleTime: 30_000, retry: false })
+  const all = allChecks(d, { taken, repo: repoCheck.data })
   const bar = all.filter((c) => reached.has(c.step)).map((c) => ({ id: c.id, text: c.text, status: c.ok ? 'met' as const : 'not_met' as const, onJump: () => draft.setStep(STEPS.findIndex((s) => s.id === c.step)) }))
   const create = useCall('projects.create', () => [['projects'], ['journey.get']])
   const [created, setCreated] = useState<Created | null>(null)
@@ -206,6 +210,7 @@ function NewProject() {
             <span className="hidden pt-8 text-muted-foreground sm:block">/</span>
             <div className="space-y-1.5"><Label htmlFor="np-repo">Name</Label><Input id="np-repo" value={d.repository.name || slug(d.name)} onChange={(e) => set({ repository: { ...d.repository, name: e.target.value.trim() } })} className="font-mono" /></div>
           </div>
+          <RepoNote d={d} check={repoCheck.data?.repo.toLowerCase() === repoOf(d).toLowerCase() ? repoCheck.data : undefined} failed={repoCheck.isError} onUse={(name) => set({ repository: { ...d.repository, name } })} />
           <div className="max-w-xs space-y-1.5"><Label htmlFor="np-branch">Default branch</Label><Input id="np-branch" value={d.repository.branch} onChange={(e) => set({ repository: { ...d.repository, branch: e.target.value } })} className="font-mono" /></div>
           <Collapsible className="rounded-xl border">
             <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium"><ChevronRight className="size-4 transition-transform group-data-[state=open]:rotate-90" /> Advanced <span className="font-normal text-muted-foreground">· agent token, memory, onboarding</span></CollapsibleTrigger>
@@ -268,6 +273,16 @@ function NewProject() {
       )}
     </FocusLayout>
   )
+}
+
+/** A value once it has stopped changing for `ms`: the repository is asked about when typing pauses, not per key. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return settled
 }
 
 function Summary({ d, onEdit }: { d: NewProjectDraft; onEdit: () => void }) {

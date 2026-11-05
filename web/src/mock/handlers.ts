@@ -23,6 +23,7 @@ import { healthAction } from './health'
 import { progressAction } from './progress'
 import { rendersAction } from './renders'
 import { docsAction } from './docs'
+import { REOPEN_REPO, reopenOn, reopened } from './reopen'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -55,7 +56,14 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })
     case 'projects': return ok(withLifecycle(PROJECTS))
     case 'inbox': return ok(inbox)
-    case 'journey.get': return JOURNEYS[repo] ? ok({ ...JOURNEYS[repo], stages: stoppedStepsOf(repo, JOURNEYS[repo].stages), next: lostStepOf(repo, JOURNEYS[repo].next), jobs: jobsOf(repo), handoffs: handoffsOf(repo) }) : json({ ok: false, error: 'no access' }, 403)
+    case 'journey.get': {
+      const j = JOURNEYS[repo]
+      if (!j) return json({ ok: false, error: 'no access' }, 403)
+      // the reopen after a change of requirements, when asked for (mock/reopen.ts)
+      const shown = repo === REOPEN_REPO && reopenOn() ? reopened(j) : j
+      // a lost job holds up the next step until it is started again or dismissed (mock/jobs.ts)
+      return ok({ ...shown, stages: stoppedStepsOf(repo, shown.stages), next: lostStepOf(repo, shown.next), jobs: jobsOf(repo), handoffs: handoffsOf(repo) })
+    }
     case 'project.update': {
       // the mock journeys are already in the app's shape (lib/readers.ts passes them through), so patch that shape
       const j = JOURNEYS[repo] as (typeof JOURNEYS)[string] & Record<string, unknown> | undefined

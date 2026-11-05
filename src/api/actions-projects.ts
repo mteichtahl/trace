@@ -34,6 +34,13 @@
  *                             (src/web/journey-events.ts); the run on GitHub sends none, so while it runs the app also
  *                             looks again at next_check_s (agentSetup). The link to the update's run and how
  *                             to start it again (trace's own repository) are an admin's only
+ *   projects.repo_check
+ *                     admin   whether a repository is free for a new project: whether it is on GitHub already, and, when
+ *                             trace knows it, the project that holds it (a retired one too: retiring keeps the
+ *                             repository and its record), with a free name to suggest. projects.create asks the same
+ *                             before it creates one, and refuses a new repository that is there already (it would put
+ *                             the new project on top of another's files and record) and a retired project's repository
+ *                             (that project is restored, not made again)
  *   project.update    admin   change what a project is after it is made: its name, description, icon, build plan
  *                             (quantity, unit cost, budget) and later stages, in the journey record (Settings). The
  *                             template and repository stay fixed
@@ -46,14 +53,15 @@ import { TemplateStore } from '../core/template-store.js'
 import { z } from 'zod'
 import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, isAdmin, membersOf, setClass } from '../core/access.js'
 import { Conflict } from '../core/central.js'
-import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, startJourney, updateAbout } from '../core/journey.js'
+import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, loadJourney, startJourney, updateAbout } from '../core/journey.js'
 import { forgetNoJourney } from '../core/journey-store.js'
-import { register } from '../core/onboard.js'
+import { lifecycleOf } from '../core/lifecycle.js'
+import { projects as registered, register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
 import { FLAT_UPDATE_MAX, type PendingRecord, PendingRecordSchema } from '../installer/pending.js'
 import { GitHubError, type GitHubApi, type RunSummary } from './github.js'
 import { cached } from './github-cache.js'
-import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, def, hashOf, label, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 import { appliesOf } from '../core/app-edits.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
 import { editStore, editorName } from './edits.js'
@@ -416,6 +424,60 @@ async function updateProgress(ctx: Context, run: RunSummary, selfUpdate: string 
   }
 }
 
+/** Whether a repository is free for a new project (projects.repo_check). */
+export interface RepoCheck {
+  repo: string
+  /** on GitHub already; null when GitHub could not be asked (projects.create asks again) */
+  exists: boolean | null
+  /** the project trace knows there, retired or not */
+  project: { name: string | null; retired: boolean } | null
+  /** a free name beside it, when it is taken */
+  suggestion: string | null
+}
+
+const SUGGESTIONS = 8
+
+async function existsOnGitHub(gh: GitHubApi, repo: string): Promise<boolean | null> {
+  if (!gh.repoExists) return null
+  return gh.repoExists(repo).catch(() => null)
+}
+
+/** What trace and GitHub know of a repository, and a free name beside it when it is taken. */
+export async function repoCheck(ctx: Context, repo: string): Promise<RepoCheck> {
+  const key = repo.toLowerCase()
+  const known = await registered().then((all) => all.some((r) => r.toLowerCase() === key)).catch(() => false)
+  const life = await lifecycleOf(repo).catch(() => null)
+  let project: RepoCheck['project'] = null
+  if (known || life?.retired) {
+    const j = await withJourneyDb(ctx, repo, (db) => loadJourney(db)?.journey ?? null).catch(() => null)
+    project = { name: j?.name ?? null, retired: Boolean(life?.retired) }
+  }
+  const gh = await ctx.deps.github()
+  // a project trace knows has its repository, whatever GitHub answers this token
+  const asked = await existsOnGitHub(gh, repo)
+  const exists = asked === true || project ? true : asked
+  let suggestion: string | null = null
+  if (exists) {
+    const [owner, name] = repo.split('/') as [string, string]
+    const base = name.replace(/-\d+$/, '')
+    const all = await registered().catch(() => [] as string[])
+    for (let n = 2; n < 2 + SUGGESTIONS && !suggestion; n++) {
+      const next = `${owner}/${base}-${n}`
+      if (next.toLowerCase() === key || all.some((r) => r.toLowerCase() === next.toLowerCase()) || (await lifecycleOf(next).catch(() => null))?.retired) continue
+      if ((await existsOnGitHub(gh, next)) !== true) suggestion = next
+    }
+  }
+  return { repo, exists, project, suggestion }
+}
+
+/** What a person reads when the repository is taken: whose it is, and the name to use instead. */
+export function takenWords(c: RepoCheck): string {
+  const whose = c.project
+    ? `${c.repo} already exists: it holds the ${c.project.retired ? 'retired ' : ''}project ${c.project.name ?? projectSlug(c.repo)}.`
+    : `${c.repo} already exists on GitHub.`
+  return `${whose}${c.suggestion ? ` ${c.suggestion} is free.` : ''}`
+}
+
 const DEFAULT_SCAFFOLD: Readonly<Record<Template, 'empty' | 'kicad'>> = { board: 'kicad', mixed: 'kicad', fpga: 'empty', firmware: 'empty' }
 
 export const PROJECT_ACTIONS = {
@@ -448,6 +510,11 @@ export const PROJECT_ACTIONS = {
 
     // 1. onboard
     if (!ctx.deps.onboard) throw new ActionError('This installation cannot put repositories under trace from the API.')
+    // nothing is created on top of what is there: onboarding a "new" repository that exists would push the starter
+    // onto its files, and a retired project's repository still holds that project's record (test-esp32 log #78)
+    const free = await repoCheck(ctx, repo)
+    if (a.new && free.exists) throw new ActionError(`${takenWords(free)} Choose another name, or choose "An existing repository" to put this one under trace.`)
+    if (free.project?.retired) throw new ActionError(`${takenWords(free)} To carry on with it, restore it from Admin, Retired projects; otherwise choose another repository.`)
     try {
       const r = await ctx.deps.onboard(repo, { create: a.new ? { template: a.new.scaffold ?? DEFAULT_SCAFFOLD[a.template], private: a.new.private } : null, apply: a.apply })
       const what = {
@@ -555,6 +622,11 @@ export const PROJECT_ACTIONS = {
       waits: [{ id: 'installation-update', what: 'The project\'s agent and knowledge base', text: cloud }],
       journey,
     }
+  }),
+
+  'projects.repo_check': def('admin', Repo, async ({ repo }, ctx) => {
+    const c = await repoCheck(ctx, repo)
+    return { ...c, text: c.exists ? takenWords(c) : null }
   }),
 
   'project.update': def('admin', Repo.extend(AboutSchema.shape), async ({ repo, ...patch }, ctx) => {

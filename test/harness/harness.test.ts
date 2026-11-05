@@ -5,6 +5,7 @@ import * as deploy from '../../src/harness/deploy.js'
 import { TASKS } from '../../src/harness/index.js'
 import * as prs from '../../src/harness/prs.js'
 import { globMatch } from '../../src/harness/util.js'
+import { afterBranch, discardComment, followsOf, readDiscard } from '../../src/core/discarded.js'
 import * as worker from '../../src/harness/worker.js'
 import { SHA, cfgOf, context, deps, fakeCore, fakeGithub } from './fake.js'
 
@@ -31,6 +32,21 @@ describe('settings', () => {
   })
 })
 
+describe('discarded changes (src/core/discarded.ts)', () => {
+  it('reads trace\'s discard comment, old and new; names the branch that follows one', () => {
+    expect(readDiscard(discardComment({ by: 'Ada Lovelace', quoted: '> Not this way.\n> Use the LDO.', stopped: ['The Verification job that was working on it was stopped.'] })))
+      .toEqual({ by: 'Ada Lovelace', reason: 'Not this way.\nUse the LDO.' })
+    expect(readDiscard('Discarded by a person on the project (CU):\n\n> We chose the other regulator.')).toEqual({ by: 'a person on the project (CU)', reason: 'We chose the other regulator.' })
+    expect(readDiscard('Discarded by me: no quote')).toBeNull()
+    expect(readDiscard('LGTM')).toBeNull()
+    expect(afterBranch('claude/task-x', 12)).toBe('claude/task-x-after-12')
+    expect(afterBranch('claude/task-x-after-12', 14)).toBe('claude/task-x-after-14')
+    expect(afterBranch(`claude/${'a'.repeat(250)}`, 3).length).toBeLessThanOrEqual(200)
+    expect(followsOf('claude/task-x-after-14')).toBe(14)
+    expect(followsOf('claude/task-x')).toBeNull()
+  })
+})
+
 describe('open-pr', () => {
   it('skips the default branch, skip_branches and wip; opens with the token', async () => {
     const cfg = cfgOf({ prs: { skip_branches: ['next', 'next/**'] } })
@@ -49,6 +65,85 @@ describe('open-pr', () => {
     expect(c.title).toBe('Fix the divider (+1 more)')
     expect(c.base).toBe('main')
     expect(String(c.body)).toMatch(/no-automerge/)
+  })
+
+  // test-esp32 log #75: change #12 was discarded, a job pushed to its branch, and it came back as #13
+  const discardedOn = (n: number, branch: string, reason = 'We chose the other regulator.') => ({
+    'pulls.list': (a: Record<string, unknown>) => (a.state === 'open' ? [] : a.head === `o:${branch}` ? [{ number: n, state: 'closed', merged_at: null, head: { ref: branch, repo: { full_name: 'o/r' } } }] : []),
+    'pulls.get': (a: Record<string, unknown>) => (a.pull_number === n ? { number: n, state: 'closed', merged_at: null, head: { ref: branch } } : { number: a.pull_number, state: 'open' }),
+    'issues.listComments': (a: Record<string, unknown>) => (a.issue_number === n
+      ? [{ body: 'Asked for changes by Ada:\n\n> again' }, { body: discardComment({ by: 'Ada Lovelace', quoted: reason.split('\n').map((l) => `> ${l}`).join('\n') }) }] : []),
+    'repos.compareCommits': { ahead_by: 1, commits: [{ sha: SHA('a'), commit: { message: 'verify: re-run the checks' } }] },
+    'pulls.create': { number: 13, html_url: 'u' },
+  })
+
+  it('opens no PR for the branch of a change a person discarded, whatever is pushed to it', async () => {
+    const f = fakeGithub(discardedOn(12, 'claude/task-x'))
+    const core = fakeCore()
+    await prs.openPr(deps(f, core, cfgOf(), context({ ref: 'refs/heads/claude/task-x' }), { OWN_TOKEN: 't' }))
+    expect(f.called('pulls.create')).toHaveLength(0)
+    expect(core.text).toMatch(/`claude\/task-x` belongs to #12, which Ada Lovelace discarded: no PR opened\..*`claude\/task-x-after-12`/)
+    // reopened on GitHub: the branch is not retired
+    const g = fakeGithub({ ...discardedOn(12, 'claude/task-x'), 'pulls.list': (a: Record<string, unknown>) => (a.state === 'open' ? [] : [{ number: 12, state: 'open', head: { ref: 'claude/task-x' } }]) })
+    await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/task-x' }), { OWN_TOKEN: 't' }))
+    expect(g.called('pulls.create')).toHaveLength(1)
+    // closed by hand without trace's discard, or merged: opened as before
+    const h = fakeGithub({ ...discardedOn(12, 'claude/task-x'), 'issues.listComments': [{ body: 'closing, see #14' }] })
+    await prs.openPr(deps(h, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/task-x' }), { OWN_TOKEN: 't' }))
+    expect(h.called('pulls.create')).toHaveLength(1)
+    // GitHub cannot say: nothing opened
+    const e = fakeGithub({ ...discardedOn(12, 'claude/task-x'), 'pulls.list': (a: Record<string, unknown>) => (a.state === 'open' ? [] : new Error('GitHub 502')) })
+    const ec = fakeCore()
+    await prs.openPr(deps(e, ec, cfgOf(), context({ ref: 'refs/heads/claude/task-x' }), { OWN_TOKEN: 't' }))
+    expect(e.called('pulls.create')).toHaveLength(0)
+    expect(ec.text).toMatch(/could not check whether `claude\/task-x` belongs to a discarded change/)
+  })
+
+  it('a branch that follows a discarded change opens a PR that links it, with the person\'s reason', async () => {
+    const f = fakeGithub(discardedOn(12, 'claude/task-x', 'Wrong regulator.\nUse the LDO.'))
+    await prs.openPr(deps(f, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/task-x-after-12' }), { OWN_TOKEN: 't' }))
+    const c = f.called('pulls.create')[0]!.args
+    expect(c.head).toBe('claude/task-x-after-12')
+    expect(String(c.body)).toContain('This follows #12, which Ada Lovelace discarded, with this reason:\n\n> Wrong regulator.\n> Use the LDO.')
+    // a name that only looks like one: no line
+    const g = fakeGithub({ ...discardedOn(12, 'claude/task-x'), 'pulls.get': { number: 40, state: 'open' } })
+    await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/thing-after-40' }), { OWN_TOKEN: 't' }))
+    expect(String(g.called('pulls.create')[0]!.args.body)).not.toMatch(/This follows/)
+  })
+
+  it('names a change by the work in it, not by a specialist\'s record that came first (test-esp32 log #144)', async () => {
+    const record = 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)\n\nWhat its tools wrote to the project\'s record.'
+    const f = fakeGithub({
+      'pulls.list': [],
+      'repos.compareCommits': { ahead_by: 2, commits: [{ sha: SHA('a'), commit: { message: record } }, { sha: SHA('b'), commit: { message: 'Case: printed two-part shell\n\nbody' } }] },
+      'pulls.create': { number: 20, html_url: 'u' },
+    })
+    await prs.openPr(deps(f, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/x' }), { OWN_TOKEN: 't' }))
+    expect(f.called('pulls.create')[0]!.args.title).toBe('Case: printed two-part shell (+1 more)')
+    // only records: named as before
+    const g = fakeGithub({ 'pulls.list': [], 'repos.compareCommits': { ahead_by: 1, commits: [{ sha: SHA('a'), commit: { message: record } }] }, 'pulls.create': { number: 21, html_url: 'u' } })
+    await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/y' }), { OWN_TOKEN: 't' }))
+    expect(g.called('pulls.create')[0]!.args.title).toBe('trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)')
+  })
+
+  it('titles an open record change again once a push brings design work into it', async () => {
+    const open = { number: 20, title: 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)', base: { ref: 'main' } }
+    const commits = [
+      { sha: SHA('a'), commit: { message: 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)' } },
+      { sha: SHA('b'), commit: { message: 'trace: the impl specialist\'s record (job-mw3awisf-29f0f73e)' } },
+      { sha: SHA('c'), commit: { message: 'Case: printed two-part shell, MJF PA12-HP at JLC3DP' } },
+    ]
+    const f = fakeGithub({ 'pulls.list': [open], 'pulls.listCommits': commits })
+    const core = fakeCore()
+    await prs.openPr(deps(f, core, cfgOf(), context({ ref: 'refs/heads/claude/handoff-hoac40d08bf1664e' }), { OWN_TOKEN: 't' }))
+    expect(f.called('pulls.update')[0]!.args).toMatchObject({ pull_number: 20, title: 'Case: printed two-part shell, MJF PA12-HP at JLC3DP (+2 more)' })
+    expect(core.text).toMatch(/retitled/)
+    // a title a person chose, or one with records only, is left alone
+    for (const [title, list] of [['Case design, reviewed', commits], [open.title, commits.slice(0, 2)]] as const) {
+      const g = fakeGithub({ 'pulls.list': [{ ...open, title }], 'pulls.listCommits': list })
+      await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/handoff-hoac40d08bf1664e' }), { OWN_TOKEN: 't' }))
+      expect(g.called('pulls.update'), title).toHaveLength(0)
+    }
   })
 
   it('opens nothing without a token and says why', async () => {

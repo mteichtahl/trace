@@ -82,7 +82,8 @@ export function useChangeActions(repo: string) {
   })
   const discard = useMutation({
     mutationFn: (a: { number: number; title: string; reason: string }) => call('change.discard', { repo, number: a.number, reason: a.reason }),
-    onSuccess: (_r, a) => toast(`Discarded "${a.title}"`, { description: 'Nothing in the design changed. Your reason is in the decisions log, and trace will not start this work again on its own.' }),
+    // what happened to the jobs that were working on it goes first: the person sees it nowhere else at once
+    onSuccess: (r, a) => toast(`Discarded "${a.title}"`, { description: [...(r.jobs ?? []), 'Nothing in the design changed. Your reason is in the decisions log, and trace will not open this change again.'].join(' ') }),
     onError: (e) => toast.error('Could not discard the change', { description: `${e instanceof Error ? e.message : String(e)} Your reason is kept; try again.` }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })

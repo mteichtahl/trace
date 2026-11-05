@@ -33,6 +33,7 @@ import { loadJourney, startJourney } from '../../src/core/journey.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
+import { DISCARD_MARK, readDiscard } from '../../src/core/discarded.js'
 
 // ------------------------------------------------------------------ the rules
 
@@ -425,6 +426,7 @@ const logs: Record<string, unknown>[] = []
 const deps: ActionDeps = { github: async () => github, cognito: () => cognito, jobs: async () => jobsApi, tools: () => new Registry([]), scratch, store: (p) => backendFor(join(bucket, p)), log: (l) => { logs.push(l) } }
 const ctx = (principal: Principal): Context => ({ principal, deps })
 const run = async (who: Principal, action: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> => (await perform(action, args, ctx(who))).result as Record<string, unknown>
+const decisionDetail = async (kind: string): Promise<unknown> => (await journeyStore(ctx(ADMIN), REPO).read((d) => loadJourney(d)?.decisions.find((x) => x.kind === kind)?.detail ?? null)).result
 const decisions = async (): Promise<{ kind: string; summary: string; by: string | null; ref: string | null }[]> => (await journeyStore(ctx(ADMIN), REPO).read((d) => loadJourney(d)?.decisions ?? [])).result
 
 beforeAll(async () => {
@@ -537,7 +539,8 @@ describe('changes.list and change.get', () => {
   it('one change in full: what trace did, files, checks, requirements, the recommendation, and who may accept', async () => {
     const d = await run(USER, 'change.get', { repo: REPO, number: 1 })
     expect(d).toMatchObject({
-      number: 1, summary: ['extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
+      // what it holds first (test-esp32 log #144): the fake's change touches a schematic
+      number: 1, summary: ['Changes the design: 1 hardware file', 'extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
       files: [{ path: 'hw/power.kicad_sch', kind: 'schematic', status: 'modified' }, { path: 'docs/notes.md', kind: 'text', status: 'added' }],
       checks_list: [{ id: 'cr:100', name: 'build', state: 'passed', summary: 'Built.' }],
       recommendation: { verdict: 'accept', why: 'Its check passed (build), and it can be merged. It covers R1, R2, R3 and R4.' },
@@ -902,17 +905,64 @@ describe('change.ask and change.discard', () => {
   })
 
   it('discard: closes it, then comments the reason, records it; a closed one cannot be discarded again', async () => {
-    expect(await run(USER, 'change.discard', { repo: REPO, number: 4, reason: 'We chose the other regulator.' })).toEqual({ closed: true })
-    expect(github.did).toEqual(['close 4', 'comment 4 Discarded by a person on the project (CU):\n\n> We chose the other regulator.'])
+    expect(await run(USER, 'change.discard', { repo: REPO, number: 4, reason: 'We chose the other regulator.' })).toEqual({ closed: true, jobs: [] })
+    expect(github.did).toEqual(['close 4', `comment 4 Discarded by a person on the project (CU):\n\n> We chose the other regulator.\n\ntrace will not open this branch again as a change. Work that is still wanted goes on a new branch, and its change links this one.\n${DISCARD_MARK}`])
     expect((await decisions()).find((x) => x.kind === 'change.discarded')).toMatchObject({ by: USER.email, ref: '4', summary: expect.stringMatching(/discarded "Change 4": We chose the other regulator/) })
     await expect(run(USER, 'change.discard', { repo: REPO, number: 4, reason: 'again' })).rejects.toThrow(/discarded already/)
   })
 
   it('discard: a comment that fails still answers closed (it is closed), and is logged', async () => {
     github.commentRefusal = true
-    expect(await run(USER, 'change.discard', { repo: REPO, number: 2, reason: 'Not this way.' })).toEqual({ closed: true })
+    expect(await run(USER, 'change.discard', { repo: REPO, number: 2, reason: 'Not this way.' })).toEqual({ closed: true, jobs: [] })
     expect(github.did).toEqual(['close 2'])
     expect(logs.find((l) => l.warning === 'change.discard: closed, but the reason was not posted')).toMatchObject({ number: 2 })
+  })
+})
+
+describe('a discarded change stays discarded (test-esp32 log #75)', () => {
+  it('stops the jobs on its branch, says so on the change and in its comment, and records branch, head and reason', async () => {
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-verify-run', { kind: 'task', agent: 'verify', title: 'Check it', state: 'running', branch: 'claude/task-wip', session: null, startedAt: now - 60, beatAt: now - 5 }, now)
+      putJob(d, 'job-queued', { kind: 'task', agent: 'impl', title: 'Carry on', state: 'queued', branch: null, queuedAt: now - 30, payload: JSON.stringify({ kind: 'task', branch: 'claude/task-wip', request: 'Carry on' }) }, now)
+      putJob(d, 'job-paused', { kind: 'task', agent: 'docs', title: 'Docs', state: 'paused', branch: 'claude/task-wip', pausedAt: now - 100 }, now)
+      putJob(d, 'job-elsewhere', { kind: 'task', agent: 'verify', title: 'Other', state: 'running', branch: 'claude/task-sch', startedAt: now - 60, beatAt: now - 5 }, now)
+      return { result: null }
+    })
+    const cancelled: { id: string; reason: string }[] = []
+    jobsApi.cancel = async (id, reason) => { cancelled.push({ id, reason }); return { ok: !id.endsWith('job-queued'), state: 'aborted' } }
+    try {
+      const r = await run(USER, 'change.discard', { repo: REPO, number: 4, reason: 'We chose the other regulator.' })
+      const jobs = [
+        'The Verification job that was working on it was stopped.',
+        'The Implementation job queued for it could not be stopped; trace will not open this branch as a change again, whatever it pushes.',
+        'The Documentation job paused on it will not be resumed.',
+      ]
+      expect(r).toEqual({ closed: true, jobs: expect.arrayContaining(jobs) })
+      expect((r.jobs as string[])).toHaveLength(3)
+      expect(cancelled.map((c) => c.id.split('.').at(-1)).sort()).toEqual(['job-queued', 'job-verify-run'])
+      expect(cancelled[0]?.reason).toBe(`the change it works on was discarded by ${USER.email}`)
+      // the comment carries what was stopped and the mark that retires the branch (src/core/discarded.ts)
+      const comment = github.did[1] ?? ''
+      expect(comment).toContain('The Verification job that was working on it was stopped.')
+      expect(comment.endsWith(DISCARD_MARK)).toBe(true)
+      expect(readDiscard(comment.replace(/^comment 4 /, ''))).toEqual({ by: 'a person on the project (CU)', reason: 'We chose the other regulator.' })
+      // the paused job is never resumed (as Cancel on a paused job)
+      const list = await run(USER, 'jobs.list', { repo: REPO }) as { jobs: { workerJobId: string; state: string; controls: string[] }[] }
+      expect(list.jobs.find((j) => j.workerJobId === 'job-paused')).toMatchObject({ state: 'aborted', controls: [] })
+      // the decision keeps the branch, head, reason and the jobs; the change's page says it
+      expect((await decisionDetail('change.discarded'))).toMatchObject({ number: 4, branch: 'claude/task-wip', head: sha(4), reason: 'We chose the other regulator.', jobs: expect.arrayContaining(jobs) })
+      const d = await run(USER, 'change.get', { repo: REPO, number: 4 })
+      expect(d.state).toBe('closed')
+      expect(d.discarded).toEqual({ by: USER.email, at: expect.any(String), reason: 'We chose the other regulator.', jobs: expect.arrayContaining(jobs) })
+    } finally {
+      delete jobsApi.cancel
+      await jobIndex(ctx(ADMIN), REPO).update((d) => { d.prepare("DELETE FROM jobs WHERE id IN ('job-verify-run','job-queued','job-paused','job-elsewhere')").run(); return { result: null } })
+    }
+  })
+
+  it('an open change has no discard on its page', async () => {
+    expect((await run(USER, 'change.get', { repo: REPO, number: 4 })).discarded).toBeUndefined()
   })
 })
 
@@ -1126,5 +1176,55 @@ describe('a change that edits an accepted requirement (test-esp32 log #112)', ()
     // the default branch still reads as before the merge (GitHub's copy lags): the review's finding reopens Define
     const r = await run(USER, 'change.accept', { repo: REPO, number: 12, head_sha: sha(12) })
     expect(r).toMatchObject({ merged: true, back_to: 'define', next: expect.stringMatching(/requirement REQ-367d71 was changed after the requirements baseline/) })
+  })
+})
+
+describe('a change says what it holds (test-esp32 log #144, #133)', () => {
+  const DB = '.trace/project.db'
+  const HANDOFF = 'claude/handoff-hoac40d08bf1664e'
+  const RECORD = 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)'
+  /** the default branch's database with one intent statement added, as the docs change's record did */
+  const withIntent = (): Uint8Array => {
+    const dir = mkdtempSync(join(scratch, 'intent-'))
+    const path = join(dir, 'project.db')
+    writeFileSync(path, github.files.get(`${REPO}:main:${DB}`)!)
+    const d = new DatabaseSync(path)
+    d.exec(`CREATE TABLE IF NOT EXISTS intent_statements (id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'statement', text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'proposed', created REAL NOT NULL, updated REAL NOT NULL)`)
+    d.prepare('INSERT INTO intent_statements (id, topic, text, created, updated) VALUES (?,?,?,?,?)').run('INT-wifiprov', 'interfaces', 'The setup access point reopens after 60 s without the saved network', 1, 1)
+    d.close()
+    return readFileSync(path)
+  }
+
+  beforeAll(async () => {
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-mw3ashi6', { kind: 'task', agent: 'docs', title: 'Answer the hand-off', state: 'succeeded', branch: HANDOFF, handoff: 'hoac40d08bf1664e', endedAt: now - 30 }, now)
+      return { result: null }
+    })
+  })
+  beforeEach(() => {
+    github.add(20, HANDOFF, { title: RECORD })
+    const p = github.pulls.get(20)!
+    p.files = ['hardware/desk-gadget/oled.kicad_sch', 'mechanical/case.py', 'mechanical/out/case.step', DB].map((path) => ({ path, status: 'modified', additions: 1, deletions: 0, patch: null, previous: null }))
+    p.commits = [`${RECORD}\n\nWhat its tools wrote.`, 'trace: the impl specialist\'s record (job-mw3awisf-29f0f73e)', 'Case: printed two-part shell, board on M2 screws']
+    github.files.set(`${REPO}:${sha(20)}:${DB}`, withIntent())
+  })
+
+  it('a "record" change that came to carry design work is named by that work, and its summary says what it holds', async () => {
+    const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
+    expect(d.title).toBe('Case: printed two-part shell, board on M2 screws (+2 more)')
+    expect((d.summary as string[]).slice(0, 2)).toEqual([
+      'Changes the design: 1 hardware file and 2 mechanical files',
+      'Adds intent statement INT-wifiprov (proposed): "The setup access point reopens after 60 s without the saved network"',
+    ])
+  })
+
+  it('a record that is only a record keeps its name, and still says it adds an intent statement', async () => {
+    const p = github.pulls.get(20)!
+    p.files = p.files.filter((f) => f.path === DB)
+    p.commits = [RECORD]
+    const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
+    expect(d.title).toBe(RECORD)
+    expect((d.summary as string[])[0]).toMatch(/^Adds intent statement INT-wifiprov/)
   })
 })

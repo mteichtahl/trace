@@ -47,6 +47,7 @@ import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
 import { BuildHealth } from '@/components/project/build-health'
 import { SpendWarningCard } from '@/components/project/spend-by-job'
+import { ResignGates } from '@/components/project/resign-gates'
 
 export const Route = createFileRoute('/_app/p/$id/')({
   component: Overview,
@@ -202,6 +203,8 @@ function Overview() {
   const spendWarning = admin && cost.data?.money && cost.data.warning
     ? <SpendWarningCard warning={cost.data.warning} currency={cost.data.currency} id={id} className="mt-4" />
     : null
+  // after a change of requirements: the gates to sign again, and which keep their evidence (journey.get resign)
+  const resign = d.resign ? <ResignGates resign={d.resign} id={id} className="mt-4" /> : null
   const nextCard = held ? <HeldNextCard repo={repo} part={part} /> : (
     <NextStepCard
       step={d.next}
@@ -230,6 +233,7 @@ function Overview() {
         <StageChip j={d} admin={admin} onOpen={(s) => setSheet(s)} />
         <StageSheet j={d} stage={sheet} admin={admin} held={held} onOpenChange={(o) => !o && setSheet(null)} />
         {nextCard}
+        {resign}
         {outOfDate}
         {spendWarning}
         <FoldRows label="Around this project">
@@ -274,6 +278,7 @@ function Overview() {
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
           {nextCard}
+          {resign}
           {outOfDate}
           {spendWarning}
 

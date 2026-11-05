@@ -73,6 +73,7 @@ const options: FieldMap = {
   fields: {
     id: { ignore: 'the option\'s id within its question' }, label: { prop: 'label' }, recommended: { prop: 'isRecommended', as: 'bool' },
     why: { prop: 'justification' }, gives_up: { prop: 'givesUp' },
+    waives: { ignore: 'what choosing it would waive: the waivers an answer records are their own rows, mapped from waivers' },
   },
 }
 const revision = { ref: 'revision', type: 'Revision' } as const
@@ -80,7 +81,10 @@ const specialist = { ref: 'specialist', type: 'Specialist' } as const
 const blockParts: FieldMap = {
   class: 'BlockPart',
   typeIf: { field: 'key', class: 'KeyPart' },
-  fields: { mpn: { prop: 'refersToPart', ref: (v) => [`part`, mpnKey(v)] }, role: { prop: 'role' }, key: { ignore: 'whether it is a key part: the node is typed KeyPart' } },
+  fields: {
+    mpn: { prop: 'refersToPart', ref: (v) => [`part`, mpnKey(v)] }, role: { prop: 'role' }, key: { ignore: 'whether it is a key part: the node is typed KeyPart' },
+    off_board: { prop: 'isOffBoard', as: 'bool' }, size_mm: { prop: 'boundingBox', as: 'json' },
+  },
 }
 /** arch_connections.from_block / to_block: a block of the same option */
 const block: RefTarget = (v, row) => ['block', `${String(row.option)}/${v}`]

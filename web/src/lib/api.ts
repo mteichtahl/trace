@@ -76,6 +76,9 @@ export interface Actions {
     /** read from the API's steps (lib/readers.ts readCreated): what was done, what failed, what waits */
     result: { repo: string; ok: boolean; done: string[]; failed: string[]; waits: Wait[] }
   }
+  /** admin: whether a repository is free for a new project: on GitHub already (null: GitHub could not be asked), the
+   * project trace knows there (retired too), a free name beside it, and the line to show when it is taken */
+  'projects.repo_check': { args: Repo; result: import('@/components/new-project/rules').RepoCheck }
   /** admin: what the project is (Settings): written to the journey record, not the repository */
   'project.update': {
     args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; hardware?: boolean }; later?: ('certify' | 'produce' | 'sustain')[] }
@@ -209,7 +212,7 @@ export interface Actions {
   /** head_sha: the head commit the person looked at (change.get's head.sha); the API refuses a change that moved since */
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
-  'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
+  'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true; jobs?: string[] } }
   'change.rerun': { args: Repo & { number: number }; result: { checks: string[]; runs: number } }
   /** a change in conflict brought up to date now (src/api/conflicts.ts): an edit made in trace is made again, anything
    * else goes to trace's worker with its earlier attempts set aside. `text`: what happens next, in plain words */
