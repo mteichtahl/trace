@@ -510,6 +510,12 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (!i.question) return notMet('resolves', 'There is no open question to answer.')
     const opt = str(i.draft?.option)
     const text = str(i.draft?.answer)
+    // an option that needs a detail only the person has resolves nothing until it is given (test-esp32 log #137)
+    const needs = i.question.options.find((o) => o.id === opt)?.needs
+    if (needs) {
+      const detail = str(i.draft?.detail)
+      return detail.length >= 3 && !VAGUE.test(detail) ? met('resolves') : notMet('resolves', `The chosen answer needs ${needs}: give it in "Make it specific".`)
+    }
     return (opt && opt !== 'other') || (text.length >= 3 && !VAGUE.test(text)) ? met('resolves') : notMet('resolves', 'Choose an option or write an answer that unblocks the agent.')
   },
   'question-answer/units': (i) => {

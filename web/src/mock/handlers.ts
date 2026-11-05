@@ -16,7 +16,7 @@ import { lifecycleAction, withLifecycle } from './lifecycle'
 import { templatesAction } from './templates'
 import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
-import { handoffsOf, jobsAction, jobsOf } from './jobs'
+import { handoffsOf, jobsAction, jobsOf, lostStepOf, stoppedStepsOf } from './jobs'
 import { changesAction } from './changes'
 import { deploysAction } from './deploys'
 import { healthAction } from './health'
@@ -60,7 +60,9 @@ function action(name: string, a: Record<string, unknown>): Response {
       const j = JOURNEYS[repo]
       if (!j) return json({ ok: false, error: 'no access' }, 403)
       // the reopen after a change of requirements, when asked for (mock/reopen.ts)
-      return ok({ ...(repo === REOPEN_REPO && reopenOn() ? reopened(j) : j), jobs: jobsOf(repo), handoffs: handoffsOf(repo) })
+      const shown = repo === REOPEN_REPO && reopenOn() ? reopened(j) : j
+      // a lost job holds up the next step until it is started again or dismissed (mock/jobs.ts)
+      return ok({ ...shown, stages: stoppedStepsOf(repo, shown.stages), next: lostStepOf(repo, shown.next), jobs: jobsOf(repo), handoffs: handoffsOf(repo) })
     }
     case 'project.update': {
       // the mock journeys are already in the app's shape (lib/readers.ts passes them through), so patch that shape

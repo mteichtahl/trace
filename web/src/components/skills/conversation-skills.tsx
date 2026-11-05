@@ -21,7 +21,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
 import { FOCUS_AGENT_ID } from '@/components/chat/agent'
 import { EmbeddedChat } from '@/components/chat/embedded-chat'
-import { DecisionCard, WaiverNote } from '@/components/decision-card'
+import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import type { QualityCheck } from '@/components/quality-bar'
@@ -245,23 +245,28 @@ export interface AnswerDraft extends SkillDraftBase {
   option?: string
   reason?: string
   answer: string
+  /** the detail a chosen option needs from the person (its `needs`), sent with the option */
+  detail?: string
   value: string
   source: string
   lasts: 'once' | 'rule' | 'requirement' | ''
 }
 
 /** The question-answer bar, from the draft. Pure. */
-export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[]; question?: string }): Record<string, CriterionStatus> {
+export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[]; question?: string; needs?: Record<string, string> }): Record<string, CriterionStatus> {
   // a draft written for another question answers nothing here, even when that question had the same option ids
-  const d = o.question && d0.question && d0.question !== o.question ? { ...d0, option: undefined, reason: undefined, answer: '', value: '', source: '', lasts: '' as const } : d0
+  const d = o.question && d0.question && d0.question !== o.question ? { ...d0, option: undefined, reason: undefined, answer: '', detail: '', value: '', source: '', lasts: '' as const } : d0
   // a chosen option counts only while it is one of this question's options: a draft kept from an earlier question can
   // still hold that question's choice
   const chosen = !!d.option && d.option !== 'other' && (!o.options || o.options.includes(d.option))
   const text = d.answer.trim()
-  const vague = /^(it depends|you decide|whatever|not sure|dunno)\.?$/i.test(text)
+  const vague = (s: string) => /^(it depends|you decide|whatever|not sure|dunno|tbd|n\/?a)\.?$/i.test(s)
   const quantity = !o.unit || chosen || /\d/.test(d.value || text)
+  // an option that needs a detail from the person resolves nothing until it is given (test-esp32 log #137)
+  const detail = (d.detail ?? '').trim()
+  const needed = chosen && !!o.needs?.[d.option!] && (detail.length < 3 || vague(detail))
   return {
-    resolves: chosen || (text.length >= 3 && !vague) ? 'met' : 'not_met',
+    resolves: !needed && (chosen || (text.length >= 3 && !vague(text))) ? 'met' : 'not_met',
     units: quantity ? 'met' : 'not_met',
     // a source is asked for when the answer states a quantity the question asked for, not for any digit in a decision
     // ("allow the 2 fixes at J1")
@@ -285,14 +290,16 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
   const otherQuestion = !!q && !!d.question && d.question !== q.id
   const stale = otherQuestion || (!!q && !!d.option && d.option !== 'other' && !options.some((o) => o.id === d.option))
   useEffect(() => {
-    if (otherQuestion) set({ question: q!.id, option: undefined, reason: undefined, answer: '', value: '', source: '', lasts: '' })
+    if (otherQuestion) set({ question: q!.id, option: undefined, reason: undefined, answer: '', detail: '', value: '', source: '', lasts: '' })
     else if (stale) set({ option: undefined, reason: undefined })
   }, [stale, otherQuestion]) // eslint-disable-line react-hooks/exhaustive-deps
   const chosen = !!d.option && d.option !== 'other' && !stale
   // the chosen option records a waiver in this person's name: say so beside the answer, as the option did
   const chosenWaiver = chosen ? options.find((o) => o.id === d.option)?.waiver : undefined
   const writing = !chosen
-  const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit, options: options.map((o) => o.id), ...(q ? { question: q.id } : {}) })
+  const needsMap = Object.fromEntries(options.flatMap((o) => (o.needs ? [[o.id, o.needs]] : [])))
+  const needs = chosen ? needsMap[d.option!] : undefined
+  const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit, options: options.map((o) => o.id), needs: needsMap, ...(q ? { question: q.id } : {}) })
   const checks: QualityCheck[] = qualityChecks(def, v, local, s.goTo)
 
   // the answer's own fields: beside the work on wide screens, and in the page itself below that, so a phone never has to
@@ -302,10 +309,16 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
           <>
             <div>
               <p className="text-xs text-muted-foreground">Chosen</p>
-              <p className="mt-0.5">{chosen ? options.find((o) => o.id === d.option)?.label : d.answer.trim() || <span className="text-muted-foreground">Nothing yet</span>}</p>
+              <p className="mt-0.5">{chosen ? chosenWords(options.find((o) => o.id === d.option), d.detail?.trim() || undefined) : d.answer.trim() || <span className="text-muted-foreground">Nothing yet</span>}</p>
               {d.reason && <p className="mt-1 text-muted-foreground">Reason: {d.reason}</p>}
               {chosenWaiver && <WaiverNote text={chosenWaiver} />}
             </div>
+            {needs && (
+              <div className="space-y-1.5">
+                <Label htmlFor="qa-detail">{needs.charAt(0).toUpperCase() + needs.slice(1)}</Label>
+                <Input id="qa-detail" value={d.detail ?? ''} onChange={(e) => set({ detail: e.target.value })} placeholder="trace needs this from you to act on the answer" aria-required />
+              </div>
+            )}
             {q.quantity && writing && (
               <div className="space-y-1.5"><Label htmlFor="qa-value">Value ({q.quantity.unit})</Label><Input id="qa-value" inputMode="decimal" value={d.value} onChange={(e) => set({ value: e.target.value })} placeholder={`A number in ${q.quantity.unit}`} /></div>
             )}
@@ -346,7 +359,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
       aside={wide ? aside : undefined}
       onSubmit={() => s.submit(() => answer.mutateAsync({
         repo, question: q!.id,
-        ...(chosen ? { option: d.option } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
+        ...(chosen ? { option: d.option, ...(needs ? { answer: (d.detail ?? '').trim() } : {}) } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
         ...(d.reason ? { reason: d.reason } : {}),
         ...(d.lasts ? { lasts: d.lasts } : {}),
       }).then(async (r) => {
@@ -372,8 +385,13 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
           {q.recommended && options.length > 0 && (
             <DecisionCard
               decision={{ recommended: q.recommended.id, options: [...options, { id: 'other', label: 'Other answer', detail: 'Write your own', free: true }], evidence: q.sources, blocks: q.blocks }}
-              chosen={d.option && !stale ? { option: d.option, recommended: d.option === q.recommended.id, reason: d.reason, ...(d.answer ? { answer: d.answer } : {}) } : undefined}
-              onChoose={(c) => { set({ question: q.id, option: c.option, reason: c.reason, ...(c.answer ? { answer: c.answer } : {}) }); if (s.stepIndex < 2) s.goTo(c.option === 'other' ? 'specific' : 'lasts') }}
+              chosen={d.option && !stale ? { option: d.option, recommended: d.option === q.recommended.id, reason: d.reason, ...(needs ? (d.detail?.trim() ? { answer: d.detail.trim() } : {}) : d.answer ? { answer: d.answer } : {}) } : undefined}
+              onChoose={(c) => {
+                // the detail an option needs is kept apart from an answer in the person's own words
+                const asks = !!needsMap[c.option]
+                set({ question: q.id, option: c.option, reason: c.reason, ...(asks ? { detail: c.answer ?? '' } : c.answer ? { answer: c.answer } : {}) })
+                if (s.stepIndex < 2) s.goTo(c.option === 'other' || asks ? 'specific' : 'lasts')
+              }}
             />
           )}
           {d.option && !stale && <Button variant="ghost" size="sm" onClick={() => set({ option: undefined, reason: undefined })}>Choose again</Button>}

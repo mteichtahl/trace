@@ -70,7 +70,7 @@ import { openChanges, openPulls, projectEdits, projectRule } from './actions-cha
 import { recordEdit } from './edits.js'
 import { recommendationOf } from './changes.js'
 import { REQUIREMENT_CHANGE_SAID } from './requirement-edits.js'
-import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
+import { AGENT_WORDS, jobIndex, listJobs, lostJobStep, openLostJobs, projectHandoffs, restartLostJobs, restartable, stoppedSteps } from './actions-jobs.js'
 import { editReviewItems, reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { evidenceStaleness } from './evidence-freshness.js'
@@ -589,9 +589,19 @@ export const JOURNEY_ACTIONS = {
     // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
     // could change the step, and its count is kept per default-branch commit and record version
     const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows, { next: view.next, version })
-    const next = drafting ? draftingStep(view.next, r, drafting, viewer, drafting.why) : view.next
+    const drafted = drafting ? draftingStep(view.next, r, drafting, viewer, drafting.why) : view.next
+    // a job that ended without finishing (test-esp32 log #45, #46): one that left no change is started again once on
+    // its own; otherwise the next step says it stopped and offers Start again, never "trace works on …" over it. The
+    // drafting job has its own step (Draft the requirements again)
+    const at = Date.now() / 1000
+    const restarted = jobs.error ? [] : await restartLostJobs(ctx, repo, jobs, open.error ? null : new Set(open.list.map((c) => c.change.job_id).filter((x): x is string => x !== null)),
+      { held: await assertNotHeld(repo).then(() => false, () => true), at }).catch(() => [] as string[])
+    const lost = jobs.error ? [] : openLostJobs(jobs.jobs, jobs.rows, at).filter((j) => !restarted.includes(j.title) && j.id !== drafting?.job?.id)
+    const next = lostJobStep(drafted, lost, viewer, (id) => { const row = jobs.rows.find((x) => x.id === lost.find((j) => j.id === id)?.workerJobId); return Boolean(row && restartable(row)) })
+    const stages = next !== drafted && next.job_id ? stoppedSteps(view.stages) : view.stages
     return {
-      repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, next),
+      repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, stages, next: await changedFirst(ctx, repo, r, next),
+      ...(restarted.length ? { jobs_restarted: restarted } : {}),
       ...(drafting ? { drafting: { state: drafting.state, job: drafting.job, why: drafting.why || null } } : {}),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}), ...(kept.length ? { answers_restarted: kept } : {}),
       ...(seen && staleCriteria(seen).length ? { stale_evidence: staleCriteria(seen) } : {}),
