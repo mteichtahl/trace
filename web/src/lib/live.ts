@@ -53,6 +53,9 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
         people: [['project.members', r], ['users.list'], ['assignments'], ['projects']],
         prompts: [['prompts.list'], ['prompts.get'], ['prompts.history'], ['prompts.preview', r]],
         kb: [['kb.search', r], ['files.list', r]],
+        // a new project's agent request changed (src/web/journey-events.ts): the installation update added it, or could
+        // not. The setup notice looks again now instead of at its next poll, and the project's next step with it
+        agent: [['project.agent', r], ['journey.get', r]],
         // a project paused, resumed, retired or restored: the lists, its banner and lifecycle, and what needs people
         projects: [['projects'], ['project.lifecycle', r], ['projects.retired'], ['journey.get', r], ['inbox'], ['activity.list']],
       }
