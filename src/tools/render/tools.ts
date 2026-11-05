@@ -133,7 +133,7 @@ export const mp4Args = (fps: number, input: string, out: string): string[] => ['
 /** The frames as a turntable MP4: with ffmpeg here, else as a job on the tools function or the queue (where the
  * runtime has no ffmpeg: agent/Dockerfile.tools and Dockerfile.gpu have it); null when none (the frames are still
  * returned). */
-async function encodeMp4(frames: string[], fps: number, dir: string): Promise<Uint8Array | null> {
+export async function encodeMp4(frames: string[], fps: number, dir: string): Promise<Uint8Array | null> {
   if (!frames.length) return null
   const ff = findFfmpeg()
   const name = (i: number): string => `f_${String(i + 1).padStart(4, '0')}.png`

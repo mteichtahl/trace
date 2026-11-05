@@ -27,6 +27,7 @@ revision, like the journey record that is copied into the repository with it.
 | `case` | The closed case | Three-quarter view |
 | `board-in-case` | The board in the base, lid off, its screws seated | Three-quarter view from higher up, 45° |
 | `exploded` | Base, board and lid pulled apart along their assembly axis, fasteners between them | Three-quarter view, framed on the whole stack |
+| `turntable` | A video: the closed case (the board when there is no case) turning once on its floor | Three-quarter view, 22° up, framed on everything the turn sweeps |
 
 **Exploded view.** The board and the case are placed in the case frame from [enclosure-build.md](enclosure-build.md):
 y flipped from KiCad, and the board's bottom face at z = 0. The board model is placed by its own outline, so where
@@ -49,6 +50,12 @@ records are one of the run's inputs, so the pictures go out of date when the scr
 - **Surfaces.** The board's surfaces come from `render_board.py`. The case uses the material its process gives it:
   printed nylon is matte grey, and machined aluminium is brushed metal.
 - **Floor.** A shadow catcher under the subject gives a soft contact shadow, so the subject does not float.
+- **Turntable.** The subject turns once about its own centre while the camera and lights stay still, as on a real
+  turntable, so the light moves over the case as it turns. The first frame is the case shot's view. It is 96 frames at
+  24 fps (four seconds), encoded as H.264 MP4 by ffmpeg. Its frames are smaller than the pictures and use fewer
+  samples, because each is seen for a 24th of a second and is denoised: 1920 × 1200 with 64 samples on the GPU queue,
+  1280 × 800 with 24 on a CPU. A draft is 48 frames at a quarter of that. It renders after the pictures, in the same
+  Blender run, so on a CPU it is the longest part of the set.
 
 ### Colours from the logo
 
@@ -86,6 +93,7 @@ Each image's name carries the project, the revision and the date the revision wa
 ```
 <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png
 test-esp32_rev-B_2026-11-04_exploded.png
+test-esp32_rev-B_2026-11-04_turntable.mp4
 ```
 
 - **The date** is the day of the `journey.snapshot` decision, in the installation's time zone (UTC when none is set).
@@ -167,5 +175,5 @@ phase 4 cover this with no new code.
 
 - **The time zone for the date in the name.** This note uses the installation's time zone. A per-project setting is
   the alternative.
-- **Turntables.** Should each revision also get a turntable movie of the closed case? It is off in this note, because
-  movies are slow on a CPU.
+- **Turntables.** Settled: each revision gets one (see "Look"). On a CPU it adds the most time to the set, so an
+  installation without a GPU queue may want it shorter; `turntable_frames` sets it per run.

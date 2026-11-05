@@ -22,9 +22,9 @@ import { type Context, Repo, def, hashOf, plainly, withProjectDb, writeJourney }
 import { listJobs } from './actions-jobs.js'
 
 /** The order the app shows a revision's pictures in: the assembly first, the board's own views after. */
-export const SHOT_ORDER: readonly Shot[] = ['exploded', 'board-in-case', 'case', 'board', 'board-top', 'board-bottom']
+export const SHOT_ORDER: readonly Shot[] = ['exploded', 'turntable', 'board-in-case', 'case', 'board', 'board-top', 'board-bottom']
 export const SHOT_LABEL: Readonly<Record<Shot, string>> = {
-  exploded: 'Exploded', 'board-in-case': 'Board in case', case: 'Case', board: 'Board', 'board-top': 'Top', 'board-bottom': 'Underside',
+  exploded: 'Exploded', turntable: 'Turntable', 'board-in-case': 'Board in case', case: 'Case', board: 'Board', 'board-top': 'Top', 'board-bottom': 'Underside',
 }
 
 export interface RenderPicture { name: string; shot: Shot; label: string; bytes: number | null; width: number | null; height: number | null }
