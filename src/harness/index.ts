@@ -19,7 +19,7 @@ import * as ci from './ci-doctor.js'
 import * as deploy from './deploy.js'
 import { dispatchTask } from './dispatch.js'
 import { RATE_LIMIT_BUDGET_MS, patient, retried } from './retry.js'
-import { appCredentials, chooseToken, fallback } from './app-token.js'
+import { type BrokerOptions, awsCredentials, chooseToken, fallback } from './app-token.js'
 import * as prs from './prs.js'
 import type { Context, Core, Deps, GitHub, TaskEnv } from './types.js'
 import * as worker from './worker.js'
@@ -165,14 +165,16 @@ async function runTask(args: { github: GitHub; context: Context; core: Core; get
 
 /**
  * The client the task acts through: trace's GitHub app's installation on this repository, with a quota of its own, when
- * the step is given the app's credentials and the app is installed here; else the person's (TRACE_TOKEN), as before
- * (app-token.ts). Only a step given the person's token changes: one that has only the job's token keeps it.
+ * the step can get its token from the installation's broker; else the person's (TRACE_TOKEN), as before (app-token.ts).
+ * Only a step given the person's token changes: one that has only the job's token keeps it. `aws`: the step's
+ * environment (its AWS credentials and region).
  */
 export async function actAs(args: { context: Context; core: Core; getOctokit: (token: string) => GitHub },
-  env: TaskEnv, person: GitHub, limits: Parameters<typeof patient>[1], o: { fetch?: Parameters<typeof chooseToken>[1]['fetch'] } = {}): Promise<GitHub> {
+  env: TaskEnv, person: GitHub, limits: Parameters<typeof patient>[1],
+  o: { aws?: Record<string, string | undefined>; fetch?: BrokerOptions['fetch'] } = {}): Promise<GitHub> {
   if (!env.OWN_TOKEN) return person
-  const { owner, repo } = args.context.repo
-  const choice = await chooseToken(appCredentials(env), { owner, repo, api: process.env.GITHUB_API_URL, ...(o.fetch ? { fetch: o.fetch } : {}) })
+  const aws = o.aws ?? process.env
+  const choice = await chooseToken({ url: env.BROKER_URL, credentials: awsCredentials(aws), env: aws, ...(o.fetch ? { fetch: o.fetch } : {}) })
   if (choice.kind === 'person') {
     args.core.info(`trace acts as TRACE_TOKEN's account here: ${choice.why}.`)
     return person

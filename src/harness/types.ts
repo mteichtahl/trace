@@ -32,10 +32,9 @@ export interface Context {
 /** Values a workflow step passes in (action inputs → environment). */
 export interface TaskEnv {
   OWN_TOKEN?: string
-  /** trace's GitHub app (vars.TRACE_APP_ID, secrets.TRACE_APP_KEY): with both, the step acts as the app's installation
-   * on the repository, when the app is installed there (src/harness/app-token.ts) */
-  APP_ID?: string
-  APP_KEY?: string
+  /** trace's token broker (vars.TRACE_GITHUB_APP_BROKER): its function URL. With the step's AWS credentials, the step
+   * acts as trace's GitHub app's installation on the repository (src/harness/app-token.ts) */
+  BROKER_URL?: string
   ITEM?: string
   /** worker-prompt/worker-dispatch: the specialist to use instead of the item's route. */
   AGENT?: string

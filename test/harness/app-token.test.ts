@@ -1,101 +1,82 @@
 /**
- * The harness acts as trace's GitHub app when the app is installed on the repository, with a quota of its own, and as
+ * The harness acts as trace's GitHub app, with a token from the installation's broker, when it can get one, and as
  * TRACE_TOKEN's account otherwise (src/harness/app-token.ts). In the test run the workflows shared one person's quota,
  * used it up, and `open-pr` and `automerge` failed on "API rate limit exceeded for user ID 1817657" (test-esp32 run 2,
  * #126 and #128).
  */
-import { generateKeyPairSync, createVerify } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Octokit } from '@octokit/rest'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { appCredentials, appJwt, chooseToken, fallback, notAllowed } from '../../src/harness/app-token.js'
+import { awsCredentials, brokerRegion, chooseToken, fallback, notAllowed, signedRequest } from '../../src/harness/app-token.js'
 import { actAs } from '../../src/harness/index.js'
 import * as prs from '../../src/harness/prs.js'
 import type { GitHub } from '../../src/harness/types.js'
 import { cfgOf, context, deps, fakeCore, fakeGithub } from './fake.js'
 
-const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
-const PEM = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString()
-const creds = { appId: '123456', privateKey: PEM }
-const NOW = 1_800_000_000_000
+const URL_ = 'https://abcdefghijklmnop.lambda-url.ap-southeast-2.on.aws/'
+const AWS = { AWS_ACCESS_KEY_ID: 'ASIAEXAMPLE', AWS_SECRET_ACCESS_KEY: 'secret', AWS_SESSION_TOKEN: 'session', AWS_REGION: 'us-east-1' }
+const creds = awsCredentials(AWS)
+const at = () => new Date('2026-11-05T07:23:00Z')
 
 interface Sent { url: string; method: string; headers: Record<string, string>; body?: string | undefined }
-/** GitHub's app endpoints, answered by `answers` keyed "METHOD path" (status and body), every request kept. */
-function github(answers: Record<string, [number, unknown]>) {
+/** The broker, answering every request with `status` and `body`, every request kept. */
+function broker(status: number, body: unknown) {
   const sent: Sent[] = []
   const fetch = async (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => {
     sent.push({ url, ...init })
-    const [status, body] = answers[`${init.method} ${new URL(url).pathname}`] ?? [404, { message: 'Not Found' }]
-    return { status, ok: status >= 200 && status < 300, json: async () => body, text: async () => JSON.stringify(body) }
+    return { status, ok: status >= 200 && status < 300, text: async () => JSON.stringify(body) }
   }
   return { fetch, sent }
 }
-const INSTALLED = {
-  'GET /repos/o/r/installation': [200, { id: 42, app_slug: 'trace-tr' }] as [number, unknown],
-  'POST /app/installations/42/access_tokens': [201, { token: 'ghs_app', expires_at: '2027-01-15T09:00:00Z' }] as [number, unknown],
-}
+const TOKEN = { token: 'ghs_app', login: 'trace-tr[bot]', expiresAt: '2026-11-05T08:23:00Z', repository: 'o/r' }
 
-describe('the app\'s credentials', () => {
-  it('needs both the id and the key', () => {
-    expect(appCredentials({ APP_ID: '1', APP_KEY: 'k' })).toEqual({ appId: '1', privateKey: 'k' })
-    expect(appCredentials({ APP_ID: '1' })).toBeNull()
-    expect(appCredentials({ APP_ID: ' ', APP_KEY: 'k' })).toBeNull()
-    expect(appCredentials({})).toBeNull()
+describe('asking the broker', () => {
+  it('takes the step\'s AWS credentials from its environment, the session token too', () => {
+    expect(awsCredentials(AWS)).toEqual({ accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret', sessionToken: 'session' })
+    expect(awsCredentials({ AWS_ACCESS_KEY_ID: 'a' })).toBeNull()
+    expect(awsCredentials({})).toBeNull()
   })
 
-  it('signs a JSON web token GitHub takes: RS256, issued by the app, a minute back, for nine minutes', () => {
-    const jwt = appJwt(creds, NOW)
-    const [h, b, s] = jwt.split('.')
-    expect(JSON.parse(Buffer.from(h!, 'base64url').toString())).toEqual({ alg: 'RS256', typ: 'JWT' })
-    expect(JSON.parse(Buffer.from(b!, 'base64url').toString())).toEqual({ iat: NOW / 1000 - 60, exp: NOW / 1000 + 540, iss: '123456' })
-    expect(createVerify('RSA-SHA256').update(`${h}.${b}`).verify(publicKey, Buffer.from(s!, 'base64url'))).toBe(true)
+  it('signs for the function URL\'s region, else the step\'s', () => {
+    expect(brokerRegion(URL_, AWS)).toBe('ap-southeast-2')
+    expect(brokerRegion('https://broker.example/', AWS)).toBe('us-east-1')
+    expect(brokerRegion('https://broker.example/', {})).toBeNull()
   })
 
-  it('reads a key pasted with literal \\n in place of line breaks', () => {
-    const jwt = appJwt({ appId: '1', privateKey: PEM.replace(/\n/g, '\\n') }, NOW)
-    const [h, b, s] = jwt.split('.')
-    expect(createVerify('RSA-SHA256').update(`${h}.${b}`).verify(publicKey, Buffer.from(s!, 'base64url'))).toBe(true)
-  })
-})
-
-describe('choosing the token', () => {
-  it('is the app\'s installation token, for this repository alone, when the app is installed on it', async () => {
-    const g = github(INSTALLED)
-    const c = await chooseToken(creds, { owner: 'o', repo: 'r', fetch: g.fetch, now: () => NOW })
-    expect(c).toEqual({ kind: 'app', token: 'ghs_app', login: 'trace-tr[bot]', expiresAt: '2027-01-15T09:00:00Z' })
-    expect(g.sent.map((s) => `${s.method} ${s.url}`)).toEqual(['GET https://api.github.com/repos/o/r/installation', 'POST https://api.github.com/app/installations/42/access_tokens'])
-    expect(g.sent[0]!.headers.authorization).toBe(`Bearer ${appJwt(creds, NOW)}`)
-    expect(JSON.parse(g.sent[1]!.body!)).toEqual({ repositories: ['r'] })
+  it('signs the request with SigV4 for lambda, and names no repository: the broker decides it from the role', async () => {
+    const r = await signedRequest(URL_, 'ap-southeast-2', creds!, at)
+    expect(r.headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=ASIAEXAMPLE\/20261105\/ap-southeast-2\/lambda\/aws4_request, SignedHeaders=[a-z0-9;-]*host[a-z0-9;-]*, Signature=[0-9a-f]{64}$/)
+    expect(r.headers['x-amz-security-token']).toBe('session')
+    expect(r.headers['x-amz-date']).toBe('20261105T072300Z')
+    expect(JSON.parse(r.body)).toEqual({})
+    // the same request at the same moment signs the same: what the function URL checks
+    expect((await signedRequest(URL_, 'ap-southeast-2', creds!, at)).headers.authorization).toBe(r.headers.authorization)
   })
 
-  it('uses the runner\'s GitHub API address', async () => {
-    const g = github(INSTALLED)
-    await chooseToken(creds, { owner: 'o', repo: 'r', api: 'https://ghe.example/api/v3/', fetch: g.fetch })
-    expect(g.sent[0]!.url).toBe('https://ghe.example/api/v3/repos/o/r/installation')
+  it('is the app\'s installation token when the broker gives one', async () => {
+    const b = broker(200, TOKEN)
+    const c = await chooseToken({ url: URL_, credentials: creds, fetch: b.fetch, now: at })
+    expect(c).toEqual({ kind: 'app', token: 'ghs_app', login: 'trace-tr[bot]', expiresAt: '2026-11-05T08:23:00Z' })
+    expect(b.sent).toHaveLength(1)
+    expect(b.sent[0]).toMatchObject({ url: URL_, method: 'POST', body: '{}' })
+    expect(b.sent[0]!.headers.authorization).toContain('/ap-southeast-2/lambda/aws4_request')
   })
 
-  it('falls back to the person\'s token, saying why: no app set up, not installed here, refused, a bad key', async () => {
-    expect(await chooseToken(null, { owner: 'o', repo: 'r' })).toMatchObject({ kind: 'person', why: expect.stringContaining('TRACE_APP_ID') })
-
-    const none = github({})
-    expect(await chooseToken(creds, { owner: 'o', repo: 'r', fetch: none.fetch })).toEqual({ kind: 'person', why: 'trace\'s GitHub app is not installed on o/r' })
-    expect(none.sent).toHaveLength(1)
-
-    const refused = github({ ...INSTALLED, 'POST /app/installations/42/access_tokens': [401, { message: 'A JSON web token could not be decoded' }] })
-    expect(await chooseToken(creds, { owner: 'o', repo: 'r', fetch: refused.fetch })).toEqual({ kind: 'person', why: 'GitHub would not give trace\'s GitHub app a token for o/r (401: A JSON web token could not be decoded)' })
-
-    const unknown = github({ 'GET /repos/o/r/installation': [401, { message: 'Bad credentials' }] })
-    expect(await chooseToken(creds, { owner: 'o', repo: 'r', fetch: unknown.fetch })).toMatchObject({ kind: 'person', why: expect.stringContaining('401: Bad credentials') })
-
-    const badKey = github(INSTALLED)
-    const c = await chooseToken({ appId: '1', privateKey: 'not a key' }, { owner: 'o', repo: 'r', fetch: badKey.fetch })
-    expect(c).toMatchObject({ kind: 'person', why: expect.stringContaining('could not get a token') })
-    expect(badKey.sent).toHaveLength(0)
-
-    const down = await chooseToken(creds, { owner: 'o', repo: 'r', fetch: async () => { throw new Error('fetch failed') } })
-    expect(down).toEqual({ kind: 'person', why: 'trace\'s GitHub app could not get a token (fetch failed)' })
+  it('falls back to the person\'s token, saying why: no broker, no AWS credentials, refused, not answering', async () => {
+    expect(await chooseToken({ url: '', credentials: creds })).toMatchObject({ kind: 'person', why: expect.stringContaining('TRACE_GITHUB_APP_BROKER') })
+    const unasked = broker(200, TOKEN)
+    expect(await chooseToken({ url: URL_, credentials: null, fetch: unasked.fetch })).toMatchObject({ kind: 'person', why: expect.stringContaining('no AWS credentials') })
+    expect(unasked.sent).toHaveLength(0)
+    expect(await chooseToken({ url: URL_, credentials: creds, fetch: broker(403, { message: 'This role is not one of trace\'s projects\' roles' }).fetch }))
+      .toEqual({ kind: 'person', why: 'trace\'s token broker gave no token (403: This role is not one of trace\'s projects\' roles)' })
+    expect(await chooseToken({ url: URL_, credentials: creds, fetch: broker(404, { message: 'trace\'s GitHub app is not installed on o/r' }).fetch }))
+      .toEqual({ kind: 'person', why: 'trace\'s token broker gave no token (404: trace\'s GitHub app is not installed on o/r)' })
+    expect(await chooseToken({ url: URL_, credentials: creds, fetch: broker(200, { message: 'odd' }).fetch })).toMatchObject({ kind: 'person', why: expect.stringContaining('without a token') })
+    expect(await chooseToken({ url: URL_, credentials: creds, fetch: async () => { throw new Error('fetch failed') } }))
+      .toEqual({ kind: 'person', why: 'trace\'s token broker could not be asked (fetch failed)' })
+    expect(await chooseToken({ url: 'https://broker.example/', credentials: creds, env: {} })).toMatchObject({ kind: 'person', why: expect.stringContaining('region') })
   })
 })
 
@@ -147,30 +128,29 @@ describe('a request the app may not make', () => {
 })
 
 describe('which client a step acts through', () => {
-  const core = fakeCore
   const made: string[] = []
   const getOctokit = (token: string): GitHub => { made.push(token); return fakeGithub().gh }
 
-  it('is the app\'s, when the step has the person\'s token and the app is installed here', async () => {
+  it('is the app\'s, when the step has the person\'s token and the broker gives the app\'s', async () => {
     made.length = 0
-    const c = core()
+    const c = fakeCore()
     const person = fakeGithub().gh
-    const g = github(INSTALLED)
-    const gh = await actAs({ context: context(), core: c, getOctokit }, { OWN_TOKEN: 'ghp_person', APP_ID: '123456', APP_KEY: PEM }, person, {}, { fetch: g.fetch })
+    const gh = await actAs({ context: context(), core: c, getOctokit }, { OWN_TOKEN: 'ghp_person', BROKER_URL: URL_ }, person, {}, { aws: AWS, fetch: broker(200, TOKEN).fetch })
     expect(made).toEqual(['ghs_app'])
     expect(gh).not.toBe(person)
     expect(c.infos.join('\n')).toContain('acts as its GitHub app here (trace-tr[bot])')
   })
 
-  it('is the person\'s when the app is not installed here, or not set up, saying so; and the job\'s token is left alone', async () => {
+  it('is the person\'s when the broker refuses or is not set up, saying so; and the job\'s token is left alone', async () => {
     made.length = 0
     const person = fakeGithub().gh
-    const c = core()
-    expect(await actAs({ context: context(), core: c, getOctokit }, { OWN_TOKEN: 'ghp_person', APP_ID: '123456', APP_KEY: PEM }, person, {}, { fetch: github({}).fetch })).toBe(person)
-    expect(c.infos.join('\n')).toContain('trace acts as TRACE_TOKEN\'s account here: trace\'s GitHub app is not installed on o/r.')
-    expect(await actAs({ context: context(), core: core(), getOctokit }, { OWN_TOKEN: 'ghp_person' }, person, {})).toBe(person)
-    const asked = github(INSTALLED)
-    expect(await actAs({ context: context(), core: core(), getOctokit }, { APP_ID: '123456', APP_KEY: PEM }, person, {}, { fetch: asked.fetch })).toBe(person)
+    const c = fakeCore()
+    expect(await actAs({ context: context(), core: c, getOctokit }, { OWN_TOKEN: 'ghp_person', BROKER_URL: URL_ }, person, {}, { aws: AWS, fetch: broker(404, { message: 'trace\'s GitHub app is not installed on o/r' }).fetch })).toBe(person)
+    expect(c.infos.join('\n')).toContain('trace acts as TRACE_TOKEN\'s account here: trace\'s token broker gave no token (404: trace\'s GitHub app is not installed on o/r).')
+    expect(await actAs({ context: context(), core: fakeCore(), getOctokit }, { OWN_TOKEN: 'ghp_person' }, person, {}, { aws: AWS })).toBe(person)
+    expect(await actAs({ context: context(), core: fakeCore(), getOctokit }, { OWN_TOKEN: 'ghp_person', BROKER_URL: URL_ }, person, {}, { aws: {} })).toBe(person)
+    const asked = broker(200, TOKEN)
+    expect(await actAs({ context: context(), core: fakeCore(), getOctokit }, { BROKER_URL: URL_ }, person, {}, { aws: AWS, fetch: asked.fetch })).toBe(person)
     expect(asked.sent).toHaveLength(0)
     expect(made).toEqual([])
   })
@@ -189,12 +169,28 @@ describe('open-pr as the app', () => {
 
 describe('the project workflows', () => {
   const ROOT = join(import.meta.dirname, '..', '..', 'templates', 'workflows')
+  type Step = { uses?: string; if?: string; 'continue-on-error'?: boolean; with?: Record<string, string> }
   for (const [file, tasks] of [['trace-prs.yml', ['open-pr', 'automerge', 'update-queue']], ['trace-ci.yml', ['ci-doctor']]] as const) {
-    it(`${file}: every harness step given TRACE_TOKEN is given the app's id and key too`, () => {
-      const wf = parse(readFileSync(join(ROOT, file), 'utf8')) as { jobs: Record<string, { steps: { uses?: string; with?: Record<string, string> }[] }> }
-      const steps = Object.values(wf.jobs).flatMap((j) => j.steps).filter((s) => s.uses?.includes('/harness/actions/run@') && s.with?.token)
-      expect(steps.map((s) => s.with!.task).sort()).toEqual([...tasks].sort())
-      for (const s of steps) expect(s.with).toMatchObject({ 'app-id': '${{ vars.TRACE_APP_ID }}', 'app-key': '${{ secrets.TRACE_APP_KEY }}' })
+    it(`${file}: every harness step given TRACE_TOKEN asks the broker, with the token role's credentials got just before`, () => {
+      const wf = parse(readFileSync(join(ROOT, file), 'utf8')) as { jobs: Record<string, { permissions: Record<string, string>; steps: Step[] }> }
+      const seen: string[] = []
+      for (const job of Object.values(wf.jobs)) {
+        const i = job.steps.findIndex((s) => s.uses?.includes('/harness/actions/run@') && s.with?.token)
+        if (i < 0) continue
+        const run = job.steps[i]!
+        seen.push(run.with!.task!)
+        expect(run.with!['broker-url']).toBe('${{ vars.TRACE_GITHUB_APP_BROKER }}')
+        const creds = job.steps[i - 1]!
+        expect(creds.uses).toMatch(/^aws-actions\/configure-aws-credentials@[0-9a-f]{40}$/)
+        expect(creds.with!['role-to-assume']).toBe('${{ vars.TRACE_GITHUB_APP_ROLE }}')
+        // left out without a broker; and a refused role falls back to TRACE_TOKEN, never fails the job
+        expect(creds.if).toContain('vars.TRACE_GITHUB_APP_BROKER != \'\'')
+        expect(creds['continue-on-error']).toBe(true)
+        expect(job.permissions['id-token']).toBe('write')
+        // the key is never the repository's
+        expect(JSON.stringify(job)).not.toMatch(/APP_KEY|private/i)
+      }
+      expect(seen.sort()).toEqual([...tasks].sort())
     })
   }
 })

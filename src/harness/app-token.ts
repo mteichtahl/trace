@@ -1,6 +1,6 @@
 /**
- * Which GitHub identity a harness step acts as: trace's GitHub app's installation on the repository when the app is
- * installed there, else the person's token (TRACE_TOKEN), as before.
+ * Which GitHub identity a harness step acts as: trace's GitHub app's installation on the repository, from the
+ * installation's token broker, when the step can reach it; else the person's token (TRACE_TOKEN), as before.
  *
  * Why: every project's workflows acted as one GitHub account (the person whose token is TRACE_TOKEN), and so shared that
  * account's hourly quota of 5,000 requests. With ten pull requests open and many agents at work it ran out: `open-pr`
@@ -8,103 +8,103 @@
  * run 2, #126 and #128). An app installation has a quota of its own (5,000 an hour and more, per installation), so the
  * workflows no longer spend the person's.
  *
- *   what the step is given   the app's id (repository variable TRACE_APP_ID) and its private key (secret TRACE_APP_KEY),
- *                            which the installer sets with TRACE_TOKEN; neither: the person's token, as before
- *   the token                minted here, for this one repository only, and good for an hour (longer than any harness
- *                            job runs): a JSON web token signed with the key asks GitHub for the app's installation on
- *                            the repository, then for an installation token limited to it
- *   falling back             the app not installed on the repository, or GitHub refusing the key: the person's token,
- *                            with a notice that says why. Never a failure: the step works as it did before the app
+ *   the broker               a Lambda function URL with IAM sign-in (`<prefix>-github-app-token`, docs/agent-identity.md;
+ *                            repository variable TRACE_GITHUB_APP_BROKER). It holds the app's private key (Secrets
+ *                            Manager, never a repository secret) and gives a token for ONE repository, which it decides
+ *                            from the AWS role that signed the request, never from the request: this step names none
+ *   signing                  SigV4 (service lambda) with the job's AWS credentials, which the workflow gets from the
+ *                            repository's token role by GitHub OIDC (vars.TRACE_GITHUB_APP_ROLE) just before this step
+ *   the token                an installation token for this repository alone, good for an hour (longer than any
+ *                            harness job runs)
+ *   falling back             no broker, no AWS credentials, the broker refusing (an unknown role, the app not
+ *                            installed on the repository) or not answering: the person's token, with a notice that
+ *                            says why. Never a failure: the step works as it did before the app
  *   what stays the person's  opening a pull request (trace tells its changes apart by the login that opened them,
  *                            TRACE_AGENT_LOGIN), git pushes (they are not API requests, so they spend no quota), and any
  *                            request the app is not allowed to make (fallback() below)
  */
-import { createSign } from 'node:crypto'
+import type { AwsCredentialIdentity } from '@smithy/types'
 import { rateLimitWait } from './retry.js'
-
-export interface AppCredentials {
-  /** the app's id (a number, as text) */
-  appId: string
-  /** the app's private key, PEM; a key pasted with literal "\n" is read too */
-  privateKey: string
-}
 
 export type TokenChoice =
   | { kind: 'app'; token: string; login: string; expiresAt: string }
   | { kind: 'person'; why: string }
 
-/** The app's credentials from the step's environment (APP_ID, APP_KEY), or null when either is missing. */
-export function appCredentials(env: { APP_ID?: string | undefined; APP_KEY?: string | undefined }): AppCredentials | null {
-  const appId = env.APP_ID?.trim() ?? ''
-  const privateKey = env.APP_KEY?.trim() ?? ''
-  return appId && privateKey ? { appId, privateKey } : null
+/** The step's AWS credentials (configure-aws-credentials puts them in the environment), or null without them. */
+export function awsCredentials(env: Record<string, string | undefined>): AwsCredentialIdentity | null {
+  const accessKeyId = env.AWS_ACCESS_KEY_ID?.trim()
+  const secretAccessKey = env.AWS_SECRET_ACCESS_KEY?.trim()
+  if (!accessKeyId || !secretAccessKey) return null
+  const sessionToken = env.AWS_SESSION_TOKEN?.trim()
+  return { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) }
 }
 
-const b64url = (b: Buffer | string): string => Buffer.from(b).toString('base64url')
-
-/**
- * The app's JSON web token (RS256), which GitHub takes only for the app's own endpoints. Issued a minute in the past
- * (GitHub's advice: the runner's clock may be ahead of GitHub's) and good for nine minutes (GitHub allows ten).
- */
-export function appJwt(c: AppCredentials, nowMs = Date.now()): string {
-  const now = Math.floor(nowMs / 1000)
-  const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const body = b64url(JSON.stringify({ iat: now - 60, exp: now + 9 * 60, iss: c.appId }))
-  const key = c.privateKey.includes('\\n') ? c.privateKey.replace(/\\n/g, '\n') : c.privateKey
-  const sig = createSign('RSA-SHA256').update(`${head}.${body}`).sign(key)
-  return `${head}.${body}.${b64url(sig)}`
+/** A function URL's region (https://<id>.lambda-url.<region>.on.aws/), else the step's. */
+export function brokerRegion(url: string, env: Record<string, string | undefined>): string | null {
+  const m = /\.lambda-url\.([a-z0-9-]+)\.on\.aws$/.exec(new URL(url).hostname)
+  return m?.[1] ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? null
 }
 
-type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; ok: boolean; json(): Promise<unknown>; text(): Promise<string> }>
+type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; ok: boolean; text(): Promise<string> }>
 
-export interface MintOptions {
-  owner: string
-  repo: string
-  /** GitHub's API (GITHUB_API_URL on a runner) */
-  api?: string | undefined
+export interface BrokerOptions {
+  /** the broker's function URL (TRACE_GITHUB_APP_BROKER); empty: none */
+  url?: string | undefined
+  credentials: AwsCredentialIdentity | null
+  /** the step's environment, for the region when the URL does not say it */
+  env?: Record<string, string | undefined>
   fetch?: Fetch
-  now?: () => number
+  /** the signing clock (tests) */
+  now?: () => Date
 }
 
-/** Why an answer from GitHub was not what was asked for, in a few words (its message, else its status). */
-async function said(r: { status: number; text(): Promise<string> }): Promise<string> {
-  const text = await r.text().catch(() => '')
+/** The broker's request, signed with SigV4 for the function URL's service (lambda). */
+export async function signedRequest(url: string, region: string, credentials: AwsCredentialIdentity, now?: () => Date): Promise<{ headers: Record<string, string>; body: string }> {
+  const [{ SignatureV4 }, { Sha256 }, { HttpRequest }] = await Promise.all([
+    import('@smithy/signature-v4'), import('@aws-crypto/sha256-js'), import('@smithy/protocol-http'),
+  ])
+  const u = new URL(url)
+  // no repository: the broker decides it from the role that signed this, and would ignore one named here
+  const body = '{}'
+  const signer = new SignatureV4({ service: 'lambda', region, credentials, sha256: Sha256 })
+  const signed = await signer.sign(
+    new HttpRequest({ method: 'POST', protocol: 'https:', hostname: u.hostname, path: u.pathname || '/', headers: { host: u.hostname, 'content-type': 'application/json' }, body }),
+    now ? { signingDate: now() } : {},
+  )
+  return { headers: signed.headers as Record<string, string>, body }
+}
+
+/** What the broker said, in a few words (its message, else its status). */
+function said(status: number, text: string): string {
   try {
     const m = (JSON.parse(text) as { message?: unknown }).message
-    if (typeof m === 'string' && m) return `${r.status}: ${m}`
+    if (typeof m === 'string' && m) return `${status}: ${m}`
   } catch {
     // not JSON: the status says enough
   }
-  return String(r.status)
+  return String(status)
 }
 
 /**
- * An installation token of trace's app for owner/repo, limited to that repository; or, when there is none to have,
- * the person's token and why. Never throws.
+ * The app's installation token for this step's repository, from the broker; or, when there is none to have, the
+ * person's token and why. Never throws.
  */
-export async function chooseToken(creds: AppCredentials | null, o: MintOptions): Promise<TokenChoice> {
-  if (!creds) return { kind: 'person', why: 'trace\'s GitHub app is not set up for this repository (no TRACE_APP_ID variable and TRACE_APP_KEY secret)' }
-  const api = (o.api || 'https://api.github.com').replace(/\/+$/, '')
-  const fetchImpl = o.fetch ?? (globalThis.fetch as unknown as Fetch)
-  const now = o.now ?? Date.now
+export async function chooseToken(o: BrokerOptions): Promise<TokenChoice> {
+  const url = o.url?.trim()
+  if (!url) return { kind: 'person', why: 'no token broker for trace\'s GitHub app is set up for this repository (the TRACE_GITHUB_APP_BROKER variable)' }
+  if (!o.credentials) return { kind: 'person', why: 'this step has no AWS credentials to ask trace\'s token broker with (the TRACE_GITHUB_APP_ROLE variable, or the role could not be assumed)' }
   try {
-    const headers = { accept: 'application/vnd.github+json', authorization: `Bearer ${appJwt(creds, now())}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'trace-harness' }
-    const found = await fetchImpl(`${api}/repos/${o.owner}/${o.repo}/installation`, { method: 'GET', headers })
-    if (found.status === 404) return { kind: 'person', why: `trace's GitHub app is not installed on ${o.owner}/${o.repo}` }
-    if (!found.ok) return { kind: 'person', why: `GitHub would not say whether trace's GitHub app is installed on ${o.owner}/${o.repo} (${await said(found)})` }
-    const inst = await found.json() as { id?: unknown; app_slug?: unknown }
-    if (typeof inst.id !== 'number') return { kind: 'person', why: 'GitHub named no installation of trace\'s GitHub app' }
-    const minted = await fetchImpl(`${api}/app/installations/${inst.id}/access_tokens`, {
-      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ repositories: [o.repo] }),
-    })
-    if (!minted.ok) return { kind: 'person', why: `GitHub would not give trace's GitHub app a token for ${o.owner}/${o.repo} (${await said(minted)})` }
-    const t = await minted.json() as { token?: unknown; expires_at?: unknown }
-    if (typeof t.token !== 'string' || !t.token) return { kind: 'person', why: 'GitHub gave trace\'s GitHub app no token' }
-    const slug = typeof inst.app_slug === 'string' && inst.app_slug ? inst.app_slug : 'trace'
-    return { kind: 'app', token: t.token, login: `${slug}[bot]`, expiresAt: typeof t.expires_at === 'string' ? t.expires_at : '' }
+    const region = brokerRegion(url, o.env ?? {})
+    if (!region) return { kind: 'person', why: 'the token broker\'s region is not known (its address names none, and AWS_REGION is not set)' }
+    const req = await signedRequest(url, region, o.credentials, o.now)
+    const r = await (o.fetch ?? (globalThis.fetch as unknown as Fetch))(url, { method: 'POST', headers: req.headers, body: req.body })
+    const text = await r.text()
+    if (!r.ok) return { kind: 'person', why: `trace's token broker gave no token (${said(r.status, text)})` }
+    const t = JSON.parse(text) as { token?: unknown; login?: unknown; expiresAt?: unknown }
+    if (typeof t.token !== 'string' || !t.token) return { kind: 'person', why: 'trace\'s token broker answered without a token' }
+    return { kind: 'app', token: t.token, login: typeof t.login === 'string' && t.login ? t.login : 'trace[bot]', expiresAt: typeof t.expiresAt === 'string' ? t.expiresAt : '' }
   } catch (e) {
-    // a key that is not a private key fails to sign; a network failure fails the fetch: the person's token either way
-    return { kind: 'person', why: `trace's GitHub app could not get a token (${(e instanceof Error ? e.message : String(e)).split('\n')[0]})` }
+    return { kind: 'person', why: `trace's token broker could not be asked (${(e instanceof Error ? e.message : String(e)).split('\n')[0]})` }
   }
 }
 
@@ -119,7 +119,7 @@ export function notAllowed(e: unknown): boolean {
   return (err?.status === 422 || err?.status === 409) && /workflow/i.test(msg) && /permission|refus|allow/i.test(msg)
 }
 
-/** The Octokit surface fallback() needs: its request hook and request (absent in a test's fake, left as it is). */
+/** The Octokit surface fallback() needs: its request hook (absent in a test's fake, left as it is). */
 interface Hooked {
   hook?: { wrap(name: 'request', fn: (request: (o: unknown) => Promise<unknown>, options: unknown) => Promise<unknown>): void }
 }
