@@ -96,6 +96,7 @@ export class FakeGitHub implements GitHubApi {
     for (const r of repos) this.branches.set(`${r}:main`, 'sha-main')
   }
   private has(repo: string): void { if (!this.repos.includes(repo)) throw new Error(`404 ${repo}`) }
+  async repoExists(repo: string): Promise<boolean> { this.calls.push(`repoExists ${repo}`); return this.repos.some((r) => r.toLowerCase() === repo.toLowerCase()) }
   async defaultBranch(repo: string): Promise<{ branch: string; sha: string }> { this.calls.push(`defaultBranch ${repo}`); this.has(repo); return { branch: 'main', sha: 'sha-main' } }
   async branchSha(repo: string, branch: string): Promise<string | null> { return this.branches.get(`${repo}:${branch}`) ?? null }
   async tree(repo: string, ref: string): Promise<{ files: TreeEntry[]; truncated: boolean }> {

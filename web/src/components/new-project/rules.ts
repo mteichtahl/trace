@@ -20,22 +20,53 @@ export const slug = (name: string): string => name.trim().toLowerCase().replace(
 
 export interface Check { id: string; text: string; ok: boolean; step: StepId }
 
+/** What projects.repo_check answers of the repository the wizard would use (src/api/actions-projects.ts). */
+export interface RepoCheck {
+  repo: string
+  /** on GitHub already; null when GitHub could not be asked (projects.create asks again) */
+  exists: boolean | null
+  /** the project trace knows there: retiring a project keeps its repository and its record */
+  project: { name: string | null; retired: boolean } | null
+  suggestion: string | null
+  /** what to say when it is taken */
+  text: string | null
+}
+
+/** What the check of the repository needs: its answer for this repository, or undefined while it is being asked. */
+export interface CheckContext { taken: string[]; repo?: RepoCheck | undefined }
+
+/** The repository the draft names, the way projects.create takes it. */
+export const repoOf = (d: NewProjectDraft): string => `${d.repository.owner}/${d.repository.name || slug(d.name)}`
+
+/**
+ * Whether the repository can be used as the draft says. A new one must not be on GitHub yet (test-esp32 log #78: it
+ * was shown "reachable" because the name was well formed, though run 1's retired project still held it); an existing
+ * one must be there, and not a retired project's (that project is restored instead). An answer for another name, or
+ * none yet, is not met.
+ */
+export function repoOk(d: NewProjectDraft, c: RepoCheck | undefined): boolean {
+  const wellFormed = /^[A-Za-z0-9-]+$/.test(d.repository.owner) && /^[A-Za-z0-9._-]+$/.test(d.repository.name || slug(d.name)) && !!d.repository.branch.trim()
+  if (!wellFormed || !c || c.repo.toLowerCase() !== repoOf(d).toLowerCase()) return false
+  if (c.project?.retired) return false
+  return d.repository.mode === 'new' ? c.exists !== true : c.exists !== false
+}
+
 /** Every check across the steps (the quality bar shows those of the steps reached). */
-export function checks(d: NewProjectDraft, o: { taken: string[] }): Check[] {
+export function checks(d: NewProjectDraft, o: CheckContext): Check[] {
   const name = d.name.trim()
   const desc = d.description.trim()
   return [
     { id: 'name', step: 'about', text: 'Name not used by another project', ok: name.length >= 2 && !o.taken.map((t) => t.toLowerCase()).includes(name.toLowerCase()) },
     { id: 'desc', step: 'about', text: 'Description is a full sentence', ok: desc.length === 0 || (/[.!?]$/.test(desc) && desc.length <= 280) },
     { id: 'template', step: 'start', text: 'Template chosen', ok: !!d.template && !!d.start },
-    { id: 'repo', step: 'repository', text: 'Repository reachable', ok: /^[A-Za-z0-9-]+$/.test(d.repository.owner) && /^[A-Za-z0-9._-]+$/.test(d.repository.name) && !!d.repository.branch.trim() },
+    { id: 'repo', step: 'repository', text: d.repository.mode === 'new' ? 'Repository name free on GitHub' : 'Repository reachable', ok: repoOk(d, o.repo) },
     { id: 'parts', step: 'people', text: 'Everyone has a part', ok: d.people.every((p) => p.part === 'reviewer' || p.class !== 'guest') },
     { id: 'quantity', step: 'build', text: 'Build quantity set', ok: Number.isInteger(d.build.quantity) && d.build.quantity >= 1 && (d.build.budget === undefined || d.build.budget >= 0) },
   ]
 }
 
 /** Continue on a step: all of that step's checks pass. */
-export const stepOk = (d: NewProjectDraft, step: StepId, o: { taken: string[] }): boolean => checks(d, o).filter((c) => c.step === step).every((c) => c.ok)
+export const stepOk = (d: NewProjectDraft, step: StepId, o: CheckContext): boolean => checks(d, o).filter((c) => c.step === step).every((c) => c.ok)
 
 /** The parts a person may have on a project, by account class. Admins are not chosen: they are on every project. */
 export function partsFor(cls: PersonClass | 'new'): ('contributor' | 'reviewer')[] {
