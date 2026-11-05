@@ -350,6 +350,11 @@ export interface ChangeDetail extends ChangeSummary {
    * why. The page offers "Run the check again" (change.rerun) instead of "Ask for changes". Absent from an older API.
    */
   infra_failed?: { checks: { id: string; name: string }[]; why: string }
+  /**
+   * A discarded change: who discarded it, when, their reason, and what happened to the jobs that were working on its
+   * branch. trace never opens that branch as a change again. Absent: not discarded, or from an older API.
+   */
+  discarded?: { by: string; at: string; reason: string; jobs: string[] }
   /** the accepted requirements its database edits, said before it is accepted; absent: it edits none */
   requirement_edits?: RequirementEdits
 }

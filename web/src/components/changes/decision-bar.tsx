@@ -30,6 +30,7 @@ export interface DecisionBarProps {
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
     recommendation?: ChangeDetail['recommendation'] | undefined
     infra_failed?: ChangeDetail['infra_failed']
+    discarded?: ChangeDetail['discarded']
   }
   part?: Part
   /** the note box's words, carried into Accept and Ask */
@@ -53,7 +54,7 @@ export const ASK_MAX = 4000
 export const DISCARD_MAX = 2000
 
 /** The words beside the buttons, for each mode. */
-export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; applies?: ChangeDetail['applies']; answers?: ChangeDetail['answers'] }, acceptSays?: string): string {
+export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; applies?: ChangeDetail['applies']; answers?: ChangeDetail['answers']; discarded?: ChangeDetail['discarded'] }, acceptSays?: string): string {
   const who = `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)}`
   // trace applies it by itself: nobody accepts it, and the bar says what it waits for
   if (c.applies === 'auto' && c.state === 'open') {
@@ -69,10 +70,25 @@ export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'bl
   if (c.verdict === 'conflict' && c.state === 'open' && mode !== 'read-only') return 'It conflicts with changes accepted since it was made. trace brings it up to date by itself; Bring it up to date starts that now, even if trace gave up on it before.'
   switch (mode) {
     case 'read-only': return `You are a reviewer on this project, so you can read this change but not decide on it. A contributor accepts it, asks ${c.from} for changes, or discards it.`
-    case 'closed': return c.state === 'merged' ? 'This change was accepted into the design.' : 'This change was discarded. Nothing in the design changed.'
+    case 'closed': return c.state === 'merged' ? 'This change was accepted into the design.' : discardedWords(c.discarded)
     case 'blocked': return c.blockers.length ? `Not ready to accept: ${c.blockers.join(' ')}` : 'Not ready to accept yet.'
     default: return acceptSays ?? 'Accepting adds it to the design.'
   }
+}
+
+/**
+ * A discarded change, in words: who and why, what happened to the jobs that were working on it, and that trace does not
+ * bring it back (test-esp32 log #75: a job pushed to its branch and it came back as a new change).
+ */
+export function discardedWords(d: ChangeDetail['discarded']): string {
+  if (!d) return 'This change was discarded. Nothing in the design changed.'
+  const r = d.reason.replace(/\s+/g, ' ').trim()
+  const reason = r.length > 300 ? `${r.slice(0, 300)}…` : r
+  return [
+    reason ? `${d.by} discarded this change: "${reason}"${/[.!?…]$/.test(reason) ? '' : '.'}` : `${d.by} discarded this change.`,
+    ...d.jobs,
+    'Nothing in the design changed, and trace will not open its branch as a change again: work that is still wanted comes as a new change that links this one.',
+  ].join(' ')
 }
 
 /** Whether the bar offers "Bring it up to date": an open change in conflict, for someone who may decide on it. */

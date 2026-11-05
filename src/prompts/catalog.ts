@@ -165,6 +165,20 @@ add({ id: 'specialist.job.stacked', mode: 'locked', prompt: 'specialist',
     'is stacked on that change, so it shows and is reviewed for your commits only, and lands after it. Keep to your own work: do',
     'not redo or revert that change; if it is wrong for what you need, say so (journey.ask) rather than change it here.',
   ].join('\n') })
+add({ id: 'specialist.job.after-discard', mode: 'locked', prompt: 'specialist',
+  vars: {
+    number: V.number, old_branch: text('the branch of the discarded change'), branch: V.branch, by: text('who discarded it'),
+    reason: text('their reason, quoted, in their words'),
+  },
+  description: 'For a job that would have worked on the branch of a change a person discarded (src/core/discarded.ts, test-esp32 log #75): it works on a new branch, and addresses their reason.',
+  default: [
+    'THIS WORK FOLLOWS A DISCARDED CHANGE. {{by}} discarded change #{{number}} (branch `{{old_branch}}`), so trace does not use that',
+    'branch again: your work goes on `{{branch}}`, a new branch started without its commits, and becomes a new change that links #{{number}}.',
+    'Their reason, in their words:',
+    '{{reason}}',
+    'Address it: do not make again what they rejected. If, given their reason, the work is no longer wanted, change nothing and say so in',
+    'your report.',
+  ].join('\n') })
 add({ id: 'specialist.job.revision', mode: 'locked', prompt: 'specialist',
   vars: {
     by: text('who asked for changes'), number: V.number, branch: V.branch, note: text('their note, in their words'),
