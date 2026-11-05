@@ -11,6 +11,8 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { journeyStore } from '../../src/api/action-kit.js'
+import { jobIndex } from '../../src/api/actions-jobs.js'
+import { putJob } from '../../src/core/job-index.js'
 import { docsReleaseRequest, docsRequest } from '../../src/api/docs-follow.js'
 import { skeleton } from '../../src/docs/catalog.js'
 import { decide } from '../../src/core/journey.js'
@@ -41,7 +43,7 @@ class CommitsGitHub extends FakeGitHub {
 }
 
 const github = new CommitsGitHub([REPO])
-const started: { request: string; agent?: string }[] = []
+const started: { request: string; agent?: string; branch?: string }[] = []
 let running: { id: string; repository: string; agent: string; state: string; kind: string }[] = []
 const scratch = mkdtempSync(join(tmpdir(), 'trace-docs-follow-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-docs-follow-bucket-'))
@@ -50,7 +52,7 @@ const deps: ActionDeps = {
   github: async () => github, cognito: () => new FakeCognito(), tools: () => new Registry([]), scratch,
   jobs: async () => ({
     repositoryOf: () => null,
-    startJob: async (p) => { started.push({ request: p.request, ...(p.agent ? { agent: p.agent } : {}) }); return { accepted: true, jobId: `job-${started.length}` } },
+    startJob: async (p) => { started.push({ request: p.request, ...(p.agent ? { agent: p.agent } : {}), ...(p.branch ? { branch: p.branch } : {}) }); return { accepted: true, jobId: `job-${started.length}` } },
     jobStatus: async () => running,
   }),
   store: (p) => backendFor(join(bucket, p)),
@@ -125,6 +127,25 @@ describe('Scribe starting on a push', () => {
     expect(r.skipped).toMatch(/already working/)
     expect(started.length).toBe(before)
     running = []
+  })
+
+  // log #110: two documentation changes open at once on high-level-design.md; once one was accepted the other had a
+  // text conflict nothing merged by itself
+  it('carries on on Scribe\'s change still waiting for review, bringing it up to date first, instead of opening a second', async () => {
+    const before = started.length
+    await jobIndex(ctx(ADMIN), REPO).update((db) => { putJob(db, 'job-docs-8', { state: 'succeeded', kind: 'task', agent: 'docs', title: 'Low level design and HLD sections', branch: 'claude/task-docs-8', startedAt: 1, endedAt: 2 }, 2); return { result: null } })
+    github.openList = [{ number: 8, title: 'Low level design and HLD sections', head: 'claude/task-docs-8', headRepo: REPO, draft: false, labels: [], url: `https://github.com/${REPO}/pull/8`, updated_at: '2026-11-05T00:00:00Z' }]
+    github.commit = { files: ['hardware/board.kicad_sch'], parent: 'sha-parent' }
+    const r = await run(BACKEND, { repo: REPO })
+    expect(r.started).toMatch(/on its change #8, which still waits for review/)
+    expect(started.length).toBe(before + 1)
+    const s = started.at(-1)!
+    expect(s).toMatchObject({ agent: 'docs', branch: 'claude/task-docs-8' })
+    expect(s.request).toMatch(/^Your change #8 \("Low level design and HLD sections"\) still waits for a person's review/)
+    expect(s.request).toMatch(/git merge origin\/main \(never a rebase or a force-push\)/)
+    expect(s.request).toMatch(/default branch moved to sha-main/)
+    expect(s.request).toMatch(/Push to claude\/task-docs-8/)
+    github.openList = []
   })
 
   it('asks Scribe to compare with the documents\' last commit, and to stop when nothing needs writing', () => {

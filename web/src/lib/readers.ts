@@ -141,6 +141,7 @@ export function readChangeSummary(c: Obj): ChangeSummary {
     verdict: verdictOf({ checks, mergeable, verdict: c.verdict }),
     ...(readLink(c.builds_on) ? { builds_on: readLink(c.builds_on)! } : {}),
     ...(arr(c.built_on_by).length ? { built_on_by: arr(c.built_on_by).map(readLink).filter((l): l is ChangeLink => l !== null) } : {}),
+    ...(c.working === true ? { working: true } : {}),
   }
 }
 

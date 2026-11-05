@@ -19,7 +19,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { CHECK_LOG_MAX, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
-  readySince, CHECK_TEXT_MAX, checkLines, checkText, stacksOf,
+  readySince, CHECK_TEXT_MAX, checkLines, checkText, stacksOf, changeSummary, jobWorking,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -133,6 +133,41 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(fileKind('.trace/project.db', null)).toBe('binary')
     expect(mergeMethod(['merge', 'squash'])).toBe('squash')
     expect(mergeMethod(['rebase', 'merge'])).toBe('merge')
+  })
+})
+
+// ------------------------------------------------------------------ a change whose job is still working (log #68)
+
+describe('a change whose job is still working', () => {
+  const NOW = 1_800_000_000
+  const job = (o: Partial<JobRow>): JobRow => ({ ...row('job-d1', 'claude/task-docs', 'task', 'docs', NOW - 100), endedAt: null, ...o })
+
+  it('is never recommended for accepting, nor accepted, however its checks went', () => {
+    const f = facts({ working: true })
+    expect(verdictOf(facts())).toBe('ready')
+    expect(verdictOf(f)).toBe('checking')
+    expect(recommendationOf(f)).toEqual({ verdict: 'wait', why: 'Its job has not finished, so what you see may still change. Wait for it to finish before you accept it.' })
+    expect(acceptance(f, true)).toEqual({ may_accept: false, blockers: ['trace is still working on this change. Wait for its job to finish.'] })
+    // the specialist's own "not finished" waits behind it: the job may yet finish it
+    expect(recommendationOf({ ...f, unfinished: 'incomplete' }).verdict).toBe('wait')
+  })
+
+  it('is working while its job is queued or running with a heartbeat; not once it ended, paused or went quiet', () => {
+    expect(jobWorking(job({ state: 'queued' }), NOW)).toBe(true)
+    expect(jobWorking(job({ state: 'running', startedAt: NOW - 600, beatAt: NOW - 30 }), NOW)).toBe(true)
+    expect(jobWorking(job({ state: 'running', startedAt: NOW - 6000, beatAt: NOW - 3600 }), NOW)).toBe(false)
+    expect(jobWorking(job({ state: 'succeeded', endedAt: NOW - 10 }), NOW)).toBe(false)
+    expect(jobWorking(job({ state: 'paused' }), NOW)).toBe(false)
+    expect(jobWorking(null, NOW)).toBe(false)
+  })
+
+  it('says so in the list: verdict checking, working, never ready', () => {
+    const pull = { number: 17, title: 'Docs: protocol specification', url: 'https://github.com/acme/board/pull/17', draft: false, labels: [], updated_at: '2026-11-05T00:00:00Z' }
+    const status = { state: 'open' as const, mergeable: 'clean', checks: checks(), draft: false, updated_at: '2026-11-05T00:00:00Z' }
+    const at = (state: JobRow['state']) => changeSummary({ repo: 'acme/board', pull, job: job({ state, startedAt: NOW - 60, beatAt: NOW - 5, endedAt: state === 'succeeded' ? NOW : null }), status, hold: 'no-automerge', agentWords: AGENT_WORDS, at: NOW })
+    expect(at('running')).toMatchObject({ verdict: 'checking', working: true })
+    expect(at('succeeded').verdict).toBe('ready')
+    expect(at('succeeded').working).toBeUndefined()
   })
 })
 

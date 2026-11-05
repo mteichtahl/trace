@@ -37,7 +37,7 @@
 import { SPECIALIST_KINDS } from '../agents/kinds.js'
 import { type AppEdit, EDIT_WORDS, type EditKind } from '../core/app-edits.js'
 import type { JobRow } from '../core/job-index.js'
-import { indexedHandle } from '../core/job-index.js'
+import { indexedHandle, isLive } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
 import type { CheckRunDetail, PullFile, PullStatus, PullSummary } from './github.js'
 
@@ -72,6 +72,8 @@ export interface ChangeSummary {
   builds_on?: StackLink
   /** the open changes stacked on this one, which follow it into the design */
   built_on_by?: StackLink[]
+  /** the job behind it is still working (ChangeFacts.working): what is reviewed may still change */
+  working?: boolean
 }
 /** One change of a stack, as another change names it. */
 export interface StackLink { number: number; title: string }
@@ -164,7 +166,22 @@ export interface ChangeFacts {
    * when no open change has that branch). Accepting it would merge it into that branch, not into the design.
    */
   stacked?: { base: string; on: StackLink | null }
+  /**
+   * The job behind it is still working (jobWorking): queued, or running and alive. It may push more commits, open
+   * another change or take on more work, so nothing about it is settled yet (log #68, #77).
+   */
+  working?: boolean
 }
+
+/**
+ * Whether a change's job is still working on it: queued (to start, or to carry on after "ask for changes"), or running
+ * with a recent heartbeat. A paused job (a person stopped it) or a lost one (its heartbeat stopped) is not.
+ */
+export const jobWorking = (job: Pick<JobRow, 'state' | 'beatAt' | 'startedAt' | 'updatedAt'> | null | undefined, at = Date.now() / 1000): boolean =>
+  Boolean(job) && (job?.state === 'queued' || isLive(job as JobRow, at))
+
+/** What a change whose job is still working says, wherever it is shown. */
+export const STILL_WORKING = 'trace is still working on this change.'
 
 // a specialist that says its work is not ready for a person, in its title (each clause) or in its summary or the pull
 // request's description (only the plainest phrases there: a word like "incomplete" in a description is often about
@@ -428,6 +445,8 @@ export function verdictOf(f: ChangeFacts): Verdict {
 
 function verdictOfOwn(f: ChangeFacts): Verdict {
   if (f.state !== 'open' || f.draft) return 'blocked'
+  // its job is still at it: checks that passed say nothing yet about what it will push next (log #68)
+  if (f.working) return 'checking'
   if (f.mergeable === 'dirty') return 'conflict'
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
   // the specialist says it is not finished: that, not the checks, is what a person should hear first
@@ -452,6 +471,9 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.state === 'merged') return { verdict: 'none', why: 'It is already accepted into the design.' }
   if (f.state === 'closed') return { verdict: 'none', why: 'It was discarded.' }
   if (f.draft) return { verdict: 'wait', why: 'It is a draft: trace has not finished it yet.' }
+  // never "accept" while its job runs: it may still push to it, and what is accepted would not be what was reviewed
+  // the app heads the box with STILL_WORKING (web/src/lib/guided.ts recommendationWords): the reason does not repeat it
+  if (f.working) return { verdict: 'wait', why: 'Its job has not finished, so what you see may still change. Wait for it to finish before you accept it.' }
   // passing checks say the files are sound, not that the work is done: the specialist's own word comes first
   if (f.unfinished) {
     const who = o.from ? `${o.from[0]?.toUpperCase() ?? ''}${o.from.slice(1)}` : 'The specialist'
@@ -496,6 +518,7 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
   else if (f.state === 'closed') out.push('It was discarded.')
   else {
     if (f.draft) out.push('It is a draft: trace has not finished it yet.')
+    if (f.working) out.push(`${STILL_WORKING} Wait for its job to finish.`)
     if (f.mergeable === 'dirty') out.push('It conflicts with changes accepted since it was made. trace will bring it up to date.')
     if (f.mergeable === 'behind') out.push('It is behind changes accepted since it was made. trace will bring it up to date.')
     const failing = f.checks?.failing ?? []
@@ -669,10 +692,13 @@ export function changeSummary(o: {
   given?: ReadonlySet<string> | undefined
   /** where it sits in a stack (stacksOf) */
   stack?: { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] } | undefined
+  /** now, in seconds (whether its job is still working) */
+  at?: number | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
   if (o.stack?.stacked) facts.stacked = o.stack.stacked
+  if (jobWorking(o.job, o.at)) facts.working = true
   const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary, request: jobRequest(o.job) })
   if (unfinished) facts.unfinished = unfinished
   settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
@@ -685,5 +711,6 @@ export function changeSummary(o: {
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
     ...(o.stack?.stacked?.on ? { builds_on: o.stack.stacked.on } : {}),
     ...(o.stack?.built_on_by.length ? { built_on_by: o.stack.built_on_by } : {}),
+    ...(facts.working ? { working: true } : {}),
   }
 }

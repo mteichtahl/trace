@@ -61,7 +61,7 @@ import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
   editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, jobRequest, jobsByBranch, readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
-  traceJob, unfinishedWords, verdictOf,
+  jobWorking, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
 import { editStore } from './edits.js'
@@ -264,6 +264,8 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   if (stack.stacked) facts.stacked = stack.stacked
+  // its job is still at it: not recommended, nor accepted, until it ends (log #68)
+  if (jobWorking(job)) facts.working = true
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
   const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body, request: jobRequest(job) })
   if (unfinished) facts.unfinished = unfinished

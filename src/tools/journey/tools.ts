@@ -444,7 +444,11 @@ export function handoffAskEnv(o: { url: string; token: string; enabled: readonly
 /** The hand-off this job answers (TRACE_HANDOFF_ID, which the runner sets for a job a hand-off started), or null. */
 export const answeringHandoff = (env: Record<string, string | undefined> = process.env): string | null => env.TRACE_HANDOFF_ID?.trim() || null
 
-const Started = z.object({ accepted: z.boolean(), jobId: z.string(), reason: z.string().optional() }).loose()
+const Started = z.object({
+  accepted: z.boolean(), jobId: z.string(), reason: z.string().optional(),
+  /** not started: the specialist asked already has this work going or waiting for review (src/core/deliverables.ts) */
+  covered: z.object({ job: z.string(), change: z.object({ number: z.number(), title: z.string() }).nullable() }).loose().optional(),
+}).loose()
 const ErrorBody = z.object({ error: z.string() }).loose()
 
 /** Ask this runtime to start the receiving job (src/agents/runtime/handoff.ts). */
@@ -513,6 +517,10 @@ export const handoff = defineTool({
       throw err
     }
     const base = { handoff_id: h.id, to: h.toKind, to_name: SPECIALIST_WORDS[h.toKind], job_id: started.accepted ? started.jobId : null }
+    if (!started.accepted && started.covered) {
+      // nothing new was started: the work that covers it is the answer to wait for (log #93)
+      return { ...base, state: 'failed', covered_by: { job_id: started.covered.job, change: started.covered.change }, next: started.reason ?? 'The specialist asked is already doing this: build on that work.' }
+    }
     if (!started.accepted) {
       return { ...base, state: 'failed', next: `Its job was not started (${started.reason ?? 'refused'}). Do not ask again: ask a person with journey.ask if it still blocks you.` }
     }

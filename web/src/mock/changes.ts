@@ -62,6 +62,7 @@ const FILES: Record<string, { before: string | Uint8Array | null; after: string 
   'docs/decisions.md': { before: DECISIONS_BEFORE, after: DECISIONS_AFTER, mime: 'text/markdown' },
   'hardware/sensor.kicad_sch': { before: sch, after: sch, mime: 'text/plain' },
   'docs/renders/front.svg': { before: DRAWING_SVG, after: RENDER_AFTER, mime: 'image/svg+xml' },
+  'docs/design/protocol-specification.md': { before: null, after: '# Protocol specification\n\n## I2C display bus\n\n- Address 0x3C, 400 kHz.\n- 4.7 kΩ pull-ups to 3V3 on SCL and SDA.\n', mime: 'text/markdown' },
 }
 
 /** A changed file's bytes at the change's base (before) or head (after). */
@@ -154,6 +155,20 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'wait', why: 'It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Its checks passed: it follows that change into the design once it is accepted.' },
       may_accept: false, blockers: ['It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Accept that one first.'],
     }),
+    // its checks passed, but the job behind it is still running: not ready, whatever the checks say (log #68)
+    summary(16, {
+      title: 'Protocol specification: I2C display', from: 'the Documentation specialist', stage: 'capture', opened_at: ago(5 * MIN), updated_at: ago(1 * MIN),
+      head: { ref: 'claude/task-16', sha: HEAD }, working: true,
+      checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'checking',
+      summary: ['Started the protocol specification with the I2C display bus: address, speed and pull-ups.'],
+      files: [{ path: 'docs/design/protocol-specification.md', status: 'added', additions: 48, deletions: 0, kind: 'text' }],
+      checks_list: [
+        { name: 'Documents check', state: 'passed', summary: 'No broken links or missing sections', id: 'cr:5701' },
+        { name: 'build', state: 'passed', summary: 'Built.', id: null },
+      ],
+      recommendation: { verdict: 'wait', why: 'Its job has not finished, so what you see may still change. Wait for it to finish before you accept it.' },
+      may_accept: false, blockers: ['trace is still working on this change. Wait for its job to finish.'],
+    }),
   ],
 }
 
@@ -231,7 +246,7 @@ function checkDetail(c: ChangeDetail, id: string, admin: boolean) {
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
 const open = (repo: string) => (CHANGES[repo] ?? []).filter((c) => c.state === 'open')
-const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by'] as const
+const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by', 'working'] as const
 const toSummary = (c: ChangeDetail) => Object.fromEntries(SUMMARY_KEYS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]))
 
 /** After a change is accepted: Capture moves to step 4 and trace starts the stock check. */

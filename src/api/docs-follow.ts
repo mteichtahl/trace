@@ -27,6 +27,8 @@ import { DOC_KINDS, DOCS, docsFor, type DocKind, type SourceKind } from '../docs
 import { parseDoc } from '../docs/markers.js'
 import { sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
 import { type Context, label, PROJECT_DB_PATH } from './action-kit.js'
+import { tracePulls } from './actions-changes.js'
+import { creditedAgent } from './changes.js'
 
 /** What Scribe is asked. `why`: what happened, in a person's words. Pure. */
 export function docsRequest(why: string, o: { stage?: StageId | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): string {
@@ -107,14 +109,48 @@ export async function documentsAt(ctx: Context, repo: string, ref: string, stage
   return { missing, written }
 }
 
-/** Start Scribe on the project, unless one of its jobs is already queued or running (`queue`: start it anyway, behind). */
-export async function startScribe(ctx: Context, repo: string, request: string, o: { queue?: boolean } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string }> {
+/**
+ * Scribe's change still waiting for review, when there is one (the newest): a second Scribe job on its own branch would
+ * edit the same documents, and once one is accepted the other is in a text conflict nothing merges by itself (log
+ * #110). None when the changes cannot be read: Scribe then starts on its own branch as before.
+ */
+export async function openScribeChange(ctx: Context, repo: string): Promise<{ number: number; title: string; branch: string; defaultBranch: string } | null> {
+  const { changes, rule } = await tracePulls(ctx, repo)
+  const docs = changes.filter(({ job }) => creditedAgent(job) === 'docs' || job.agent === 'docs').at(-1)
+  return docs && rule.defaultBranch ? { number: docs.pull.number, title: docs.pull.title, branch: docs.pull.head, defaultBranch: rule.defaultBranch } : null
+}
+
+/** What Scribe is asked when it carries on on its open change: bring that branch up to date first, then the request. */
+export function onOpenChangeRequest(request: string, c: { number: number; title: string; branch: string; defaultBranch: string }): string {
+  return [
+    `Your change #${c.number} ("${c.title}") still waits for a person's review and edits the same documents, so this work goes on its branch, ${c.branch}, and lands with it: two changes to one document would conflict once either is accepted.`,
+    `First bring the branch up to date: git fetch origin ${c.defaultBranch}, then git merge origin/${c.defaultBranch} (never a rebase or a force-push). The project database merges by itself; if a document's text conflicts, keep what each side added and write the section again from the records, then commit the merge.`,
+    'Then:',
+    request,
+    `Push to ${c.branch}, so its change carries both.`,
+  ].join('\n')
+}
+
+/**
+ * Start Scribe on the project, unless one of its jobs is already queued or running (`queue`: start it anyway, behind).
+ * When Scribe's last change still waits for review, it carries on on that change's branch rather than open a second
+ * change on the same documents (log #110).
+ */
+export async function startScribe(ctx: Context, repo: string, request: string, o: { queue?: boolean } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; change?: number }> {
   try {
     const jobs = await ctx.deps.jobs()
     const busy = o.queue ? undefined : (await jobs.jobStatus()).find((j) => j.repository === repo && j.agent === 'docs' && (j.state === 'queued' || j.state === 'running'))
     if (busy) return { skipped: `Scribe is already working on this project (job ${busy.id}); it compares with the documents' last commit, so it sees this too.` }
-    const r = await jobs.startJob({ kind: 'task', repository: repo, request, agent: 'docs', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
-    return r.accepted ? { jobId: r.jobId, started: 'The Documentation agent brings the project\'s documents up to date.' } : { jobError: r.reason ?? 'trace did not accept the job.' }
+    // a revision's release copies (queue) are printed on their own change, from the default branch as accepted
+    const open = o.queue ? null : await openScribeChange(ctx, repo).catch(() => null)
+    const r = await jobs.startJob({
+      kind: 'task', repository: repo, request: open ? onOpenChangeRequest(request, open) : request, agent: 'docs', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub,
+      ...(open ? { branch: open.branch } : {}),
+    })
+    if (!r.accepted) return { jobError: r.reason ?? 'trace did not accept the job.' }
+    return open
+      ? { jobId: r.jobId, change: open.number, started: `The Documentation agent brings the documents up to date on its change #${open.number}, which still waits for review, so the two never conflict.` }
+      : { jobId: r.jobId, started: 'The Documentation agent brings the project\'s documents up to date.' }
   } catch (e) {
     return { jobError: e instanceof Error ? e.message : String(e) }
   }
