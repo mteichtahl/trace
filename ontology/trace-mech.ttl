@@ -323,6 +323,20 @@ trace:isCurrentBuild a owl:DatatypeProperty ;
     rdfs:range xsd:boolean ;
     trace:derived true .
 
+trace:needsInCase a owl:DatatypeProperty ;
+    rdfs:label "needs in the case" ;
+    rdfs:comment "What the requirement asks of the case beyond the bare board, in words: a window, or a part off the board such as a display module on a header. Worked out when read from the requirement's words, never stored." ;
+    rdfs:domain trace:Requirement ;
+    rdfs:range xsd:string ;
+    trace:derived true .
+
+trace:needsOffBoardPart a owl:DatatypeProperty ;
+    rdfs:label "needs a part off the board" ;
+    rdfs:comment "The kind of part off the board the requirement depends on (display, module or battery), from its words: a block serving it must name one, with its size. Worked out when read, never stored." ;
+    rdfs:domain trace:Requirement ;
+    rdfs:range xsd:string ;
+    trace:derived true .
+
 trace:staleBecause a owl:DatatypeProperty ;
     rdfs:label "out of date because" ;
     rdfs:comment "What changed since the build, in words: worked out when read, never stored." ;
