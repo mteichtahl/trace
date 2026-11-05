@@ -7,7 +7,12 @@
  *                                  database compared with its parent's table by table, src/docs/stale.ts). A commit
  *                                  that changed only the documents, or only runs Scribe makes for them, starts nothing,
  *                                  so Scribe's own change never starts Scribe again
- *   a gate signed                  (gate.sign): the stage that opens may need new documents or new sections
+ *   a stage's design work landed   (docsAfterDesign): the stage's documents are written from its design, so they
+ *                                  start once its criteria (but the documents' own) are met or waived: a push that
+ *                                  meets the last of them (hook.docs), or the person's act that does (a guided
+ *                                  review submitted, a question answered, a criterion signed off). A stage opening
+ *                                  starts nothing while it has design work to do (gate.sign): started then, Scribe
+ *                                  wrote "pending" in every section the stage was about (test-esp32 #58, #98, #120)
  *   a revision cut                 (gate.sign's release, journey.snapshot): the documents brought up to date and
  *                                  printed as the revision's release copies (docsReleaseRequest, src/docs/printed.ts)
  *   the nightly drift check        (hook.drift, the hooks function's schedule at DRIFT_HOUR_UTC): anything that
@@ -26,7 +31,8 @@ import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { DOC_KINDS, DOCS, docsFor, type DocKind, type SourceKind } from '../docs/catalog.js'
 import { parseDoc } from '../docs/markers.js'
 import { sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
-import { type Context, label, PROJECT_DB_PATH } from './action-kit.js'
+import { designWorkLeft, loadJourney, mergeAgentFacts, type CriterionRow, type JourneyRecord } from '../core/journey.js'
+import { type Context, agentFacts, journeyStore, label, PROJECT_DB_PATH } from './action-kit.js'
 import { tracePulls } from './actions-changes.js'
 import { creditedAgent } from './changes.js'
 
@@ -156,12 +162,47 @@ export async function startScribe(ctx: Context, repo: string, request: string, o
   }
 }
 
+/** The project's record with the agents' facts merged in (their checks meet trace's criteria), or null before a journey. */
+export async function recordNow(ctx: Context, repo: string): Promise<JourneyRecord | null> {
+  const [rec, facts] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), agentFacts(ctx, repo).catch(() => null)])
+  return rec.result && facts ? mergeAgentFacts(rec.result, facts) : rec.result
+}
+
+/** Why the documents wait, in words: the design work of the stage still to land. */
+export const waitWords = (r: JourneyRecord, left: readonly CriterionRow[]): string =>
+  `${STAGE_NAMES[r.journey.currentStage]}'s documents are written once its design work lands; still to come: ${left.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`
+
+/**
+ * Start Scribe on the current stage's documents, unless that stage still has design work to land (designWorkLeft):
+ * then nothing starts and `waiting` says what it waits for; the push or the person's act that lands the last of it
+ * starts Scribe then (docsAfterDesign). `rec`: the record with the agents' facts, when the caller has it.
+ */
+export async function startStageScribe(ctx: Context, repo: string, why: string, o: { rec?: JourneyRecord | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; waiting?: string }> {
+  const r = o.rec ?? await recordNow(ctx, repo)
+  if (!r) return { skipped: 'The project has no journey yet.' }
+  const left = designWorkLeft(r)
+  if (left.length) return { waiting: waitWords(r, left) }
+  return startScribe(ctx, repo, docsRequest(why, { stage: r.journey.currentStage, ...(o.records ? { records: o.records } : {}), ...(o.also ? { also: o.also } : {}) }))
+}
+
+/**
+ * After a person's act that can meet a criterion (a guided review submitted, a question answered, a criterion signed
+ * off): when it landed the last of the stage's design work (`before`: what was left before it, from the same record),
+ * Scribe writes the stage's documents now. No push follows these acts, so hook.docs would not see them.
+ */
+export async function docsAfterDesign(ctx: Context, repo: string, before: readonly CriterionRow[] | null): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; waiting?: string }> {
+  if (!before?.length) return {}
+  const r = await recordNow(ctx, repo)
+  if (!r || r.journey.currentStage === 'define' || designWorkLeft(r).length) return {}
+  return startStageScribe(ctx, repo, `${STAGE_NAMES[r.journey.currentStage]}'s design work is done.`, { rec: r, also: ['journey'] })
+}
+
 /**
  * The nightly drift check of one project (hook.drift): whether anything changed a record since the documents were
  * last written (each document's front-matter commit compared with the default branch), or a document the stage needs
  * is missing; if so, Scribe is started. Before Architect there is nothing to check.
  */
-export async function driftOf(ctx: Context, repo: string, stage: StageId): Promise<{ head: string; records: SourceKind[]; missing: DocKind[]; since: string[]; started?: string; skipped?: string; jobId?: string; jobError?: string }> {
+export async function driftOf(ctx: Context, repo: string, stage: StageId): Promise<{ head: string; records: SourceKind[]; missing: DocKind[]; since: string[]; started?: string; skipped?: string; jobId?: string; jobError?: string; waiting?: string }> {
   const gh = await ctx.deps.github()
   const { sha } = await gh.defaultBranch(repo)
   const docs = await documentsAt(ctx, repo, sha, stage)
@@ -179,5 +220,6 @@ export async function driftOf(ctx: Context, repo: string, stage: StageId): Promi
     out.missing.length ? ` (missing: ${out.missing.map((k) => DOCS[k].title.toLowerCase()).join(', ')})` : '',
     '.',
   ].join('')
-  return { ...out, ...(await startScribe(ctx, repo, docsRequest(why, { stage, records: out.records }))) }
+  // the stage's design work still to land: the documents wait for it, as they do on a push
+  return { ...out, ...(await startStageScribe(ctx, repo, why, { records: out.records })) }
 }

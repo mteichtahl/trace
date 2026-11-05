@@ -10,12 +10,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { journeyStore } from '../../src/api/action-kit.js'
+import { hashOf, journeyStore } from '../../src/api/action-kit.js'
 import { jobIndex } from '../../src/api/actions-jobs.js'
 import { putJob } from '../../src/core/job-index.js'
 import { docsReleaseRequest, docsRequest } from '../../src/api/docs-follow.js'
 import { skeleton } from '../../src/docs/catalog.js'
-import { decide } from '../../src/core/journey.js'
+import { decide, loadJourney, recordOpen, setCriterion } from '../../src/core/journey.js'
 import { recordLatest, recordRelease, storePrinted } from '../../src/docs/printed.js'
 import { AccessDenied, type Principal } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -62,6 +62,24 @@ const run = async (p: Principal, args: Record<string, unknown>): Promise<Record<
 const atStage = async (stage: string): Promise<void> => {
   await journeyStore(ctx(ADMIN), REPO).update((db) => { db.prepare('UPDATE journey SET current_stage=?').run(stage); return { result: null } })
 }
+/** Every criterion of the gates of `stage` met (true) or not met again (false): its design work landed, or not yet. */
+const settle = async (stage: string, met = true): Promise<void> => {
+  await journeyStore(ctx(ADMIN), REPO).update((db) => {
+    for (const c of loadJourney(db)!.criteria.filter((x) => x.gate.split('.')[0] === stage)) setCriterion(db, c.id, met ? 'met' : 'not_met', met ? [{ kind: 'run', ref: `run-${c.id}` }] : [], 'seed')
+    return { result: null }
+  })
+}
+
+/** The runs `settle` cites for `stage`'s criteria, put in the default branch's record: their changes are accepted. */
+const acceptRuns = async (stage: string): Promise<void> => {
+  const ids = (await journeyStore(ctx(ADMIN), REPO).read((db) => loadJourney(db)!.criteria.filter((x) => x.gate.split('.')[0] === stage).map((c) => c.id))).result
+  const dir = mkdtempSync(join(scratch, 'accepted-'))
+  mkdirSync(join(dir, '.git'))
+  const db = openProject(dir)
+  for (const id of ids) db.prepare("INSERT INTO runs (id, kind, started, status) VALUES (?, 'verify.run', 1, 'pass')").run(`run-${id}`)
+  db.close()
+  github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
+}
 
 /** Two project databases on the fake: the parent's, and the commit's with one requirement more. */
 function seedDatabases(): void {
@@ -94,8 +112,17 @@ describe('Scribe starting on a push', () => {
     expect(started).toEqual([])
   })
 
-  it('starts Scribe when the push changed a record, naming the records and the stage', async () => {
+  it('starts nothing while the stage\'s design work is still to land, and says what it waits for (test-esp32 #120)', async () => {
     await atStage('capture')
+    github.commit = { files: ['hardware/board.kicad_sch'], parent: 'sha-parent' }
+    const r = await run(BACKEND, { repo: REPO })
+    expect(r).toMatchObject({ records: ['schematic'], started: null })
+    expect(r.waiting).toMatch(/^Capture's documents are written once its design work lands; still to come: the electrical rule check is clean/)
+    expect(started).toEqual([])
+  })
+
+  it('starts Scribe when the push changed a record, naming the records and the stage', async () => {
+    await settle('capture')
     github.commit = { files: ['hardware/board.kicad_sch', 'README.md'], parent: 'sha-parent' }
     const r = await run(BACKEND, { repo: REPO })
     expect(r).toMatchObject({ records: ['schematic'], job: 'job-1' })
@@ -152,6 +179,59 @@ describe('Scribe starting on a push', () => {
     const q = docsRequest('The design gate was signed.', { stage: 'capture' })
     expect(q).toMatch(/leaving base unset/)
     expect(q).toMatch(/If nothing needs writing, say so and stop/)
+  })
+})
+
+describe('the order of a stage\'s work: design first, the documents from it (test-esp32 #120, #132)', () => {
+  const meet = async (...ids: string[]): Promise<void> => {
+    await journeyStore(ctx(ADMIN), REPO).update((db) => { for (const id of ids) setCriterion(db, id, 'met', [{ kind: 'run', ref: `run-${id}` }], 'seed'); return { result: null } })
+  }
+  const decisions = async (kind: string): Promise<string[]> => (await journeyStore(ctx(ADMIN), REPO).read((db) => loadJourney(db)!.decisions.filter((d) => d.kind === kind).map((d) => d.ref ?? ''))).result
+
+  it('starts the case once the layout lands, not behind the documents, and only once', async () => {
+    await atStage('layout')
+    await settle('layout', false)
+    github.commit = { files: ['hardware/board.kicad_pcb'], parent: 'sha-parent' }
+    // the layout is not accepted yet: nothing to build the case for, and the documents wait
+    const before = started.length
+    expect(await run(BACKEND, { repo: REPO })).toMatchObject({ started: null, waiting: expect.stringMatching(/^Layout's documents/) })
+    expect(started.length).toBe(before)
+    // the layout accepted: routed and checked, so the case starts for it
+    await meet('layout.routed', 'layout.drc')
+    const r = await run(BACKEND, { repo: REPO })
+    expect(r.design).toMatchObject({ started: [expect.stringMatching(/designs the case for the accepted board/)] })
+    expect(started.at(-1)).toMatchObject({ agent: 'impl', request: expect.stringMatching(/layout is accepted[\s\S]*mech_build[\s\S]*shape_check layout\.fit/) })
+    expect(r.started).toBeNull()
+    expect(await decisions('work.started')).toEqual(['layout.fit'])
+    // a later push starts it no second time
+    const n = started.length
+    expect((await run(BACKEND, { repo: REPO })).design).toBeUndefined()
+    expect(started.length).toBe(n)
+  })
+
+  it('a person\'s act that lands the last of the design work starts the documents (no push follows it)', async () => {
+    await meet('layout.lengths', 'layout.renders')
+    const n = started.length
+    const w = (await perform('waiver.add', {
+      repo: REPO, target: { kind: 'criterion', id: 'layout.fit' }, reason: 'this revision ships as a bare board', risk: 'the board is handled without a case',
+      severity: 'cosmetic', caught_where: null,
+    }, ctx(ADMIN))).result as Record<string, any>
+    expect(w.started).toEqual([expect.stringMatching(/Documentation agent/)])
+    expect(started.length).toBe(n + 1)
+    expect(started.at(-1)).toMatchObject({ agent: 'docs', request: expect.stringMatching(/Layout's design work is done[\s\S]*stage layout/) })
+  })
+
+  it('a stage opening starts its design work, and its documents wait for it', async () => {
+    await atStage('prove')
+    await settle('prove')
+    await settle('layout', false)
+    await journeyStore(ctx(ADMIN), REPO).update((db) => { for (const c of loadJourney(db)!.criteria.filter((x) => x.gate === 'prove')) recordOpen(db, { criterion: c.id }, hashOf(ADMIN)); return { result: null } })
+    // the gates count the accepted design only (#287): the runs Prove's criteria cite are in the default branch's record
+    await acceptRuns('prove')
+    const n = started.length
+    const s = (await perform('gate.sign', { repo: REPO, gate: 'prove' }, ctx(ADMIN))).result as Record<string, any>
+    expect(s.advanced_to).toBe('layout')
+    expect(started.slice(n).map((x) => x.agent)).toEqual(['impl'])
   })
 })
 

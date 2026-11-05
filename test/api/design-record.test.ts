@@ -10,9 +10,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { baselineCriteria } from '../../src/api/actions-skills.js'
+import { agentFactsStore, journeyStore } from '../../src/api/action-kit.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
-import { setCriterion, startJourney } from '../../src/core/journey.js'
+import { loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
+import { addAgentQuestion } from '../../src/core/agent-facts.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
 import { DesignDb } from '../../src/tools/design/db.js'
@@ -252,6 +254,21 @@ describe('the guided skills read the design record', () => {
     // a waiver on the finding lets it through
     await run(USER, 'waiver.add', { repo: REPO, target: { kind: 'finding', id: 'pin:U1.40:missing_pin' }, reason: 'Pin 40 is a test point the firmware never drives.', risk: 'None at bring-up.', severity: 'cosmetic', caught_where: null })
     expect((await checks('pin-plan-review')).match?.status).toBe('waived')
+    // an open question about a pin of the plan: the plan is not agreed over it, and the review names it (test-esp32 #106)
+    const facts = agentFactsStore({ principal: ADMIN, deps }, REPO)
+    const record = (await journeyStore({ principal: ADMIN, deps }, REPO).read((db) => loadJourney(db))).result
+    const asked = await facts.update((db) => ({ result: addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: null }, {
+      text: 'Which pin order does U1\'s debug header need?', blocks: 'drawing the header',
+      options: [{ id: 'a', label: 'GND first', recommended: true, why: 'the module\'s silkscreen' }, { id: 'b', label: 'VCC first', recommended: false, why: 'the other module' }],
+    }, record) }))
+    // and one about something else does not hold it
+    await facts.update((db) => ({ result: addAgentQuestion(db, { agent: 'verify', label: 'the Verification specialist', jobId: null }, {
+      text: 'Which ambient temperature should the thermal test use?', options: [{ id: 'a', label: '40 °C', recommended: true, why: 'the intent' }, { id: 'b', label: '25 °C', recommended: false, why: 'a lab' }],
+    }, record) }))
+    const held = await run(USER, 'skill.get', { repo: REPO, skill: 'pin-plan-review' }) as { pending_errors?: string[] }
+    expect(held.pending_errors).toEqual(['Answer the open question first: the Implementation specialist asks "Which pin order does U1\'s debug header need?" Its answer may change what Pin plan review agrees.'])
+    await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'pin-plan-review', draft: {} })).rejects.toThrow(/cannot be submitted yet: Answer the open question first: the Implementation specialist asks "Which pin order/)
+    await run(USER, 'question.answer', { repo: REPO, question: asked.result, option: 'a' })
     expect(await run(USER, 'skill.submit', { repo: REPO, skill: 'pin-plan-review', draft: {} })).toMatchObject({ ok: true })
     const d = await run(USER, 'design.get', { repo: REPO }) as { pin_plan: { parts: { part: string; agreed: { by: string; stale: boolean } }[] } }
     expect(d.pin_plan.parts[0]).toMatchObject({ part: 'U1', agreed: { by: USER.email, stale: false } })

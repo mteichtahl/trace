@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type OpenChange, STAGE_IDS, TEMPLATES, type Viewer, askQuestion, journeyView, loadJourney, nextStep, recordOpen, setCriterion, signGate,
-  startJourney, withChanges,
+  addWaiver, designWorkLeft, startJourney, withChanges,
 } from '../../src/core/journey.js'
 import { stageGuideText } from '../../src/core/stage-guides.js'
 import { openProject } from '../../src/core/store.js'
@@ -137,11 +137,11 @@ describe('open changes in the journey', () => {
     expect(withChanges(r, journeyView(r, REVIEWER), REVIEWER, [change()]).next).toMatchObject({ kind: 'review', belongs_to: 'contributors', yours: false, button: 'Read the change' })
   })
 
-  it('a change not ready (or with no criterion it names) is a step first among those left, and the next step stays', () => {
+  it('a change not ready is a step, and the next step stays; one naming no criterion follows the stage\'s criteria, before signing', () => {
     const r = rec()
     const v = withChanges(r, journeyView(r, USER), USER, [change({ ready: false })])
-    expect(v.next).toMatchObject({ kind: 'task', ref: { kind: 'criterion', id: 'define.accepted' }, step: { index: 2, total: 4 } })
-    expect(states(v, 'define')).toEqual(['change:7:you:later', 'define.accepted:you:now', 'define.measurable:you:next', 'sign:define:admins:later'])
+    expect(v.next).toMatchObject({ kind: 'task', ref: { kind: 'criterion', id: 'define.accepted' }, step: { index: 1, total: 4 } })
+    expect(states(v, 'define')).toEqual(['define.accepted:you:now', 'define.measurable:you:next', 'change:7:you:later', 'sign:define:admins:later'])
   })
 
   it('a gate ready or a question comes before a change: only a task or trace working gives way', () => {
@@ -161,8 +161,46 @@ describe('open changes in the journey', () => {
     const v = withChanges(r, journeyView(r, USER), USER, [change({ number: 9, title: 'the schematic', ready: false, criteria: ['capture.erc'] }), change({ number: 8, title: 'the block diagram' })])
     expect(v.next).toMatchObject({ kind: 'review', ref: { kind: 'change', id: '8' } })
     expect(states(v, 'capture')[0]).toBe('change:9:you:later')
-    expect(states(v, 'architect')).toEqual(['architect.blocks:you:done', 'change:8:you:now', 'architect.mapped:trace:next', 'architect.stock:trace:later', 'sign:architect:admins:later'])
+    // a change that meets no criterion (the documents) follows the design work; trace goes on with that work alongside
+    expect(states(v, 'architect')).toEqual(['architect.blocks:you:done', 'architect.mapped:trace:later', 'architect.stock:trace:later', 'change:8:you:now', 'sign:architect:admins:next'])
+    expect(v.stages.find((s) => s.id === 'architect')?.steps.filter((s) => s.alongside).map((s) => s.id)).toEqual(['architect.mapped'])
     // nothing open: the view is as it was
     expect(withChanges(r, journeyView(r, USER), USER, [])).toEqual(journeyView(r, USER))
+  })
+
+  it('the case goes on alongside a docs change under review, never after it (test-esp32 #132)', () => {
+    signAll('define', 'architect', 'capture', 'prove')
+    for (const k of ['routed', 'drc', 'lengths', 'renders']) setCriterion(db, `layout.${k}`, 'met', [{ kind: 'run', ref: k }], 'trace')
+    const r = rec()
+    expect(journeyView(r, USER).next).toMatchObject({ kind: 'working', ref: { kind: 'criterion', id: 'layout.fit' } })
+    const v = withChanges(r, journeyView(r, USER), USER, [change({ number: 18, title: 'Docs: the Layout sections', from: 'the Documentation specialist' })])
+    expect(v.next).toMatchObject({ kind: 'review', ref: { kind: 'change', id: '18' } })
+    const steps = v.stages.find((s) => s.id === 'layout')!.steps
+    // the docs change comes after the design work it describes
+    expect(steps.map((s) => s.id)).toEqual(['layout.routed', 'layout.drc', 'layout.lengths', 'layout.fit', 'layout.renders', 'change:18', 'sign:layout'])
+    expect(steps.find((s) => s.id === 'layout.fit')).toMatchObject({ owner: 'trace', alongside: true })
+    expect(v.next.after).toBe('Once you accept it, its work counts in the design. Meanwhile, trace goes on with: the board fits its enclosure, or each clash is waived.')
+    // a change that meets the criterion trace works on is what trace waits for: not alongside
+    const meets = withChanges(r, journeyView(r, USER), USER, [change({ number: 20, title: 'the case', criteria: ['layout.fit'] })])
+    expect(meets.stages.find((s) => s.id === 'layout')!.steps.some((s) => s.alongside)).toBe(false)
+  })
+})
+
+describe('the stage\'s design work left (the documents wait for it)', () => {
+  beforeEach(() => { db = fresh(); startJourney(db, { template: 'board', by: ADMIN.label, name: 'Soil sensor' }) })
+  const left = (): string[] => designWorkLeft(rec()).map((c) => c.id)
+
+  it('is every criterion of the stage not met or waived: on opening, all of them', () => {
+    signAll('define', 'architect', 'capture', 'prove')
+    expect(left()).toEqual(['layout.routed', 'layout.drc', 'layout.lengths', 'layout.fit', 'layout.renders'])
+    for (const k of ['routed', 'drc', 'lengths', 'renders']) setCriterion(db, `layout.${k}`, 'met', [], 'trace')
+    expect(left()).toEqual(['layout.fit'])
+    addWaiver(db, { target: { kind: 'criterion', id: 'layout.fit' }, reason: 'this revision ships as a bare board', risk: 'the board is handled without a case', severity: 'cosmetic', caught_where: null, scope: 'this revision only' }, signer)
+    expect(left()).toEqual([])
+  })
+
+  it('leaves out the documents criterion and the review that comes after it', () => {
+    signAll('define', 'architect', 'capture', 'prove', 'layout')
+    expect(left()).toEqual(['signoff.coverage', 'signoff.emc', 'signoff.bom'])
   })
 })

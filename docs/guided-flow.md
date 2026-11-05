@@ -127,9 +127,12 @@ admin). `now` is the step the next step points at; `next` is the one after it; d
 `after: string | null` (one sentence: what happens once this is done).
 
 `journey.get` adds open changes: each open change becomes a step (owner `you`/`contributors`, ref `change`) placed
-before the criteria it would satisfy, else first among the not-done steps. When the next step would be `task` or
-`working` and a change is open and ready, the next step becomes kind `review`: "trace finished <title>. Review it and
-accept it into the design.", with the change's recommendation and `ref: { kind: 'change', id: String(number) }`. The
+before the criteria it would satisfy, else after the stage's criteria, just before signing its gate (a change that
+meets no criterion, such as the documents, follows the design work it is written from). When the next step would be
+`task` or `working` and a change is open and ready, the next step becomes kind `review`: "trace finished <title>.
+Review it and accept it into the design.", with the change's recommendation and `ref: { kind: 'change', id:
+String(number) }`. When trace was working on a criterion the change does not meet, that step carries `alongside: true`
+and reads "trace · alongside you": trace goes on with it meanwhile, it does not wait for the review. The
 inbox `review` item's action becomes "Review the change" with an in-app link (`/p/<id>/changes/<number>`).
 
 ### As built (API): additions to the shapes above

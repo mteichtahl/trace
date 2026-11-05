@@ -21,7 +21,7 @@ function StepIcon({ s }: { s: StageStep }) {
   if (s.state === 'done') return <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-verified text-white"><Check className="size-3" strokeWidth={3} aria-hidden /></span>
   if (s.state === 'waived') return <Circle className="size-[18px] shrink-0 text-waived" aria-hidden />
   if (s.state === 'now') return <CircleDot className="size-[18px] shrink-0 text-primary" aria-hidden />
-  if (s.owner === 'trace' && s.state === 'next') return <CircleDashed className="size-[18px] shrink-0 text-muted-foreground" aria-hidden />
+  if (s.owner === 'trace' && (s.state === 'next' || s.alongside)) return <CircleDashed className="size-[18px] shrink-0 text-muted-foreground" aria-hidden />
   return <Circle className="size-[18px] shrink-0 text-muted-foreground/50" aria-hidden />
 }
 
@@ -50,7 +50,7 @@ export function StepList({ steps, links, held = false, className }: { steps: Sta
           <li
             key={s.id}
             className={cn('-mx-2 flex items-center gap-3 rounded-md px-2 py-1.5 text-sm', mine && 'bg-primary-soft font-medium')}
-            aria-label={`${s.text}: ${waiting ? 'on hold while the project is paused' : `${ownerWord(s)}, ${STATE_WORD[s.state]}`}`}
+            aria-label={`${s.text}: ${waiting ? 'on hold while the project is paused' : `${ownerWord(s)}, ${s.alongside && !done && s.state !== 'now' ? 'working on it meanwhile' : STATE_WORD[s.state]}`}`}
           >
             <span className={cn('contents', waiting && '[&>*]:opacity-50')}><StepIcon s={s} /></span>
             <span className={cn('min-w-0 flex-1', done && 'text-muted-foreground line-through decoration-muted-foreground/50', waiting && 'text-muted-foreground')}>
