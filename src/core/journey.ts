@@ -481,8 +481,29 @@ export const BuildSchema = z.object({
 })
 export type Build = z.output<typeof BuildSchema>
 
-export interface OptionRow { id: string; label: string; recommended: boolean; why: string; gives_up?: string | undefined }
-export const OptionSchema = z.object({ id: z.string().min(1).max(40), label: z.string().min(1).max(300), recommended: z.boolean().default(false), why: z.string().max(2000).default(''), gives_up: z.string().max(1000).optional() })
+export const SEVERITIES = ['cosmetic', 'degraded', 'failure', 'safety'] as const
+export type Severity = (typeof SEVERITIES)[number]
+export const WAIVER_TARGETS = ['criterion', 'requirement', 'finding', 'test'] as const
+
+/**
+ * The waiver an option records when a person chooses it (answerQuestion): what it waives, by id (a shape's finding as
+ * shape.check names it, a criterion, a requirement or a test), and the risk, severity, where it is caught instead and
+ * scope that waiver.add takes. The reason is the person's (or, choosing the recommendation, the option's why). An
+ * agent cannot take a waiver; it offers one, and the person's answer is the act (test-esp32 #142: asked to waive, the
+ * person had nowhere to do it).
+ */
+export const OptionWaiverSchema = z.object({
+  targets: z.array(z.object({ kind: z.enum(WAIVER_TARGETS), id: z.string().trim().min(1).max(300) })).min(1).max(20)
+    .describe('what choosing it waives, each by its id: a finding (as shape.check names it), a criterion, a requirement or a test'),
+  risk: z.string().trim().min(5).max(2000).describe('what goes wrong if the reason to waive is mistaken'),
+  severity: z.enum(SEVERITIES).describe('how bad that would be: cosmetic, degraded, failure or safety'),
+  caught_where: z.string().trim().max(300).nullable().default(null).describe('where it is checked instead (a later stage, a bench test); required for safety'),
+  scope: z.string().trim().min(1).max(300).default('this revision only').describe('this revision only, or until a named condition changes'),
+})
+export type OptionWaiver = z.output<typeof OptionWaiverSchema>
+
+export interface OptionRow { id: string; label: string; recommended: boolean; why: string; gives_up?: string | undefined; waives?: OptionWaiver | undefined }
+export const OptionSchema = z.object({ id: z.string().min(1).max(40), label: z.string().min(1).max(300), recommended: z.boolean().default(false), why: z.string().max(2000).default(''), gives_up: z.string().max(1000).optional(), waives: OptionWaiverSchema.optional() })
 
 export interface JourneyRow {
   template: Template; revision: string; currentStage: StageId; later: LaterStage[]; start: 'idea' | 'import'
@@ -509,9 +530,6 @@ export interface QuestionRow {
 }
 /** Who an agent's question is for when it names no one: the project's contributors (admins too), or its admins. */
 export type AskedPart = 'contributors' | 'admins'
-export const SEVERITIES = ['cosmetic', 'degraded', 'failure', 'safety'] as const
-export type Severity = (typeof SEVERITIES)[number]
-export const WAIVER_TARGETS = ['criterion', 'requirement', 'finding', 'test'] as const
 export interface WaiverRow {
   id: string; stage: StageId; gate: string | null; targetKind: (typeof WAIVER_TARGETS)[number]; target: string; reason: string; risk: string; severity: Severity
   caughtWhere: string | null; scope: string; by: string; at: number; acknowledgedBy: string | null; acknowledgedAt: number | null; closedAt: number | null
@@ -685,6 +703,8 @@ export interface QuestionView {
   answered: { answer: string; option_id: string | null; reason: string | null; by: string | null; at: string } | null
   /** a stuck agent's recommendation, in its words (agent facts) */
   recommendation?: string | undefined
+  /** answered just now with an option that waives: the waivers recorded in the person's name */
+  waivers?: string[] | undefined
 }
 export interface WaiverView {
   id: string; stage: StageId; gate: string | null; target: { kind: string; id: string }; reason: string; risk: string; severity: Severity
@@ -1815,6 +1835,7 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
   if (differs && recommended && reason.length < 3) throw new JourneyError(`trace recommended "${recommended.label}". Say in a line why you chose otherwise.`)
   const t = now()
   const approved = opt ? approvedByAnswer(r, q, opt.label) : []
+  let waived: string[] = []
   transaction(db, () => {
     db.prepare('UPDATE questions SET answer=?, option_id=?, answer_reason=?, answered_by=?, answered_by_hash=?, answered_at=?, updated=? WHERE id=?')
       .run(text, opt?.id ?? null, reason || null, by.label, by.hash, t, t, id)
@@ -1829,9 +1850,11 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
       setCriterion(db, c.id, 'met', [{ kind: 'question', ref: id, label: `${text}, answered by ${by.label}` }, ...q.sources], by.label)
       decide(db, { kind: 'criterion.approved', stage: q.stage, ref: c.id, by: by.label, summary: `${c.text} Approved by ${by.label} in answer to question ${id}.` })
     }
+    // an option that waives: the person's answer is their waiver, recorded as waiver.add would (an agent cannot take one)
+    if (opt?.waives) waived = waiversFromAnswer(db, withFacts(need(db), o.facts), q, opt, reason, by)
   })
   const after = withFacts(need(db), o.facts).questions.find((x) => x.id === id) as QuestionRow
-  return questionView(after, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
+  return { ...questionView(after, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' }), ...(waived.length ? { waivers: waived } : {}) }
 }
 
 /**
@@ -1861,30 +1884,72 @@ export interface WaiverInput {
 /** Take a waiver (the Waiver skill's quality bar is checked here). */
 export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer, o: { facts?: AgentFacts | null | undefined } = {}): WaiverView {
   const r = withFacts(need(db), o.facts)
+  const id = transaction(db, () => insertWaiver(db, r, w, by))
+  const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
+  return v.waivers.find((x) => x.id === id) as WaiverView
+}
+
+/** Why a waiver cannot be taken as given (its quality bar), or null. `r` with the agents' facts merged. */
+export function waiverProblem(r: JourneyRecord, w: Omit<WaiverInput, 'reason'> & { reason?: string | undefined }): string | null {
+  if (w.reason !== undefined) {
+    const reason = w.reason.trim()
+    if (reason.length < 10 || VAGUE.test(reason)) return 'Give the reason it cannot or need not be met now; "not needed" alone is not enough.'
+  }
+  if (w.risk.trim().length < 5) return 'Say what goes wrong if the reason is mistaken.'
+  if (w.severity === 'safety' && !w.caught_where?.trim()) return 'A waiver rated safety must say where it is checked instead; it cannot be accepted for good.'
+  if (!w.scope.trim()) return 'Say the scope: this revision only, or until a named condition changes.'
+  if (w.target.kind === 'criterion') {
+    const c = r.criteria.find((x) => x.id === w.target.id)
+    if (!c) return `There is no criterion called ${w.target.id} in this project.`
+    if (c.status === 'met') return 'That criterion is already met; there is nothing to waive.'
+    if (r.waivers.some((x) => x.targetKind === 'criterion' && x.target === c.id && x.closedAt === null)) return 'That criterion is already waived.'
+  }
+  return null
+}
+
+/** Write a waiver and its decision, in the caller's transaction; returns its id. Throws JourneyError when it falls short. */
+function insertWaiver(db: DatabaseSync, r: JourneyRecord, w: WaiverInput, by: Signer, o: { question?: string } = {}): string {
+  const problem = waiverProblem(r, w)
+  if (problem) throw new JourneyError(problem)
   const reason = w.reason.trim()
-  if (reason.length < 10 || VAGUE.test(reason)) throw new JourneyError('Give the reason it cannot or need not be met now; "not needed" alone is not enough.')
-  if (w.risk.trim().length < 5) throw new JourneyError('Say what goes wrong if the reason is mistaken.')
-  if (w.severity === 'safety' && !w.caught_where?.trim()) throw new JourneyError('A waiver rated safety must say where it is checked instead; it cannot be accepted for good.')
-  if (!w.scope.trim()) throw new JourneyError('Say the scope: this revision only, or until a named condition changes.')
   let gate: string | null = null
   let stage = r.journey.currentStage
   if (w.target.kind === 'criterion') {
-    const c = r.criteria.find((x) => x.id === w.target.id)
-    if (!c) throw new JourneyError(`There is no criterion called ${w.target.id} in this project.`)
-    if (c.status === 'met') throw new JourneyError('That criterion is already met; there is nothing to waive.')
+    const c = r.criteria.find((x) => x.id === w.target.id) as CriterionRow
     gate = c.gate
     stage = (r.gates.find((g) => g.id === c.gate) as GateRow).stage
-    if (r.waivers.some((x) => x.targetKind === 'criterion' && x.target === c.id && x.closedAt === null)) throw new JourneyError('That criterion is already waived.')
   }
   const id = newId()
   const t = now()
-  transaction(db, () => {
-    db.prepare(`INSERT INTO waivers (id, stage, gate, target_kind, target, reason, risk, severity, caught_where, scope, by, at, updated)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, stage, gate, w.target.kind, w.target.id, reason, w.risk.trim(), w.severity, w.caught_where?.trim() || null, w.scope.trim(), by.label, t, t)
-    decide(db, { kind: 'waiver.added', stage, ref: id, by: by.label, summary: `A waiver was taken on ${w.target.kind} ${w.target.id} (rated ${w.severity}): ${reason}` })
+  db.prepare(`INSERT INTO waivers (id, stage, gate, target_kind, target, reason, risk, severity, caught_where, scope, by, at, updated)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, stage, gate, w.target.kind, w.target.id, reason, w.risk.trim(), w.severity, w.caught_where?.trim() || null, w.scope.trim(), by.label, t, t)
+  decide(db, {
+    kind: 'waiver.added', stage, ref: id, by: by.label,
+    summary: `A waiver was taken on ${w.target.kind} ${w.target.id} (rated ${w.severity}): ${reason}${o.question ? ` (in answer to question ${o.question})` : ''}`,
+    ...(o.question ? { detail: { question: o.question } } : {}),
   })
-  const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
-  return v.waivers.find((x) => x.id === id) as WaiverView
+  return id
+}
+
+/**
+ * The waivers a person records by choosing an option that waives (OptionWaiverSchema), one per target: the answer's
+ * reason (or, choosing the recommendation, the option's why), attributed to the person. A target already waived, or a
+ * criterion already met, needs no waiver and is passed over. Throws JourneyError when the waiver falls short.
+ */
+function waiversFromAnswer(db: DatabaseSync, r: JourneyRecord, q: QuestionRow, opt: OptionRow, reason: string, by: Signer): string[] {
+  const w = opt.waives
+  if (!w) return []
+  const why = reason || opt.why.trim()
+  const ids: string[] = []
+  for (const target of w.targets) {
+    const open = r.waivers.some((x) => x.closedAt === null && x.targetKind === target.kind && x.target === target.id)
+    const met = target.kind === 'criterion' && r.criteria.find((c) => c.id === target.id)?.status === 'met'
+    if (open || met) continue
+    const input: WaiverInput = { target, reason: why, risk: w.risk, severity: w.severity, caught_where: w.caught_where ?? null, scope: w.scope ?? 'this revision only' }
+    if (waiverProblem(r, input)?.startsWith('Give the reason')) throw new JourneyError(`"${opt.label}" records a waiver in your name: say in a sentence why it need not be met now.`)
+    ids.push(insertWaiver(db, r, input, by, { question: q.id }))
+  }
+  return ids
 }
 
 /** An agent asks a person (or the project's contributors) a question, or says it is stuck. */

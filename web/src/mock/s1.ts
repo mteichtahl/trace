@@ -6,7 +6,7 @@
 import { JOURNEYS, MEMBERS } from './fixtures'
 import { OPS_RUNS } from './fixtures-admin'
 import {
-  BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, QUESTIONS, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
+  BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, PANEL_GATE, QUESTIONS, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
 } from './fixtures-s1'
 import type { Gate } from '@/lib/types'
 import type { GateMore, JourneyMore } from '@/lib/types-s1'
@@ -19,6 +19,7 @@ const later = (r: Response, ms = 700) => new Promise<Response>((res) => setTimeo
 // enrich the shared journeys once: gate criteria, waivers, recommendation, decisions
 for (const g of JOURNEYS['acme/soil-sensor']!.gates as GateMore[]) Object.assign(g, SOIL_GATES[g.id] ?? {})
 ;(JOURNEYS['acme/soil-sensor'] as JourneyMore).decisions = DECISIONS
+for (const g of JOURNEYS['acme/panel-controller']!.gates as GateMore[]) if (g.state === 'open') Object.assign(g, PANEL_GATE)
 for (const g of JOURNEYS['acme/motor-driver']!.gates as GateMore[])
   if (g.state === 'signed') Object.assign(g, { criteria: SOIL_GATES.requirements!.criteria })
 

@@ -1,7 +1,7 @@
 /** The agents' facts beside the journey record: the store (conditional writes), the rules each fact must meet, and how the views merge them. */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  AgentFactError, AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts, loadChecks, projectsFromEnv, resolveStuck,
+  AgentFactError, AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, askAgentQuestion, loadAgentFacts, loadChecks, projectsFromEnv, resolveStuck,
 } from '../../src/core/agent-facts.js'
 import { S3Backend } from '../../src/core/central.js'
 import {
@@ -156,6 +156,43 @@ describe('merging the agents\' facts into the journey views', () => {
     expect(inboxItems('acme/board', after, CONTRIB, undefined, f)).toEqual([])
     expect(mergeAgentFacts(after, f).questions).toEqual([expect.objectContaining({ id, from: 'agent', askedPart: 'contributors', answeredAt: expect.any(Number) })])
     await expect(s.journey.update((db) => ({ result: answerQuestion(db, id, { hash: CONTRIB.hash, label: CONTRIB.label }, { option: 'a' }, { facts: f }) }))).rejects.toThrow(/already answered/)
+  })
+
+  // test-esp32 #142: the agent offered "Waive the Q1, R4, R5 findings", the person chose it, and no waiver was taken
+  it('an agent\'s option that waives keeps what it waives; the person choosing it records the waivers', async () => {
+    const s = await started()
+    const r = await s.record()
+    const finding = 'layout.fit@urn:trace:case-finding:Q1'
+    const waives = { targets: [{ kind: 'finding' as const, id: finding }], risk: 'Q1 could touch the display glass.', severity: 'cosmetic' as const }
+    const ask = (o: typeof opts) => s.facts.update((db) => ({ result: addAgentQuestion(db, VERIFY, { text: 'Waive the fit finding on Q1 under the display window?', blocks: 'layout.fit', options: o }, r) }))
+    // refused when asked, not when answered: a safety waiver must say where it is checked instead, a criterion must exist
+    await expect(ask([{ ...opts[0]!, waives: { ...waives, severity: 'safety' } } as never, opts[1]!])).rejects.toThrow(/caught_where/)
+    await expect(ask([{ ...opts[0]!, waives: { ...waives, targets: [{ kind: 'criterion', id: 'layout.nope' }] } } as never, opts[1]!])).rejects.toThrow(/does not have/)
+    const { result: id } = await ask([{ id: 'w', label: 'Waive the Q1 finding', recommended: true, why: 'The module glass covers the window.', waives } as never, opts[1]!])
+    const f = await s.read()
+    expect(f.questions[0]?.options[0]).toMatchObject({ id: 'w', waives: { targets: [{ kind: 'finding', id: finding }], severity: 'cosmetic', scope: 'this revision only', caught_where: null } })
+    const answered = await s.journey.update((db) => ({ result: answerQuestion(db, id, { hash: CONTRIB.hash, label: CONTRIB.label }, { option: 'w' }, { facts: f }) }))
+    expect(answered.result.waivers).toHaveLength(1)
+    expect((await s.record()).waivers).toEqual([expect.objectContaining({ targetKind: 'finding', target: finding, by: CONTRIB.label, reason: 'The module glass covers the window.', risk: waives.risk })])
+  })
+
+  // test-esp32 #143: two near-identical questions open at once, the second "as asked in aq…"
+  it('a question that asks again what an open question asks keeps the open one', async () => {
+    const s = await started()
+    const r = await s.record()
+    const ask = (text: string, rec = r) => s.facts.update((db) => ({ result: askAgentQuestion(db, VERIFY, { text, blocks: 'sizing the regulator', options: opts }, rec) }))
+    const first = (await ask('What is the supply range?')).result
+    expect(first.repeat).toBe(false)
+    expect((await ask(`As asked in ${first.id}: what is the supply range of the sensor?`)).result).toEqual({ id: first.id, repeat: true })
+    expect((await ask('What is the  supply range?')).result).toEqual({ id: first.id, repeat: true })
+    expect((await s.read()).questions).toHaveLength(1)
+    // a different question is asked; once the first is answered, asking it again is a new question
+    expect((await ask('Is the coin cell the only source?')).result.repeat).toBe(false)
+    const f = await s.read()
+    await s.journey.update((db) => ({ result: answerQuestion(db, first.id, { hash: CONTRIB.hash, label: CONTRIB.label }, { option: 'a' }, { facts: f }) }))
+    const again = (await ask('What is the supply range?', await s.record())).result
+    expect(again.repeat).toBe(false)
+    expect(again.id).not.toBe(first.id)
   })
 
   it('an agent\'s checks move the criteria trace owns; when all are met the gate is ready, and only an admin\'s own acts sign it', async () => {

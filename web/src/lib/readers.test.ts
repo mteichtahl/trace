@@ -14,6 +14,21 @@ const read = <T>(action: keyof typeof answers): T => {
 }
 
 describe('reading the API\'s answers', () => {
+  // test-esp32 #142: the person must know before choosing that an option records a waiver in their name
+  it('journey.get: an agent\'s option that waives carries what it records, in words', () => {
+    const a = answers['journey.get'] as { args: Record<string, unknown>; result: Record<string, unknown> }
+    const result = structuredClone(a.result) as { questions: Record<string, unknown>[] }
+    result.questions = [{ id: 'aq1', kind: 'question', for: 'you', text: 'Waive the fit findings under the window?', asked_at: '2026-11-05T00:00:00Z', answered: null, recommended: { id: 'w', label: 'Waive the Q1, R4, R5 findings' }, options: [
+      { id: 'w', label: 'Waive the Q1, R4, R5 findings', recommended: true, why: 'The glass covers them.', waives: { targets: [{ kind: 'finding', id: 'f1' }, { kind: 'finding', id: 'f2' }, { kind: 'finding', id: 'f3' }], risk: 'A part could touch the glass.', severity: 'cosmetic', caught_where: null, scope: 'this revision only' } },
+      { id: 'm', label: 'Model the module', recommended: false, why: 'Measured.' },
+    ], sources: [] }]
+    const j = READERS['journey.get']!(result, a.args) as Journey
+    expect(j.questions[0]!.options).toEqual([
+      { id: 'w', label: 'Waive the Q1, R4, R5 findings', waiver: 'Records a waiver in your name: 3 findings, rated cosmetic, this revision only. Risk: A part could touch the glass.' },
+      { id: 'm', label: 'Model the module' },
+    ])
+  })
+
   it('journey.get: a criterion its shape finds not met carries each finding, under the run that found them', () => {
     const a = answers['journey.get'] as { args: Record<string, unknown>; result: { gates: { id: string; criteria: Record<string, unknown>[] }[] } }
     const result = structuredClone(a.result)

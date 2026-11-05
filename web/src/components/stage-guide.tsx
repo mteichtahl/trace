@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Facts, SideSheet } from '@/components/side-sheet'
 import { askTrace } from '@/components/chat/chat-state'
 import { SKILLS } from '@/components/skills/definitions'
+import { CriterionFindings } from '@/components/criterion-findings'
 import { currentStage, gateMeter, gateOf, ownerWord, stageSteps, stepLabel, stepPlace } from '@/lib/guided'
 import { stepLink } from '@/lib/step-skills'
 import type { Gate, Journey, RunSummary, Stage, StageStep } from '@/lib/types'
@@ -84,12 +85,12 @@ export function StageGuidePanel({ j, admin, held, onWhat, className }: { j: Jour
         {c.stage.guide && <p className="mt-1.5 text-sm">{c.stage.guide.purpose}</p>}
         {steps.length > 0 ? <StepList steps={steps} held={held} className="mt-3" /> : <p className="mt-3 text-sm text-muted-foreground">trace has not set out this stage's steps yet.</p>}
       </div>
-      <GatePanel gate={gate} stage={c.stage} meter={meter} onWhat={() => onWhat(c.stage)} />
+      <GatePanel repo={j.repo} gate={gate} stage={c.stage} meter={meter} held={held} onWhat={() => onWhat(c.stage)} />
     </div>
   )
 }
 
-function GatePanel({ gate, stage, meter, onWhat }: { gate?: Gate; stage: Stage; meter: ReturnType<typeof gateMeter>; onWhat: () => void }) {
+function GatePanel({ repo, gate, stage, meter, held, onWhat }: { repo: string; gate?: Gate; stage: Stage; meter: ReturnType<typeof gateMeter>; held?: boolean; onWhat: () => void }) {
   return (
     <div className="border-t p-5 md:border-t-0">
       <p className="section-label">To pass the gate</p>
@@ -105,9 +106,13 @@ function GatePanel({ gate, stage, meter, onWhat }: { gate?: Gate; stage: Stage; 
           {gate.criteria.map((c) => {
             const met = c.status === 'met' || c.status === 'waived'
             return (
-              <li key={c.id} className="flex items-center gap-3 text-sm">
-                {met ? <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-verified text-white"><Check className="size-3" strokeWidth={3} aria-hidden /></span> : <Circle className="size-[18px] shrink-0 text-muted-foreground/50" aria-hidden />}
-                <span className={cn(!met && 'text-foreground')}>{c.text}{c.status === 'waived' && <span className="text-muted-foreground"> (waived)</span>}</span>
+              <li key={c.id} className="flex items-start gap-3 text-sm">
+                {met ? <span className="mt-px flex size-[18px] shrink-0 items-center justify-center rounded-full bg-verified text-white"><Check className="size-3" strokeWidth={3} aria-hidden /></span> : <Circle className="mt-px size-[18px] shrink-0 text-muted-foreground/50" aria-hidden />}
+                <span className="min-w-0">
+                  <span className={cn(!met && 'text-foreground')}>{c.text}{c.status === 'waived' && <span className="text-muted-foreground"> (waived)</span>}</span>
+                  {/* what its shape found, each waivable here: the gate page may be closed for review while work is pending */}
+                  {!met && !held && c.findings?.length ? <CriterionFindings repo={repo} findings={c.findings} className="mt-1" /> : null}
+                </span>
                 <span className="sr-only">{met ? 'met' : 'not met yet'}</span>
               </li>
             )

@@ -307,7 +307,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       id: String(q.id), to: q.for === 'you' ? 'you' : q.for === 'contributors' ? 'the contributors' : q.for === 'admins' ? 'the admins' : 'a person on the project', text: String(q.text),
       askedAt: String(q.asked_at), ...(str(q.blocks) ? { blocks: String(q.blocks) } : {}),
       ...(rec ? { recommended: { id: String(rec.id), label: String(rec.label) } } : {}),
-      options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label) })),
+      options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(isObj(o.waives) ? { waiver: waiverWords(o.waives) } : {}) })),
       sources: arr(q.sources).map((e) => readEvidence(e, repo)),
     }
   })
@@ -590,4 +590,16 @@ export const READERS: Partial<Record<string, (raw: unknown, args: Record<string,
   'changes.list': (r, a) => readChanges(r, a as { repo?: string }),
   'change.get': readChange,
   'change.diff': readChangeDiff,
+}
+
+/**
+ * What an option that waives records when chosen (journey.get's `waives`), in words: the same words the Question answer
+ * skill shows (src/api/actions-skills.ts optionWaiverWords). Pure.
+ */
+export function waiverWords(w: Record<string, unknown>): string {
+  const targets = arr(w.targets)
+  const kinds = [...new Set(targets.map((t) => String(t.kind)))]
+  const what = kinds.map((k) => { const n = targets.filter((t) => String(t.kind) === k).length; return `${n} ${n === 1 ? k : `${k}s`}` }).join(' and ')
+  const caught = str(w.caught_where) ? ` Checked instead: ${String(w.caught_where)}.` : ''
+  return `Records a waiver in your name: ${what}, rated ${String(w.severity)}, ${str(w.scope) ?? 'this revision only'}. Risk: ${String(w.risk ?? '').replace(/\.$/, '')}.${caught}`
 }
