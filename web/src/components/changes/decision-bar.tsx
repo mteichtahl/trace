@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils'
 
 export interface DecisionBarProps {
   change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & {
-    verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined
+    verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; answers?: ChangeDetail['answers']
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
   }
   part?: Part
