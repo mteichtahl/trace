@@ -68,6 +68,17 @@ const settle = async (stage: string, met = true): Promise<void> => {
   })
 }
 
+/** The runs `settle` cites for `stage`'s criteria, put in the default branch's record: their changes are accepted. */
+const acceptRuns = async (stage: string): Promise<void> => {
+  const ids = (await journeyStore(ctx(ADMIN), REPO).read((db) => loadJourney(db)!.criteria.filter((x) => x.gate.split('.')[0] === stage).map((c) => c.id))).result
+  const dir = mkdtempSync(join(scratch, 'accepted-'))
+  mkdirSync(join(dir, '.git'))
+  const db = openProject(dir)
+  for (const id of ids) db.prepare("INSERT INTO runs (id, kind, started, status) VALUES (?, 'verify.run', 1, 'pass')").run(`run-${id}`)
+  db.close()
+  github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
+}
+
 /** Two project databases on the fake: the parent's, and the commit's with one requirement more. */
 function seedDatabases(): void {
   const before = mkdtempSync(join(scratch, 'before-'))
@@ -194,6 +205,8 @@ describe('the order of a stage\'s work: design first, the documents from it (tes
     await settle('prove')
     await settle('layout', false)
     await journeyStore(ctx(ADMIN), REPO).update((db) => { for (const c of loadJourney(db)!.criteria.filter((x) => x.gate === 'prove')) recordOpen(db, { criterion: c.id }, hashOf(ADMIN)); return { result: null } })
+    // the gates count the accepted design only (#287): the runs Prove's criteria cite are in the default branch's record
+    await acceptRuns('prove')
     const n = started.length
     const s = (await perform('gate.sign', { repo: REPO, gate: 'prove' }, ctx(ADMIN))).result as Record<string, any>
     expect(s.advanced_to).toBe('layout')
