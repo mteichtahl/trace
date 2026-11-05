@@ -84,7 +84,7 @@ import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
 import type { JobRow } from '../core/job-index.js'
-import { type Followup, followupStatus, loadFollowups, putFollowup, updateFollowup } from '../core/answer-followups.js'
+import { type Followup, carryOnPlace, followupStatus, landedOn, loadFollowups, putFollowup, updateFollowup } from '../core/answer-followups.js'
 import { assertNotHeld } from './held.js'
 
 const Id = z.string().min(1).max(80)
@@ -160,13 +160,21 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
 export type Lasts = 'once' | 'rule' | 'requirement'
 
 /** The request of the task that carries an ended job on once its question is answered. */
-export function answeredRequest(a: { id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null; lasts?: Lasts | undefined; again?: string | undefined }): string {
+export function answeredRequest(a: {
+  id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null; lasts?: Lasts | undefined; again?: string | undefined
+  /** the asking job's branch holds another specialist's work: this job works on a change of its own on top of it (carryOnPlace) */
+  stacked?: { owner: string | null } | undefined
+}): string {
+  const owner = a.stacked?.owner ? `the ${SPECIALIST_WORDS[a.stacked.owner as keyof typeof SPECIALIST_WORDS] ?? a.stacked.owner} specialist's work` : 'another specialist\'s work'
   return [
     `Your question ${a.id} (asked in job ${a.jobId}) is answered. You asked: ${a.text}`,
     `${a.by ?? 'A person'} answered: ${a.answer}${a.reason ? ` (because ${a.reason})` : ''}.`,
     // started again by trace (keepAnswers): an earlier job for this answer stopped before it was applied
     ...(a.again ? [`An earlier job started to apply this answer stopped before it did (${a.again}). The branch may hold part of that work: read it first.`] : []),
-    `Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`,
+    // the asking job only ran on another specialist's branch (log #144): its work is a change of its own, never theirs
+    ...(a.stacked
+      ? [`Your job ran on ${a.branch}, which holds ${owner}, so this work is a change of its own: you are on a new branch that starts from ${a.branch}. Change what the answer changes, check it as before, commit with subjects that say what the work is, and push this branch: it opens as its own change, stacked on that one. Never push to ${a.branch}.`]
+      : [`Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`]),
     ...(a.lasts === 'requirement' ? [`${REQUIREMENT_CHANGE_SAID} Have the change proposed for a person to accept in Requirements review: the requirement, its new wording and measurable criterion, and why (the Verification specialist owns the requirements: journey.handoff to it unless you are it, then verify.requirements, left proposed). Until it is accepted, treat the requirement as it stands, and say in your report that the change waits on review.`] : []),
     ...(a.lasts === 'rule' ? ['They made this a rule for the project: remember it (memory.remember) so later jobs apply it without asking again.'] : []),
     // a rule or a one-off is not a requirement change: an edit of an accepted requirement reopens Define and every
@@ -199,7 +207,9 @@ async function keepFollowup(ctx: Context, repo: string, f: Omit<Followup, 'state
 
 /**
  * After an answer: when the job that asked has ended, a task for the same specialist on that job's branch, told the
- * answer. A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
+ * answer; when that branch holds another specialist's work (the asking job only ran there: carryOnPlace), a task on a
+ * change of its own stacked on it, so the answer's work is reviewed under its own name and never lands in their change
+ * (test-esp32 log #144). A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
  * Either way the answer is kept as a follow-up (src/core/answer-followups.ts) until a job on that branch applies it: a
  * carry-on that is lost, stopped with its runtime or never reaches the queue is started again (keepAnswers), and the
  * change on that branch is not recommended for accepting meanwhile (test-esp32 log #131).
@@ -213,21 +223,26 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
   // the specialist's own row may not carry the branch its worker pushed to
   const branch = row ? row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null : null
   const answered = q.answered
+  // the asking job may only have run on another specialist's branch (a hand-off's, to check its answer): then the
+  // answer's work is a change of its own, stacked on it, never more commits in that change (test-esp32 log #144)
+  const place = row && branch && row.state !== 'queued' && row.state !== 'paused' && !isLive(row, at) ? carryOnPlace(rows, row, branch) : null
+  const stacked = place && 'stackOn' in place ? place : null
   const keep = (job: string | null, attempts: number): Promise<void> => (agent && branch ? keepFollowup(ctx, repo, {
     question: asked.id, text: asked.text, askedJob: asked.jobId as string, branch, agent, answer: answered.answer, reason: answered.reason, lasts: lasts ?? null,
-    by: answered.by, bySub: ctx.principal.sub, job, attempts, answeredAt: at, startedAt: at,
+    by: answered.by, bySub: ctx.principal.sub, job, attempts, answeredAt: at, startedAt: at, stackOn: stacked?.stackOn ?? null,
   }) : Promise.resolve())
   // the job still runs, waits or is paused: it reads the answer itself (and is kept as the job that applies it)
   if (row && (row.state === 'queued' || row.state === 'paused' || isLive(row, at))) { await keep(row.id, 0); return {} }
   // never say the agent carries on when nothing will: the answer waits for whichever job asks next
   if (!row || !agent || !branch) return { summary: `Answered. The job that asked (${asked.jobId}) has ended and could not be started again${!row ? ' (it is not in the project\'s job list)' : !agent ? ` (${row.agent ?? 'no'} agent is not a specialist)` : ' (it has no branch)'}: the answer is kept for its next job.` }
-  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: answered.answer, reason: answered.reason, by: answered.by, lasts })
-  const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, branch, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: answered.answer, reason: answered.reason, by: answered.by, lasts, ...(stacked ? { stacked: { owner: stacked.owner } } : {}) })
+  const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, ...(stacked ? { stackOn: branch } : { branch }), requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
   // a start that was not accepted is kept too, with no job: trace starts it again (keepAnswers)
   await keep(r.accepted ? workerJobId(r.jobId) : null, 1)
   const who = `the ${SPECIALIST_WORDS[agent]} specialist`
+  const where = stacked ? `a change of its own, on top of ${branch}` : branch
   return r.accepted
-    ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer on ${branch}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it on ${branch}.` }
+    ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer on ${where}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it on ${where}.` }
     : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started yet: ${r.reason ?? 'trace did not accept the job'}. trace tries again, and the change is not recommended for accepting until the answer is in it.` }
 }
 
@@ -240,7 +255,17 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
  * project is paused or retired. Answers the follow-ups started again, in words.
  */
 export async function keepAnswers(ctx: Context, repo: string, followups: readonly Followup[], rows: readonly JobRow[], at = Date.now() / 1000): Promise<string[]> {
-  const open = followups.filter((f) => f.state === 'pending').map((f) => ({ f, s: followupStatus(f, rows, at) }))
+  // a carry-on on a change of its own whose job has named its branch: from now on that branch is where the answer goes
+  // (a restart carries on there, with the work already on it)
+  const landed = new Map(followups.filter((f) => f.state === 'pending' && f.stackOn).map((f) => [f.question, landedOn(f, rows)] as const).filter((x): x is [string, string] => x[1] !== null))
+  if (landed.size) {
+    await writeJourney(ctx, repo, (db) => {
+      for (const [question, branch] of landed) updateFollowup(db, question, { branch, stackOn: null }, at)
+      return { result: {} }
+    }).catch(() => undefined)
+  }
+  const open = followups.filter((f) => f.state === 'pending').map((f) => (landed.has(f.question) ? { ...f, branch: landed.get(f.question) as string, stackOn: null } : f))
+    .map((f) => ({ f, s: followupStatus(f, rows, at) }))
   const settle = open.filter(({ s }) => s.state === 'applied' || s.state === 'stopped')
   if (settle.length) {
     await writeJourney(ctx, repo, (db) => {
@@ -263,13 +288,18 @@ export async function keepAnswers(ctx: Context, repo: string, followups: readonl
       return { result: { ok: true } }
     }).catch(() => ({ ok: false }))
     if (!claimed.ok) continue
-    const request = answeredRequest({ id: f.question, text: f.text, jobId: f.askedJob, branch: f.branch, answer: f.answer, reason: f.reason, by: f.by, lasts: (['once', 'rule', 'requirement'] as const).find((x) => x === f.lasts), again: s.why })
+    // still no branch of its own: stacked on the same branch again
+    const place = f.stackOn ? carryOnPlace(rows, { id: f.askedJob, agent: f.agent }, f.stackOn) : null
+    const request = answeredRequest({
+      id: f.question, text: f.text, jobId: f.askedJob, branch: f.branch, answer: f.answer, reason: f.reason, by: f.by, lasts: (['once', 'rule', 'requirement'] as const).find((x) => x === f.lasts), again: s.why,
+      ...(f.stackOn ? { stacked: { owner: place && 'owner' in place ? place.owner : null } } : {}),
+    })
     const r = await (await ctx.deps.jobs()).startJob({
-      kind: 'task', repository: repo, request, agent, branch: f.branch, requestedBy: f.by ?? label(ctx.principal), ...(f.bySub ? { requestedBySub: f.bySub } : {}), attempt: f.attempts + 1,
+      kind: 'task', repository: repo, request, agent, ...(f.stackOn ? { stackOn: f.stackOn } : { branch: f.branch }), requestedBy: f.by ?? label(ctx.principal), ...(f.bySub ? { requestedBySub: f.bySub } : {}), attempt: f.attempts + 1,
     }).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message : String(e) }))
     if (r.accepted) {
       await writeJourney(ctx, repo, (db) => { updateFollowup(db, f.question, { job: workerJobId(r.jobId) }, Date.now() / 1000); return { result: {} } }).catch(() => undefined)
-      out.push(`trace started the ${SPECIALIST_WORDS[agent]} specialist again to apply the answer to "${f.text.slice(0, 120)}" on ${f.branch}: ${s.why}.`)
+      out.push(`trace started the ${SPECIALIST_WORDS[agent]} specialist again to apply the answer to "${f.text.slice(0, 120)}" on ${f.stackOn ? `a change of its own, on top of ${f.stackOn}` : f.branch}: ${s.why}.`)
     }
   }
   return out

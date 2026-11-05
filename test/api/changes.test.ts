@@ -537,7 +537,8 @@ describe('changes.list and change.get', () => {
   it('one change in full: what trace did, files, checks, requirements, the recommendation, and who may accept', async () => {
     const d = await run(USER, 'change.get', { repo: REPO, number: 1 })
     expect(d).toMatchObject({
-      number: 1, summary: ['extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
+      // what it holds first (test-esp32 log #144): the fake's change touches a schematic
+      number: 1, summary: ['Changes the design: 1 hardware file', 'extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
       files: [{ path: 'hw/power.kicad_sch', kind: 'schematic', status: 'modified' }, { path: 'docs/notes.md', kind: 'text', status: 'added' }],
       checks_list: [{ id: 'cr:100', name: 'build', state: 'passed', summary: 'Built.' }],
       recommendation: { verdict: 'accept', why: 'Its check passed (build), and it can be merged. It covers R1, R2, R3 and R4.' },
@@ -1126,5 +1127,55 @@ describe('a change that edits an accepted requirement (test-esp32 log #112)', ()
     // the default branch still reads as before the merge (GitHub's copy lags): the review's finding reopens Define
     const r = await run(USER, 'change.accept', { repo: REPO, number: 12, head_sha: sha(12) })
     expect(r).toMatchObject({ merged: true, back_to: 'define', next: expect.stringMatching(/requirement REQ-367d71 was changed after the requirements baseline/) })
+  })
+})
+
+describe('a change says what it holds (test-esp32 log #144, #133)', () => {
+  const DB = '.trace/project.db'
+  const HANDOFF = 'claude/handoff-hoac40d08bf1664e'
+  const RECORD = 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)'
+  /** the default branch's database with one intent statement added, as the docs change's record did */
+  const withIntent = (): Uint8Array => {
+    const dir = mkdtempSync(join(scratch, 'intent-'))
+    const path = join(dir, 'project.db')
+    writeFileSync(path, github.files.get(`${REPO}:main:${DB}`)!)
+    const d = new DatabaseSync(path)
+    d.exec(`CREATE TABLE IF NOT EXISTS intent_statements (id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'statement', text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'proposed', created REAL NOT NULL, updated REAL NOT NULL)`)
+    d.prepare('INSERT INTO intent_statements (id, topic, text, created, updated) VALUES (?,?,?,?,?)').run('INT-wifiprov', 'interfaces', 'The setup access point reopens after 60 s without the saved network', 1, 1)
+    d.close()
+    return readFileSync(path)
+  }
+
+  beforeAll(async () => {
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-mw3ashi6', { kind: 'task', agent: 'docs', title: 'Answer the hand-off', state: 'succeeded', branch: HANDOFF, handoff: 'hoac40d08bf1664e', endedAt: now - 30 }, now)
+      return { result: null }
+    })
+  })
+  beforeEach(() => {
+    github.add(20, HANDOFF, { title: RECORD })
+    const p = github.pulls.get(20)!
+    p.files = ['hardware/desk-gadget/oled.kicad_sch', 'mechanical/case.py', 'mechanical/out/case.step', DB].map((path) => ({ path, status: 'modified', additions: 1, deletions: 0, patch: null, previous: null }))
+    p.commits = [`${RECORD}\n\nWhat its tools wrote.`, 'trace: the impl specialist\'s record (job-mw3awisf-29f0f73e)', 'Case: printed two-part shell, board on M2 screws']
+    github.files.set(`${REPO}:${sha(20)}:${DB}`, withIntent())
+  })
+
+  it('a "record" change that came to carry design work is named by that work, and its summary says what it holds', async () => {
+    const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
+    expect(d.title).toBe('Case: printed two-part shell, board on M2 screws (+2 more)')
+    expect((d.summary as string[]).slice(0, 2)).toEqual([
+      'Changes the design: 1 hardware file and 2 mechanical files',
+      'Adds intent statement INT-wifiprov (proposed): "The setup access point reopens after 60 s without the saved network"',
+    ])
+  })
+
+  it('a record that is only a record keeps its name, and still says it adds an intent statement', async () => {
+    const p = github.pulls.get(20)!
+    p.files = p.files.filter((f) => f.path === DB)
+    p.commits = [RECORD]
+    const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
+    expect(d.title).toBe(RECORD)
+    expect((d.summary as string[])[0]).toMatch(/^Adds intent statement INT-wifiprov/)
   })
 })

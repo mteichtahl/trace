@@ -8,6 +8,8 @@ describe('live events → query invalidation', () => {
     expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'chats', at: '' })).toContainEqual(['chats.recall', 'a/b'])
     expect(invalidationsFor({ type: 'job.updated', repo: 'a/b', jobId: 'j', state: 'done', at: '' })).toContainEqual(['tools.waits', 'a/b'])
     expect(invalidationsFor({ type: 'notification', id: 'n', kind: 'gate', repo: 'a/b', summary: '', at: '' })).toEqual([['inbox'], ['journey.get', 'a/b']])
+    // the installation update added a new project's agent (src/web/journey-events.ts): its setup notice looks again now
+    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'agent', at: '' })).toEqual([['project.agent', 'a/b'], ['journey.get', 'a/b']])
   })
 
   it('invalidates matching queries and leaves the others', async () => {
