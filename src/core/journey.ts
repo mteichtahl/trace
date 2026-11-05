@@ -492,7 +492,8 @@ export interface StageRow { id: StageId; ord: number; revision: string; started:
 export interface GateRow { id: string; stage: StageId; ord: number; name: string; returnedAt: number | null; returnedBy: string | null; returnReason: string | null }
 export interface CriterionRow {
   id: string; gate: string; ord: number; text: string; owner: Owner; evidenceLabel: string | null; status: 'met' | 'not_met'; evidence: Evidence[]; checkedAt: number | null; checkedBy: string | null
-  /** set by withStaleEvidence: the evidence it was met on is out of date, and why, in words */
+  /** set by withStaleEvidence: why it reads as not met although checked met (its evidence is out of date, or not
+   *  accepted yet, or the accepted record says otherwise), in words */
   staleBecause?: string | null
 }
 export interface SignatureRow { id: string; gate: string; revision: string; by: string; byHash: string; at: number; criteria: unknown; waivers: string[]; notes: string | null; supersededAt: number | null }
@@ -1033,20 +1034,58 @@ function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): Criteri
  * cites such a run reads as not met, with the reason, until a check on current evidence meets it again; the record
  * itself is not changed. A person's criterion stays the person's call: their agreement is not undone by a file
  * changing, and the change request flow is how they are asked again.
+ *
+ * The gates count the accepted design only (AcceptedRecord): a check made on a branch whose change is not accepted
+ * reads as not met until it is (test-esp32 #43, #57: a criterion met by an open change's run), and a rule check is
+ * read again from the accepted record's report, counting every finding to fix or waive, not only its errors (#51).
  */
-export function withStaleEvidence(r: JourneyRecord, staleRun: (id: string) => string | null): JourneyRecord {
+export function withStaleEvidence(r: JourneyRecord, check: EvidenceCheck): JourneyRecord {
+  const o: AcceptedRecord = typeof check === 'function' ? { staleRun: check } : check
   let changed = false
   const criteria = r.criteria.map((c) => {
-    if (c.status !== 'met' || c.owner !== 'trace') return c
+    if (c.owner !== 'trace') return c
+    const again = o.criteria?.get(c.id)
+    // what the accepted record says it rests on is listed with the criterion, met or not (what it checked, its counts)
+    const evidence = again?.evidence.length ? [...c.evidence, ...again.evidence] : c.evidence
+    const notMet = (why: string, more: readonly Evidence[] = []): CriterionRow => {
+      changed = true
+      return { ...c, status: 'not_met', evidence: [...evidence, ...more], staleBecause: why }
+    }
+    if (c.status !== 'met') {
+      if (evidence !== c.evidence) changed = true
+      return evidence === c.evidence ? c : { ...c, evidence }
+    }
     for (const e of c.evidence) {
       if (e.kind !== 'run') continue
-      const why = staleRun(e.ref)
-      if (why) { changed = true; return { ...c, status: 'not_met' as const, staleBecause: `Its evidence is out of date: ${why.replace(/\.$/, '')}. trace checks it again.` } }
+      // checked on a branch whose change is not accepted: the default branch's record does not hold the run yet
+      if (o.unaccepted?.(e.ref)) return notMet(`It was checked on a change that is not accepted yet: its run ${e.ref.slice(0, 8)} is not in the accepted design. It counts once that change is accepted.`)
+      const why = o.staleRun?.(e.ref)
+      if (why) return notMet(`Its evidence is out of date: ${why.replace(/\.$/, '')}. trace checks it again.`)
     }
-    return c
+    if (again?.why) return notMet(again.why, again.findings ?? [])
+    if (evidence !== c.evidence) changed = true
+    return evidence === c.evidence ? c : { ...c, evidence }
   })
   return changed ? { ...r, criteria } : r
 }
+
+/**
+ * What the default branch's record (the accepted design) says of the criteria trace owns (src/api/evidence-freshness.ts
+ * acceptedRecord): withStaleEvidence reads a met criterion as not met when any of these says so.
+ *   staleRun    why a run cited as evidence no longer stands (its inputs changed), or null
+ *   unaccepted  a run cited as evidence is not in the default branch's record: it was made on a branch whose change is
+ *               not accepted (or was discarded), so it does not count yet
+ *   criteria    a criterion checked again against the accepted record (the rule checks: every finding the report
+ *               classes as to fix or waive counts, not only its errors): why it is not met (null: it is), the evidence
+ *               it rests on (the run, its counts), and each open finding (kind finding, waivable on its own)
+ */
+export interface AcceptedRecord {
+  staleRun?: ((id: string) => string | null) | undefined
+  unaccepted?: ((id: string) => boolean) | undefined
+  criteria?: ReadonlyMap<string, { why: string | null; evidence: Evidence[]; findings?: Evidence[] }> | undefined
+}
+/** A run's staleness alone (as before), or everything the accepted record says. */
+export type EvidenceCheck = ((id: string) => string | null) | AcceptedRecord
 
 /** The criteria whose evidence is out of date, for the main screen: each with its gate and why. */
 export const staleCriteria = (r: JourneyRecord): { criterion: string; gate: string; text: string; why: string }[] =>
@@ -1622,8 +1661,9 @@ export function reviewWaitsOn(r: JourneyRecord, id: string): CriterionRow[] {
 export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
-export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined; pending?: PendingChanges | null | undefined; staleRun?: ((id: string) => string | null) | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
-  // the agents' checks of the criteria trace owns count, unless their evidence is out of date; the signing rules are the same
+export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined; pending?: PendingChanges | null | undefined; staleRun?: EvidenceCheck | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
+  // the agents' checks of the criteria trace owns count, unless their evidence is out of date or not accepted yet;
+  // the signing rules are the same
   const r = o.staleRun ? withStaleEvidence(withFacts(need(db), o.facts), o.staleRun) : withFacts(need(db), o.facts)
   const viewer: Viewer = { hash: signer.hash, label: signer.label, also: signer.also, admin: true, part: 'contributor' }
   const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [], o.pending)

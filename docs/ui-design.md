@@ -117,7 +117,7 @@ A person is never more than two steps from Home: an area from the rail, then an 
 | Evidence | The coverage matrix, every run with its plots, waivers | Prove |
 | Build | Releases, orders, boards by serial, the bench | Release |
 | Decisions | Gate records, change requests, answered questions, the decision log | First gate signed |
-| Cost and time | Spent, committed and forecast cost, and the stage timeline | Always, for admins |
+| Cost and time | Spent, committed and forecast cost, the stage timeline, and spend by job grouped by stage with work done again (sent back, redone, asked twice) and lost jobs marked; the Overview warns when the current stage nears its share of the budget | Always, for admins |
 | Settings | Template, build quantity, budget, people on the project, rules | Always |
 | Memory | What the agents remember: long-term memories to switch off and on, recent activity, the change log | The first agent session |
 

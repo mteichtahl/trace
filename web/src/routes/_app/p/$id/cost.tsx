@@ -1,6 +1,7 @@
 /**
  * Cost and time (/p/:id/cost, admins): spent, committed and forecast cost against the budget, the stage timeline
- * (days and cloud use per stage, forecasts for what is queued), and the spend lines as a Data table. The chart is
+ * (days and cloud use per stage, forecasts for what is queued), spend by job grouped by stage with work done again
+ * marked (and the warning when the current stage nears its share of the budget), and the spend lines as a Data table. The chart is
  * Recharts, loaded lazily. Data: cost.get, from the cost ledger: cloud use is an estimate (each run's tokens and each
  * job's running time, priced from a dated table), with what AWS billed beside it from Cost Explorer, a day behind,
  * and when it reads next. What the record does not hold (forecast days) is null and shown as "not recorded", with the
@@ -23,6 +24,7 @@ import { ago, money } from '@/lib/format'
 import { useAction } from '@/lib/queries'
 import type { CostView } from '@/lib/types-s1'
 import { CloudBreakdown } from '@/components/project/cloud-cost'
+import { SpendByJob, SpendWarningCard } from '@/components/project/spend-by-job'
 import { cn } from '@/lib/utils'
 
 const StageChart = lazy(() => import('@/components/project/stage-chart'))
@@ -77,6 +79,7 @@ function Cost() {
         <Tile label="Committed" value={m(d.committed)} hint="Orders ready to place" />
         <Tile label="Forecast for the build" value={m(d.forecast)} hint={d.quantity ? `${d.quantity} boards at the planned unit cost` : 'Quantity × unit cost'} />
       </div>
+      {d.warning && <SpendWarningCard warning={d.warning} currency={d.currency} id={id} link={false} className="mt-4" />}
       {d.budget !== undefined && (
         <div className="mt-4 rounded-xl border p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -114,6 +117,12 @@ function Cost() {
           </ol>
         </div>
       </Section>
+
+      {d.jobs && d.jobs.jobs.length > 0 && (
+        <Section label="Spend by job" count={d.jobs.jobs.filter((j) => j.id !== null).length} className="mt-10">
+          <SpendByJob spend={d.jobs} currency={d.currency} />
+        </Section>
+      )}
 
       {d.notes?.length ? <div className="mt-6 space-y-1">{d.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
 

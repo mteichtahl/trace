@@ -5133,6 +5133,13 @@
           "estimate": false
         }
       ],
+      "jobs": {
+        "total": 0,
+        "repeated": 0,
+        "wasted": 0,
+        "stages": [],
+        "jobs": []
+      },
       "explorer": {
         "checkedAt": null,
         "nextAt": null,

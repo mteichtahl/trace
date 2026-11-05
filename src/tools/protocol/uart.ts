@@ -58,12 +58,13 @@ export function uartModel(cfgIn: UartConfig, txs: readonly UartTx[]): { wave: Wa
     if (last[1] !== logic) levels.push([at, logic])
   }
   const mask = (1 << c.data_bits) - 1
-  for (const raw of txs) {
+  // each transaction numbers its rows (tx, from 0), as the other models do: protocol.diagram zooms to one by it
+  for (const [i, raw] of txs.entries()) {
     const x = UartTxSchema.parse(raw)
     if (x.break_bits !== undefined) {
       put(t, 0)
       const end = t + x.break_bits * bit
-      w.note({ t0: t, t1: end, lane: 'uart', label: 'BREAK', kind: 'error' })
+      w.note({ t0: t, t1: end, lane: 'uart', label: 'BREAK', kind: 'error', tx: i })
       put(end, 1)
       expected.push({ kind: 'break', value: null })
       t = end + bit * (1 + c.gap_bits)
@@ -89,7 +90,7 @@ export function uartModel(cfgIn: UartConfig, txs: readonly UartTx[]): { wave: Wa
       put(t0 + bit * pos, 1)
       const end = t0 + bit * (pos + c.stop_bits)
       const label = v >= 32 && v < 127 ? `0x${v.toString(16).padStart(2, '0')} '${String.fromCharCode(v)}'` : `0x${v.toString(16).padStart(2, '0')}`
-      w.note({ t0, t1: end, lane: 'uart', label, kind: 'data' })
+      w.note({ t0, t1: end, lane: 'uart', label, kind: 'data', tx: i })
       expected.push({ kind: 'frame', value: v })
       t = end + bit * c.gap_bits
     }

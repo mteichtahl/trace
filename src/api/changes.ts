@@ -137,6 +137,29 @@ export interface ChangeDetail extends ChangeSummary {
   may_ask: boolean
   /** when it became ready for a person (readySince), ISO */
   ready_since: string
+  /**
+   * Every check that failed, failed for a reason outside the work (GitHub busy or down, the runner lost: infraReason):
+   * which ones, by checks_list id, and why in plain words. The page offers to run them again (change.rerun). Absent:
+   * no check failed, or one failed on the work itself.
+   */
+  infra_failed?: InfraFailure
+}
+
+/** Checks that failed for a reason outside the work (ChangeDetail.infra_failed). */
+export interface InfraFailure { checks: { id: string; name: string }[]; why: string }
+
+/**
+ * Why a check's failure says nothing about the work, from its annotations or the end of its log: null when nothing
+ * there names a cause outside it. Only what GitHub and its runners say in their own words counts, so a check that
+ * failed on the design is never taken for one that did not run properly. In test-esp32 run 2 (#126, #128) both of
+ * trace-prs's jobs died on "API rate limit exceeded for user ID …", and the page said to send a sound layout back.
+ */
+export function infraReason(text: string | null | undefined): string | null {
+  const t = text ?? ''
+  if (/API rate limit exceeded|secondary rate limit|abuse detection mechanism/i.test(t)) return 'GitHub was busy (it limited how many requests trace could make)'
+  if (/runner has received a shutdown signal|lost communication with the server|hosted runner encountered an error|job was not acquired by Runner/i.test(t)) return 'the machine running it stopped partway'
+  if (/(?:HttpError|RequestError)\b[^\n]{0,120}\b(?:Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out|50[0234])\b|GitHub is (?:down|having|experiencing)|Unicorn!/i.test(t)) return 'GitHub had a problem'
+  return null
 }
 
 /**
@@ -171,6 +194,8 @@ export interface ChangeFacts {
    * another change or take on more work, so nothing about it is settled yet (log #68, #77).
    */
   working?: boolean
+  /** every check that failed, failed for a reason outside the work (infraReason): it is run again, not sent back */
+  infra?: InfraFailure
 }
 
 /**
@@ -448,6 +473,8 @@ function verdictOfOwn(f: ChangeFacts): Verdict {
   // its job is still at it: checks that passed say nothing yet about what it will push next (log #68)
   if (f.working) return 'checking'
   if (f.mergeable === 'dirty') return 'conflict'
+  // a check that did not run properly says nothing about the work: it waits to be run again, it is not failing
+  if (infraOnly(f)) return 'blocked'
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
   // the specialist says it is not finished: that, not the checks, is what a person should hear first
   if (f.unfinished) return 'unfinished'
@@ -459,6 +486,12 @@ function verdictOfOwn(f: ChangeFacts): Verdict {
   if (f.checks === null || f.checks.total === 0) return 'checking'
   return 'ready'
 }
+
+/** Whether every check that failed, failed for a reason outside the work (and at least one did). */
+const infraOnly = (f: ChangeFacts): boolean => !!f.infra?.checks.length && (f.checks?.failed ?? 0) > 0
+
+/** "the open-pr and automerge checks": which checks did not run properly. */
+const infraNamed = (i: InfraFailure): string => `the ${list(i.checks.slice(0, 3).map((c) => c.name))} ${i.checks.length === 1 ? 'check' : 'checks'}${i.checks.length > 3 ? ` and ${i.checks.length - 3} more` : ''}`
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 const list = (xs: readonly string[]): string => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`)
@@ -483,6 +516,13 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   }
   if (f.mergeable === 'dirty') return { verdict: 'none', why: 'It conflicts with changes accepted since it was made. trace will bring it up to date.' }
   const failing = f.checks?.failing ?? []
+  // GitHub was busy, or the runner was lost: the check did not run properly, which says nothing about the work. Run it
+  // again; never "ask for changes", which would send sound work back to the specialist (test-esp32 run 2, #128)
+  if (infraOnly(f) && f.infra) {
+    const named = infraNamed(f.infra)
+    const why = `${f.infra.why[0]?.toUpperCase() ?? ''}${f.infra.why.slice(1)}`
+    return { verdict: 'wait', why: `${why}, so ${named} did not run properly. That says nothing about the work. Run ${f.infra.checks.length === 1 ? 'it' : 'them'} again; trace recommends once ${f.infra.checks.length === 1 ? 'it has' : 'they have'} run.` }
+  }
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') {
     const named = failing.length ? `The ${list(failing.slice(0, 3))} ${failing.length === 1 ? 'check' : 'checks'} failed${failing.length > 3 ? `, with ${plural(failing.length - 3, 'more')}` : ''}` : 'A check failed'
     return { verdict: 'ask', why: `${named}. Ask trace to fix ${failing.length > 1 ? 'them' : 'it'} before accepting.` }
@@ -522,7 +562,8 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
     if (f.mergeable === 'dirty') out.push('It conflicts with changes accepted since it was made. trace will bring it up to date.')
     if (f.mergeable === 'behind') out.push('It is behind changes accepted since it was made. trace will bring it up to date.')
     const failing = f.checks?.failing ?? []
-    if ((f.checks?.failed ?? 0) > 0) out.push(failing.length ? `The ${list(failing.slice(0, 3))} ${failing.length === 1 ? 'check' : 'checks'} failed.` : 'A check failed.')
+    if (infraOnly(f) && f.infra) out.push(`${infraNamed(f.infra).replace(/^t/, 'T')} did not run properly: ${f.infra.why}. Run ${f.infra.checks.length === 1 ? 'it' : 'them'} again.`)
+    else if ((f.checks?.failed ?? 0) > 0) out.push(failing.length ? `The ${list(failing.slice(0, 3))} ${failing.length === 1 ? 'check' : 'checks'} failed.` : 'A check failed.')
     else if (f.mergeable === 'unstable') out.push('A check failed.')
     if ((f.checks?.running ?? 0) > 0) out.push(`${plural(f.checks?.running ?? 0, 'check is', 'checks are')} still running.`)
     else if (f.mergeable === 'unknown') out.push('GitHub is still working out whether it can be merged.')

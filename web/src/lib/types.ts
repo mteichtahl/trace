@@ -166,8 +166,12 @@ export interface Criterion {
   text: string
   status: CriterionStatus
   evidence?: EvidenceRef
+  /** everything it was checked on, in order (the requirements, the runs and their counts), the first being `evidence`:
+   *  the evidence panel lists them all (findings are `findings`) */
+  checked?: EvidenceRef[]
   opened?: boolean
-  /** met on evidence that has since gone out of date: why, in words (not met until trace checks it again) */
+  /** why it reads as not met although it was checked met: its evidence is out of date, or was checked on a change not
+   *  accepted yet, or the accepted record says otherwise (a rule check's warnings), in words */
   stale?: string
   /** not met by its shape (shape.check): each thing still needed, in words naming what to fix, with the id a waiver
    *  of that one finding names */
@@ -331,6 +335,11 @@ export interface ChangeDetail extends ChangeSummary {
   may_discard?: boolean
   /** whether this person may ask for changes (never for an edit: there is no specialist) */
   may_ask?: boolean
+  /**
+   * Every check that failed, failed for a reason outside the work (GitHub busy or down, the runner lost): which ones and
+   * why. The page offers "Run the check again" (change.rerun) instead of "Ask for changes". Absent from an older API.
+   */
+  infra_failed?: { checks: { id: string; name: string }[]; why: string }
 }
 
 /** change.diff: one file's two sides. */

@@ -45,7 +45,10 @@ export const docs: Specialist = {
       + ' out where it first appears or put in the glossary section; part numbers, pins and nets in `code`. If it is'
       + ' refused, fix what the findings say and write it again. Then docs_check at the stage: no errors left.',
     'Print the documents you changed with docs_publish and look at the result (trace_run on its run): every diagram'
-      + ' drew, the cover carries the logo or the project icon. When a revision was cut, print every document with'
+      + ' drew, the cover carries the logo or the project icon. If its answer lists diagrams under not_drawn, the browser'
+      + ' that draws them could not start where it ran: that is trace\'s installation, not the document, and not the'
+      + ' person\'s to fix. Carry on, say in the change\'s description which diagrams were printed as their source, and'
+      + ' do not ask the person about it. When a revision was cut, print every document with'
       + ' release set to it, as the request says: those are the revision\'s release copies, kept for good, so check'
       + ' first and print once. From Sign-off on, record the documents criterion:'
       + ' journey_check signoff.docs, met with the docs_check run as evidence when it passes, not met with its findings'
