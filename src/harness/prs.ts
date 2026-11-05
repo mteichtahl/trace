@@ -3,6 +3,8 @@
  *
  *   openPr       a pushed branch that is ahead of the default branch and has no open PR gets one. A branch built on
  *                another open PR's branch is stacked on it (stack.ts): its PR targets that branch, not the default one.
+ *                It is titled by the first commit that is not a specialist's record (src/core/change-contents.ts),
+ *                and a PR still titled as a record is titled again once a push brings work into it.
  *   automerge    every PR to the default branch merges itself once its required checks pass (unless held).
  *   updateQueue  first the stacks are kept in order (stack.ts restack); then trace's own PRs (held ones too) whose only conflict is .trace/project.db get the default branch
  *                merged in with the database merged (db-conflict.ts; up to DB_RESOLVE_PER_RUN a run); then the oldest
@@ -12,6 +14,7 @@
  * Actions that must start other workflows (opening a PR, merging, updating a branch) are taken with the repository's
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
+import { changeTitle, recordTitle } from '../core/change-contents.js'
 import { commentOnce, globMatch } from './util.js'
 import { resolveDbConflict } from './db-conflict.js'
 import { settle } from './mergeable.js'
@@ -31,7 +34,7 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
   if (wip && new RegExp(`(^|[-_/])${escapeRe(wip)}([-_/]|$)`, 'i').test(branch)) return say(`\`${branch}\` is marked work in progress: no PR opened.`)
 
   const open = (await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 1 })).data
-  if (open[0]) return say(`#${open[0].number} is already open for \`${branch}\`.`)
+  if (open[0]) return retitle(github, { owner, repo, pr: open[0], ownToken: Boolean(env.OWN_TOKEN) }, say)
   const toDefault = await github.rest.repos.compareCommits({ owner, repo, base: cfg.branch, head: branch }).catch(() => null)
   if (!toDefault || toDefault.data.ahead_by === 0) return say(`\`${branch}\` has nothing that ${cfg.branch} lacks: no PR opened.`)
   // built on another open PR's branch: stacked on it, so the PR shows only this branch's own commits. Any doubt opens
@@ -60,8 +63,8 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
   }
   const commits = cmp.data.commits
   const subject = (m: string): string => m.split('\n')[0] ?? ''
-  const first = subject(commits[0]?.commit.message ?? branch)
-  const title = commits.length === 1 ? first : `${first.replace(/\.$/, '')} (+${commits.length - 1} more)`
+  // named by the work in it, not by a specialist's record that came first (test-esp32 log #144)
+  const title = changeTitle(commits.map((c) => c.commit.message)) || branch
   const rest = commits.length === 1 ? (commits[0]?.commit.message ?? '').split('\n').slice(1).join('\n').trim() : ''
   const body = [
     `Opened automatically for \`${branch}\` when it was pushed.${cfg.prs.auto_merge ? ` It merges itself once \`${cfg.build.required_check}\` passes${parent ? ` and it targets \`${cfg.branch}\`` : ''}; add the \`${cfg.labels.hold}\` label to hold it.` : ''}`,
@@ -73,6 +76,24 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
   ].join('\n')
   const pr = await github.rest.pulls.create({ owner, repo, head: branch, base, title: title.slice(0, 250), body })
   return say(`Opened #${pr.data.number}${parent ? `, stacked on #${parent.number}` : ''}: ${pr.data.html_url}`)
+}
+
+/**
+ * A push to a branch whose pull request is open: its title, when it is still a specialist's record title (as opened:
+ * a person who renamed it is left alone), is named again by the work its commits now hold. In the test run a "docs
+ * specialist's record" change came to carry a whole case design, a schematic field and board text under that title
+ * (test-esp32 log #144).
+ */
+async function retitle(github: GitHub, o: { owner: string; repo: string; pr: { number: number; title: string; base: { ref: string } }; ownToken: boolean }, say: (s: string) => Promise<void>): Promise<void> {
+  const { owner, repo, pr } = o
+  const already = `#${pr.number} is already open for its branch.`
+  if (!recordTitle(pr.title)) return say(already)
+  const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number: pr.number, per_page: 100 }).catch(() => null)
+  const title = commits ? changeTitle(commits.map((c) => c.commit.message)) : ''
+  if (!title || recordTitle(title) || title === pr.title) return say(already)
+  if (!o.ownToken) return say(`${already} It holds more than a record now; with a TRACE_TOKEN secret it would be retitled "${title}".`)
+  await github.rest.pulls.update({ owner, repo, pull_number: pr.number, title: title.slice(0, 250) })
+  return say(`${already} It holds more than a specialist's record now: retitled "${title}".`)
 }
 
 const ENABLE = 'mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }'

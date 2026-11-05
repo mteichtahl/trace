@@ -137,9 +137,14 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       return ok(EXISTING_USERS)
     case 'projects.create':
       return later(ok({
-        repo: `${(a.repository as { owner: string }).owner}/${(a.repository as { name: string }).name}`,
-        done: ['Created the repository', 'Opened the onboarding pull request', "Set up the project's agent, knowledge base and build runner", 'Sent the invitations'],
-        waits: [{ id: 'w-pr', what: "Waiting for the onboarding pull request's checks", text: 'Checks run on the new repository', lastCheckedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 60_000).toISOString() }],
+        // projects.create takes `repo` (owner/name); an older draft of the mock read `repository`
+        repo: typeof a.repo === 'string' ? a.repo : `${(a.repository as { owner: string }).owner}/${(a.repository as { name: string }).name}`,
+        done: ['Created the repository', 'Opened the onboarding pull request', ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [] : ["Set up the project's agent, knowledge base and build runner"]), 'Sent the invitations'],
+        waits: [
+          { id: 'w-pr', what: "Waiting for the onboarding pull request's checks", text: 'Checks run on the new repository', lastCheckedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 60_000).toISOString() },
+          // VITE_MOCK_AGENT=setting_up: the project's agent arrives with the installation update (project.agent, mock/small.ts)
+          ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [{ id: 'installation-update', what: "The project's agent and knowledge base", text: "trace is updating itself to add this project's agent and knowledge base. The project page shows how far it has got and about when it will be ready." }] : []),
+        ],
       }), 1400)
     case 'settings.get':
       return ok({ repo, set: settings, config: { branch: 'main' }, errors: [] })

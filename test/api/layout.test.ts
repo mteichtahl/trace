@@ -1,11 +1,13 @@
 /** installation.layout: what a flat installation has and lacks, and how to move, for New project and Admin ›
  * Installation; and what projects.create's wait says there. */
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { cloudWait, startUpdate } from '../../src/api/actions-projects.js'
+import { ADD_PROJECTS_INPUT, cloudWait, startUpdate } from '../../src/api/actions-projects.js'
+import { GitHubError } from '../../src/api/github.js'
 import { AccessDenied } from '../../src/core/access.js'
 import { Registry } from '../../src/core/registry.js'
 import { FLAT_UPDATE_MAX } from '../../src/installer/pending.js'
@@ -49,13 +51,33 @@ describe('installation.layout', () => {
 })
 
 describe('projects.create starts the installation update', () => {
-  it('runs trace\'s ci workflow on the self-update\'s branch, and says the agent arrives within the hour', async () => {
+  it('runs trace\'s ci workflow on the self-update\'s branch, only adding projects, and says so in plain words (log #2, #4)', async () => {
     const runs: string[] = []
-    const gh = { dispatchWorkflow: async (repo: string, wf: string, ref: string) => { runs.push(`${repo} ${wf} ${ref}`) } }
+    const gh = {
+      dispatchWorkflow: async (repo: string, wf: string, ref: string) => { runs.push(`${repo} ${wf} ${ref}`) },
+      dispatchWorkflowWith: async (repo: string, wf: string, ref: string, inputs: Record<string, string>) => { runs.push(`${repo} ${wf} ${ref} ${JSON.stringify(inputs)}`) },
+    }
     const r = await startUpdate(gh, 'mteichtahl/trace@main', 'nested')
+    // the tests are skipped: main passed them already, and they were half the wait
+    expect(runs).toEqual(['mteichtahl/trace ci.yml main {"add_projects":"true"}'])
+    expect(r).toEqual({ started: true, text: "trace is updating itself to add this project's agent and knowledge base. The project page shows how far it has got and about when it will be ready." })
+    // no GitHub jargon for the person who made the project: no workflow, branch or repository named
+    expect(r.text).not.toMatch(/ci workflow|mteichtahl\/trace|\bmain\b/)
+    expect((await startUpdate(gh, 'mteichtahl/trace@main', 'flat')).text).toMatch(/add this project's agent\. .*flat layout/)
+  })
+
+  it('a branch whose ci workflow does not know add_projects yet (GitHub: 422) gets a plain run', async () => {
+    const runs: string[] = []
+    const gh = {
+      dispatchWorkflow: async (repo: string, wf: string, ref: string) => { runs.push(`${repo} ${wf} ${ref}`) },
+      dispatchWorkflowWith: async () => { throw new GitHubError(422, 'Unexpected inputs provided: ["add_projects"]') },
+    }
+    expect((await startUpdate(gh, 'mteichtahl/trace@main', 'nested')).started).toBe(true)
     expect(runs).toEqual(['mteichtahl/trace ci.yml main'])
-    expect(r).toEqual({ started: true, text: expect.stringMatching(/^Started the installation update: mteichtahl\/trace's ci workflow on main .*agent and knowledge base, usually within the hour/) })
-    expect((await startUpdate(gh, 'mteichtahl/trace@main', 'flat')).text).toMatch(/agent, usually within the hour.*flat layout/)
+    // any other refusal is not retried
+    const refused = await startUpdate({ ...gh, dispatchWorkflowWith: async () => { throw new GitHubError(403, 'Resource not accessible') } }, 'mteichtahl/trace@main', 'nested')
+    expect(refused.started).toBe(false)
+    expect(runs).toHaveLength(1)
   })
 
   it('without the self-update, or when GitHub refuses, waits as before and says why', async () => {
@@ -69,3 +91,28 @@ describe('projects.create starts the installation update', () => {
   })
 })
 
+
+describe('trace\'s ci workflow, run to add projects only', () => {
+  const ci = parse(readFileSync(join(import.meta.dirname, '..', '..', '.github', 'workflows', 'ci.yml'), 'utf8')) as {
+    on: { workflow_dispatch: { inputs: Record<string, { type: string; default: unknown }> } }
+    jobs: Record<string, { if?: string; needs?: string | string[]; steps?: { env?: Record<string, string>; run?: string }[] }>
+  }
+
+  it('takes the input startUpdate sends, off unless asked for', () => {
+    expect(ci.on.workflow_dispatch.inputs[ADD_PROJECTS_INPUT]).toMatchObject({ type: 'boolean', default: false })
+  })
+
+  it('skips the tests "tests pass" waits for, and counts them passed only in such a run; the update still runs after it', () => {
+    const pass = ci.jobs['tests-pass']!
+    const needs = [pass.needs ?? []].flat()
+    expect(needs.length).toBeGreaterThan(0)
+    for (const j of needs) expect(ci.jobs[j]?.if).toBe(`\${{ !inputs.${ADD_PROJECTS_INPUT} }}`)
+    const step = pass.steps?.[0]
+    expect(step?.env?.ADD_PROJECTS).toContain(`inputs.${ADD_PROJECTS_INPUT}`)
+    expect(step?.run).toMatch(/"\$r" = success \] \|\| \{ \[ "\$ADD_PROJECTS" = true \] && \[ "\$r" = skipped \]; \}/)
+    const update = ci.jobs['update-installation']!
+    expect(update.needs).toBe('tests-pass')
+    expect(update.if).toMatch(/workflow_dispatch/)
+    expect(update.if).not.toMatch(/add_projects/)
+  })
+})

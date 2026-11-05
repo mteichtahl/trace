@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { ADDED_CHECK_S, ADDED_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, type RunJob, agentSetup, failedJob, logTail, updateRunFor, updateSteps } from '../../src/api/actions-projects.js'
+import { ADDED_CHECK_S, ADDED_MS, LATE_SLACK_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, TYPICAL_MIN_MS, type RunJob, agentSetup, failedJob, logTail, typicalUpdateMs, updateRunFor, updateSteps } from '../../src/api/actions-projects.js'
 import type { GitHubApi, RunSummary } from '../../src/api/github.js'
 import { parseWorkerRuntimes, remoteJobs } from '../../src/api/workers.js'
 import { AccessDenied, assign, seen } from '../../src/core/access.js'
@@ -35,15 +35,28 @@ describe('agentSetup', () => {
   it('waiting for the update: says what is happening, about when it is ready (an hour from the update starting) and when to look again', () => {
     const queued = agentSetup({ ...base, run: run({ status: 'queued' }) })
     expect(queued).toMatchObject({ ready: false, state: 'setting_up', update: { status: 'queued' }, next_check_s: SETUP_CHECK_S })
-    expect(queued.text).toMatch(/queued on GitHub/)
+    expect(queued.text).toMatch(/waiting for its turn to start; once it starts it usually takes under an hour/)
     const running = agentSetup({ ...base, run: run() })
-    expect(running.text).toMatch(/is running: it tests trace and then deploys this project's agent/)
+    expect(running.text).toMatch(/is running: it is adding this project's agent to the installation/)
     expect(running.expected_by).toBe(new Date(Date.parse('2026-11-02T09:41:00Z') + SETUP_MS).toISOString())
     // the run could not be read: from the request, "usually within the hour"
     const asked = agentSetup(base)
-    expect(asked.text).toMatch(/usually within the hour/)
+    expect(asked.text).toMatch(/usually takes under an hour/)
     expect(asked.expected_by).toBe(new Date(Date.parse(REQUESTED) + SETUP_MS).toISOString())
-    expect(agentSetup({ ...base, run: run({ status: 'completed', conclusion: 'success' }) }).text).toMatch(/has finished; trace is checking/)
+    // finished: marked added within a minute or so, so looked at sooner
+    expect(agentSetup({ ...base, run: run({ status: 'completed', conclusion: 'success' }) })).toMatchObject({ next_check_s: ADDED_CHECK_S, text: expect.stringMatching(/has finished; trace is checking/) })
+  })
+
+  it('the estimate is this installation\'s own: how long its recent updates took, not an hour (log #2: it took 15 minutes)', () => {
+    const typical = 12 * 60_000
+    const running = agentSetup({ ...base, run: run(), typicalMs: typical })
+    expect(running.expected_by).toBe(new Date(Date.parse('2026-11-02T09:41:00Z') + typical).toISOString())
+    expect(agentSetup({ ...base, run: run({ status: 'queued' }), typicalMs: typical }).text).toMatch(/usually takes about 12 minutes/)
+    expect(agentSetup({ ...base, typicalMs: typical }).text).toMatch(/usually takes about 12 minutes/)
+    // a little past the estimate is not late yet; well past it is
+    const from = Date.parse('2026-11-02T09:41:00Z')
+    expect(agentSetup({ ...base, run: run(), typicalMs: typical, now: from + typical + LATE_SLACK_MS / 2 }).text).not.toMatch(/longer than usual/)
+    expect(agentSetup({ ...base, run: run(), typicalMs: typical, now: from + typical + LATE_SLACK_MS + 60_000 }).text).toMatch(/longer than usual/)
   })
 
   it('says when it is taking longer than usual, and when an earlier update with it failed', () => {
@@ -114,6 +127,31 @@ describe('updateRunFor', () => {
     ]
     expect(updateRunFor(runs, 'main', REQUESTED)?.id).toBe(4)
     expect(updateRunFor(runs.slice(0, 1), 'main', REQUESTED)).toBeNull()
+  })
+})
+
+describe('typicalUpdateMs', () => {
+  const done = (id: number, created: string, minutes: number, o: Partial<RunSummary> = {}): RunSummary =>
+    run({ id, status: 'completed', conclusion: 'success', created_at: created, updated_at: new Date(Date.parse(created) + minutes * 60_000).toISOString(), ...o })
+
+  it('the median of the latest successful update runs, those started by hand (projects.create\'s) first', () => {
+    const runs = [
+      done(1, '2026-11-01T10:00:00Z', 9), done(2, '2026-11-01T11:00:00Z', 15), done(3, '2026-11-01T12:00:00Z', 11),
+      // a push to main runs the tests too: left out while there are runs started by hand
+      done(4, '2026-11-01T13:00:00Z', 30, { event: 'push' }),
+      // failed, another branch, another workflow: never counted
+      done(5, '2026-11-01T14:00:00Z', 2, { conclusion: 'failure' }), done(6, '2026-11-01T14:00:00Z', 2, { branch: 'dev' }),
+      done(7, '2026-11-01T14:00:00Z', 2, { path: '.github/workflows/release-images.yml' }),
+      run({ id: 8, created_at: '2026-11-01T15:00:00Z' }),
+    ]
+    expect(typicalUpdateMs(runs, 'main')).toBe(11 * 60_000)
+    expect(typicalUpdateMs(runs.filter((r) => r.event === 'push'), 'main')).toBe(30 * 60_000)
+  })
+
+  it('none finished, or none with a time: null (the hour); never under a few minutes', () => {
+    expect(typicalUpdateMs([run()], 'main')).toBeNull()
+    expect(typicalUpdateMs([run({ status: 'completed', conclusion: 'success' })], 'main')).toBeNull()
+    expect(typicalUpdateMs([done(1, '2026-11-01T10:00:00Z', 1)], 'main')).toBe(TYPICAL_MIN_MS)
   })
 })
 

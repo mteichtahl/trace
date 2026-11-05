@@ -108,3 +108,39 @@ describe('an answer whose job is lost', () => {
     expect(await followups()).toEqual([expect.objectContaining({ job: 'job-c2', state: 'applied' })])
   })
 })
+
+describe('an answer to a job that ran on another specialist\'s branch (test-esp32 log #144)', () => {
+  const HANDOFF = 'claude/handoff-hoac40d08bf1664e'
+  let asked = ''
+  it('its carry-on opens a change of its own, stacked on that branch, not more commits in the other\'s change', async () => {
+    // the Documentation specialist answered a hand-off on its branch; the Implementation specialist, sent there to
+    // check the answer, asked about the case and ended
+    const record = (await journeyStore(ctx(ADMIN), REPO).read((d) => loadJourney(d))).result
+    await new AgentFactsStore(backendFor(join(bucket, 'projects')), REPO).update((d) => {
+      asked = addAgentQuestion(d, { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-impl-ask' }, {
+        text: 'How is the case made?', options: [{ id: 'a', label: 'A printed two-part shell', recommended: true, why: 'cheap at one-off quantities' }, { id: 'b', label: 'A bought enclosure', why: 'no printing' }],
+      }, record)
+      return { result: null }
+    })
+    await index((put, now) => {
+      put('job-docs-ho', { agent: 'docs', handoff: 'hoac40d08bf1664e', state: 'succeeded', branch: HANDOFF, session: S('h'), queuedAt: now - 7200, startedAt: now - 7200, endedAt: now - 6000 })
+      put('job-impl-ask', { agent: 'impl', state: 'succeeded', branch: HANDOFF, session: S('i'), queuedAt: now - 5000, startedAt: now - 5000, endedAt: now - 4000 })
+    })
+    const r = await run(USER, 'question.answer', { repo: REPO, question: asked, option: 'a', lasts: 'once' })
+    const job = started.at(-1) as Started
+    expect(job).toMatchObject({ kind: 'task', agent: 'impl', stackOn: HANDOFF, request: expect.stringMatching(/holds the Documentation specialist's work, so this work is a change of its own[\s\S]*Never push to claude\/handoff-/) })
+    expect(job.branch).toBeUndefined()
+    expect(String(r.summary)).toMatch(/carries on with it on a change of its own, on top of claude\/handoff-hoac40d08bf1664e/)
+    const n = workerId(String(r.jobId))
+    expect((await followups()).find((x) => x.question === asked)).toMatchObject({ branch: HANDOFF, stackOn: HANDOFF, job: n, agent: 'impl' })
+
+    // once its job names its branch, that is where the answer goes
+    await index((put, now) => put(n, { agent: 'impl', state: 'running', branch: 'claude/task-case-answer', session: S('k'), queuedAt: now - 20, startedAt: now - 20, beatAt: now - 5 }))
+    const before = started.length
+    await run(USER, 'journey.get', { repo: REPO })
+    expect(started.length).toBe(before)
+    expect((await followups()).find((x) => x.question === asked)).toMatchObject({ branch: 'claude/task-case-answer', stackOn: null })
+  })
+})
+
+const workerId = (handle: string): string => handle.split('.').at(-1) as string

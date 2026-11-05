@@ -287,7 +287,8 @@ describe('the web app', () => {
     expect(rule.EventPattern).toEqual({
       source: ['aws.s3'], 'detail-type': ['Object Created'],
       // endings, not wildcards: EventBridge refused four wildcards in one rule as too complex (the #183 deploy)
-      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ suffix: '/journey-agent/facts.db' }, { suffix: '/journey-agent/bench.db' }, { suffix: '/journey-agent/jobs.db' }, { suffix: '/journey/journey.db' }] } },
+      // and a new project's agent request by its prefix: the update marking it added is the setup notice's event (log #5)
+      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ suffix: '/journey-agent/facts.db' }, { suffix: '/journey-agent/bench.db' }, { suffix: '/journey-agent/jobs.db' }, { suffix: '/journey/journey.db' }, { prefix: 'installation/pending-projects/' }] } },
     })
     expect(rule.Targets).toEqual([expect.objectContaining({ Arn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents[0-9A-F]{8}$/), 'Arn'] }, RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 } })])
     web.hasResourceProperties('AWS::Lambda::Function', {

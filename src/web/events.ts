@@ -13,7 +13,7 @@ import { SignatureV4 } from '@smithy/signature-v4'
 import type { WebConfig } from './config.js'
 import type { Credentials } from './ports.js'
 
-export type What = 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'jobs' | 'integrations' | 'projects' | 'preferences'
+export type What = 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'jobs' | 'integrations' | 'projects' | 'preferences' | 'agent'
 
 /** Every action whose ok answer is published, and what it changed. Prefix entries end with `.`. */
 const MUTATING: ReadonlyArray<readonly [string, What]> = [
