@@ -14,6 +14,7 @@ import { kindOf } from '../../src/api/actions-files.js'
 import { neighbourhood, type GraphLink, type GraphNode } from '../../src/api/actions-graph.js'
 import { listen } from '../../src/api/server.js'
 import { templateChecks } from '../../src/api/actions-templates.js'
+import { optionWaiverWords } from '../../src/api/actions-skills.js'
 import type { TemplateDoc } from '../../src/core/templates.js'
 import { AccessDenied, assign, standing } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -311,6 +312,24 @@ describe('the agents\' facts in the journey', () => {
     await expect(run(USER, 'question.answer', { repo: 'acme/other', question: 'aqnothing', option: 'a' })).rejects.toThrow(/no question/)
     // the API never writes the agents' facts
     expect((await facts().read((db) => loadAgentFacts(db))).result.questions).toHaveLength(3)
+  })
+
+  // test-esp32 #142: "Waive the Q1, R4, R5 findings" was chosen, and the person was then asked to waive them by hand
+  it('answering with an option that waives records the waivers in the person\'s name and says so; the option says it before', async () => {
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const found = ['Q1', 'R4', 'R5'].map((x) => `layout.fit@urn:trace:case-finding:${x}`)
+    const waives = { targets: found.map((id) => ({ kind: 'finding' as const, id })), risk: 'A part could touch the display glass', severity: 'cosmetic' as const, caught_where: 'Bring up: fit the lid', scope: 'this revision only' }
+    const { result: q } = await facts().update((db) => ({
+      result: addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: null }, { text: 'Three parts sit under the display window: waive the fit findings?', blocks: 'layout.fit', options: [
+        { id: 'waive', label: 'Waive the Q1, R4, R5 findings', recommended: true, why: 'The module glass covers the window; the fit engine does not model it.', waives },
+        { id: 'model', label: 'Model the module under the lid', why: 'Measured, not waived.' },
+      ] }, r),
+    }))
+    expect(optionWaiverWords(waives)).toBe('Records a waiver in your name: 3 findings, rated cosmetic, this revision only. Risk: A part could touch the display glass. Checked instead: Bring up: fit the lid.')
+    const out = await run(USER, 'question.answer', { repo: 'acme/other', question: q, option: 'waive' }) as { summary: string; question: { waivers: string[] } }
+    expect(out.summary).toBe('Answered. 3 waivers are recorded in your name. The agent carries on.')
+    const rec = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result!
+    expect(rec.waivers.filter((w) => out.question.waivers.includes(w.id)).map((w) => [w.target, w.by])).toEqual(found.map((f) => [f, USER.email]))
   })
 
   it('answering the question of a job that has ended starts its specialist again on that job\'s branch; a live job reads it itself', async () => {

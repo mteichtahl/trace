@@ -34,6 +34,7 @@ import { Rich } from '@/components/rich'
 import { useCommands } from '@/components/shell/command-menu'
 import { LiveDot } from '@/components/shell/live-dot'
 import { EvidenceBody, EvidencePanel } from '@/components/skills/evidence-sheet'
+import { CriterionFindings } from '@/components/criterion-findings'
 import { type Blocker, isOpened, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
 import { reauthenticate } from '@/components/skills/reauth'
 import { StatusBadge } from '@/components/status-badge'
@@ -48,8 +49,6 @@ import { q, useCall, useJourney } from '@/lib/queries'
 import type { Criterion, Journey } from '@/lib/types'
 import type { GateMore } from '@/lib/types-s1'
 
-/** A shape's findings shown under its criterion; the run the evidence opens lists them all. */
-const FINDINGS_SHOWN = 5
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_focus/p/$id/gates/$gate')({ component: GatePage })
@@ -130,6 +129,9 @@ function GatePending({ journey: j, gate: g }: { journey: Journey; gate: GateMore
   const from = j.stages.find((s) => s.id === g.after)
   const pending = g.pending ?? []
   const changes = pending.some((p) => /open change/.test(p))
+  // what the checks found meanwhile: a person can waive each finding now, not only once the gate opens for review (a
+  // job waiting for that very waiver is often what is pending: test-esp32 #142)
+  const found = g.criteria.filter((c) => c.status === 'not_met' && c.findings?.length)
   return (
     <div className="mx-auto w-full max-w-[880px] px-4 py-10 md:px-8">
       <h1 className="text-2xl font-semibold tracking-tight">{gateTitle(g)}</h1>
@@ -142,6 +144,20 @@ function GatePending({ journey: j, gate: g }: { journey: Journey; gate: GateMore
           <li key={p} className="flex gap-2 rounded-lg border bg-card p-3 text-sm"><Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden /><Rich text={p} /></li>
         ))}
       </ul>
+      {found.length > 0 && (
+        <section className="mt-6" aria-labelledby="pending-findings">
+          <h2 id="pending-findings" className="text-base font-semibold">What the checks found</h2>
+          <p className="mt-1 text-sm text-muted-foreground">You can waive a finding now, while the work settles. The signer acknowledges each waiver when the gate opens for review.</p>
+          <ul className="mt-3 space-y-2">
+            {found.map((c) => (
+              <li key={c.id} className="rounded-lg border bg-card p-3 text-sm">
+                <p>{c.text}</p>
+                <CriterionFindings repo={j.repo} findings={c.findings!} className="mt-1" />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <div className="mt-6 flex flex-wrap gap-2">
         {changes && <Button asChild><Link to="/p/$id/changes" params={{ id }}>Review the changes <ArrowRight /></Link></Button>}
         <Button asChild variant={changes ? 'outline' : 'default'}><Link to="/p/$id" params={{ id }}>Back to the project</Link></Button>
@@ -221,19 +237,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
           <div>
             <div>{text}</div>
             {stale && <div className="mt-0.5 text-xs text-muted-foreground">{stale}</div>}
-            {findings?.length ? (
-              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground" aria-label="Still needed">
-                {findings.slice(0, FINDINGS_SHOWN).map((f) => (
-                  <li key={f.id}>
-                    {f.text}{' '}
-                    <Link to="/p/$id/do/$skill" params={{ id, skill: 'waiver' }} search={{ about: `finding:${f.id}` } as never} className="whitespace-nowrap text-primary underline-offset-2 hover:underline" onClick={(e) => e.stopPropagation()}>
-                      Waive this one…
-                    </Link>
-                  </li>
-                ))}
-                {findings.length > FINDINGS_SHOWN && <li className="list-none">and {findings.length - FINDINGS_SHOWN} more: open the evidence for all of them</li>}
-              </ul>
-            ) : null}
+            {findings?.length ? <CriterionFindings repo={repo} findings={findings} className="mt-1" /> : null}
           </div>
         )
       },
