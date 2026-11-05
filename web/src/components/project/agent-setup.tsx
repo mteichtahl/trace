@@ -1,9 +1,12 @@
 /**
  * The notice a project shows while its own agent is not set up yet (project.agent): a project created in the web app
- * gets its agent with the next update of the installation, usually within the hour, and until then trace cannot save
- * what a person tells it, run the project's tools or start work there. The notice says so, roughly when it will be
- * ready, and when the app looks again. Nothing announces the update's end, so the app looks again at the time the API
- * gives (next_check_s), with Check now; once the agent is there the notice goes away by itself.
+ * gets its agent with an update of the installation that the API starts at once, and until then trace cannot run the
+ * project's tools or start work there. The notice says so, roughly when it will be ready (from how long this
+ * installation's updates take), and when the app looks again. The update marking the project added is a live event
+ * (`record.changed { what: 'agent' }`, lib/live.ts), which makes the notice look again at once; the run on GitHub
+ * sends none, so the app also looks again at the time the API gives (next_check_s), with Check now, and as soon as the
+ * person comes back to the tab: a tab in the background does not poll, and in the test run the notice still said
+ * "queued" half an hour after the update finished (test-esp32 log #5). Once the agent is there the notice goes away.
  *
  * The update's progress (UpdateProgress) is its steps as the API reads them from the run (done, running, waiting,
  * failed), a bar, "about N min left" from expected_by, and on failure the failing step's last lines (admins only, as
@@ -46,6 +49,10 @@ export function agentBlocked(s: unknown): string | null {
 /** The id of projects.create's wait for the installation update that brings the project's agent. */
 export const AGENT_WAIT = 'installation-update'
 
+/** New project's finished screen's title: "ready" only once the agent is (test-esp32 log #3: it said "test-esp32 is
+ * ready" above a notice saying trace could not start work yet). Pure. */
+export const createdTitle = (name: string, settingUp: boolean): string => (settingUp ? `${name} is created; its agent is being set up` : `${name} is ready`)
+
 /** New project's last button: it says the agent is still being set up while it is. Pure. */
 export const openLabel = (settingUp: boolean): string => (settingUp ? 'Open project — trace is still setting up its agent' : 'Open project')
 
@@ -57,7 +64,7 @@ export function setupWords(s: AgentSetup, now: number): { title: string; body: s
   const title = s.state === 'failed' ? 'This project\'s agent could not be set up yet'
     : s.state === 'missing' ? 'This project has no agent in this installation yet'
       : 'trace is setting up this project\'s agent'
-  const body = `Until it is ready, trace can't save your answers, run this project's tools or start work here. ${s.text}`
+  const body = `Until it is ready, trace can't start work here, remember what you tell it or run this project's tools. ${s.text}`
   const by = s.expected_by ? Date.parse(s.expected_by) : NaN
   const when = s.state === 'failed' || s.state === 'missing' ? null
     : Number.isFinite(by) && by > now ? `Usually ready by about ${time(by)}.`
@@ -139,6 +146,8 @@ export function useAgentSetup(repo: string | undefined, o: { fetch?: boolean } =
     enabled: !!repo && o.fetch !== false,
     retry: false,
     refetchInterval: (query) => setupLookEvery(query.state.data),
+    // the app's default is not to (main.tsx): here coming back to the tab is when a stale "queued" would be read
+    refetchOnWindowFocus: (query) => setupLookEvery(query.state.data) !== false,
   })
 }
 

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -8,7 +8,7 @@ import { TaskConfirmCard } from '@/components/chat/cards'
 import { QualityBar } from '@/components/quality-bar'
 import { auth } from '@/lib/auth'
 import type { AgentSetup } from '@/lib/types'
-import { AgentSetupNotice, UpdateProgress, agentBlocked, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
+import { AgentSetupNotice, UpdateProgress, agentBlocked, createdTitle, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
 
 const NOW = Date.parse('2026-11-02T10:00:00Z')
 const setup = (o: Partial<AgentSetup> = {}): AgentSetup => ({
@@ -18,10 +18,10 @@ const setup = (o: Partial<AgentSetup> = {}): AgentSetup => ({
 })
 
 describe('the words of the notice', () => {
-  it('says trace is setting up the agent, that answers cannot be saved until then, and about when it is ready', () => {
+  it('says trace is setting up the agent, that it cannot start work until then, and about when it is ready', () => {
     const w = setupWords(setup(), NOW)
     expect(w.title).toBe('trace is setting up this project\'s agent')
-    expect(w.body).toMatch(/^Until it is ready, trace can't save your answers, run this project's tools or start work here\. The installation update is running/)
+    expect(w.body).toMatch(/^Until it is ready, trace can't start work here, remember what you tell it or run this project's tools\. The installation update is running/)
     expect(w.when).toMatch(/^Usually ready by about \d\d:\d\d\.$/)
     expect(setupWords(setup({ expected_by: null }), NOW).when).toBe('Usually ready within the hour.')
     // past the estimate: the API's text says it is taking longer; no time in the past is promised
@@ -55,6 +55,11 @@ describe('the words of the notice', () => {
     expect(openLabel(true)).toBe('Open project — trace is still setting up its agent')
     expect(openLabel(false)).toBe('Open project')
   })
+
+  it('New project\'s finished screen says "ready" only once the agent is (log #3)', () => {
+    expect(createdTitle('test-esp32', true)).toBe('test-esp32 is created; its agent is being set up')
+    expect(createdTitle('test-esp32', false)).toBe('test-esp32 is ready')
+  })
 })
 
 describe('the notice', () => {
@@ -69,13 +74,36 @@ describe('the notice', () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(ready ? setup({ ready: true, state: 'ready', next_check_s: null }) : setup({ expected_by: new Date(Date.now() + 30 * 60_000).toISOString() })))
     render(<AgentSetupNotice repo="acme/new" />, { wrapper })
     expect(await screen.findByText('trace is setting up this project\'s agent')).toBeInTheDocument()
-    expect(screen.getByText(/trace can't save your answers/)).toBeInTheDocument()
+    expect(screen.getByText(/trace can't start work here/)).toBeInTheDocument()
     expect(screen.getByText(/Usually ready by about/)).toBeInTheDocument()
     expect(screen.getByText(/trace looks again in \d+ s\./)).toBeInTheDocument()
     expect(JSON.parse(String((fetch.mock.calls[0]![1] as RequestInit).body))).toEqual({ action: 'project.agent', repo: 'acme/new' })
     ready = true
     await userEvent.click(screen.getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(screen.queryByText('trace is setting up this project\'s agent')).toBeNull())
+  })
+
+  it('looks again as soon as the person comes back to the tab, where a hidden tab polls nothing (log #5); not once it is ready', async () => {
+    let ready = false
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(ready ? setup({ ready: true, state: 'ready', next_check_s: null }) : setup()))
+    // the app's own default (main.tsx): no look on focus, unless a query asks for one
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
+    render(<AgentSetupNotice repo="acme/new" />, { wrapper })
+    expect(await screen.findByText('trace is setting up this project\'s agent')).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    ready = true
+    try {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+      await waitFor(() => expect(screen.queryByText('trace is setting up this project\'s agent')).toBeNull())
+      expect(fetch).toHaveBeenCalledTimes(2)
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+      await new Promise((r) => setTimeout(r, 20))
+      expect(fetch).toHaveBeenCalledTimes(2)
+    } finally {
+      focusManager.setFocused(undefined)
+    }
   })
 
   it('draws nothing for a project whose agent is set up', async () => {

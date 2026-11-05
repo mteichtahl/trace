@@ -91,7 +91,7 @@ import { Construct } from 'constructs'
 import { BENCH_DB } from '../core/bench.js'
 import { DRIFT_EVENT, DRIFT_HOUR_UTC } from '../docs/drift.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
-import { PROJECTS_PREFIX } from '../core/project.js'
+import { PENDING_PROJECTS_PREFIX, PROJECTS_PREFIX } from '../core/project.js'
 import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER } from '../core/job-index.js'
 import { JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
@@ -669,8 +669,10 @@ export class WebStack extends NestedStack {
         source: ['aws.s3'],
         detailType: ['Object Created'],
         detail: { bucket: { name: [central.bucketName] }, // matched by their endings: EventBridge refuses four wildcards in one rule as "too complex"; the handler
-        // (src/web/journey-events.ts) checks each key whole, so a key outside projects/ that ends the same is ignored
-        object: { key: events.Match.anyOf(...JOURNEY_EVENT_KEY_ENDINGS.map((e) => events.Match.suffix(e))) } },
+        // (src/web/journey-events.ts) checks each key whole, so a key outside projects/ that ends the same is ignored.
+        // And a new project's agent request, by its prefix (the update marking it added is the event the setup
+        // notice waits for); the handler publishes it without reading it, so the role gets no read of it
+        object: { key: events.Match.anyOf(...JOURNEY_EVENT_KEY_ENDINGS.map((e) => events.Match.suffix(e)), events.Match.prefix(PENDING_PROJECTS_PREFIX)) } },
       },
     })
     rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
