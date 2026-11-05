@@ -157,7 +157,7 @@ const CHANGES: Record<string, ChangeDetail[]> = {
     // a sound change whose trace-prs jobs died on GitHub's rate limit (test-esp32 run 2, #126, #128): run them again,
     // never ask for changes
     summary(16, {
-      title: 'Sensor board layout, rev A', from: 'the layout specialist', stage: 'layout', opened_at: ago(50 * MIN), updated_at: ago(45 * MIN), mergeable: 'unstable',
+      title: 'Sensor board layout, rev A', from: 'the layout specialist', stage: 'layout', opened_at: ago(3 * MIN), updated_at: ago(2 * MIN), mergeable: 'unstable',
       checks: { total: 3, passed: 1, failed: 2, running: 0, skipped: 0, failing: ['trace-prs'] }, verdict: 'blocked',
       summary: ['Placed and routed the sensor board on two layers, 48 × 30 mm.', 'The design rule check passes with no violations.'],
       files: [{ path: 'docs/renders/front.svg', status: 'modified', additions: 2, deletions: 2, kind: 'image' }],
@@ -229,12 +229,12 @@ const CHECK_DETAIL: Record<string, CheckMock> = {
     ],
     log: { text: CLEAR_LOG, truncated: true }, started: 4, took: 3,
   },
-  'job:9401': { text: 'KiCad checked the board: 0 violations, 0 unconnected pads.', started: 47, took: 38 },
+  'job:9401': { text: 'KiCad checked the board: 0 violations, 0 unconnected pads.', started: 3, took: 38 },
   'job:9402': {
     annotations: [{ path: '.github', line: null, level: 'failure', title: null, message: 'Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.' }],
-    log: { text: 'Run actions/github-script\nGitHub was busy: it limited trace\'s requests, and would take 2140 s to allow more, longer than this job may wait.\nError: Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.', truncated: false }, started: 46, took: 4,
+    log: { text: 'Run actions/github-script\nGitHub was busy: it limited trace\'s requests, and would take 2140 s to allow more, longer than this job may wait.\nError: Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.', truncated: false }, started: 2, took: 4,
   },
-  'job:9403': { annotations: [{ path: '.github', line: null, level: 'failure', title: null, message: 'Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.' }], started: 45, took: 3 },
+  'job:9403': { annotations: [{ path: '.github', line: null, level: 'failure', title: null, message: 'Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.' }], started: 2, took: 3 },
   'cr:5605': { started: 2 },
   'cr:5606': { started: 2 },
 }
