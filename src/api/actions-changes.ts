@@ -71,7 +71,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFact
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type DiscardView, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
-  editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
+  editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, traceChanges,
   jobWorking, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
@@ -84,6 +84,7 @@ import { recordRework, recordWait } from './process-metrics.js'
 import { jobLogEnd, repoJob } from './actions-health.js'
 import type { CheckRunDetail } from './github.js'
 import { backToDefine, changedRequirements, pastDefine } from './pending-changes.js'
+import { hasTable } from './record-read.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
 import { type RecordChanges, betterTitle, contentBullets, recordChanges } from '../core/change-contents.js'
@@ -303,7 +304,14 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   // it waited on a person's approval: once given, it is finished (src/api/changes.ts settleUnfinished)
   settleUnfinished(facts, { title: pull.title, summary: job.summary, body: pull.body }, given)
   const checksList = checkLines(runs)
-  const requirements = requirementIds(pull.title, pull.body, ...commits)
+  // checked against the project's own requirements: a resistor R3 is not a requirement (test-esp32 log #47, #105)
+  const named = await projectRequirementIds(ctx, gh, repo, rule.defaultBranch, files.some((f) => f.path === PROJECT_DB_PATH) ? sha : null)
+    .then((known) => requirementsNamed(known, pull.title, pull.body, ...commits))
+    .catch((e: unknown) => {
+      logLine(ctx, { warning: 'change.get: the project\'s requirements could not be read', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
+      return { ids: [] as string[], unknown: [] as string[] }
+    })
+  const requirements = named.ids
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   // an accepted requirement its database edits: said before it is accepted (src/api/requirement-edits.ts)
   // and the intent statements and requirements it adds or changes, said in its summary (log #133)
@@ -324,6 +332,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     summary: [...contentBullets({ paths: files.map((f) => f.path), record: read?.record ?? null }), ...summaryBullets({ jobSummary: job.summary, body: pull.body, commits })].slice(0, 12),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
+    ...(named.unknown.length ? { requirements_unknown: named.unknown } : {}),
     recommendation: withRequirementEdits(recommendationOf(facts, { passed, requirements, from: sum.from }), edits),
     ...(edits ? { requirement_edits: edits } : {}),
     ...acceptance(facts, write),
@@ -399,6 +408,36 @@ async function recordEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: Pu
     t.cleanup()
     under?.cleanup()
   }
+}
+
+/** Every requirement id in a project database (struck ones too: a change may still name one), or none. */
+export function requirementIdsIn(db: DatabaseSync): string[] {
+  if (!hasTable(db, 'requirements')) return []
+  return (db.prepare('SELECT id FROM requirements ORDER BY id').all() as { id: unknown }[]).map((r) => String(r.id))
+}
+
+/** The requirement ids in the database at `ref`: none when it has no database. */
+async function requirementIdsAt(ctx: Context, gh: GitHubApi, repo: string, ref: string): Promise<string[]> {
+  const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, ref))
+  try {
+    if (!existsSync(t.db)) return []
+    const db = new DatabaseSync(t.db, { readOnly: true })
+    try { return requirementIdsIn(db) } finally { db.close() }
+  } finally {
+    t.cleanup()
+  }
+}
+
+/**
+ * The project's requirement ids a change may name: the design's (its default branch's database, kept
+ * SETTINGS_TTL_MS), and, when the change carries its own database (`head`: its head commit), the ones it adds.
+ */
+export async function projectRequirementIds(ctx: Context, gh: GitHubApi, repo: string, defaultBranch: string, head: string | null): Promise<string[]> {
+  const [design, theirs] = await Promise.all([
+    cached(ctx.deps.githubCache, repo, 'requirement-ids', () => requirementIdsAt(ctx, gh, repo, defaultBranch), SETTINGS_TTL_MS),
+    head ? cached(ctx.deps.githubCache, repo, `requirement-ids:${head}`, () => requirementIdsAt(ctx, gh, repo, head)) : Promise.resolve([] as string[]),
+  ])
+  return [...new Set([...design, ...theirs])]
 }
 
 /**

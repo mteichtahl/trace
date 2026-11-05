@@ -33,10 +33,24 @@ describe('ChangeRequirements', () => {
     expect(screen.getByText('REQ-004 criterion')).toBeInTheDocument()
   })
 
-  it('says when a named requirement is not in the project, and when there are none', () => {
+  it('says when a named requirement is not in the design yet, and when there are none', () => {
     const { rerender } = render(<ChangeRequirements ids={['REQ-077']} rows={[]} link={link} />)
-    expect(screen.getByText(/could not find REQ-077/)).toBeInTheDocument()
+    expect(screen.getByText(/REQ-077 is not among the design's requirements yet/)).toBeInTheDocument()
     rerender(<ChangeRequirements ids={[]} rows={[]} link={link} />)
     expect(screen.getByText('This change does not name a requirement.')).toBeInTheDocument()
+  })
+
+  it('says once, plainly, which ids it cites that the project does not have, and lists none of them (log #47, #105)', () => {
+    // run 1: the schematic change named R3
+    const { rerender } = render(<ChangeRequirements ids={[]} unknown={['R3']} rows={[]} link={link} />)
+    expect(screen.getByText('The change names R3, which is not a requirement of this project.')).toBeInTheDocument()
+    expect(screen.queryByText('This change does not name a requirement.')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
+    // run 2: R1 to R7 beside a requirement it does name
+    const r = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']
+    rerender(<ChangeRequirements ids={['REQ-9b1b96']} unknown={r} rows={[row('REQ-9b1b96')]} link={link} />)
+    expect(screen.getAllByText(/which are not requirements of this project/)).toHaveLength(1)
+    expect(screen.getByText('The change names R1, R2, R3, R4, R5, R6 and R7, which are not requirements of this project.')).toBeInTheDocument()
+    expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual(['/req/REQ-9b1b96'])
   })
 })

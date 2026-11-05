@@ -7,6 +7,9 @@
  * The requirement's details come from the coverage the Requirements tab reads (verify.coverage). A change may name a
  * requirement by a short form ("REQ-9" for "REQ-009"), so the row is matched loosely and the link uses the project's
  * own id, which is what the requirement sheet looks up.
+ *
+ * What a change cites as a requirement that the project does not have ("R3", where its requirements are REQ-xxxxxx)
+ * is said once, in one line, and never listed as a requirement it covers (test-esp32 log #47, #105).
  */
 import { useState, type ReactNode } from 'react'
 import { ChevronDown, ExternalLink } from 'lucide-react'
@@ -41,9 +44,22 @@ export function findRequirement(rows: CoverageRow[] | undefined, rid: string): C
 const testStatus = (s: string) => (s === 'pass' ? 'verified' : s === 'fail' || s === 'error' ? 'failing' : s === 'waived' ? 'waived' : 'untested') as 'verified' | 'failing' | 'waived' | 'untested'
 const testWord = (s: string) => ({ pass: 'Passed', fail: 'Failed', error: 'Error', waived: 'Waived', planned: 'Planned' })[s] ?? 'Not run'
 
+/** "R1, R2 and R3" */
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`)
+
+/** "The change names R3, which is not a requirement of this project." */
+export function unknownWords(ids: string[]): string {
+  const shown = ids.length > 8 ? [...ids.slice(0, 8), `${ids.length - 8} more`] : ids
+  return ids.length === 1
+    ? `The change names ${ids[0]}, which is not a requirement of this project.`
+    : `The change names ${andList(shown)}, which are not requirements of this project.`
+}
+
 export interface ChangeRequirementsProps {
-  /** the requirement ids the change names */
+  /** the project's requirement ids the change names */
   ids: string[]
+  /** what it cites as a requirement that the project does not have */
+  unknown?: string[]
   /** verify.coverage's rows; undefined while they load */
   rows: CoverageRow[] | undefined
   loading?: boolean
@@ -51,15 +67,17 @@ export interface ChangeRequirementsProps {
   link: (rid: string, children: ReactNode, className?: string) => ReactNode
 }
 
-export function ChangeRequirements({ ids, rows, loading, link }: ChangeRequirementsProps) {
+export function ChangeRequirements({ ids, unknown = [], rows, loading, link }: ChangeRequirementsProps) {
   const [open, setOpen] = useState<Record<string, boolean>>(() => Object.fromEntries(ids.map((r) => [r, ids.length <= OPEN_UP_TO])))
   const isOpen = (r: string) => open[r] ?? ids.length <= OPEN_UP_TO
   const allOpen = ids.every(isOpen)
 
-  if (!ids.length) return <p className="mt-2 text-sm text-muted-foreground">This change does not name a requirement.</p>
+  const notOurs = unknown.length ? unknownWords(unknown) : null
+  if (!ids.length) return <p className={cn('mt-2 text-sm', !notOurs && 'text-muted-foreground')}>{notOurs ?? 'This change does not name a requirement.'}</p>
 
   return (
     <div className="mt-2">
+      {notOurs && <p className="mb-2 text-sm">{notOurs}</p>}
       {ids.length > 1 && (
         <Button variant="ghost" size="sm" className="-ml-2 mb-1 h-7 px-2 text-xs" onClick={() => setOpen(Object.fromEntries(ids.map((r) => [r, !allOpen])))}>
           {allOpen ? 'Fold all' : `Open all ${ids.length}`}
@@ -83,7 +101,7 @@ export function ChangeRequirements({ ids, rows, loading, link }: ChangeRequireme
                 </CollapsibleTrigger>
                 <CollapsibleContent className="border-t px-3 py-2.5 text-sm">
                   {!r ? (
-                    <p className="text-muted-foreground">{loading ? 'Loading the requirement…' : `trace could not find ${rid} in this project. It may have been renumbered or struck.`}</p>
+                    <p className="text-muted-foreground">{loading ? 'Loading the requirement…' : `${rid} is not among the design's requirements yet: this change adds it, or it was struck since.`}</p>
                   ) : (
                     <>
                       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">

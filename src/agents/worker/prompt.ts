@@ -9,11 +9,16 @@ import type { TraceConfig } from '../../core/config.js'
 import { type WorkItem, addValidate, promptFor } from '../../harness/worker.js'
 import type { TaskJob } from '../runtime/schemas.js'
 import { type Composed, Composer, type Layers, NO_LAYERS } from '../../prompts/resolve.js'
+import { requirementIdWords } from '../specialist.js'
 
 const WHERE = 'on Amazon Bedrock AgentCore Runtime'
 
 /** What the worker's task prompt reads of a task: a person's, or a specialist's delegation (its brief as the request). */
-export type TaskLike = Pick<TaskJob, 'repository' | 'request' | 'requestedBy'> & { issue?: number | undefined }
+export type TaskLike = Pick<TaskJob, 'repository' | 'request' | 'requestedBy'> & {
+  issue?: number | undefined
+  /** the project's requirement ids, which its commits and pull request name requirements by (test-esp32 log #47, #105) */
+  requirements?: readonly string[] | undefined
+}
 
 export function workItemPrompt(item: WorkItem, cfg: TraceConfig, repository: string, layers: Layers = NO_LAYERS): string {
   return promptFor(item, cfg, repository, undefined, { where: WHERE, prompts: layers })
@@ -42,6 +47,7 @@ export function composeTask(job: TaskLike, cfg: TraceConfig, branch: string, lay
     branch, default_branch: cfg.branch, requested_by: job.requestedBy,
     start: stackedOn?.ref ?? `origin/${cfg.branch}`, base: stackedOn?.name ?? cfg.branch,
   })
+  if (job.requirements?.length) p.add('worker.requirements', { ids: requirementIdWords(job.requirements) })
   addValidate(p, cfg)
   const esc = cfg.worker.escalate_to
   if (job.issue) p.add('worker.report.issue', { issue: job.issue, mention: esc ? p.text('mention.starting', { escalate_to: esc }) : '' })

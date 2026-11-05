@@ -10,7 +10,9 @@ import { mcpName as specialistMcpName } from '../../src/agents/specialist.js'
 import { type RouteInput, classificationPrompt, labelKind, route, routeJob, sdkClassifier } from '../../src/agents/router.js'
 import { createDelegations, delegatedRequest } from '../../src/agents/runtime/delegation.js'
 import { createWaitRelay } from '../../src/agents/runtime/wait-relay.js'
-import { type ClaudeOptions, type RunnerDeps, TOOLS, createRunner } from '../../src/agents/runtime/job.js'
+import { taskPrompt } from '../../src/agents/worker/prompt.js'
+import { DatabaseSync } from 'node:sqlite'
+import { type ClaudeOptions, type RunnerDeps, TOOLS, createRunner, projectRequirementIds } from '../../src/agents/runtime/job.js'
 import { type JobRunner, createJobs } from '../../src/agents/runtime/jobs.js'
 import { DelegatedTaskPayload, InvocationSchema, type JobPayload, TaskPayload } from '../../src/agents/runtime/schemas.js'
 import { createAgentServer } from '../../src/agents/runtime/server.js'
@@ -130,6 +132,34 @@ describe('specialist prompts', () => {
     expect(p).toMatch(/GUARDRAILS/)
     expect(p).toMatch(/ESCALATE/)
     expect(p).not.toMatch(/\b\d+x faster\b/i)
+  })
+
+  it('give the project\'s requirement ids, so its briefs and pull requests cite them, never a numbering of their own (log #47, #105)', () => {
+    const ids = ['REQ-1e1e84', 'REQ-8fc402', 'REQ-9b1b96']
+    const p = specialistPrompt(SPECIALISTS.impl, { cfg, repository: 'o/r', job, rules: null, requirements: ids })
+    expect(p).toContain("REQUIREMENT IDS: this project's requirements are REQ-1e1e84, REQ-8fc402, REQ-9b1b96")
+    expect(p).toMatch(/Never number\s+requirements yourself \(R1, R2\)/)
+    expect(p.indexOf('REQUIREMENT IDS')).toBeLessThan(p.indexOf('GUARDRAILS'))
+    // the worker that writes the commits and the pull request gets them too
+    const w = taskPrompt({ repository: 'o/r', request: 'Draw the schematic', requestedBy: 'impl', requirements: ids }, cfg, 'claude/x')
+    expect(w).toMatch(/this project's requirements are REQ-1e1e84, REQ-8fc402, REQ-9b1b96\.\nWhen a brief/)
+    expect(w).toMatch(/"Requirements: <id>,\s+<id>"/)
+    // a project with no requirements yet: nothing said
+    expect(specialistPrompt(SPECIALISTS.impl, { cfg, repository: 'o/r', job, rules: null })).not.toContain('REQUIREMENT IDS')
+    expect(taskPrompt({ repository: 'o/r', request: 'x', requestedBy: 'p' }, cfg, 'claude/x')).not.toContain('REQUIREMENT IDS')
+  })
+
+  it('read the requirement ids still in play from the checkout\'s database', () => {
+    const root = mkdtempSync(join(tmpdir(), 'trace-reqids-'))
+    try {
+      expect(projectRequirementIds(root)).toEqual([])
+      mkdirSync(join(root, '.trace'))
+      const db = new DatabaseSync(join(root, '.trace', 'project.db'))
+      db.exec('CREATE TABLE requirements (id TEXT PRIMARY KEY, status TEXT NOT NULL)')
+      for (const [id, status] of [['REQ-9b1b96', 'accepted'], ['REQ-1e1e84', 'proposed'], ['REQ-dead00', 'obsolete']] as const) db.prepare('INSERT INTO requirements VALUES (?, ?)').run(id, status)
+      db.close()
+      expect(projectRequirementIds(root)).toEqual(['REQ-1e1e84', 'REQ-9b1b96'])
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
   it('say so when there are no rules, leave out empty instructions, and cut very long rules', () => {
