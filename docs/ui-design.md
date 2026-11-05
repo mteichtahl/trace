@@ -581,15 +581,16 @@ The filtering is done by trace's API on every request, using the same project as
 
 Agents and tools (`/agents`) shows every agent and every tool trace has, what each is doing right now, and whether it can work, so a person never has to guess why something is slow or unavailable. It updates live from the same events as the rest of the app.
 
-**Agents.** One row per agent: the six specialists (Verification, Implementation, Analog and mixed-signal, EMC, Rendering, Thermal) and the Worker that makes code changes for them.
+**Agents: a map, not a table.** The page leads with a picture of who is doing what (redesigned November 2026; `web/src/components/agents/agent-map.tsx`, model in `map-model.ts`):
 
-| Column | Shows |
-| --- | --- |
-| Status | Working, Idle, Queued, Waiting on a person, Stuck, or Unavailable, each with its icon and word |
-| Now | What it is doing in plain words and for which project ("Routing the Soil sensor board, stage 1 of 2"), as a Run line with Pause and Cancel for people allowed to |
-| Queue | Jobs waiting for it, oldest first, with Move up |
-| Today | Runs, success rate and median time, from Operations |
-| Instructions | Which layer of its instructions is in force (trace's default, the installation's, the project's), linking to Admin › Agent instructions for admins |
+- **Project filter** beside the title: All projects, or one project (kept in the address as `?project=owner/name`). All projects summarises every project; one project shows only its work.
+- **Agents by state**: how many agents are Working, Waiting on a person, Stuck, Queued and Idle, and how many hand-offs are open.
+- **Projects at a glance** (All projects, more than one project): a tile per project with its agents by state as a bar, its jobs running and queued, its hand-offs, what it has on Next, and *Show only this project*. A project with an agent waiting on a person or stuck is outlined in the accent.
+- **Needs you or stuck**: the questions and stuck reports on Next for the projects in view, as Needs-you cards: answer with the recommendation in one tap, or dismiss a stuck report with a reason. Shown only when there is something.
+- **Who is working with whom**: the map, drawn with React Flow in the Canvas frame. Each agent is a box with its status (icon, border and word), then one line per project it has work on: the project's colour dot and name (or, filtered to one project, what it is doing: Working on, Paused, Queued, Waiting on a person, Stuck), the job, its step ("3/5") and a progress bar (sliding while the size is not known, dashed while queued). Two lines show; more projects are counted in the last line with the queue and today's runs ("+1 more project · Queue 3 · Today 8 of 9 passed"). The project the agent's status comes from is always first. Every line is one line, cut with "…" (the whole line is its tooltip), so nothing spills out of a box. Hand-offs are arrows from asker to asked, one per pair of agents, with how many hand-offs it carries: solid and moving while one is being worked on, dashed while waiting its turn, green when answered in the last hour. Selecting a box lights its arrows and the agents it works with and opens a side sheet with all its work, its hand-offs, and *Open the agent: logs and history*. On a phone the boxes stack as cards, each opening the agent's page.
+- **Hand-offs**, grouped by arrow, then **trace is doing now** (every running, paused and queued job with Pause, Resume, Move up and Cancel), then the tool catalogue.
+
+Project colours (`--project-1` to `--project-6`, light and dark) are by a project's place in the person's list, so a project keeps its colour when the filter changes; they are not status colours. Which layer of an agent's instructions is in force shows on the agent's own page.
 
 Opening an agent shows its recent runs, the questions it is waiting on, the tools it used most, and, for a stuck agent, why it stopped and trace's recommendation for getting it moving.
 
@@ -1049,7 +1050,11 @@ Source: [`KnowledgeGraph.dc.html`](ui/source/KnowledgeGraph.dc.html)
 
 ![Agents and tools](ui/screens/Agents.png)
 
-Source: [`Agents.dc.html`](ui/source/Agents.dc.html)
+![Agents and tools: an agent selected](ui/screens/AgentsSelected.png)
+
+![Agents and tools on a phone](ui/screens/AgentsPhone.png)
+
+Screenshots from mock mode (`npm --prefix web run dev:mock`). The first design is [`Agents.dc.html`](ui/source/Agents.dc.html).
 
 ### Operations (from CloudWatch)
 

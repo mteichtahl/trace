@@ -98,6 +98,8 @@ export interface AgentWork {
   /** the status's line on the project it comes from, with that project */
   says: string
   project: string | null
+  /** that project's repository */
+  repo: string | null
   now: WorkItem[]
   queue: WorkItem[]
   today: { runs: number; succeeded: number; medianS: number | null }
@@ -110,8 +112,8 @@ export function mergeAgents(per: { repo: string; project: string; agents: AgentS
   for (const p of per) {
     const byId = new Map(p.jobs.map((j) => [j.id, j]))
     for (const a of p.agents) {
-      const w = out.get(a.id) ?? { id: a.id, status: 'idle' as const, says: 'Idle', project: null, now: [], queue: [], today: { runs: 0, succeeded: 0, medianS: null } }
-      if (RANK[a.status] < RANK[w.status]) { w.status = a.status; w.says = a.says; w.project = p.project }
+      const w = out.get(a.id) ?? { id: a.id, status: 'idle' as const, says: 'Idle', project: null, repo: null, now: [], queue: [], today: { runs: 0, succeeded: 0, medianS: null } }
+      if (RANK[a.status] < RANK[w.status]) { w.status = a.status; w.says = a.says; w.project = p.project; w.repo = p.repo }
       for (const id of a.now) { const run = byId.get(id); if (run) w.now.push({ repo: p.repo, project: p.project, run }) }
       for (const id of a.queue) { const run = byId.get(id); if (run) w.queue.push({ repo: p.repo, project: p.project, run }) }
       // a median of medians is not a median: the median of the project where it ran most stands for its day
@@ -124,12 +126,15 @@ export function mergeAgents(per: { repo: string; project: string; agents: AgentS
   return out
 }
 
+/** One project's agents, jobs and hand-offs, as jobs.list answers them. */
+export interface ProjectWork { repo: string; project: string; agents: AgentState[]; jobs: RunSummary[]; handoffs: Handoff[]; paused: boolean }
+
 /** What trace is doing and has queued, across the person's projects (jobs.list), and each agent's state. */
 export function useWork() {
   const projects = useProjects()
   const repos = (projects.data ?? []).map((p) => p.repo)
   const lists = useQueries({ queries: repos.map((repo) => ({ ...q('jobs.list', { repo }), retry: false })) })
-  const per = repos.map((repo, i) => ({ repo, project: projectName(repo), agents: lists[i]?.data?.agents ?? [], jobs: lists[i]?.data?.jobs ?? [] }))
+  const per: ProjectWork[] = repos.map((repo, i) => ({ repo, project: projectName(repo), agents: lists[i]?.data?.agents ?? [], jobs: lists[i]?.data?.jobs ?? [], handoffs: lists[i]?.data?.handoffs ?? [], paused: !!(projects.data ?? [])[i]?.paused }))
   const items: WorkItem[] = per.flatMap((p) => p.jobs.map((run) => ({ repo: p.repo, project: p.project, run })))
   // the hand-offs between agents on every project: open ones first, then the newest
   const handoffs: HandoffItem[] = repos.flatMap((repo, i) => (lists[i]?.data?.handoffs ?? []).map((handoff) => ({ repo, project: projectName(repo), handoff })))
@@ -139,6 +144,8 @@ export function useWork() {
   const now = Date.now()
   const at = items.map((x) => { const st = runState(x.run, now); return { ...x, run: lostNow(x.run, st), st } })
   return {
+    /** each project's own agents, jobs and hand-offs, in the order of the person's projects: for the per-project summary and the project filter */
+    per,
     handoffs,
     running: at.filter((x) => x.st === 'running' || x.st === 'silent' || x.st === 'paused').map(({ st: _s, ...x }) => x),
     queued: at.filter((x) => x.st === 'queued').map(({ st: _s, ...x }) => x),

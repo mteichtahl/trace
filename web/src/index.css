@@ -77,3 +77,8 @@ mark.match {
 /* React Flow (traceability view, block diagram): its credit sits quietly on the canvas in both themes */
 .react-flow { --xy-attribution-background-color: transparent; }
 .react-flow__attribution a { color: var(--muted-foreground); }
+
+/* Agents: a running job whose size is not known slides a short bar along its track, so it never looks stopped */
+@keyframes bar-indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
+.bar-indeterminate { width: 30%; animation: bar-indeterminate 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .bar-indeterminate { animation: none; width: 100%; opacity: 0.35; } }

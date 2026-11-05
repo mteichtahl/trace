@@ -18,6 +18,12 @@ const shots = [
   { name: 'focus', path: '/p/acme~soil-sensor/do/schematic-finish' },
   { name: 'home-phone', path: '/', width: 390, height: 844, scale: 2, full: true },
   { name: 'no-access', path: '/no-access' },
+  // agents map (docs/ui-design.md, "Agents and tools")
+  { name: 'agents', path: '/agents', full: true },
+  { name: 'agents-dark', path: '/agents', theme: 'dark', full: true },
+  { name: 'agents-one-project', path: '/agents?project=acme%2Fsoil-sensor', full: true },
+  { name: 'agents-selected', path: '/agents', act: async (p) => { await p.click('[data-id=impl]'); await p.waitForTimeout(800) } },
+  { name: 'agents-phone', path: '/agents', width: 390, height: 844, scale: 2, full: true },
   // progress and logs (docs/progress-and-logs.md)
   { name: 'progress-activity', path: '/', act: async (p) => { await p.click('button[aria-label^="trace is working"]'); await p.waitForTimeout(600) } },
   { name: 'progress-activity-dark', path: '/', theme: 'dark', act: async (p) => { await p.click('button[aria-label^="trace is working"]'); await p.waitForTimeout(600) } },

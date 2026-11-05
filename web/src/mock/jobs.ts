@@ -15,11 +15,19 @@ const JOBS: Record<string, RunSummary[]> = {
     { id: 'job_q1', title: 'Write the test plan for Prove', state: 'queued', agent: 'verify', agentName: 'Verification', position: 1, startsWhen: 'the Verification agent is already working on this project ("Check the ERC")', controls: ['pause', 'cancel'], startedBy: 'marc@example.com', yours: true },
     { id: 'job_s1', title: 'Check stock for 10 boards', state: 'queued', agent: 'parts', agentName: 'Parts', position: 1, startsWhen: 'starts when the power and USB-C input sheet is accepted', controls: ['pause', 'cancel'], startedBy: 'trace' },
     { id: 'job_q2', title: 'Run SPICE corners on the LDO', state: 'queued', agent: 'verify', agentName: 'Verification', position: 2, startsWhen: '"Write the test plan for Prove" is ahead of it in the queue', controls: ['pause', 'move_up', 'cancel'], startedBy: 'priya@example.com' },
-    { id: 'job_v1', title: 'Check the ERC', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running ERC on the power sheet', startedAt: ago(9 * MIN), typicalS: 600, controls: ['pause', 'cancel'], startedBy: 'priya@example.com' },
+    { id: 'job_v1', title: 'Check the ERC', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running ERC on the power sheet', stepIndex: 2, stepCount: 5, startedAt: ago(9 * MIN), typicalS: 600, controls: ['pause', 'cancel'], startedBy: 'priya@example.com' },
+    { id: 'job_d1', title: 'Update the user guide with the new renders', state: 'running', agent: 'docs', agentName: 'Documentation', step: 'Writing the assembly chapter', stepIndex: 3, stepCount: 4, startedAt: ago(12 * MIN), typicalS: 1500, controls: ['pause', 'cancel'], startedBy: 'trace' },
     { id: 'job_h1', title: 'Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C with a 500 mA load?', state: 'queued', agent: 'ams', agentName: 'Analog and mixed-signal', position: 1, startsWhen: 'starts when it is its turn', controls: ['pause', 'cancel'], startedBy: 'the Thermal specialist (job job_th1)', handoff: { id: 'ho_mock_1', from: 'thermal', fromName: 'Thermal' } },
   ],
   'acme/panel-controller': [
     { id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', agent: 'impl', agentName: 'Implementation', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45, controls: ['cancel'] },
+    { id: 'job_w1', title: 'Asked by the Implementation specialist: Move the LED driver pins to bank 2', state: 'running', agent: 'worker', agentName: 'Worker', step: 'Editing the pin constraints', stepIndex: 1, stepCount: 3, startedAt: ago(2 * MIN), typicalS: 300, controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_2', from: 'impl', fromName: 'Implementation' } },
+    { id: 'job_v2', title: 'Simulate the LED current limit', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running the transient corners', startedAt: ago(5 * MIN), typicalS: 900, controls: ['pause', 'cancel'], startedBy: 'trace' },
+    { id: 'job_e1', title: 'Asked by the Implementation specialist: Check the antenna keep-out once routing is done', state: 'queued', agent: 'emc', agentName: 'EMC', position: 1, startsWhen: 'starts when the routing job ends', controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_3', from: 'impl', fromName: 'Implementation' } },
+  ],
+  'acme/motor-driver': [
+    { id: 'job_a1', title: 'Size the current-sense amplifier', state: 'paused', agent: 'ams', agentName: 'Analog and mixed-signal', stepIndex: 4, stepCount: 6, pausedBy: 'trace (waiting on your answer)', controls: ['resume', 'cancel'], startedBy: 'trace' },
+    { id: 'job_v3', title: 'Write the gate-drive test plan', state: 'queued', agent: 'verify', agentName: 'Verification', position: 1, startsWhen: 'starts when the architecture gate is signed', controls: ['pause', 'cancel'], startedBy: 'trace' },
   ],
 }
 
@@ -43,20 +51,45 @@ const HANDOFFS: Record<string, Handoff[]> = {
   ],
 }
 
+HANDOFFS['acme/panel-controller'] = [
+  {
+    id: 'ho_mock_2', from: 'impl', fromName: 'Implementation', to: 'worker', toName: 'Worker', question: 'Move the LED driver pins to bank 2, so they share the 3.3 V bank with the display.',
+    blocks: 'the routing of the LED driver', evidence: [], acceptance: ['the constraints file changed', 'the timing check still passes'],
+    summary: 'Implementation → Worker: Move the LED driver pins to bank 2', state: 'running', says: 'Being worked on by the Worker.', createdAt: ago(3 * MIN), jobId: 'job_w1', workerJobId: 'job_w1', fromWorkerJobId: 'job_t1',
+  },
+  {
+    id: 'ho_mock_3', from: 'impl', fromName: 'Implementation', to: 'emc', toName: 'EMC', question: 'Check the antenna keep-out once routing is done.',
+    blocks: 'the layout review', evidence: [], acceptance: ['the keep-out clear of copper, or the parts that intrude'],
+    summary: 'Implementation → EMC: Check the antenna keep-out once routing is done', state: 'queued', says: 'Queued for the EMC specialist: it starts when the routing job ends.', createdAt: ago(8 * MIN), jobId: 'job_e1', workerJobId: 'job_e1', fromWorkerJobId: 'job_t1',
+  },
+]
+HANDOFFS['acme/motor-driver'] = [
+  {
+    id: 'ho_mock_4', from: 'thermal', fromName: 'Thermal', to: 'ams', toName: 'Analog and mixed-signal', question: 'How much does the current-sense amplifier dissipate at full load?',
+    blocks: 'the heat model of the driver stage', evidence: [], acceptance: ['the dissipation in watts at 10 A'],
+    summary: 'Thermal → Analog and mixed-signal: How much does the current-sense amplifier dissipate at full load?', state: 'requested', says: 'Waiting for the Analog and mixed-signal specialist, which is waiting on a person.', createdAt: ago(20 * MIN), fromWorkerJobId: 'job_th2',
+  },
+]
+
 /** The project's hand-offs as journey.get carries them. */
 export const handoffsOf = (repo: string): Handoff[] => HANDOFFS[repo] ?? []
 
-const AGENT_IDS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'worker'] as const
-const NAMES: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal', worker: 'Worker' }
+const AGENT_IDS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'docs', 'worker'] as const
+const NAMES: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal', docs: 'Documentation', worker: 'Worker' }
+
+/** each agent's last 24 hours on the busiest project: runs, and how many passed */
+const TODAY: Record<string, [number, number]> = { verify: [9, 8], impl: [6, 6], worker: [11, 11], ams: [3, 3], emc: [2, 2], render: [1, 1], docs: [4, 4] }
 
 function agentsOf(repo: string, jobs: RunSummary[]): AgentState[] {
   return AGENT_IDS.map((id) => {
-    const now = jobs.filter((j) => j.agent === id && j.state === 'running')
+    const now = jobs.filter((j) => j.agent === id && (j.state === 'running' || j.state === 'paused'))
     const queue = jobs.filter((j) => j.agent === id && j.state === 'queued').sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
     const stuck = repo === 'acme/motor-driver' && id === 'thermal'
-    const status: AgentState['status'] = stuck ? 'stuck' : now.length ? 'working' : queue.length ? 'queued' : 'idle'
-    const says = stuck ? 'Stuck: No ambient temperature is in the requirements.' : now.length ? `Working on ${now.map((j) => `"${j.title}"`).join(', ')}` : queue.length ? `${queue.length} queued` : 'Idle'
-    return { id, name: NAMES[id] ?? id, status, says, now: now.map((j) => j.id), queue: queue.map((j) => j.id), today: { runs: id === 'verify' ? 3 : 0, succeeded: id === 'verify' ? 2 : 0, medianS: id === 'verify' ? 540 : null } }
+    const waiting = repo === 'acme/motor-driver' && id === 'ams'
+    const status: AgentState['status'] = stuck ? 'stuck' : waiting ? 'waiting_person' : now.length ? 'working' : queue.length ? 'queued' : 'idle'
+    const says = stuck ? 'Stuck: No ambient temperature is in the requirements.' : waiting ? 'Waiting on a person: Which current-sense amplifier should the driver use?' : now.length ? `Working on ${now.map((j) => `"${j.title}"`).join(', ')}` : queue.length ? `${queue.length} queued` : 'Idle'
+    const runs = TODAY[id] ?? [0, 0]
+    return { id, name: NAMES[id] ?? id, status, says, now: now.map((j) => j.id), queue: queue.map((j) => j.id), today: { runs: repo === 'acme/soil-sensor' ? runs[0] : 0, succeeded: repo === 'acme/soil-sensor' ? runs[1] : 0, medianS: runs[0] ? 540 : null } }
   })
 }
 
