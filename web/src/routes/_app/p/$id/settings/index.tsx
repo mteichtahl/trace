@@ -66,7 +66,7 @@ function Settings() {
   if (!s.data || !j.data) return <TabSkeleton loading={s.isLoading || j.isLoading} />
   const jm = j.data as JourneyMore
   const icon: ProjectIcon = jm.icon ?? { glyph: 'board', colour: 'blue' }
-  const build = jm.build ?? { quantity: 10, unit_cost: null, budget: null }
+  const build = jm.build ?? { quantity: 10, unit_cost: null, budget: null, hardware: false }
   const later = new Set(jm.later ?? [])
 
   return (
@@ -136,6 +136,13 @@ function Settings() {
           <NumberSetting label="Boards per build" value={build.quantity} disabled={!admin} saving={pending === 'quantity'} saved={saved === 'quantity'} onSave={(x) => save('quantity', { build: { quantity: Math.round(x) } })} min={1} />
           <NumberSetting label="Budget per revision (US$)" value={build.budget ?? undefined} placeholder="No budget" disabled={!admin} saving={pending === 'budget'} saved={saved === 'budget'} onSave={(x) => save('budget', { build: { budget: x } })} min={0} />
           <NumberSetting label="Target unit cost (US$)" value={build.unit_cost ?? undefined} placeholder="None" disabled={!admin} saving={pending === 'unit_cost'} saved={saved === 'unit_cost'} onSave={(x) => save('unit_cost', { build: { unit_cost: x } })} min={0} />
+          <div className="flex items-start gap-3 border-t pt-4 sm:col-span-2">
+            <span className="flex-1">
+              <span className="block text-sm font-medium" id="hw-label">Include panel and mounting hardware</span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">trace also makes a separate list of the case parts, screws and panel parts (knobs, nuts, standoffs). It is kept apart from the parts list and is not sent to JLCPCB for assembly.</span>
+            </span>
+            <Switch aria-labelledby="hw-label" checked={build.hardware === true} disabled={!admin || pending === 'hardware'} onCheckedChange={(on) => save('hardware', { build: { hardware: on } })} />
+          </div>
         </div>
       </Section>
 
@@ -160,7 +167,7 @@ function Settings() {
   )
 }
 
-type Field = 'name' | 'description' | 'icon' | 'quantity' | 'budget' | 'unit_cost' | 'later'
+type Field = 'name' | 'description' | 'icon' | 'quantity' | 'budget' | 'unit_cost' | 'hardware' | 'later'
 
 function Status({ saving, saved }: { saving?: boolean; saved?: boolean }) {
   if (saving) return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />Saving</span>
