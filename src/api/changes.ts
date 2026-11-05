@@ -152,7 +152,15 @@ export interface ChangeDetail extends ChangeSummary {
    * no check failed, or one failed on the work itself.
    */
   infra_failed?: InfraFailure
+  /**
+   * A discarded change: who discarded it, when, their reason and what happened to the jobs that were working on its
+   * branch (stopped, or told apart: change.discard). Absent: not discarded, or discarded before this was kept.
+   */
+  discarded?: DiscardView
 }
+
+/** Who discarded a change, when, why, and the jobs on its branch it stopped (ChangeDetail.discarded). */
+export interface DiscardView { by: string; at: string; reason: string; jobs: string[] }
 
 /** Checks that failed for a reason outside the work (ChangeDetail.infra_failed). */
 export interface InfraFailure { checks: { id: string; name: string }[]; why: string }

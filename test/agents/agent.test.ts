@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { discardComment } from '../../src/core/discarded.js'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -481,6 +482,48 @@ describe('job runner', () => {
       expect(taskPrompt(task, cfgOf(), branch)).toMatch(/There is no issue to comment on/)
       expect(taskPrompt({ ...task, issue: 12 }, cfgOf(), branch)).toMatch(/Finish with a comment on #12/)
     } finally { h.cleanup() }
+  })
+
+  // test-esp32 log #75: a job pushed to the branch of change #12 after it was discarded, and #12 came back as #13
+  it('works on a new branch, told the person\'s reason, when the branch it was given belongs to a discarded change', async () => {
+    const closed = (n: number, ref: string) => [{ number: n, state: 'closed', merged_at: null, head: { ref, repo: { full_name: 'o/r' } } }]
+    const f = fakeGithub({
+      'repos.get': { default_branch: 'main' },
+      'pulls.list': (a: Record<string, unknown>) => (a.state !== 'all' ? [] : a.head === 'o:claude/task-x' ? closed(12, 'claude/task-x') : a.head === 'o:claude/task-x-after-12' ? closed(15, 'claude/task-x-after-12') : []),
+      'issues.listComments': (a: Record<string, unknown>) => (a.issue_number === 12 ? [{ body: discardComment({ by: 'Ada Lovelace', quoted: '> Wrong regulator.' }) }]
+        : a.issue_number === 15 ? [{ body: discardComment({ by: 'Ada Lovelace', quoted: '> Still the wrong regulator: use the LDO.' }) }] : []),
+    })
+    const h = harness({ github: () => f.gh })
+    try {
+      const task = { kind: 'task' as const, repository: 'o/r', request: 'Carry on with the answer', requestedBy: 'marc@example.com', branch: 'claude/task-x', resume: { job: 'job-p', by: 'marc' } }
+      let branch = ''
+      await createRunner(h.d)(task, { ...h.ctx, branch: (b: string) => { branch = b } })
+      // past #12 and its follow-up #15, both discarded: a new branch, from the default branch, without their commits
+      expect(branch).toBe('claude/task-x-after-15')
+      const flat = h.cmds.map((c) => c.args.join(' '))
+      expect(flat).not.toContain('fetch --depth=300 origin +refs/heads/claude/task-x:refs/remotes/origin/claude/task-x')
+      expect(flat).toContain('checkout -B claude/task-x-after-15 origin/main')
+      const p = h.claudeCalls.at(-1)!.prompt
+      expect(p).toMatch(/THIS WORK FOLLOWS A DISCARDED CHANGE\. Ada Lovelace discarded change #15 \(branch `claude\/task-x-after-12`\)/)
+      expect(p).toContain('> Still the wrong regulator: use the LDO.')
+      expect(p).toContain('your work goes on `claude/task-x-after-15`')
+      // not a resume of the paused work: that was on the discarded branch
+      expect(p).not.toMatch(/CARRIES ON A PAUSED ONE/)
+      expect(h.lines.join('\n')).toMatch(/claude\/task-x belongs to change #12, which Ada Lovelace discarded: working on claude\/task-x-after-15 instead/)
+    } finally { h.cleanup() }
+  })
+
+  it('works on the branch it was given when its change is open, merged, or GitHub cannot say', async () => {
+    for (const list of [[{ number: 12, state: 'open', head: { ref: 'claude/task-x' } }], [{ number: 12, state: 'closed', merged_at: '2026-11-05T10:00:00Z', head: { ref: 'claude/task-x' } }], new Error('GitHub 502')]) {
+      const f = fakeGithub({ 'repos.get': { default_branch: 'main' }, 'pulls.list': (a: Record<string, unknown>) => (a.state === 'all' ? list : []), 'issues.listComments': [{ body: discardComment({ by: 'A', quoted: '> no' }) }] })
+      const h = harness({ github: () => f.gh })
+      try {
+        let branch = ''
+        await createRunner(h.d)({ kind: 'task', repository: 'o/r', request: 'Carry on', requestedBy: 'marc@example.com', branch: 'claude/task-x' }, { ...h.ctx, branch: (b: string) => { branch = b } })
+        expect(branch).toBe('claude/task-x')
+        expect(h.claudeCalls.at(-1)!.prompt).not.toMatch(/DISCARDED CHANGE/)
+      } finally { h.cleanup() }
+    }
   })
 
   it('sweeps: runs pick per repository and starts one job per claimed item', async () => {

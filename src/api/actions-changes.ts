@@ -28,8 +28,12 @@
  *   change.ask      write   { repo, number, note } → { job_id }: comments the note on it as a quote, starts a revision
  *                           job with the same specialist on the same branch (so the same pull request updates), and
  *                           records change.asked (and a rework, sent_back: src/api/process-metrics.ts)
- *   change.discard  write   { repo, number, reason } → { closed }: closes it, then comments the reason (a comment that
- *                           fails leaves it closed), records change.discarded
+ *   change.discard  write   { repo, number, reason } → { closed, jobs }: closes it, stops the jobs working on its
+ *                           branch (queued or running: cancelled; paused: never resumed), then comments the reason
+ *                           with what was stopped and trace's discard mark (a comment that fails leaves it closed),
+ *                           records change.discarded with its branch, head, reason and the jobs. The comment retires
+ *                           the branch: no job reopens it as a change (src/core/discarded.ts, test-esp32 log #75).
+ *                           `jobs`: what happened to each job, in words, as the change's page says it (discarded)
  *
  * Access is checked first (perform), as for every action: read = assigned to the project; write = the Contributor
  * part (admins are contributors everywhere). A reviewer reads changes but cannot accept, ask or discard, and a
@@ -57,7 +61,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { isAdmin, standing } from '../core/access.js'
 import { readSettings, resolve } from '../core/config.js'
-import { type JobRow, loadJobs } from '../core/job-index.js'
+import { type JobRow, indexedHandle, isLive, loadJobs, putControl } from '../core/job-index.js'
+import { discardComment } from '../core/discarded.js'
 import { STAGE_NAMES, decide, loadJourney, mergeAgentFacts } from '../core/journey.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { fence } from '../agents/specialist.js'
@@ -65,7 +70,7 @@ import { Composer, NO_LAYERS } from '../prompts/resolve.js'
 import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
-  CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
+  CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type DiscardView, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
   editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, traceChanges,
   jobWorking, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
@@ -82,6 +87,7 @@ import { backToDefine, changedRequirements, pastDefine } from './pending-changes
 import { hasTable } from './record-read.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
+import { type RecordChanges, betterTitle, contentBullets, recordChanges } from '../core/change-contents.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -271,12 +277,13 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sha = pull.head.sha
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   // everything else is read in parallel; a part GitHub will not give (a token that cannot read checks) is left out
-  const [status, files, commits, runs, write, { given, answers }] = await Promise.all([
+  const [status, files, commits, runs, write, { given, answers }, discarded] = await Promise.all([
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
     cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha, { jobs: true }), DETAIL_STATUS_TTL_MS).catch(() => null), writes(ctx, repo),
     projectReview(ctx, repo, found.rows),
+    pull.state === 'closed' ? discardOf(ctx, repo, number) : Promise.resolve(null),
   ])
   const hold = rule.hold
   // where it sits in a stack: its base read now (accepting decides on it), the changes above it from the kept list
@@ -307,17 +314,22 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const requirements = named.ids
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   // an accepted requirement its database edits: said before it is accepted (src/api/requirement-edits.ts)
-  const edits = pull.state === 'open' && files.some((f) => f.path === PROJECT_DB_PATH)
-    ? await cached(keep, repo, `requirement-edits:${number}:${sha}`, () => requirementEditsOf(ctx, gh, repo, pull, found.rows, stack.stacked?.base ?? null)).catch((e: unknown) => {
+  // and the intent statements and requirements it adds or changes, said in its summary (log #133)
+  const read = pull.state === 'open' && files.some((f) => f.path === PROJECT_DB_PATH)
+    ? await cached(keep, repo, `record-edits:${number}:${sha}`, () => recordEditsOf(ctx, gh, repo, pull, found.rows, stack.stacked?.base ?? null)).catch((e: unknown) => {
       logLine(ctx, { warning: 'change.get: the requirements it edits could not be read', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
       return null
     })
     : null
+  const edits = read?.edits ?? null
   return {
     ...sum,
+    // named by the work in it, not by the record it started as (log #144)
+    title: betterTitle(sum.title, commits),
     verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
-    summary: summaryBullets({ jobSummary: job.summary, body: pull.body, commits }),
+    // what it holds first: design files, and what it adds to the intent and the requirements (log #144, #133)
+    summary: [...contentBullets({ paths: files.map((f) => f.path), record: read?.record ?? null }), ...summaryBullets({ jobSummary: job.summary, body: pull.body, commits })].slice(0, 12),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
     ...(named.unknown.length ? { requirements_unknown: named.unknown } : {}),
@@ -328,6 +340,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     ready_since: readySince(runs, pull.created_at),
     rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
     ...(infra ? { infra_failed: infra } : {}),
+    ...(discarded ? { discarded } : {}),
   }
 }
 
@@ -365,27 +378,35 @@ async function failureText(ctx: Context, gh: GitHubApi, repo: string, id: string
 }
 
 /**
- * The accepted requirements change `pull`'s database edits, against the design as it stands (the default branch's
- * database, with people's decisions from the journey record), and what on its branch asked for that. Null when it
- * edits none, or carries no database.
+ * What `pull`'s database edits. `edits`: the accepted requirements it changes, against the design as it stands (the
+ * default branch's database, with people's decisions from the journey record), and what on its branch asked for that
+ * (null when it edits none). `record`: the intent statements and requirements it adds or changes, against the change
+ * it is stacked on when it is (its own review shows its own edits only), else the design. Null when it carries no
+ * database.
  */
-async function requirementEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullDetail, jobs: readonly JobRow[], base: string | null): Promise<RequirementEditsView | null> {
+async function recordEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullDetail, jobs: readonly JobRow[], base: string | null): Promise<{ edits: RequirementEditsView | null; record: RecordChanges } | null> {
   const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, pull.head.sha))
+  // a stacked change is compared with the change it builds on; that copy unreadable, with the design
+  const under = base ? tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, base).catch(() => null)) : null
   try {
     if (!existsSync(t.db)) return null
     const head = new DatabaseSync(t.db, { readOnly: true })
+    const below = under && existsSync(under.db) ? new DatabaseSync(under.db, { readOnly: true }) : null
     try {
       return await withRecordDb(ctx, repo, (design) => {
+        const record = recordChanges(below ?? design, head)
         const edits = requirementEdits(design, head)
-        if (!edits.length) return null
+        if (!edits.length) return { edits: null, record }
         const r = loadJourney(design)
-        return editsView(edits, r ? pastDefine(r) : false, requirementAsked(jobs, [pull.head.ref, ...(base ? [base] : [])], r))
+        return { edits: editsView(edits, r ? pastDefine(r) : false, requirementAsked(jobs, [pull.head.ref, ...(base ? [base] : [])], r)), record }
       })
     } finally {
       head.close()
+      below?.close()
     }
   } finally {
     t.cleanup()
+    under?.cleanup()
   }
 }
 
@@ -600,6 +621,58 @@ export async function publicName(ctx: Context): Promise<string> {
   const name = u?.name?.trim()
   if (name) return neutralise(name.replace(/\s+/g, ' ').slice(0, 80))
   return `a person on the project (${initials(p.email ?? p.sub)})`
+}
+
+/** The branch a job works on: its row's once it started, else the one its request names (a queued carry-on). */
+function branchOf(r: JobRow): string | null {
+  if (r.branch) return r.branch
+  try {
+    const b = (JSON.parse(r.payload ?? 'null') as { branch?: unknown } | null)?.branch
+    return typeof b === 'string' ? b : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stop the jobs on a discarded change's branch (test-esp32 log #75: a Verification job pushed to it 15 minutes after
+ * the discard): a queued or running one is cancelled through the worker, a paused one is marked never to be resumed
+ * (as Cancel on a paused job does). A delegated worker goes with its specialist's job; a job trace lost contact with
+ * has nothing to stop. What happened to each, in words for the change's page and its comment. A job that cannot be
+ * stopped is said so: whatever it pushes, trace opens no change from the branch again (src/harness/prs.ts).
+ */
+async function stopBranchJobs(ctx: Context, repo: string, branch: string, by: string): Promise<string[]> {
+  const at = Date.now() / 1000
+  const rows = (await jobRows(ctx, repo).catch(() => [] as JobRow[]))
+    .filter((r) => !r.parentJob && branchOf(r) === branch && (r.state === 'queued' || r.state === 'paused' || (r.state === 'running' && isLive(r, at))))
+  if (!rows.length) return []
+  const api = await ctx.deps.jobs()
+  const words: string[] = []
+  for (const r of rows) {
+    const who = `The ${(SPECIALIST_WORDS as Readonly<Record<string, string>>)[r.agent ?? ''] ?? AGENT_WORDS[r.agent ?? ''] ?? 'trace'} job`
+    if (r.state === 'paused') {
+      const ok = await writeJourney(ctx, repo, (db) => { putControl(db, { job: r.id, by, at, discarded: true }); return { result: true } }).then(() => true, () => false)
+      words.push(ok ? `${who} paused on it will not be resumed.` : `${who} paused on it could not be marked: do not resume it.`)
+      continue
+    }
+    const what = r.state === 'queued' ? 'queued for it' : 'that was working on it'
+    const res = api.cancel ? await api.cancel(indexedHandle(repo, r.session, r.id), `the change it works on was discarded by ${by}`).catch(() => null) : null
+    words.push(res?.ok ? `${who} ${what} was stopped.` : `${who} ${what} could not be stopped; trace will not open this branch as a change again, whatever it pushes.`)
+  }
+  return words
+}
+
+/** A discarded change's discard, from the decisions log (change.discard records it); null when none is kept. */
+async function discardOf(ctx: Context, repo: string, number: number): Promise<DiscardView | null> {
+  const r = await withJourneyDb(ctx, repo, (db) => loadJourney(db)).catch(() => null)
+  const d = r?.decisions.find((x) => x.kind === 'change.discarded' && x.ref === String(number))
+  if (!d) return null
+  const detail = (d.detail ?? {}) as { reason?: unknown; jobs?: unknown }
+  return {
+    by: d.by ?? 'a person', at: new Date(d.at * 1000).toISOString(),
+    reason: typeof detail.reason === 'string' ? detail.reason : d.summary.replace(/^.*?discarded "[^"]*": /, ''),
+    jobs: Array.isArray(detail.jobs) ? detail.jobs.filter((j): j is string => typeof j === 'string') : [],
+  }
 }
 
 /** Record a decision about a change in the journey's log (a project without a journey yet keeps no log: skipped). */
@@ -840,14 +913,17 @@ export const CHANGE_ACTIONS = {
     } finally {
       bust(ctx, repo)
     }
-    await gh.comment(repo, number, `Discarded by ${await publicName(ctx)}:\n\n${quote(reason)}`).catch((e: unknown) => {
+    // the jobs still at its branch would push to it again (log #75): stopped now, where trace can reach them
+    const jobs = edit ? [] : await stopBranchJobs(ctx, repo, pull.head.ref, by)
+    // the comment (with its mark) is what retires the branch for the harness and the jobs (src/core/discarded.ts)
+    await gh.comment(repo, number, discardComment({ by: await publicName(ctx), quoted: quote(reason), stopped: jobs })).catch((e: unknown) => {
       logLine(ctx, { warning: 'change.discard: closed, but the reason was not posted', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
     })
     if (edit) await editStore(ctx).remove(repo, edit.branch).catch(() => undefined)
     await record(ctx, repo, {
       kind: 'change.discarded', ref: String(number),
-      summary: `${by} discarded "${pull.title}": ${reason.replace(/\s+/g, ' ').slice(0, 300)}`, detail: { number, branch: pull.head.ref },
+      summary: `${by} discarded "${pull.title}": ${reason.replace(/\s+/g, ' ').slice(0, 300)}`, detail: { number, branch: pull.head.ref, head: pull.head.sha, reason, by, jobs },
     })
-    return { closed: true as const }
+    return { closed: true as const, jobs }
   }),
 }

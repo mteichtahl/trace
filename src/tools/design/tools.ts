@@ -110,7 +110,14 @@ export const intentTool = defineTool({
 
 // ------------------------------------------------------------------ design.architecture
 
-const Part = z.object({ mpn: z.string().min(1).max(80), role: z.string().max(120).optional(), key: z.boolean().optional().describe('a key part: its stock is checked at the architecture gate') }).strict()
+const Part = z.object({
+  mpn: z.string().min(1).max(80), role: z.string().max(120).optional(), key: z.boolean().optional().describe('a key part: its stock is checked at the architecture gate'),
+  off_board: z.boolean().optional().describe('it sits off the board: a display, sensor module or battery on a header, connector or cable. Always a key part, and give size_mm: the case must hold it'),
+  size_mm: z.array(z.number().positive().max(2000)).length(3).optional().describe('its outline in millimetres (x, y, z), from its datasheet'),
+}).strict()
+  // a part off the board is one the design depends on: a key part (test-esp32 #136: the display module was never
+  // chosen, only the header it plugs into)
+  .transform((p) => (p.off_board ? { ...p, key: true } : p))
 const Block = z.object({
   id: Id, name: z.string().min(1).max(80), role: z.string().max(300).optional(),
   parts: z.array(Part).max(20).optional(),
@@ -121,7 +128,7 @@ const Block = z.object({
 
 export const architectureTool = defineTool({
   name: 'design.architecture',
-  description: 'The architecture record in the project database, for Architecture choice: options compared (set_option: name, summary, recommended with why and what it gives up, risks), the criteria to score them on with weights (set_criteria), trace\'s score of each option on each criterion with a one-line reason (set_scores, 1 worst to 5 best), the blocks of an option (set_blocks: name, role, key part numbers, the requirements each serves, place on the diagram) and what flows between them (set_connections: a rail and its voltage, a bus, an RF path), list. Propose at least two options. A person fixes the criteria and chooses; never record a choice yourself.',
+  description: 'The architecture record in the project database, for Architecture choice: options compared (set_option: name, summary, recommended with why and what it gives up, risks), the criteria to score them on with weights (set_criteria), trace\'s score of each option on each criterion with a one-line reason (set_scores, 1 worst to 5 best), the blocks of an option (set_blocks: name, role, key part numbers, the requirements each serves, place on the diagram; a part a requirement depends on that sits off the board, such as a display module on a header, is a part of its block with off_board and its size_mm, not only the header) and what flows between them (set_connections: a rail and its voltage, a bus, an RF path), list. Propose at least two options. A person fixes the criteria and chooses; never record a choice yourself.',
   input: z.object({
     action: z.enum(['set_option', 'withdraw_option', 'set_criteria', 'set_scores', 'set_blocks', 'set_connections', 'list']),
     option: z.object({

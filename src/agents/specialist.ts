@@ -116,7 +116,9 @@ export type SpecialistJob =
       /** the open change its new branch started from: a stacked change (docs/stacked-changes.md) */
       stackedOn?: string | undefined
       /** it carries on a paused job whose conversation was not kept: what was done (src/agents/runtime/job.ts) */
-      resumed?: Resumed | undefined }
+      resumed?: Resumed | undefined
+      /** the change a person discarded on the branch it would have used: it works on a new one (src/core/discarded.ts) */
+      afterDiscard?: { number: number; branch: string; by: string; reason: string } | undefined }
   /** Another specialist asked for it (journey.handoff): the recorded request, which it answers with journey.handoff_answer. */
   | { kind: 'handoff'; handoff: Handoff; branch: string; stackedOn?: string | undefined }
   /** `tracectl agent prompt`: no job, for review. */
@@ -188,6 +190,10 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
         asked_on: job.issue ? p.text('specialist.job.task.issue', { issue: job.issue }) : '',
       })
       if (job.stackedOn) p.add('specialist.job.stacked', { base: job.stackedOn, default_branch: cfg.branch })
+      if (job.afterDiscard) {
+        const d = job.afterDiscard
+        p.add('specialist.job.after-discard', { number: d.number, old_branch: d.branch, branch: job.branch, by: d.by, reason: quoted(d.reason || '(no reason could be read)') })
+      }
       if (job.resumed) p.add('specialist.job.resumed', { paused_by: job.resumed.pausedBy, paused_at: job.resumed.pausedAt, commits: job.resumed.commits || '(none)', last_step: job.resumed.lastStep || '(not recorded)' })
       return
     case 'handoff': {

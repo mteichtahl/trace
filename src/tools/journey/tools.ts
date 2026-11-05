@@ -44,7 +44,7 @@ import { existsSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import {
-  AgentFactError, AgentFactsStore, AgentOptionSchema, type Asker, addAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts, projectsBackend,
+  AgentFactError, AgentFactsStore, AgentOptionSchema, type Asker, askAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts, projectsBackend,
   projectsFromEnv, resolveStuck,
 } from '../../core/agent-facts.js'
 import { type AgentFacts, EvidenceSchema, type JourneyRecord, JourneyError, journeyView, loadJourney, mergeAgentFacts } from '../../core/journey.js'
@@ -197,7 +197,7 @@ export const JOURNEY_WRITE_FILTER = { source: ['aws.s3'], 'detail-type': ['Objec
 
 export const ask = defineTool({
   name: 'journey.ask',
-  description: 'Ask a person on the project a question you cannot answer from the record, the knowledge base or the datasheets, so it reaches them on Home, in the inbox and in chat (not only in an issue). Name what it blocks; offer 2 to 6 options with exactly one recommended and a reason for every option; cite what you already read. Ask one person by their Cognito sub when you know it, else the contributors (default) or the admins. Returns the question id; with wait_minutes, waits for the answer and returns it (or when trace will look next).',
+  description: 'Ask a person on the project a question you cannot answer from the record, the knowledge base or the datasheets, so it reaches them on Home, in the inbox and in chat (not only in an issue). Name what it blocks; offer 2 to 6 options with exactly one recommended and a reason for every option; cite what you already read. An option that waives findings or criteria carries waives (each by id, with the risk and severity): the person choosing it records the waiver. Ask one person by their Cognito sub when you know it, else the contributors (default) or the admins. Asking again what an open question asks (or naming it by id) returns that question instead of a second one. Returns the question id; with wait_minutes, waits for the answer and returns it (or when trace will look next).',
   input: z.object({
     text: z.string().min(10).max(2000).describe('the question, in one or two plain sentences'),
     blocks: z.string().max(500).optional().describe('what it blocks, in words ("sizing the regulator"); leave out when it blocks nothing'),
@@ -212,13 +212,15 @@ export const ask = defineTool({
     const s = journeyScope()
     checkEvidence(a.sources)
     const r = await record(s)
-    const { result: id } = await s.facts.update((db) => ({
-      result: addAgentQuestion(db, s.asker, { text: a.text, blocks: a.blocks, options: a.options, sources: a.sources, askedOfSub: a.sub ?? null, askedPart: a.ask }, r),
-    }))
+    const { result: { id, repeat } } = await s.facts.update((db) => {
+      const out = askAgentQuestion(db, s.asker, { text: a.text, blocks: a.blocks, options: a.options, sources: a.sources, askedOfSub: a.sub ?? null, askedPart: a.ask }, r)
+      return { result: out, changed: !out.repeat }
+    })
     // asked again what a person already answered: a rework (src/core/process-time.ts asksAgain)
-    if (asksAgain(r, a.blocks)) { try { recordProcessMetric('trace.project.rework', 1, { cause: 'asked_again' }, s.repository) } catch { /* never fails the ask */ } }
-    const asked = { question_id: id, for: a.sub ? 'one person' : `the ${a.ask}` }
-    if (!a.wait_minutes) return { ...asked, answered: null, next: `Asked. Read the answer later with journey.status { question: "${id}" }, or ask again with wait_minutes.` }
+    if (!repeat && asksAgain(r, a.blocks)) { try { recordProcessMetric('trace.project.rework', 1, { cause: 'asked_again' }, s.repository) } catch { /* never fails the ask */ } }
+    const asked = { question_id: id, for: a.sub ? 'one person' : `the ${a.ask}`, ...(repeat ? { already_asked: true } : {}) }
+    const said = repeat ? `Not asked again: question ${id} already asks this and is still open.` : 'Asked.'
+    if (!a.wait_minutes) return { ...asked, answered: null, next: `${said} Read the answer later with journey.status { question: "${id}" }, or ask again with wait_minutes.` }
     const out = await waitForAnswer(s, id, a.wait_minutes * 60_000, { events: eventsOf(process.env, s.repository) })
     return { ...asked, ...out }
   }),

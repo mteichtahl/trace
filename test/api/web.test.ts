@@ -14,6 +14,7 @@ import { kindOf } from '../../src/api/actions-files.js'
 import { neighbourhood, type GraphLink, type GraphNode } from '../../src/api/actions-graph.js'
 import { listen } from '../../src/api/server.js'
 import { templateChecks } from '../../src/api/actions-templates.js'
+import { optionWaiverWords } from '../../src/api/actions-skills.js'
 import type { TemplateDoc } from '../../src/core/templates.js'
 import { AccessDenied, assign, standing } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -311,6 +312,24 @@ describe('the agents\' facts in the journey', () => {
     await expect(run(USER, 'question.answer', { repo: 'acme/other', question: 'aqnothing', option: 'a' })).rejects.toThrow(/no question/)
     // the API never writes the agents' facts
     expect((await facts().read((db) => loadAgentFacts(db))).result.questions).toHaveLength(3)
+  })
+
+  // test-esp32 #142: "Waive the Q1, R4, R5 findings" was chosen, and the person was then asked to waive them by hand
+  it('answering with an option that waives records the waivers in the person\'s name and says so; the option says it before', async () => {
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const found = ['Q1', 'R4', 'R5'].map((x) => `layout.fit@urn:trace:case-finding:${x}`)
+    const waives = { targets: found.map((id) => ({ kind: 'finding' as const, id })), risk: 'A part could touch the display glass', severity: 'cosmetic' as const, caught_where: 'Bring up: fit the lid', scope: 'this revision only' }
+    const { result: q } = await facts().update((db) => ({
+      result: addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: null }, { text: 'Three parts sit under the display window: waive the fit findings?', blocks: 'layout.fit', options: [
+        { id: 'waive', label: 'Waive the Q1, R4, R5 findings', recommended: true, why: 'The module glass covers the window; the fit engine does not model it.', waives },
+        { id: 'model', label: 'Model the module under the lid', why: 'Measured, not waived.' },
+      ] }, r),
+    }))
+    expect(optionWaiverWords(waives)).toBe('Records a waiver in your name: 3 findings, rated cosmetic, this revision only. Risk: A part could touch the display glass. Checked instead: Bring up: fit the lid.')
+    const out = await run(USER, 'question.answer', { repo: 'acme/other', question: q, option: 'waive' }) as { summary: string; question: { waivers: string[] } }
+    expect(out.summary).toBe('Answered. 3 waivers are recorded in your name. The agent carries on.')
+    const rec = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result!
+    expect(rec.waivers.filter((w) => out.question.waivers.includes(w.id)).map((w) => [w.target, w.by])).toEqual(found.map((f) => [f, USER.email]))
   })
 
   it('answering the question of a job that has ended starts its specialist again on that job\'s branch; a live job reads it itself', async () => {
@@ -665,6 +684,37 @@ describe('projects.create', () => {
     } finally {
       templateChecks.shape = was
     }
+  })
+
+  // test-esp32 log #78: after retiring run 1's project, the wizard proposed a new repository with the same name, which
+  // GitHub already had (retiring keeps it); creating would have pushed the starter onto run 1's repository and record
+  it('a new repository that exists is refused, saying whose it is and a free name beside it', async () => {
+    const before = onboarded.length
+    expect(await run(ADMIN, 'projects.repo_check', { repo: 'acme/ident' })).toMatchObject({ exists: true, project: null, suggestion: 'acme/ident-2', text: 'acme/ident already exists on GitHub. acme/ident-2 is free.' })
+    await expect(run(ADMIN, 'projects.create', { repo: 'acme/ident', name: 'Ident', template: 'board', new: { private: true } }))
+      .rejects.toThrow(/^acme\/ident already exists on GitHub\. acme\/ident-2 is free\. Choose another name, or choose "An existing repository"/)
+    expect(onboarded.length).toBe(before)
+    // a name nobody has: free, nothing to suggest, and it is created
+    expect(await run(ADMIN, 'projects.repo_check', { repo: 'acme/brand-new' })).toMatchObject({ exists: false, project: null, suggestion: null, text: null })
+    const r = await run(ADMIN, 'projects.create', { repo: 'acme/brand-new', name: 'Brand new', template: 'board', new: { private: true } }) as { steps: { id: string; state: string }[] }
+    expect(r.steps[0]).toMatchObject({ id: 'repository', state: 'done' })
+    expect(onboarded.at(-1)).toMatchObject({ repo: 'acme/brand-new', create: { private: true } })
+    await expect(run(USER, 'projects.repo_check', { repo: 'acme/brand-new' })).rejects.toThrow(AccessDenied)
+  })
+
+  it('a retired project\'s repository is named as such, and neither made again nor used as an existing one', async () => {
+    github.repos.push('acme/oldsensor', 'acme/oldsensor-2')
+    await run(ADMIN, 'projects.create', { repo: 'acme/oldsensor', name: 'Old sensor', template: 'board' })
+    await run(ADMIN, 'project.retire', { repo: 'acme/oldsensor', reason: 'run 1' })
+    const before = onboarded.length
+    // the retired project is not among the names in use, but its repository is: -2 is on GitHub too, so -3
+    expect(await run(ADMIN, 'projects.repo_check', { repo: 'acme/oldsensor' })).toMatchObject({
+      exists: true, project: { name: 'Old sensor', retired: true }, suggestion: 'acme/oldsensor-3',
+      text: 'acme/oldsensor already exists: it holds the retired project Old sensor. acme/oldsensor-3 is free.',
+    })
+    await expect(run(ADMIN, 'projects.create', { repo: 'acme/oldsensor', name: 'Old sensor', template: 'board', new: { private: true } })).rejects.toThrow(/holds the retired project Old sensor/)
+    await expect(run(ADMIN, 'projects.create', { repo: 'acme/oldsensor', name: 'Old sensor', template: 'board' })).rejects.toThrow(/restore it from Admin, Retired projects/)
+    expect(onboarded.length).toBe(before)
   })
 
   it('stops the dependent steps when onboarding fails', async () => {

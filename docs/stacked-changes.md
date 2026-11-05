@@ -25,7 +25,8 @@ straight after the change below it, without conflicting with it.
 | A worker a specialist delegates to on a new branch, when the specialist's branch is an open change | the specialist's branch, as on GitHub | the specialist's branch |
 | A follow-up task given `stack_on` (API `task`, `tracectl remote task --stack-on`) | that open change's branch | that branch |
 | A revision asked for with "Ask for changes" | the same branch | (the same pull request: no new one) |
-| A carry-on after a question is answered | the asking job's branch | (the same pull request) |
+| A carry-on after a question is answered, when the asking job's branch is its specialist's own work | the asking job's branch | (the same pull request) |
+| A carry-on after a question is answered, when another specialist started the asking job's branch (the asker only checked a hand-off's answer there) | the asking job's branch, as on GitHub | that branch: a change of its own, never more commits in theirs |
 | An edit made in the app (prompts, settings, files, hand-ins) | the default branch | the default branch: edits stay independent |
 
 A change can only stack on an **open** change: a branch with an open pull request in the repository itself. A branch
