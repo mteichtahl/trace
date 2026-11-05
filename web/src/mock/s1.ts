@@ -136,7 +136,8 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       return ok(EXISTING_USERS)
     case 'projects.create':
       return later(ok({
-        repo: `${(a.repository as { owner: string }).owner}/${(a.repository as { name: string }).name}`,
+        // projects.create takes `repo` (owner/name); an older draft of the mock read `repository`
+        repo: typeof a.repo === 'string' ? a.repo : `${(a.repository as { owner: string }).owner}/${(a.repository as { name: string }).name}`,
         done: ['Created the repository', 'Opened the onboarding pull request', ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [] : ["Set up the project's agent, knowledge base and build runner"]), 'Sent the invitations'],
         waits: [
           { id: 'w-pr', what: "Waiting for the onboarding pull request's checks", text: 'Checks run on the new repository', lastCheckedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 60_000).toISOString() },
