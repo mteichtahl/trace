@@ -91,6 +91,7 @@ import { GithubConnection, RunnerProject, RunnerWebhooks } from './runner.js'
 import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
+import { GithubAppBroker } from './github-app.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { apiVocabularyStatement } from './voice.js'
 import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
@@ -98,7 +99,7 @@ import { SELF_WRITABLE, TraceWeb, addHooksClient, addWebClient, traceWebProps } 
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, toolsEnabled, TOOLS_IMAGE_OUTPUT, webModel,
-  githubSubjects, kbEnabled, projectRefs, projectSettings, smokeSecret, webHooksOn, webHooksSecret,
+  githubAppEnabled, githubSubjects, kbEnabled, projectRefs, projectSettings, smokeSecret, webHooksOn, webHooksSecret,
 } from './props.js'
 
 /** The tag every runtime (and memory) of an installation carries: its prefix. The API's grant on the workers is scoped
@@ -406,6 +407,8 @@ export class TraceStack extends Stack {
     }
     // ------------------------------------------------------------------ shipped orders, with their carrier (src/infra/order-watch.ts)
     const orderWatch = new OrderWatch(this, 'OrderWatch', { prefix: cfg.prefix, central, root: REPO_ROOT })
+    // ------------------------------------------------------------------ trace's GitHub app's token broker (src/infra/github-app.ts)
+    if (githubAppEnabled(cfg)) new GithubAppBroker(this, 'GithubAppBroker', { prefix: cfg.prefix, repositories: refs.map((r) => r.repository), root: REPO_ROOT })
     // ------------------------------------------------------------------ run logs (src/infra/run-logs.ts)
     // what every job, tool call and check says while it runs, one stream per run (docs/progress-and-logs.md): written by
     // the workers and the runners, read by the API, followed live by the web app's JourneyEvents. Kept a month and

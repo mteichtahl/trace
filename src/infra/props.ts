@@ -206,6 +206,12 @@ export const InfraPropsSchema = z.object({
     /** its /tmp (MB): a job's inputs, its work (a KiCad project unpacked) and its outputs */
     ephemeralMb: z.number().int().min(512).max(10_240).default(10_240),
   }).strict().prefault({}),
+  /** trace's GitHub app (docs/agent-identity.md): its token broker (src/infra/github-app.ts) and each project's token
+   * role. Off until the installer has made the app and kept its key (`<prefix>/github-app`); nested layout only
+   * (githubAppEnabled), whose stacks have room for them. */
+  githubApp: z.object({
+    enabled: z.boolean().default(false),
+  }).strict().prefault({}),
   /** The agents' memory: one AgentCore Memory per project (short-term events, long-term facts, session summaries,
    * preferences; src/infra/memory.ts). */
   memory: z.object({
@@ -546,7 +552,12 @@ export const GPU_JOB_VCPUS = 4
 export const toolsEnabled = (cfg: Pick<InfraProps, 'tools' | 'layout' | 'layoutMigration'>): boolean =>
   cfg.tools.enabled && cfg.layout === 'nested' && cfg.layoutMigration === undefined
 
-export const cpuEnabled = (cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boolean => cfg.cpu.enabled && cfg.gpu.enabled && cfg.layout === 'nested'
+/** Whether the installation has its GitHub app's token broker and the projects their token roles: githubApp.enabled, in
+ * the nested layout only (the props' githubApp above). */
+export const githubAppEnabled = (cfg: Pick<InfraProps, 'githubApp' | 'layout' | 'layoutMigration'>): boolean =>
+  cfg.githubApp.enabled && cfg.layout === 'nested' && cfg.layoutMigration === undefined
+
+export const cpuEnabled =(cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boolean => cfg.cpu.enabled && cfg.gpu.enabled && cfg.layout === 'nested'
 
 /** The CloudFormation output names of one project (alphanumeric only, so the hash rather than the slug). In the nested
  * layout they are its nested stack's outputs only (the parent carries none of them): the installer reads them there
@@ -558,6 +569,9 @@ export const projectOutputs = (repository: string): { runtimeArn: string; roleAr
     memoryId: `Project${h}MemoryId`, runnerProject: `Project${h}RunnerProject`,
   }
 }
+
+/** A project's token role's output (its nested stack's, with githubApp on): the repository's TRACE_GITHUB_APP_ROLE. */
+export const tokenRoleOutput = (repository: string): string => `Project${projectHash(repository)}TokenRoleArn`
 
 /** A build-only repository's output (the parent's, in either layout): its CodeBuild runner project's name, which the
  * installer sets as that repository's TRACE_CODEBUILD_PROJECT. Absent while the runners wait for the connection. */
