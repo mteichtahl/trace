@@ -21,7 +21,7 @@ function StepIcon({ s }: { s: StageStep }) {
   if (s.state === 'done') return <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-verified text-white"><Check className="size-3" strokeWidth={3} aria-hidden /></span>
   if (s.state === 'waived') return <Circle className="size-[18px] shrink-0 text-waived" aria-hidden />
   if (s.state === 'now') return <CircleDot className="size-[18px] shrink-0 text-primary" aria-hidden />
-  if (s.owner === 'trace' && (s.state === 'next' || (s.alongside && s.state !== 'now'))) return <CircleDashed className="size-[18px] shrink-0 text-muted-foreground" aria-hidden />
+  if (s.owner === 'trace' && (s.state === 'next' || s.alongside)) return <CircleDashed className="size-[18px] shrink-0 text-muted-foreground" aria-hidden />
   return <Circle className="size-[18px] shrink-0 text-muted-foreground/50" aria-hidden />
 }
 

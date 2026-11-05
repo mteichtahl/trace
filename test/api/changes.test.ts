@@ -865,7 +865,8 @@ describe('journey.get with changes open', () => {
     expect(next).toMatchObject({ kind: 'review', ref: { kind: 'change', id: '1' }, summary: 'trace finished Project purpose and requirements R1-R4. Review it and accept it into the design.' })
     expect(next.recommendation).toMatch(/^trace recommends accepting it\. /)
     const define = (j.stages as { id: string; steps: { id: string; state: string }[] }[]).find((s) => s.id === 'define')
-    expect(define?.steps.map((s) => `${s.id}:${s.state}`)).toEqual(['change:2:later', 'change:4:later', 'define.accepted:later', 'change:1:now', 'define.measurable:next', 'sign:define:later'])
+    // the changes that meet no criterion follow the stage's criteria, before signing its gate
+    expect(define?.steps.map((s) => `${s.id}:${s.state}`)).toEqual(['define.accepted:later', 'change:1:now', 'define.measurable:next', 'change:2:later', 'change:4:later', 'sign:define:later'])
     expect(j.changes_unavailable).toBeUndefined()
   })
 
