@@ -329,6 +329,11 @@ export interface ChangeDetail extends ChangeSummary {
   may_discard?: boolean
   /** whether this person may ask for changes (never for an edit: there is no specialist) */
   may_ask?: boolean
+  /**
+   * Every check that failed, failed for a reason outside the work (GitHub busy or down, the runner lost): which ones and
+   * why. The page offers "Run the check again" (change.rerun) instead of "Ask for changes". Absent from an older API.
+   */
+  infra_failed?: { checks: { id: string; name: string }[]; why: string }
 }
 
 /** change.diff: one file's two sides. */

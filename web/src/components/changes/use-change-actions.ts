@@ -1,6 +1,7 @@
 /**
- * Accept, ask for changes, discard, and bring a change in conflict up to date: one place for the acts on a change, wherever they are taken (the review
- * page, the next-step card, Home's Needs you). Each refreshes the change, its project's list, the journey and the inbox,
+ * Accept, ask for changes, discard, bring a change in conflict up to date, and run again a check that did not run
+ * properly (GitHub busy, the runner lost: change.rerun): one place for the acts on a change, wherever they are taken
+ * (the review page, the next-step card, Home's Needs you). Each refreshes the change, its project's list, the journey and the inbox,
  * and confirms with a toast that says what moved and what trace starts next.
  *
  * Accepting sends the head commit the person was shown (change.get's head.sha): the API refuses a change that moved
@@ -93,5 +94,11 @@ export function useChangeActions(repo: string) {
     onError: (e) => toast.error('Could not bring the change up to date', { description: `${e instanceof Error ? e.message : String(e)}` }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })
-  return { accept, ask, discard, resolve }
+  const rerun = useMutation({
+    mutationFn: (a: { number: number; title: string }) => call('change.rerun', { repo, number: a.number }),
+    onSuccess: (r, a) => toast.success(r.checks.length === 1 ? 'Running the check again' : 'Running the checks again', { description: `"${a.title}": ${r.checks.join(' and ')} ${r.checks.length === 1 ? 'runs' : 'run'} again now. This page updates when ${r.checks.length === 1 ? 'it finishes' : 'they finish'}.` }),
+    onError: (e) => toast.error('Could not run the check again', { description: `${e instanceof Error ? e.message : String(e)}` }),
+    onSettled: (_d, _e, a) => refresh(a.number),
+  })
+  return { accept, ask, discard, resolve, rerun }
 }
