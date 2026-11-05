@@ -157,7 +157,7 @@ describe('the mock change actions (dev:mock)', () => {
 
   it('lists, reads, diffs, refuses an early accept, and accepting moves Capture on', async () => {
     const list = await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })
-    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready'], [15, 'blocked'], [16, 'blocked'], [19, 'ready']])
+    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready'], [15, 'blocked'], [16, 'blocked'], [17, 'unfinished'], [19, 'ready']])
     // a stacked change names the one it builds on, and that one names it
     expect(list.result.changes.find((c) => c.number === 15)?.builds_on).toEqual({ number: 12, title: 'Power and USB-C input sheet' })
     const twelve = await call<ChangeDetail>('change.get', { repo: 'acme/soil-sensor', number: 12 })
@@ -174,7 +174,7 @@ describe('the mock change actions (dev:mock)', () => {
     expect(done.result.merged).toBe(true)
     const j = await call<Journey>('journey.get', { repo: 'acme/soil-sensor' })
     expect(j.result.next).toMatchObject({ kind: 'working', step: { index: 4, total: 5 } })
-    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => [c.number, c.verdict])).toEqual([[13, 'checking'], [14, 'ready'], [15, 'ready'], [16, 'blocked'], [19, 'ready']])
+    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => [c.number, c.verdict])).toEqual([[13, 'checking'], [14, 'ready'], [15, 'ready'], [16, 'blocked'], [17, 'unfinished'], [19, 'ready']])
     expect((await call<{ id: string }[]>('inbox', {})).result.some((i) => i.id.includes(':12'))).toBe(false)
   })
 

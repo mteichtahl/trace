@@ -80,6 +80,7 @@ import { jobLogEnd, repoJob } from './actions-health.js'
 import type { CheckRunDetail } from './github.js'
 import { backToDefine, changedRequirements, pastDefine } from './pending-changes.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
+import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -97,12 +98,22 @@ export const DETAIL_STATUS_TTL_MS = 4_000
  * approval keeps waiting, the safe side).
  */
 export async function projectApprovals(ctx: Context, repo: string): Promise<Set<string>> {
+  return (await projectReview(ctx, repo, [])).given
+}
+
+/**
+ * What the journey record says about the project's open changes, in one read: the approvals given (projectApprovals)
+ * and, by branch, the answers trace has not applied yet (src/core/answer-followups.ts pendingAnswers, against `rows`,
+ * the job index). A record trace cannot read now: no approvals and no answers (as before this was kept).
+ */
+export async function projectReview(ctx: Context, repo: string, rows: readonly JobRow[]): Promise<{ given: Set<string>; answers: Map<string, PendingAnswer[]> }> {
   try {
-    const [r, facts] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), agentFacts(ctx, repo).catch(() => null)])
-    if (!r) return new Set()
-    return approvalsGiven(facts ? mergeAgentFacts(r, facts) : r)
+    const [{ r, followups }, facts] = await Promise.all([withJourneyDb(ctx, repo, (db) => ({ r: loadJourney(db), followups: loadFollowups(db) })), agentFacts(ctx, repo).catch(() => null)])
+    const answers = pendingAnswers(followups, rows, Date.now() / 1000)
+    if (!r) return { given: new Set(), answers }
+    return { given: approvalsGiven(facts ? mergeAgentFacts(r, facts) : r), answers }
   } catch {
-    return new Set()
+    return { given: new Set(), answers: new Map() }
   }
 }
 
@@ -186,14 +197,14 @@ export const projectEdits = async (ctx: Context, repo: string): Promise<AppEdit[
  * The open pull requests that are trace's changes, each with its job, oldest first; the open pull requests that are
  * people's app edits, each with its record; and the project's rule.
  */
-export async function tracePulls(ctx: Context, repo: string): Promise<{ changes: { pull: PullSummary; job: JobRow }[]; edits: { pull: PullSummary; edit: AppEdit }[]; rule: ProjectRule; pulls: PullSummary[] }> {
+export async function tracePulls(ctx: Context, repo: string): Promise<{ changes: { pull: PullSummary; job: JobRow }[]; edits: { pull: PullSummary; edit: AppEdit }[]; rule: ProjectRule; pulls: PullSummary[]; rows: JobRow[] }> {
   const [pulls, rows] = await Promise.all([openPulls(ctx, repo), jobRows(ctx, repo)])
   // no open pull request: nothing to tell apart, so the settings are not read for it
-  if (!pulls.length) return { changes: [], edits: [], rule: { repo, defaultBranch: '', prefix: 'claude/', agentLogin: null, hold: 'no-automerge' }, pulls }
+  if (!pulls.length) return { changes: [], edits: [], rule: { repo, defaultBranch: '', prefix: 'claude/', agentLogin: null, hold: 'no-automerge' }, pulls, rows }
   const [rule, recorded] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo)])
   const byBranch = editsByBranch(recorded)
   const edits = pulls.flatMap((pull) => { const edit = editOf(pull, byBranch, repo); return edit ? [{ pull, edit }] : [] })
-  return { changes: traceChanges(pulls, rows, rule), edits, rule, pulls }
+  return { changes: traceChanges(pulls, rows, rule), edits, rule, pulls, rows }
 }
 
 /** Whether this person may change the project: an admin, or the Contributor part on it. */
@@ -224,16 +235,16 @@ const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: P
  */
 export async function openChanges(ctx: Context, repo: string, o: { max?: number } = {}): Promise<{ change: ChangeSummary; criteria: string[] }[]> {
   const gh = await ctx.deps.github()
-  const { changes: mine, edits, rule, pulls } = await tracePulls(ctx, repo)
+  const { changes: mine, edits, rule, pulls, rows } = await tracePulls(ctx, repo)
   const stacks = stacksOf(pulls, repo, rule.defaultBranch)
   const max = o.max ?? MAX_STATUS
-  const [status, editStatus, given] = await Promise.all([
+  const [status, editStatus, { given, answers }] = await Promise.all([
     Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     Promise.all(edits.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
-    mine.length ? projectApprovals(ctx, repo) : Promise.resolve(new Set<string>()),
+    mine.length ? projectReview(ctx, repo, rows) : Promise.resolve({ given: new Set<string>(), answers: new Map<string, PendingAnswer[]>() }),
   ])
   const works = mine.map(({ pull, job }, i) => ({
-    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number) }),
+    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head) }),
     criteria: criteriaNamed(jobRequest(job), job.title),
   }))
   const own = edits.map(({ pull, edit }, i) => ({
@@ -259,19 +270,22 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sha = pull.head.sha
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   // everything else is read in parallel; a part GitHub will not give (a token that cannot read checks) is left out
-  const [status, files, commits, runs, write, given] = await Promise.all([
+  const [status, files, commits, runs, write, { given, answers }] = await Promise.all([
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
     cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha, { jobs: true }), DETAIL_STATUS_TTL_MS).catch(() => null), writes(ctx, repo),
-    projectApprovals(ctx, repo),
+    projectReview(ctx, repo, found.rows),
   ])
   const hold = rule.hold
   // where it sits in a stack: its base read now (accepting decides on it), the changes above it from the kept list
   const stack = await stackFor(ctx, repo, pull, rule)
-  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack })
+  const pending = answers.get(pull.head.ref)
+  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack, answers: pending })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   if (stack.stacked) facts.stacked = stack.stacked
+  // an answer to its specialist's question not applied yet: never recommended for accepting (test-esp32 log #131)
+  if (pending?.length) facts.answers = [...pending]
   const infra = await infraFailures(ctx, gh, repo, runs)
   if (infra) facts.infra = infra
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)

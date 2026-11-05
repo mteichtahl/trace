@@ -83,6 +83,9 @@ import { backToDefine, changedRequirements, pendingOf } from './pending-changes.
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
+import type { JobRow } from '../core/job-index.js'
+import { type Followup, followupStatus, loadFollowups, putFollowup, updateFollowup } from '../core/answer-followups.js'
+import { assertNotHeld } from './held.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -157,10 +160,12 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
 export type Lasts = 'once' | 'rule' | 'requirement'
 
 /** The request of the task that carries an ended job on once its question is answered. */
-export function answeredRequest(a: { id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null; lasts?: Lasts | undefined }): string {
+export function answeredRequest(a: { id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null; lasts?: Lasts | undefined; again?: string | undefined }): string {
   return [
     `Your question ${a.id} (asked in job ${a.jobId}) is answered. You asked: ${a.text}`,
     `${a.by ?? 'A person'} answered: ${a.answer}${a.reason ? ` (because ${a.reason})` : ''}.`,
+    // started again by trace (keepAnswers): an earlier job for this answer stopped before it was applied
+    ...(a.again ? [`An earlier job started to apply this answer stopped before it did (${a.again}). The branch may hold part of that work: read it first.`] : []),
     `Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`,
     ...(a.lasts === 'requirement' ? [`${REQUIREMENT_CHANGE_SAID} Have the change proposed for a person to accept in Requirements review: the requirement, its new wording and measurable criterion, and why (the Verification specialist owns the requirements: journey.handoff to it unless you are it, then verify.requirements, left proposed). Until it is accepted, treat the requirement as it stands, and say in your report that the change waits on review.`] : []),
     ...(a.lasts === 'rule' ? ['They made this a rule for the project: remember it (memory.remember) so later jobs apply it without asking again.'] : []),
@@ -181,27 +186,93 @@ export function askedBy(facts: AgentFacts | null | undefined, id: string): { id:
   return s ? { id: s.id, text: s.why, jobId: s.jobId } : undefined
 }
 
+/** The worker's job id in a job id the API hands out (`<session>.<job id>`, src/api/workers.ts), or the id itself. */
+const workerJobId = (id: string): string => id.split('.').at(-1) ?? id
+
+/**
+ * Keep the answer a job has to apply (src/core/answer-followups.ts), so it is never dropped with that job: journey.get
+ * starts it again (keepAnswers) until it is applied. Never fails the answer: it stands whatever happens here.
+ */
+async function keepFollowup(ctx: Context, repo: string, f: Omit<Followup, 'state' | 'note' | 'updatedAt'>): Promise<void> {
+  await writeJourney(ctx, repo, (db) => { putFollowup(db, f, Date.now() / 1000); return { result: {} } }).catch(() => undefined)
+}
+
 /**
  * After an answer: when the job that asked has ended, a task for the same specialist on that job's branch, told the
  * answer. A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
+ * Either way the answer is kept as a follow-up (src/core/answer-followups.ts) until a job on that branch applies it: a
+ * carry-on that is lost, stopped with its runtime or never reaches the queue is started again (keepAnswers), and the
+ * change on that branch is not recommended for accepting meanwhile (test-esp32 log #131).
  */
 export async function carryOn(ctx: Context, repo: string, asked: { id: string; text: string; jobId: string | null }, q: { answered: { answer: string; reason: string | null; by: string | null } | null }, lasts?: Lasts): Promise<{ jobId?: string; started?: string[]; jobError?: string; summary?: string }> {
   if (!asked.jobId || !q.answered) return {}
   const { rows } = await listJobs(ctx, repo)
   const row = rows.find((r) => r.id === asked.jobId)
-  // the job still runs, waits or is paused: it reads the answer itself
-  if (row && (row.state === 'queued' || row.state === 'paused' || isLive(row, Date.now() / 1000))) return {}
+  const at = Date.now() / 1000
   const agent = row ? SPECIALIST_KINDS.find((k) => k === row.agent) : undefined
   // the specialist's own row may not carry the branch its worker pushed to
   const branch = row ? row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null : null
+  const answered = q.answered
+  const keep = (job: string | null, attempts: number): Promise<void> => (agent && branch ? keepFollowup(ctx, repo, {
+    question: asked.id, text: asked.text, askedJob: asked.jobId as string, branch, agent, answer: answered.answer, reason: answered.reason, lasts: lasts ?? null,
+    by: answered.by, bySub: ctx.principal.sub, job, attempts, answeredAt: at, startedAt: at,
+  }) : Promise.resolve())
+  // the job still runs, waits or is paused: it reads the answer itself (and is kept as the job that applies it)
+  if (row && (row.state === 'queued' || row.state === 'paused' || isLive(row, at))) { await keep(row.id, 0); return {} }
   // never say the agent carries on when nothing will: the answer waits for whichever job asks next
   if (!row || !agent || !branch) return { summary: `Answered. The job that asked (${asked.jobId}) has ended and could not be started again${!row ? ' (it is not in the project\'s job list)' : !agent ? ` (${row.agent ?? 'no'} agent is not a specialist)` : ' (it has no branch)'}: the answer is kept for its next job.` }
-  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: q.answered.answer, reason: q.answered.reason, by: q.answered.by, lasts })
+  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: answered.answer, reason: answered.reason, by: answered.by, lasts })
   const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, branch, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+  // a start that was not accepted is kept too, with no job: trace starts it again (keepAnswers)
+  await keep(r.accepted ? workerJobId(r.jobId) : null, 1)
   const who = `the ${SPECIALIST_WORDS[agent]} specialist`
   return r.accepted
     ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer on ${branch}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it on ${branch}.` }
-    : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started again: ${r.reason ?? 'trace did not accept the job'}. The answer is kept for its next job.` }
+    : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started yet: ${r.reason ?? 'trace did not accept the job'}. trace tries again, and the change is not recommended for accepting until the answer is in it.` }
+}
+
+/**
+ * Bring the answers trace still has to apply in line with the job index (src/core/answer-followups.ts followupStatus),
+ * on each journey.get: one applied, or one trace will no longer start on its own, is written as such; one whose job was
+ * lost, stopped with its runtime, or never reached the queue gets a new carry-on on the same branch, as a new attempt
+ * (a new session: src/api/workers.ts taskSession), so a queued answer is never dropped (test-esp32 log #131). Each
+ * restart is claimed in the record first (its attempts), so two looks at once start it once. Nothing starts while the
+ * project is paused or retired. Answers the follow-ups started again, in words.
+ */
+export async function keepAnswers(ctx: Context, repo: string, followups: readonly Followup[], rows: readonly JobRow[], at = Date.now() / 1000): Promise<string[]> {
+  const open = followups.filter((f) => f.state === 'pending').map((f) => ({ f, s: followupStatus(f, rows, at) }))
+  const settle = open.filter(({ s }) => s.state === 'applied' || s.state === 'stopped')
+  if (settle.length) {
+    await writeJourney(ctx, repo, (db) => {
+      for (const { f, s } of settle) updateFollowup(db, f.question, { state: s.state === 'applied' ? 'applied' : 'stopped', note: s.why }, at)
+      return { result: {} }
+    }).catch(() => undefined)
+  }
+  const restart = open.filter(({ s }) => s.state === 'restart')
+  if (!restart.length) return []
+  try { await assertNotHeld(repo) } catch { return [] }
+  const out: string[] = []
+  for (const { f, s } of restart) {
+    const agent = SPECIALIST_KINDS.find((k) => k === f.agent)
+    if (!agent || s.state !== 'restart') continue
+    // claimed: only the look that moves its attempts on starts it
+    const claimed = await writeJourney(ctx, repo, (db) => {
+      const now = loadFollowups(db).find((x) => x.question === f.question)
+      if (!now || now.state !== 'pending' || now.attempts !== f.attempts || now.job !== f.job) return { result: { ok: false }, changed: false }
+      updateFollowup(db, f.question, { attempts: f.attempts + 1, job: null, startedAt: at, note: s.why }, at)
+      return { result: { ok: true } }
+    }).catch(() => ({ ok: false }))
+    if (!claimed.ok) continue
+    const request = answeredRequest({ id: f.question, text: f.text, jobId: f.askedJob, branch: f.branch, answer: f.answer, reason: f.reason, by: f.by, lasts: (['once', 'rule', 'requirement'] as const).find((x) => x === f.lasts), again: s.why })
+    const r = await (await ctx.deps.jobs()).startJob({
+      kind: 'task', repository: repo, request, agent, branch: f.branch, requestedBy: f.by ?? label(ctx.principal), ...(f.bySub ? { requestedBySub: f.bySub } : {}), attempt: f.attempts + 1,
+    }).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message : String(e) }))
+    if (r.accepted) {
+      await writeJourney(ctx, repo, (db) => { updateFollowup(db, f.question, { job: workerJobId(r.jobId) }, Date.now() / 1000); return { result: {} } }).catch(() => undefined)
+      out.push(`trace started the ${SPECIALIST_WORDS[agent]} specialist again to apply the answer to "${f.text.slice(0, 120)}" on ${f.branch}: ${s.why}.`)
+    }
+  }
+  return out
 }
 
 /** The day a revision was cut, YYYY-MM-DD, in the signer's time zone (an IANA name from their browser), else UTC. */
@@ -353,7 +424,7 @@ export const JOURNEY_ACTIONS = {
     const viewer = await viewerOf(ctx.principal, repo)
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
-    const [{ result: r0, version: v0 }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), agentFacts(ctx, repo),
+    const [{ result: { record: r0, followups }, version: v0 }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => ({ record: loadJourney(db), followups: loadFollowups(db) })), agentFacts(ctx, repo),
       listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, error: null }), (e: unknown) => ({ jobs: [], rows: [], error: e instanceof Error ? e.message : String(e) }))])
     // a requirement changed after the baseline takes the project back to Define before a gate past it can be signed
     // (returnForChange). The record is read only when a gate is the next step, as changedFirst did
@@ -363,6 +434,8 @@ export const JOURNEY_ACTIONS = {
       const back = await backToDefine(ctx, repo, r0, await changedRequirements(ctx, repo, r0).catch(() => [] as string[]), 'trace').catch(() => null)
       if (back) { r = back.record; version = back.version }
     }
+    // the answers trace still has to apply: one whose job was lost or stopped is started again, never dropped
+    const kept = followups.length && !jobs.error ? await keepAnswers(ctx, repo, followups, jobs.rows).catch(() => [] as string[]) : []
     // the hand-offs between specialists (jobs.list's): who asked whom, for what, and the answer
     const handoffs = projectHandoffs(repo, facts, r, jobs.rows)
     if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
@@ -392,7 +465,7 @@ export const JOURNEY_ACTIONS = {
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, next),
       ...(drafting ? { drafting: { state: drafting.state, job: drafting.job, why: drafting.why || null } } : {}),
-      jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
+      jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}), ...(kept.length ? { answers_restarted: kept } : {}),
       ...(seen && staleCriteria(seen).length ? { stale_evidence: staleCriteria(seen) } : {}),
       ...(open.error ? { changes_unavailable: open.error.slice(0, 200) } : {}),
     }

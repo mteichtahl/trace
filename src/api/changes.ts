@@ -41,6 +41,7 @@ import { indexedHandle } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
 import type { CheckRunDetail, PullFile, PullStatus, PullSummary } from './github.js'
 import type { RequirementEditsView } from './requirement-edits.js'
+import type { PendingAnswer } from '../core/answer-followups.js'
 
 export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
 /** 'work': a specialist's change (docs/guided-flow.md); otherwise an edit a person made in the app (docs/stay-in-trace.md) */
@@ -69,6 +70,8 @@ export interface ChangeSummary {
   verdict: Verdict
   /** the gate criteria it says it waits on a person's approval of (ChangeFacts.awaiting) */
   awaiting?: string[]
+  /** the answers to its specialist's questions trace has not applied to it yet (ChangeFacts.answers) */
+  answers?: PendingAnswer[]
   /** a stacked change (docs/stacked-changes.md): the open change it builds on, which is accepted first */
   builds_on?: StackLink
   /** the open changes stacked on this one, which follow it into the design */
@@ -190,6 +193,11 @@ export interface ChangeFacts {
    * when no open change has that branch). Accepting it would merge it into that branch, not into the design.
    */
   stacked?: { base: string; on: StackLink | null }
+  /**
+   * The answers a person gave to its specialist's questions that no job has applied to it yet (src/core/answer-
+   * followups.ts pendingAnswers): accepted now, the change would go in without them (test-esp32 log #131).
+   */
+  answers?: PendingAnswer[]
   /** every check that failed, failed for a reason outside the work (infraReason): it is run again, not sent back */
   infra?: InfraFailure
 }
@@ -460,8 +468,9 @@ function verdictOfOwn(f: ChangeFacts): Verdict {
   // a check that did not run properly says nothing about the work: it waits to be run again, it is not failing
   if (infraOnly(f)) return 'blocked'
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
-  // the specialist says it is not finished: that, not the checks, is what a person should hear first
-  if (f.unfinished) return 'unfinished'
+  // the specialist says it is not finished, or an answer is still to be applied to it: that, not the checks, is what a
+  // person should hear first
+  if (f.unfinished || f.answers?.length) return 'unfinished'
   if ((f.checks?.running ?? 0) > 0 || f.mergeable === 'unknown') return 'checking'
   if (f.mergeable === 'behind' || f.mergeable === 'blocked') return 'blocked'
   // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance). A token
@@ -488,6 +497,8 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.state === 'merged') return { verdict: 'none', why: 'It is already accepted into the design.' }
   if (f.state === 'closed') return { verdict: 'none', why: 'It was discarded.' }
   if (f.draft) return { verdict: 'wait', why: 'It is a draft: trace has not finished it yet.' }
+  // an answer not applied yet: accepted now, the change goes in without it (test-esp32 log #131)
+  if (f.answers?.length) return answersWait(f.answers)
   // passing checks say the files are sound, not that the work is done: the specialist's own word comes first
   if (f.unfinished) {
     const who = o.from ? `${o.from[0]?.toUpperCase() ?? ''}${o.from.slice(1)}` : 'The specialist'
@@ -553,6 +564,22 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
     if (f.stacked) out.push(stackedWords(f.stacked))
   }
   return { may_accept: out.length === 0, blockers: out }
+}
+
+/** "your answer to "…"" for one or more pending answers. */
+const answersWords = (xs: readonly PendingAnswer[]): string =>
+  `your ${xs.length === 1 ? 'answer' : 'answers'} to ${list(xs.slice(0, 3).map((a) => `"${a.text.replace(/\s+/g, ' ').trim().slice(0, 120)}"`))}${xs.length > 3 ? ` and ${plural(xs.length - 3, 'more question')}` : ''}`
+
+/**
+ * What trace recommends for a change with answers still to apply: wait while trace applies them; ask for changes
+ * (with the answer) when it will not on its own (a person cancelled the job, or it gave up). Never accept.
+ */
+export function answersWait(xs: readonly PendingAnswer[]): Recommendation {
+  const stopped = xs.filter((a) => a.stopped)
+  if (stopped.length) {
+    return { verdict: 'ask', why: `trace has not applied ${answersWords(stopped)} to it: ${stopped[0]?.stopped ?? 'its job stopped'}. Ask for changes with the answer before you accept it, or discard it.` }
+  }
+  return { verdict: 'wait', why: `Waiting for trace to apply ${answersWords(xs)} to it. Accepted now, it would go into the design without ${xs.length === 1 ? 'that answer' : 'those answers'}.` }
 }
 
 /** Why a stacked change waits, in plain words. */
@@ -713,10 +740,13 @@ export function changeSummary(o: {
   given?: ReadonlySet<string> | undefined
   /** where it sits in a stack (stacksOf) */
   stack?: { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] } | undefined
+  /** the answers trace has not applied to its branch yet (pendingAnswers) */
+  answers?: readonly PendingAnswer[] | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
   if (o.stack?.stacked) facts.stacked = o.stack.stacked
+  if (o.answers?.length) facts.answers = [...o.answers]
   const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary, request: jobRequest(o.job) })
   if (unfinished) facts.unfinished = unfinished
   settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
@@ -727,6 +757,7 @@ export function changeSummary(o: {
     opened_at: o.pull.created_at ?? o.pull.updated_at, updated_at: s?.updated_at ?? o.pull.updated_at,
     state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}), verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
+    ...(facts.answers ? { answers: facts.answers } : {}),
     ...(o.stack?.stacked?.on ? { builds_on: o.stack.stacked.on } : {}),
     ...(o.stack?.built_on_by.length ? { built_on_by: o.stack.built_on_by } : {}),
   }

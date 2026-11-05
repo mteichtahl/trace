@@ -23,3 +23,24 @@ describe('a change its specialist says is not finished', () => {
     expect(ask.className).not.toBe(accept.className)
   })
 })
+
+describe('a change with an answer of yours not in it yet (test-esp32 log #131)', () => {
+  const answers = [{ question: 'aqf54afeab7d8d4a', text: 'How does a user clear the saved Wi-Fi network?' }]
+  const waiting = { ...change, title: 'Wi-Fi setup in the user guide', from: 'the Documentation specialist', answers }
+
+  it('says trace is applying the answer, in the list and the bar, never "accept"', () => {
+    const line = 'Waiting for trace to apply your answer to "How does a user clear the saved Wi-Fi network?". Once it has, this updates by itself.'
+    expect(changeLine({ ...waiting, checks: null } as never)).toBe(line)
+    expect(barWords('ready', waiting)).toBe(line)
+  })
+
+  it('does not lead with Ask for changes while trace applies it; does once trace will not on its own', () => {
+    const { unmount } = render(<DecisionBar change={waiting} part="contributor" note="" onAccept={() => undefined} onAsk={() => undefined} onDiscard={() => undefined} />)
+    const calm = screen.getByRole('button', { name: 'Ask for changes' }).className
+    unmount()
+    const stopped = { ...waiting, answers: [{ ...answers[0]!, stopped: 'its job was cancelled by alex@example.com' }] }
+    expect(barWords('ready', stopped)).toBe('trace has not applied your answer to "How does a user clear the saved Wi-Fi network?": its job was cancelled by alex@example.com. Ask for changes with the answer before accepting it.')
+    render(<DecisionBar change={stopped} part="contributor" note="" onAccept={() => undefined} onAsk={() => undefined} onDiscard={() => undefined} />)
+    expect(screen.getByRole('button', { name: 'Ask for changes' }).className).not.toBe(calm)
+  })
+})
