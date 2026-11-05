@@ -321,7 +321,12 @@ describe('the guided skills read the design record', () => {
     expect(await run(USER, 'skill.submit', { repo: REPO, skill: 'requirements-review', draft: { ...draft, no_conflicts: true } })).toMatchObject({ ok: true })
     const after = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string; evidence: { kind: string }[] }[] }[] }
     const define = after.gates.find((g) => g.id === 'define')!.criteria
-    expect(define.find((x) => x.id === 'define.accepted')).toMatchObject({ status: 'met', evidence: [{ kind: 'skill' }] })
+    // its evidence is what was checked: the review, then each requirement with its decision (test-esp32 #32)
+    const accepted = define.find((x) => x.id === 'define.accepted')!
+    expect(accepted.status).toBe('met')
+    expect(accepted.evidence[0]).toMatchObject({ kind: 'skill', label: expect.stringMatching(/^Requirements review, submitted by .*: \d+ of \d+ accepted/) })
+    expect(accepted.evidence.slice(1).length).toBeGreaterThan(0)
+    expect(accepted.evidence.slice(1).every((e) => e.kind === 'requirement')).toBe(true)
     expect(define.find((x) => x.id === 'define.measurable')).toMatchObject({ status: 'met' })
   })
 

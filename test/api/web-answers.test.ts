@@ -58,6 +58,8 @@ beforeAll(async () => {
   const db = openProject(dir)
   startJourney(db, { template: 'board', by: 'seed', name: 'Answers' })
   setCriterion(db, 'define.accepted', 'met', [{ kind: 'run', ref: 'run-1', label: 'the requirements list' }], 'trace')
+  // the run it was met on is in the default branch's record: a run made on a change not accepted yet would not count
+  db.prepare("INSERT INTO runs (id, kind, started, status) VALUES ('run-1', 'verify.requirements', 1, 'pass')").run()
   askQuestion(db, { askedBy: 'the Analog specialist', text: 'What is the supply range?', blocks: 'sizing the regulator', options: [{ id: 'a', label: '2.7 to 3.6 V', recommended: true, why: 'datasheet' }, { id: 'b', label: '1.8 to 3.6 V' }] })
   // the design record: intent with a requirement derived from it, an architecture, a pin plan, a sheet's requirements
   const t = Date.now() / 1000
