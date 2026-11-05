@@ -39,6 +39,11 @@ export const impl: Specialist = {
       + ' quantity (parts_bom_check). A circuit outside these (a filter, a converter loop, noise) is a hand-off to ams.',
     'Capture: once the schematic is written, kicad_erc on it and kicad_netlist to check every connection the'
       + ' architecture names; kicad_bom to check each part carries its MPN, manufacturer and LCSC fields.',
+    'Panel and mounting hardware: when a job asks for the hardware list, kicad_bom with hardware: true makes it as a'
+      + ' list of its own (the case parts and board screws from the newest case build, else the board\'s mounting holes,'
+      + ' and parts marked Hardware = panel or mounting); it is never part of the parts list, its stock check or the'
+      + ' assembler\'s files. A case built for an earlier board (case_stale) is rebuilt (mech_build) before the list is'
+      + ' given.',
     'Recall earlier implementation sessions (memory_recall): seeds and placer settings that closed before, known'
       + ' tight paths, routing decisions. Read the job and find the design: the FPGA top and constraints (.pcf, .lpf,'
       + ' .cst, .sdc/.xdc) or the KiCad board (.kicad_pcb).',
