@@ -60,7 +60,8 @@ export async function backToDefine(ctx: Context, repo: string, r: JourneyRecord,
   if (!ids.length || !pastDefine(r)) return null
   const reason = changedWords(ids)
   const out = await plainly(() => writeJourney(ctx, repo, (db) => {
-    const back = applyChange(db, 'define', reason, by)
+    // the requirements go with the reopen, so the stages they do not reach keep their evidence (src/api/reopen-scope.ts)
+    const back = applyChange(db, 'define', reason, by, { requirements: ids })
     return { result: { back, record: loadJourney(db) }, changed: back !== null }
   }))
   return out.back && out.record ? { record: out.record, version: out.version, reason, words: changeWords(out.back), outcome: out.back } : null

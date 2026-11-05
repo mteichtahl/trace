@@ -21,7 +21,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
 import { FOCUS_AGENT_ID } from '@/components/chat/agent'
 import { EmbeddedChat } from '@/components/chat/embedded-chat'
-import { DecisionCard, chosenWords } from '@/components/decision-card'
+import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import type { QualityCheck } from '@/components/quality-bar'
@@ -31,7 +31,7 @@ import { EmptyState, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { call } from '@/lib/api'
 import { useCall } from '@/lib/queries'
-import type { CriterionStatus } from '@/lib/types'
+import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
@@ -240,6 +240,8 @@ function groupBy<T>(xs: T[], key: (x: T) => string): [string, T[]][] {
 // ------------------------------------------------------------------ question answer
 
 export interface AnswerDraft extends SkillDraftBase {
+  /** the question this draft answers: a draft belongs to its question, never to the next one asked */
+  question?: string
   option?: string
   reason?: string
   answer: string
@@ -251,7 +253,9 @@ export interface AnswerDraft extends SkillDraftBase {
 }
 
 /** The question-answer bar, from the draft. Pure. */
-export function answerChecks(d: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[]; needs?: Record<string, string> }): Record<string, CriterionStatus> {
+export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[]; question?: string; needs?: Record<string, string> }): Record<string, CriterionStatus> {
+  // a draft written for another question answers nothing here, even when that question had the same option ids
+  const d = o.question && d0.question && d0.question !== o.question ? { ...d0, option: undefined, reason: undefined, answer: '', detail: '', value: '', source: '', lasts: '' as const } : d0
   // a chosen option counts only while it is one of this question's options: a draft kept from an earlier question can
   // still hold that question's choice
   const chosen = !!d.option && d.option !== 'other' && (!o.options || o.options.includes(d.option))
@@ -279,16 +283,23 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
   const d = s.draft.data
   const set = (p: Partial<AnswerDraft>) => s.draft.setData((x) => ({ ...x, ...p }))
   const answer = useCall('question.answer', (a) => [['journey.get', a.repo], ['inbox']])
-  const options: { id: string; label: string; detail?: string; needs?: string }[] = useMemo(() => q?.options ?? (q?.recommended ? [q.recommended] : []), [q])
-  // the draft is kept per project, not per question: a choice left from an earlier question is not one of this one's
-  // options, so drop it rather than send it (the record refuses an option the question does not have)
-  const stale = !!q && !!d.option && d.option !== 'other' && !options.some((o) => o.id === d.option)
-  useEffect(() => { if (stale) set({ option: undefined, reason: undefined }) }, [stale]) // eslint-disable-line react-hooks/exhaustive-deps
+  const options = useMemo<NonNullable<Question['options']>>(() => q?.options ?? (q?.recommended ? [q.recommended] : []), [q])
+  // the draft is kept per project, not per question: a draft written for another question is dropped (two near-identical
+  // questions share option ids, so its choice would look like this one's: test-esp32 #143), and a choice that is not
+  // one of this question's options is dropped rather than sent (the record refuses it)
+  const otherQuestion = !!q && !!d.question && d.question !== q.id
+  const stale = otherQuestion || (!!q && !!d.option && d.option !== 'other' && !options.some((o) => o.id === d.option))
+  useEffect(() => {
+    if (otherQuestion) set({ question: q!.id, option: undefined, reason: undefined, answer: '', detail: '', value: '', source: '', lasts: '' })
+    else if (stale) set({ option: undefined, reason: undefined })
+  }, [stale, otherQuestion]) // eslint-disable-line react-hooks/exhaustive-deps
   const chosen = !!d.option && d.option !== 'other' && !stale
+  // the chosen option records a waiver in this person's name: say so beside the answer, as the option did
+  const chosenWaiver = chosen ? options.find((o) => o.id === d.option)?.waiver : undefined
   const writing = !chosen
   const needsMap = Object.fromEntries(options.flatMap((o) => (o.needs ? [[o.id, o.needs]] : [])))
   const needs = chosen ? needsMap[d.option!] : undefined
-  const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit, options: options.map((o) => o.id), needs: needsMap })
+  const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit, options: options.map((o) => o.id), needs: needsMap, ...(q ? { question: q.id } : {}) })
   const checks: QualityCheck[] = qualityChecks(def, v, local, s.goTo)
 
   // the answer's own fields: beside the work on wide screens, and in the page itself below that, so a phone never has to
@@ -300,6 +311,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
               <p className="text-xs text-muted-foreground">Chosen</p>
               <p className="mt-0.5">{chosen ? chosenWords(options.find((o) => o.id === d.option), d.detail?.trim() || undefined) : d.answer.trim() || <span className="text-muted-foreground">Nothing yet</span>}</p>
               {d.reason && <p className="mt-1 text-muted-foreground">Reason: {d.reason}</p>}
+              {chosenWaiver && <WaiverNote text={chosenWaiver} />}
             </div>
             {needs && (
               <div className="space-y-1.5">
@@ -373,18 +385,18 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
           {q.recommended && options.length > 0 && (
             <DecisionCard
               decision={{ recommended: q.recommended.id, options: [...options, { id: 'other', label: 'Other answer', detail: 'Write your own', free: true }], evidence: q.sources, blocks: q.blocks }}
-              chosen={d.option ? { option: d.option, recommended: d.option === q.recommended.id, reason: d.reason, ...(needs ? (d.detail?.trim() ? { answer: d.detail.trim() } : {}) : d.answer ? { answer: d.answer } : {}) } : undefined}
+              chosen={d.option && !stale ? { option: d.option, recommended: d.option === q.recommended.id, reason: d.reason, ...(needs ? (d.detail?.trim() ? { answer: d.detail.trim() } : {}) : d.answer ? { answer: d.answer } : {}) } : undefined}
               onChoose={(c) => {
                 // the detail an option needs is kept apart from an answer in the person's own words
                 const asks = !!needsMap[c.option]
-                set({ option: c.option, reason: c.reason, ...(asks ? { detail: c.answer ?? '' } : c.answer ? { answer: c.answer } : {}) })
+                set({ question: q.id, option: c.option, reason: c.reason, ...(asks ? { detail: c.answer ?? '' } : c.answer ? { answer: c.answer } : {}) })
                 if (s.stepIndex < 2) s.goTo(c.option === 'other' || asks ? 'specific' : 'lasts')
               }}
             />
           )}
           {d.option && !stale && <Button variant="ghost" size="sm" onClick={() => set({ option: undefined, reason: undefined })}>Choose again</Button>}
           {(d.option === 'other' || !q.recommended) && (
-            <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={3} value={d.answer} onChange={(e) => set({ answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
+            <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={3} value={d.answer} onChange={(e) => set({ question: q.id, answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
           )}
           {!wide && <section className="space-y-5 rounded-xl border p-5 text-sm" aria-label="Your answer"><h2 className="font-semibold">Your answer</h2>{fields}</section>}
           <div className="h-[360px] overflow-hidden rounded-xl border"><EmbeddedChat repo={repo} title="Ask trace about this question" placeholder="Why does it recommend that? Where did it look?" /></div>

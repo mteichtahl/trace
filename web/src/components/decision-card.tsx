@@ -30,6 +30,18 @@ export interface DecisionOption {
   /** a detail only the person has that this answer needs ("the module's part number"): choosing it opens a field for
    * it, and the choice is not sent until it is filled (test-esp32 log #137) */
   needs?: string
+  /** choosing it records a waiver in the person's name: what it waives, the risk and severity, in words */
+  waiver?: string
+}
+
+/** "Records a waiver" under an option that takes one when chosen, so the person knows before choosing it. */
+export function WaiverNote({ text, className }: { text: string; className?: string }) {
+  return (
+    <span className={cn('mt-1 flex items-start gap-1.5 text-xs', className)}>
+      <Badge variant="outline" className="shrink-0 rounded-sm border-waived/60 font-normal text-foreground">Records a waiver</Badge>
+      <span className="text-muted-foreground">{text.replace(/^Records a waiver in your name: /, 'In your name: ')}</span>
+    </span>
+  )
 }
 
 export interface Decision {
@@ -120,6 +132,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
           {chosenWords(opt, chosen.answer) ?? chosen.option}
           {chosen.recommended ? <Badge variant="secondary" className="ml-2">Recommended</Badge> : null}
         </p>
+        {opt?.waiver && <WaiverNote text={opt.waiver} />}
         {chosen.reason && <p className="mt-1 text-muted-foreground">Reason: {chosen.reason}</p>}
       </div>
     )
@@ -133,6 +146,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         <span className="font-semibold">{rec.label}</span>
         {rec.detail && <span className="text-foreground/80"> {rec.detail}</span>}
       </p>
+      {rec.waiver && <WaiverNote text={rec.waiver} />}
       {(decision.why || decision.evidence?.length) && (
         <div className="mt-3">
           <p className="text-xs text-muted-foreground">Why</p>
@@ -178,6 +192,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
                     <span className="font-medium">{a.label}</span>
                     {a.detail && <span className="block text-xs text-muted-foreground">{a.detail}</span>}
                     {a.needs && <span className="block text-xs text-muted-foreground">Needs from you: {a.needs}</span>}
+                    {a.waiver && <WaiverNote text={a.waiver} />}
                   </li>
                 ))}
               </ul>
@@ -190,6 +205,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
                     <span className="font-medium">{a.label}</span>
                     {a.detail && <span className="block text-xs text-muted-foreground">{a.detail}</span>}
                     {a.needs && <span className="block text-xs text-muted-foreground">Needs from you: {a.needs}</span>}
+                    {a.waiver && <WaiverNote text={a.waiver} />}
                   </span>
                 </Label>
               ))}

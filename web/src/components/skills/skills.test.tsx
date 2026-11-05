@@ -108,6 +108,12 @@ describe('Question answer', () => {
     expect(answerChecks(d, { options: ['a', 'b'] }).resolves).toBe('not_met')
     expect(answerChecks({ ...d, option: 'a' }, { options: ['a', 'b'] }).resolves).toBe('met')
   })
+  // test-esp32 #143: two near-identical questions share option ids; the second showed the first one's choice
+  it('does not count a draft written for another question, even with the same option ids', () => {
+    const d = { done: [], question: 'aq1967542f437743', option: 'a', answer: '', value: '', source: '', lasts: 'once' as const }
+    expect(answerChecks(d, { options: ['a', 'b'], question: 'aq1967542f437743' })).toMatchObject({ resolves: 'met', requirement: 'met' })
+    expect(answerChecks(d, { options: ['a', 'b'], question: 'aq00000000000002' })).toMatchObject({ resolves: 'not_met', requirement: 'not_met' })
+  })
 })
 
 describe('bench readouts', () => {

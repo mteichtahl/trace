@@ -45,6 +45,7 @@ function readWaiver(w: Obj): Waiver {
 
 const STAGE_STATES = new Set(['done', 'current', 'queued', 'reopened', 'skipped'])
 const DRAFTING = new Set(['intent', 'drafting', 'stopped', 'drafted', 'done'])
+const RESIGN = new Set(['agree', 'kept', 'redo', 'signed'])
 
 /**
  * The address of what a next step or an inbox item is about: where it is done. A criterion a person meets in a guided
@@ -177,7 +178,14 @@ export function readChange(raw: unknown): ChangeDetail {
     blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),
     base: ref(c.base), head: ref(c.head),
     ...(readRequirementEdits(c.requirement_edits) ? { requirement_edits: readRequirementEdits(c.requirement_edits)! } : {}),
+    ...(readDiscarded(c.discarded) ? { discarded: readDiscarded(c.discarded)! } : {}),
   }
+}
+
+/** change.get's discarded: who discarded it, why, and the jobs it stopped; nothing when not discarded (or an older API). */
+function readDiscarded(v: unknown): ChangeDetail['discarded'] | null {
+  if (!isObj(v) || !str(v.by)) return null
+  return { by: String(v.by), at: str(v.at) ?? '', reason: str(v.reason) ?? '', jobs: (Array.isArray(v.jobs) ? v.jobs : []).filter((j): j is string => typeof j === 'string') }
 }
 
 /** change.get's requirement_edits: the accepted requirements it edits, or nothing (none, or an older API). */
@@ -300,7 +308,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       id: String(q.id), to: q.for === 'you' ? 'you' : q.for === 'contributors' ? 'the contributors' : q.for === 'admins' ? 'the admins' : 'a person on the project', text: String(q.text),
       askedAt: String(q.asked_at), ...(str(q.blocks) ? { blocks: String(q.blocks) } : {}),
       ...(rec ? { recommended: { id: String(rec.id), label: String(rec.label) } } : {}),
-      options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(str(o.needs) ? { needs: String(o.needs) } : {}) })),
+      options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(isObj(o.waives) ? { waiver: waiverWords(o.waives) } : {}), ...(str(o.needs) ? { needs: String(o.needs) } : {}) })),
       sources: arr(q.sources).map((e) => readEvidence(e, repo)),
     }
   })
@@ -317,6 +325,13 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     hasMemory: Boolean(raw.has_memory),
     ...(str(raw.changes_unavailable) ? { changesUnavailable: String(raw.changes_unavailable) } : {}),
     ...(arr(raw.stale_evidence).length ? { staleEvidence: arr(raw.stale_evidence).map((x) => ({ criterion: String(x.criterion), gate: String(x.gate), text: String(x.text), why: String(x.why) })) } : {}),
+    ...(isObj(raw.resign) && arr(raw.resign.gates).length ? { resign: {
+      requirements: (Array.isArray(raw.resign.requirements) ? raw.resign.requirements : []).map(String), edits: String(raw.resign.edits ?? ''),
+      gates: arr(raw.resign.gates).map((g) => ({
+        gate: String(g.gate), name: String(g.name), stage: String(g.stage), why: String(g.why),
+        state: RESIGN.has(String(g.state)) ? String(g.state) as NonNullable<Journey['resign']>['gates'][number]['state'] : 'redo',
+      })),
+    } } : {}),
     ...(isObj(raw.drafting) && DRAFTING.has(String(raw.drafting.state)) ? { drafting: {
       state: String(raw.drafting.state) as NonNullable<Journey['drafting']>['state'],
       ...(isObj(raw.drafting.job) && str(raw.drafting.job.id) ? { jobId: String(raw.drafting.job.id), jobState: String(raw.drafting.job.state) } : {}),
@@ -583,4 +598,16 @@ export const READERS: Partial<Record<string, (raw: unknown, args: Record<string,
   'changes.list': (r, a) => readChanges(r, a as { repo?: string }),
   'change.get': readChange,
   'change.diff': readChangeDiff,
+}
+
+/**
+ * What an option that waives records when chosen (journey.get's `waives`), in words: the same words the Question answer
+ * skill shows (src/api/actions-skills.ts optionWaiverWords). Pure.
+ */
+export function waiverWords(w: Record<string, unknown>): string {
+  const targets = arr(w.targets)
+  const kinds = [...new Set(targets.map((t) => String(t.kind)))]
+  const what = kinds.map((k) => { const n = targets.filter((t) => String(t.kind) === k).length; return `${n} ${n === 1 ? k : `${k}s`}` }).join(' and ')
+  const caught = str(w.caught_where) ? ` Checked instead: ${String(w.caught_where)}.` : ''
+  return `Records a waiver in your name: ${what}, rated ${String(w.severity)}, ${str(w.scope) ?? 'this revision only'}. Risk: ${String(w.risk ?? '').replace(/\.$/, '')}.${caught}`
 }

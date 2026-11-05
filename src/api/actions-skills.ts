@@ -30,12 +30,12 @@ import { filesRead } from '../ontology/lineage.js'
 import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
-  type AgentFacts, type Evidence, type JourneyRecord, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
+  type AgentFacts, type Evidence, type JourneyRecord, type OptionWaiver, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
   STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
-import { type Lasts, askedBy, carryOn, designBefore, viewerOf } from './actions-journey.js'
+import { type Lasts, askedBy, carryOn, designBefore, viewerOf, waivedWords } from './actions-journey.js'
 import { docsAfterDesign } from './docs-follow.js'
 import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
@@ -280,6 +280,18 @@ const finding = (f: NonNullable<CheckInput['erc']>['findings'][number]) => ({
   source: { kind: 'run' as const, id: f.run, label: `run ${f.run.slice(0, 8)}` },
 })
 
+/**
+ * What choosing an option that waives records, in words, so the person knows before choosing it (test-esp32 #142):
+ * "Records a waiver in your name: 3 findings, rated cosmetic. Risk: …"
+ */
+export function optionWaiverWords(w: OptionWaiver): string {
+  const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`
+  const kinds = [...new Set(w.targets.map((t) => t.kind))]
+  const what = kinds.map((k) => plural(w.targets.filter((t) => t.kind === k).length, k)).join(' and ')
+  const caught = w.caught_where?.trim() ? ` Checked instead: ${w.caught_where.trim()}.` : ''
+  return `Records a waiver in your name: ${what}, rated ${w.severity}, ${w.scope}. Risk: ${w.risk.replace(/\.$/, '')}.${caught}`
+}
+
 /** What a skill's screen reads beyond the bar. */
 function extras(skill: string, i: CheckInput): Record<string, unknown> {
   switch (skill) {
@@ -290,7 +302,7 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       return {
         question: {
           id: q.id, to: q.askedOf || q.askedOfSub ? 'you' : q.askedPart === 'admins' ? 'the admins' : 'the contributors', text: q.text, askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: q.blocks } : {}),
-          ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}), ...(o.needs ? { needs: o.needs } : {}) })),
+          ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}), ...(o.waives ? { waiver: optionWaiverWords(o.waives) } : {}), ...(o.needs ? { needs: o.needs } : {}) })),
           sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ?? s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
         },
       }
@@ -554,10 +566,13 @@ export const SKILL_ACTIONS = {
       } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
     }
     if (carried.jobError) jobError = carried.jobError
+    // an answer whose option waives recorded the waivers in this person's name: the summary says so
+    const waived = out.answered ? waivedWords(out.answered) : ''
+    const summary = carried.summary ? carried.summary.replace(/^Answered\./, `Answered.${waived}`) : waived ? `Answered.${waived} The agent carries on.` : undefined
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     if (docs.started) started = [...started, docs.started]
     if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
-    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(carried.summary ? { summary: carried.summary } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
+    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),
 }
 

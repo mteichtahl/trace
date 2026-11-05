@@ -58,11 +58,16 @@ export function decisionFor(item: InboxItem, journey?: Journey): Decision {
   const qn = journey?.questions.find((x) => x.id === item.questionId)
   const rec = item.recommended ?? qn?.recommended
   const opts = (qn?.options ?? []).filter((o) => o.id !== rec?.id)
+  const waiverOf = (id: string) => { const w = qn?.options?.find((o) => o.id === id)?.waiver; return w ? { waiver: w } : {} }
   return {
     question: qn?.text ?? item.summary.replace(/\*\*/g, ''),
     recommended: rec?.id ?? '__other',
-    // an option that needs a detail from the person keeps it, so the card asks for it before sending (test-esp32 log #137)
-    options: [...(rec ? [{ id: rec.id, label: rec.label, ...needsOf(qn, rec.id) }] : []), ...opts.map((o) => ({ id: o.id, label: o.label, ...needsOf(qn, o.id) })), { id: '__other', label: 'Other answer', detail: 'In your own words', free: true }],
+    // an option that waives says so before it is chosen: the answer records the waiver in the person's name; one that
+    // needs a detail from the person keeps it, so the card asks for it before sending (test-esp32 log #137)
+    options: [
+      ...(rec ? [{ id: rec.id, label: rec.label, ...waiverOf(rec.id), ...needsOf(qn, rec.id) }] : []), ...opts.map((o) => ({ id: o.id, label: o.label, ...waiverOf(o.id), ...needsOf(qn, o.id) })),
+      { id: '__other', label: 'Other answer', detail: 'In your own words', free: true },
+    ],
     evidence: item.sources ?? qn?.sources,
     blocks: item.blocks ?? qn?.blocks,
   }

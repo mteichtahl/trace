@@ -33,7 +33,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { type Backend, backendFor } from './central.js'
 import {
-  type AgentFacts, type AgentQuestion, type AskedPart, type CriterionCheck, type Evidence, EvidenceSchema, type JourneyRecord, type OptionRow, STAGE_IDS,
+  type AgentFacts, type AgentQuestion, type AskedPart, type CriterionCheck, type Evidence, EvidenceSchema, type JourneyRecord, type OptionRow, OptionWaiverSchema, STAGE_IDS,
   type StageId, type StuckFact,
 } from './journey.js'
 import { BucketDb, type JourneyStoreOptions } from './journey-store.js'
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS agent_questions (
   stage TEXT,
   text TEXT NOT NULL,
   blocks TEXT,                    -- what it blocks, in words (empty: it blocks nothing)
-  options TEXT NOT NULL,          -- JSON list, recommended first: [{ id, label, recommended, why, gives_up? }]
+  options TEXT NOT NULL,          -- JSON list, recommended first: [{ id, label, recommended, why, gives_up?, waives? }]
   sources TEXT NOT NULL,          -- JSON list: [{ kind, ref, label }]
   job_id TEXT,
   asked_at REAL NOT NULL
@@ -176,6 +176,7 @@ export const AgentOptionSchema = z.object({
   why: z.string().trim().min(3, 'say why, for every option').max(2000).describe('why: for the recommended one, why you recommend it; for the others, when it would be right'),
   gives_up: z.string().trim().max(1000).optional().describe('what choosing it gives up'),
   needs: z.string().trim().min(3).max(200).optional().describe('only when this answer needs a detail only the person has: what they must give, in a few words ("the module\'s part number, or a link to its dimensioned drawing"); the app asks them for it before the answer is sent'),
+  waives: OptionWaiverSchema.optional().describe('for an option that waives findings or criteria: what it waives, by id, with the risk and severity. A person choosing it records the waiver in their name (you cannot); never ask them to waive by hand what this records'),
 })
 export type AgentOption = z.input<typeof AgentOptionSchema>
 
@@ -205,7 +206,11 @@ export function checkOptions(given: readonly AgentOption[], o: { min: number }):
   if (best && tight && !/\bmargin\b/i.test(words)) {
     throw new AgentFactError(`Option ${best.id} comes to ${tight.value} ${tight.unit} against a ${tight.limit} ${tight.unit} limit: ${marginWords(tight)} of margin. Add it up again from every layer (in a height stack: each board, part, connector, standoff and gap), and say the margin in the option, or recommend one with more room.`)
   }
-  return [...options].sort((a, b) => Number(b.recommended) - Number(a.recommended)).map((x) => ({ id: x.id, label: x.label, recommended: x.recommended, why: x.why, ...(x.gives_up ? { gives_up: x.gives_up } : {}), ...(x.needs ? { needs: x.needs } : {}) }))
+  // a waiver the answer will record must be one the record can take: refused now, not when the person answers
+  const unsafe = options.find((x) => x.waives?.severity === 'safety' && !x.waives.caught_where?.trim())
+  if (unsafe) throw new AgentFactError(`Option ${JSON.stringify(unsafe.id)} waives at severity safety: say where it is checked instead (caught_where).`)
+  return [...options].sort((a, b) => Number(b.recommended) - Number(a.recommended))
+    .map((x) => ({ id: x.id, label: x.label, recommended: x.recommended, why: x.why, ...(x.gives_up ? { gives_up: x.gives_up } : {}), ...(x.waives ? { waives: x.waives } : {}), ...(x.needs ? { needs: x.needs } : {}) }))
 }
 
 export interface Asker { agent: string; label: string; jobId: string | null }
@@ -217,15 +222,43 @@ export interface QuestionInput {
 
 /** Record an agent's question (the record's current stage when none is given); returns its id. */
 export function addAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, record: JourneyRecord | null): string {
+  return askAgentQuestion(db, by, q, record).id
+}
+
+/** A question id as agents' questions carry it ("aq" and 14 hex digits). */
+const QUESTION_ID = /\baq[0-9a-f]{14}\b/g
+const sameWords = (a: string): string => a.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
+/**
+ * Record an agent's question, or, when it asks again what an open question already asks, keep that one: a question that
+ * names an open question by id ("as asked in aq…"), or asks it in the same words, is not opened twice (test-esp32 #143:
+ * two near-identical questions open at once). `repeat`: the id is the open question's.
+ */
+export function askAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, record: JourneyRecord | null): { id: string; repeat: boolean } {
   if (!record) throw new AgentFactError('This project has no journey yet: there is nowhere for a person to answer. Escalate in your report instead.')
   const options = checkOptions(q.options, { min: 2 })
   const text = q.text.trim()
   if (text.length < 10) throw new AgentFactError('Ask the question in a full sentence.')
+  for (const t of options.flatMap((o) => o.waives?.targets ?? [])) {
+    if (t.kind === 'criterion' && !record.criteria.some((c) => c.id === t.id)) throw new AgentFactError(`An option waives criterion ${t.id}, which this project does not have (journey.status lists them).`)
+  }
+  const repeat = openRepeat(db, record, text, q.blocks ?? null)
+  if (repeat) return { id: repeat, repeat: true }
   const id = newId('aq')
   db.prepare(`INSERT INTO agent_questions (id, asked_by, agent, asked_of_sub, asked_part, stage, text, blocks, options, sources, job_id, asked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(id, by.label, by.agent, q.askedOfSub ?? null, q.askedOfSub ? 'contributors' : q.askedPart ?? 'contributors', q.stage ?? record.journey.currentStage, text,
       q.blocks?.trim() || null, JSON.stringify(options), JSON.stringify((q.sources ?? []).map((s) => EvidenceSchema.parse(s))), by.jobId, now())
-  return id
+  return { id, repeat: false }
+}
+
+/** The open agent question (not answered in the record) that `text` names by id or asks in the same words, or null. */
+function openRepeat(db: DatabaseSync, record: JourneyRecord, text: string, blocks: string | null): string | null {
+  const answered = new Set(record.questions.filter((x) => x.answeredAt !== null).map((x) => x.id))
+  const open = (db.prepare('SELECT id, text FROM agent_questions ORDER BY asked_at, rowid').all() as { id: string; text: string }[]).filter((x) => !answered.has(x.id))
+  if (!open.length) return null
+  const named = new Set([...`${text} ${blocks ?? ''}`.matchAll(QUESTION_ID)].map((m) => m[0]))
+  const words = sameWords(text)
+  return open.find((x) => named.has(x.id))?.id ?? open.find((x) => sameWords(x.text) === words)?.id ?? null
 }
 
 /** Record an agent's check of a criterion trace owns; refuses a person-owned or unknown criterion, and a met one without evidence. */

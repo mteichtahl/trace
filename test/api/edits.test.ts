@@ -241,7 +241,7 @@ describe('accept, ask and discard on an edit', () => {
   it('asking for changes is refused (there is no specialist); its author discards it, and the record is done', async () => {
     await expect(run(ADMIN, 'change.ask', { repo: REPO, number: 1, note: 'smaller' })).rejects.toThrow(/CU made this change in trace/)
     await expect(run(OTHER, 'change.discard', { repo: REPO, number: 1, reason: 'no' })).rejects.toThrow(/they or an admin can discard it/)
-    expect(await run(USER, 'change.discard', { repo: REPO, number: 1, reason: 'Changed my mind' })).toEqual({ closed: true })
+    expect(await run(USER, 'change.discard', { repo: REPO, number: 1, reason: 'Changed my mind' })).toEqual({ closed: true, jobs: [] })
     expect(github.did).toContain('close 1')
     expect(await stored('trace/settings-quantity-1')).toBeNull()
   })

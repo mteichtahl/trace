@@ -16,6 +16,15 @@ const decision: Decision = {
 }
 
 describe('DecisionCard', () => {
+  it('marks an option that records a waiver, before and after it is chosen', () => {
+    const d: Decision = { ...decision, options: [decision.options[0]!, { ...decision.options[1]!, waiver: 'Records a waiver in your name: 1 finding, rated cosmetic, this revision only. Risk: Ringing.' }] }
+    const { rerender } = render(<DecisionCard decision={d} onChoose={() => undefined} />)
+    expect(screen.getByText('Records a waiver')).toBeInTheDocument()
+    expect(screen.getByText(/In your name: 1 finding, rated cosmetic/)).toBeInTheDocument()
+    rerender(<DecisionCard decision={d} onChoose={() => undefined} chosen={{ option: 'c22', recommended: true }} />)
+    expect(screen.getByText('Records a waiver')).toBeInTheDocument()
+  })
+
   it('puts the recommendation first and marked', () => {
     render(<DecisionCard decision={decision} onChoose={() => undefined} />)
     expect(screen.getByText('trace recommends')).toBeInTheDocument()

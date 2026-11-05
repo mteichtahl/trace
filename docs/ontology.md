@@ -302,6 +302,11 @@ This is the existing criterion "The board fits its enclosure, or each clash is w
 - The tallest component plus the clearance above parts (1.0 mm by default) is below the lid's inner height.
 - Every edge connector has an `Opening` within the interface tolerance, and every `MountingPoint` lines up with a standoff.
 - Outer size meets the size requirement, and walls, holes and bosses are within the chosen process's capability.
+- A live requirement that puts more than the bare board in the case (a window for a display, a module on a header, a
+  battery: `needsInCase`, read from its words by `src/ontology/case-needs.ts`) holds the criterion, naming it, until a
+  person checks the case holds it and waives that one finding. The fit check models the board's own parts only.
+  At Architect, `architect.mapped` holds such a requirement until a block serving it names the part off the board
+  (`isOffBoard`) with its size, so the display module is chosen before Layout needs its size.
 
 ### Assembly reasoning
 
