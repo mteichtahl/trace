@@ -14,6 +14,8 @@ import { assign, seen } from '../../src/core/access.js'
 import { BenchStore, insertIds, insertReadings, newReading } from '../../src/core/bench.js'
 import { backendFor } from '../../src/core/central.js'
 import { ActualsStore, CostLedger, insertUsage, jobRow, modelRows, writeActuals } from '../../src/core/cost.js'
+import { buildCost } from '../../src/api/actions-cost.js'
+import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { IntegrationStore, type SecretsApi } from '../../src/core/integrations.js'
 import { signGate, startJourney } from '../../src/core/journey.js'
 import { DEFAULT_PRICES } from '../../src/core/prices.js'
@@ -244,7 +246,15 @@ describe('cost', () => {
         { checkedAt: t, nextAt: t + 86400, ok: true, tag: 'active', message: 'Read from Cost Explorer by the trace:project cost allocation tag.' }, t)
       return { result: null }
     })
+    await new JobIndexStore(store('projects'), REPO, { scratch }).update((db) => {
+      putJob(db, 'job-a', { kind: 'task', agent: 'verify', title: 'Write the test plan', state: 'succeeded', startedAt: t - 300, endedAt: t + 1 }, t)
+      return { result: null }
+    })
     const a = await run(ADMIN, 'cost.get', { repo: REPO })
+    // spend by job: the verify job's run, and the CPU job it overlapped, in the stage the project is in
+    expect(a.jobs).toMatchObject({ total: 3.45, repeated: 0 })
+    expect(a.jobs.jobs).toEqual([expect.objectContaining({ id: 'job-a', specialist: 'Verification', title: 'Write the test plan', stage: a.stages.find((s: { state: string }) => s.state === 'current').stage, seconds: 301, amount: 3.45, outcome: 'finished', repeat: null })])
+    expect(a.jobs.stages).toEqual([expect.objectContaining({ amount: 3.45, jobs: 1 })])
     expect(a.spent.detail.estimated).toEqual({ agents: 3, gpu: 0, cpu: 0.45, tools: 0, total: 3.45 })
     expect(a.spent).toMatchObject({ cloud: 3.45, orders: 48.5 })
     expect(a.spent.detail.actual).toMatchObject({ total: 1.5, estimatedDays: 1 })
@@ -256,6 +266,8 @@ describe('cost', () => {
     for (const who of [USER, REVIEWER]) {
       const u = await run(who, 'cost.get', { repo: REPO })
       expect(u).toMatchObject({ money: false, spent: { cloud: null, orders: null }, committed: null, forecast: null, lines: [] })
+      expect(u.jobs).toBeUndefined()
+      expect(u.warning).toBeUndefined()
       // no money anywhere in the answer (its times left out: a stage started at 12:37:48.560Z is not $48.50)
       expect(JSON.stringify(u).replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<time>')).not.toMatch(/explorer|3\.45|48\.5/)
       expect(u.stages.every((s: { cloud: null }) => s.cloud === null)).toBe(true)
@@ -265,5 +277,12 @@ describe('cost', () => {
     expect(m.shared).toMatchObject({ total: 2 })
     expect(m.totals).toMatchObject({ actual: 3.5 })
     void signGate
+  })
+
+  it('counts the build once against the budget: forecast until Fabricate, then committed, then neither once ordered', () => {
+    expect(buildCost({ planned: 80, placed: false, atFabricate: false })).toEqual({ committed: 0, forecast: 80 })
+    expect(buildCost({ planned: 80, placed: false, atFabricate: true })).toEqual({ committed: 80, forecast: 0 })
+    expect(buildCost({ planned: 80, placed: true, atFabricate: true })).toEqual({ committed: 0, forecast: 0 })
+    expect(buildCost({ planned: null, placed: false, atFabricate: true })).toEqual({ committed: 0, forecast: null })
   })
 })

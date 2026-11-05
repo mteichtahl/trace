@@ -14,7 +14,17 @@
  *                                                               is recorded
  *                                         forecast              the build: quantity x unit cost, for the revision not
  *                                                               ordered yet
- *                                         stages[].cloud        the estimated cloud spend of the runs in each stage's span
+ *                                         stages[].cloud        the estimated cloud spend of each stage: its jobs' (by
+ *                                                               the stage the project was in when each started), and the
+ *                                                               spend no job claims, by when it ran
+ *                                         jobs                  spend by job (src/core/cost-jobs.ts): each job's
+ *                                                               specialist, request, stage, outcome, running time and
+ *                                                               estimated cost, work done again marked (sent back,
+ *                                                               redone, duplicated); per stage what was done again or
+ *                                                               lost
+ *                                         warning               the current stage near or past its share of what the
+ *                                                               budget leaves for cloud work, with its biggest jobs
+ *                                                               (stageWarning); absent while within it
  *                                         lines                 the spend lines: orders, and each run and job (marked
  *                                                               estimate)
  *                                         explorer              the daily read's status: when it read, when it reads
@@ -32,9 +42,13 @@ import {
   ACTUALS_PREFIX, ActualsStore, CostLedger, type ActualRow, type ExplorerStatus, type PricedBySource, type UsageRow, actualTotals, estimateTotals, loadActuals, loadExplorerStatus, loadUsage, usageLine,
 } from '../core/cost.js'
 import { type JourneyRecord, STAGE_NAMES, type StageId, loadJourney, loadOrders } from '../core/journey.js'
+import { type SpendByJob, spendByJob, stageTimeline, stageWarning } from '../core/cost-jobs.js'
+import { type BatchRow, type JobRow, STALE_AFTER_S, loadBatch, loadJobs } from '../core/job-index.js'
+import { jobIndex } from './actions-jobs.js'
 import { type PriceSource, type PriceTable, DEFAULT_PRICES, isStale } from '../core/prices.js'
 import { type PricesInUse, PRICES_PREFIX, pricesFor } from '../core/prices-store.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
+import { SPECIALIST_WORDS, type SpecialistKind, WORKER } from '../agents/kinds.js'
 import { type Context, Repo, def, storeAt, withJourneyDb } from './action-kit.js'
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -49,6 +63,15 @@ const actualsStore = (ctx: Context): ActualsStore => new ActualsStore(storeAt(ct
 async function usageOf(ctx: Context, repo: string, since = 0): Promise<{ rows: UsageRow[]; error: string | null }> {
   try { return { rows: (await ledger(ctx, repo).read((db) => loadUsage(db, since))).result, error: null } } catch (e) { return { rows: [], error: e instanceof Error ? e.message : String(e) } }
 }
+
+/** A project's job index (none when it cannot be read: the jobs are then shown by their ids). */
+async function jobsOf(ctx: Context, repo: string): Promise<{ rows: JobRow[]; batch: BatchRow[] }> {
+  try { return (await jobIndex(ctx, repo).read((db) => ({ rows: loadJobs(db), batch: loadBatch(db) }))).result } catch { return { rows: [], batch: [] } }
+}
+
+/** The jobs a person's "ask for changes" started (change.asked): work sent back. */
+const sentBackJobs = (r: JourneyRecord): Set<string> =>
+  new Set(r.decisions.filter((d) => d.kind === 'change.asked').map((d) => (d.detail as { job_id?: unknown } | null)?.job_id).filter((x): x is string => typeof x === 'string'))
 
 /** The installation's actuals and the read's status. */
 async function actualsOf(ctx: Context, o: { repo?: string; since?: string } = {}): Promise<{ rows: ActualRow[]; status: ExplorerStatus | null }> {
@@ -132,25 +155,69 @@ export function pricesView(p: PricesInUse, o: { now?: number; by?: PricedBySourc
   }
 }
 
+/**
+ * The build's cost against the budget: committed once the project is at Fabricate with its order not placed yet, else
+ * forecast until it is placed; never both (counted twice, the budget showed the order's cost twice from Fabricate on).
+ * Pure.
+ */
+export function buildCost(o: { planned: number | null; placed: boolean; atFabricate: boolean }): { committed: number; forecast: number | null } {
+  if (o.placed) return { committed: 0, forecast: 0 }
+  if (o.atFabricate && o.planned !== null) return { committed: o.planned, forecast: 0 }
+  return { committed: 0, forecast: o.planned }
+}
+
+/** One job's spend as the screens show it: its stage and specialist in words, its times as dates. */
+function jobLine(j: SpendByJob['jobs'][number]) {
+  return {
+    id: j.id, agent: j.agent, specialist: j.agent && j.agent in SPECIALIST_WORDS ? SPECIALIST_WORDS[j.agent as SpecialistKind] : j.agent === WORKER ? 'Worker' : j.agent,
+    title: j.title, stage: j.stage ? STAGE_NAMES[j.stage] : null, stageId: j.stage, outcome: j.outcome,
+    started: iso(j.started), ended: iso(j.ended), seconds: j.seconds, amount: j.amount, byKind: j.byKind, workers: j.workers,
+    repeat: j.repeat ? { kind: j.repeat.kind, of: j.repeat.of, text: REPEAT_WORDS[j.repeat.kind] } : null,
+  }
+}
+const REPEAT_WORDS: Record<NonNullable<SpendByJob['jobs'][number]['repeat']>['kind'], string> = {
+  sent_back: 'Sent back: a person asked for changes',
+  redone: 'Redone: worked again on an earlier job\'s change',
+  duplicate: 'Duplicate: the same request as an earlier job',
+}
+
+/** Spend by job for cost.get: the jobs, newest first, and per stage in the journey's order. */
+function spendView(s: SpendByJob, r: JourneyRecord) {
+  const ord = (id: StageId): number => stageOrd(r, id)
+  return {
+    total: s.total, repeated: s.repeated, wasted: s.wasted,
+    stages: s.stages.map((x) => ({ ...x, stage: STAGE_NAMES[x.stage], id: x.stage })).sort((a, b) => ord(a.id) - ord(b.id)),
+    jobs: [...s.jobs].reverse().map(jobLine),
+  }
+}
+
 export const COST_ACTIONS = {
   'cost.get': def('read', Repo, async ({ repo }, ctx) => {
     const money = isAdmin(ctx.principal)
     // the ledger and the actuals are read only for admins: nobody else's answer carries money
-    const [usage, actuals, prices] = money ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx)]) : [{ rows: [], error: null }, { rows: [], status: null }, null]
+    const [usage, actuals, prices, jobs] = money
+      ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx), jobsOf(ctx, repo)])
+      : [{ rows: [], error: null }, { rows: [], status: null }, null, { rows: [], batch: [] }]
     return withJourneyDb(ctx, repo, (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
       if (!r) return { repo, money, currency: 'USD', spent: { cloud: null, orders: money ? 0 : null }, committed: money ? 0 : null, forecast: null, stages: [], lines: [], notes: ['This project has not started its journey yet.'] }
       const now = Date.now() / 1000
       const cur = stageOrd(r, r.journey.currentStage)
-      const est = (from: number | null, to: number | null): number | null => {
-        if (!money || from === null) return null
-        return cents(usage.rows.filter((u) => u.at >= from && u.at < (to ?? Infinity) && u.amount !== null).reduce((n, u) => n + (u.amount ?? 0), 0))
+      // by job, each in the stage the project was in when it started (a reopened stage's spans overlap the later
+      // stages', so a span would count the same run in two stages)
+      const byJob: SpendByJob | null = money
+        ? spendByJob({ usage: usage.rows, jobs: jobs.rows, batch: jobs.batch, timeline: stageTimeline(db, r.journey.currentStage), sentBack: sentBackJobs(r), now, staleAfter: STALE_AFTER_S })
+        : null
+      const est = (s: { id: StageId; started: number | null }): number | null => {
+        if (!byJob) return null
+        const spent = byJob.stages.find((x) => x.stage === s.id)?.amount ?? null
+        return spent ?? (s.started === null ? null : 0)
       }
       const stages = r.stages.map((s) => {
         const state = s.ord < cur ? 'done' as const : s.ord === cur ? 'current' as const : 'queued' as const
         const days = s.started !== null ? Math.round((((s.finished ?? now) - s.started) / DAY) * 10) / 10 : 0
-        return { stage: STAGE_NAMES[s.id], id: s.id, state, started: iso(s.started), finished: iso(s.finished), days, cloud: est(s.started, s.finished), forecastDays: null as number | null }
+        return { stage: STAGE_NAMES[s.id], id: s.id, state, started: iso(s.started), finished: iso(s.finished), days, cloud: est(s), forecastDays: null as number | null }
       })
       notes.push('Forecast days per stage are not computed yet: there is no history of how long each stage takes.')
       if (!money) {
@@ -164,7 +231,7 @@ export const COST_ACTIONS = {
       if (unpaid) notes.push(`${unpaid} recorded order${unpaid === 1 ? ' has' : 's have'} no cost given.`)
       const planned = b.unit_cost !== null ? Math.round(b.unit_cost * b.quantity * 100) / 100 : null
       const placedThisRevision = orders.some((o) => o.revision === r.journey.revision)
-      const committed = !placedThisRevision && cur >= stageOrd(r, 'fabricate') && stageOrd(r, 'fabricate') >= 0 && planned !== null ? planned : 0
+      const { committed, forecast } = buildCost({ planned, placed: placedThisRevision, atFabricate: cur >= stageOrd(r, 'fabricate') && stageOrd(r, 'fabricate') >= 0 })
       if (planned === null) notes.push('No unit cost is set in the build plan, so the build\'s forecast is unknown.')
       const e = estimateTotals(usage.rows)
       const a = actuals.rows.length ? actualTotals(actuals.rows) : null
@@ -172,6 +239,13 @@ export const COST_ACTIONS = {
       if (e.unpriced) notes.push(`${e.unpriced} run${e.unpriced === 1 ? '' : 's'} could not be priced: the price table has no entry for its model and the Agent SDK gave no figure.`)
       notes.push('Cloud estimates (agents, graphics card and CPU jobs) are computed from each run\'s tokens and each job\'s running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project).')
       const pv = prices ? pricesView(prices, { by: e.bySource }) : null
+      // what the budget leaves for cloud work, split across the stages still to do (the build's forecast, or its
+      // committed order, and the orders paid come off first)
+      const curStage = r.stages.find((s) => s.ord === cur)
+      const warning = byJob && curStage && b.budget !== null
+        ? stageWarning({ budget: b.budget, other: paid + committed + (forecast ?? 0), cloud: e.total, stage: curStage.id, stagesLeft: r.stages.filter((s) => s.ord >= cur).length, spend: byJob })
+        : null
+      if (byJob && !jobs.rows.length && byJob.jobs.length) notes.push('The job index has none of these jobs (it could not be read, or they are older than it keeps), so they are shown without their requests.')
       if (pv?.notes.length) notes.push(...pv.notes.map((n) => `Price list: ${n}`))
       const cloud = {
         estimated: { ...e.byKind, total: e.total },
@@ -183,7 +257,7 @@ export const COST_ACTIONS = {
         ...(b.currency !== 'USD' ? { orderCurrency: b.currency } : {}),
         spent: { cloud: cents(e.total), orders: Math.round(paid * 100) / 100, detail: cloud },
         committed,
-        forecast: placedThisRevision ? 0 : planned,
+        forecast,
         ...(b.budget !== null ? { budget: b.budget } : {}),
         quantity: b.quantity, unit_cost: b.unit_cost,
         stages,
@@ -191,6 +265,8 @@ export const COST_ACTIONS = {
           ...orders.map((o) => ({ id: o.id, at: iso(o.placedAt) as string, what: `Order ${o.number} with ${o.fab}: ${o.boards} boards of revision ${o.revision}`, kind: 'order' as const, amount: o.paid ?? 0, estimate: false })),
           ...usage.rows.map(usageLine),
         ],
+        jobs: byJob ? spendView(byJob, r) : null,
+        ...(warning ? { warning: { ...warning, stage: STAGE_NAMES[warning.stage], top: warning.top.map(jobLine) } } : {}),
         explorer: explorerView(actuals.status),
         ...(pv ? { prices: pv } : {}),
         notes,
