@@ -53,6 +53,7 @@ afterEach(() => process.chdir(cwd))
 describe('names, days and looks', () => {
   it('names each picture by project, revision, day and shot', () => {
     expect(shotName('Test ESP32', 'B', '2026-11-05', 'exploded')).toBe('test-esp32_rev-B_2026-11-05_exploded.png')
+    expect(shotName('Test ESP32', 'B', '2026-11-05', 'turntable')).toBe('test-esp32_rev-B_2026-11-05_turntable.mp4')
     expect(projectSlug('--My__Board v2--')).toBe('my-board-v2')
     expect(projectSlug('***')).toBe('project')
   })
@@ -140,6 +141,23 @@ describe.skipIf(!works)('with Blender', () => {
     const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
     const inputs = db.prepare('SELECT ref FROM run_inputs WHERE run_id=? ORDER BY ord').all(String(r.run_id)).map((x) => (x as { ref: string }).ref)
     expect(inputs).toContain('mechanical/out/case.jsonld')
+  }, 600_000)
+
+  it('makes the turntable: the board (no case here) turning once, as one MP4 named like the pictures', async () => {
+    const dir = sample()
+    process.chdir(dir)
+    const r = await run({ revision: 'A', date: '2026-11-05', project: PCB, board_model: 'board.glb', quality: 'draft', width: 160, height: 100, samples: 2, device: 'cpu', shots: ['board', 'turntable'], turntable_frames: 8, out_dir: 'out' })
+    const project = dir.split('/').pop()?.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    const mp4 = `${project}_rev-A_2026-11-05_turntable.mp4`
+    expect(r.shots).toEqual({ [`${project}_rev-A_2026-11-05_board.png`]: 'board', [mp4]: 'turntable' })
+    expect(r.turntable).toMatchObject({ width: 160, height: 100, frames: 8, fps: 24 })
+    expect((r.artifacts as Record<string, unknown>[]).find((x) => x.shot === 'turntable')).toMatchObject({ name: mp4, frames: 8, fps: 24, width: 160 })
+    // an MP4 (ISO base media: an ftyp box first), written beside the picture, and kept as the run's artifact
+    const written = (r.written as string[]).find((w) => w.endsWith('.mp4')) as string
+    expect(readFileSync(written).subarray(4, 8).toString('latin1')).toBe('ftyp')
+    const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
+    const row = db.prepare('SELECT mime FROM artifacts WHERE run_id=? AND name=?').get(String(r.run_id), mp4) as { mime: string }
+    expect(row.mime).toBe('video/mp4')
   }, 600_000)
 
   it('takes the colours of an SVG logo from the colours it paints with', async () => {

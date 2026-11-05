@@ -216,7 +216,7 @@ export function cutDay(at: Date, timeZone?: string | null): string {
 export function rendersRequest(revision: string, day: string): string {
   return [
     `Revision ${revision} was cut on ${day}: make its renders.`,
-    `Call render_showcase with revision=${revision} and date=${day}, at release quality, for every shot it offers: the board, the board from above and below, and, when the case is built, the closed case, the board in the case and the exploded view. The pictures are named <project>_rev-${revision}_${day}_<shot>.png.`,
+    `Call render_showcase with revision=${revision} and date=${day}, at release quality, for every shot it offers: the board, the board from above and below, and, when the case is built, the closed case, the board in the case and the exploded view, and the turntable video. The pictures are named <project>_rev-${revision}_${day}_<shot>.png and the turntable <project>_rev-${revision}_${day}_turntable.mp4.`,
     'Try one shot at quality=draft first, look at it, then make the full set in one call. Look at every picture before reporting it: framed, lit, the right way up, the board sitting in its case.',
     'Deliver the run the way your instructions say, naming the revision in the pull request\'s title.',
   ].join('\n')
