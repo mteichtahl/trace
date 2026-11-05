@@ -19,6 +19,8 @@
 import { existsSync, statSync } from 'node:fs'
 import type { DatabaseSync } from 'node:sqlite'
 import { applyProjectSchema, open, projectTables, transaction } from './store.js'
+// every area's tables and merge rules, whoever calls merge (the harness loads no area of its own)
+import './project-tables.js'
 
 interface Setting { value: string; updated: number; by: string | null }
 

@@ -79,6 +79,43 @@ describe('resolveDbConflict', () => {
     expect(execFileSync('git', ['--git-dir', origin, 'rev-parse', 'claude/task-a'], { encoding: 'utf8' }).trim()).toBe(before)
   })
 
+  it('keeps the newer requirement from the default branch over the older row the change still holds', async () => {
+    // test-esp32: a requirement's criterion changed and accepted on main; an older change (branched before it) still
+    // holds the old row. Merging main into that change must keep main's newer row: a plain union kept the change's
+    // row, and accepting the change then reverted the requirement.
+    const root = mkdtempSync(join(tmpdir(), 'trace-dbc-req-'))
+    const origin = join(root, 'origin.git')
+    const work = join(root, 'work')
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin])
+    mkdirSync(work)
+    git(work, 'init', '-q', '-b', 'main')
+    git(work, 'remote', 'add', 'origin', origin)
+    mkdirSync(join(work, '.trace'))
+    writeFileSync(join(work, '.gitattributes'), '.trace/project.db binary merge=trace-db\n')
+    const setReq = (acceptance: string, updated: number): void => {
+      const db = openProject(work)
+      db.prepare(`INSERT INTO requirements (id, text, kind, acceptance, status, created, updated, by) VALUES ('REQ-1', 'The 3.3 V regulator is rated for at least 600 mA output.', 'electrical', ?, 'accepted', 1, ?, 'marc')
+        ON CONFLICT(id) DO UPDATE SET acceptance=excluded.acceptance, updated=excluded.updated`).run(acceptance, updated)
+      db.close()
+    }
+    setReq('3.3 V within +/-3 %', 100)
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'base'); git(work, 'push', '-q', 'origin', 'main')
+    git(work, 'checkout', '-qb', 'claude/task-docs')
+    addRun(work, 'run-docs')
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'docs'); git(work, 'push', '-q', 'origin', 'claude/task-docs')
+    git(work, 'checkout', '-q', 'main')
+    setReq('+3V3 between 3.1 V and 3.6 V', 200)
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'criterion changed'); git(work, 'push', '-q', 'origin', 'main')
+
+    expect(await resolveDbConflict({ remote: origin, head: 'claude/task-docs', base: 'main' })).toMatchObject({ ok: true })
+    const c = mkdtempSync(join(tmpdir(), 'trace-dbc-req-check-'))
+    execFileSync('git', ['clone', '-q', '-b', 'claude/task-docs', origin, c])
+    const db = new DatabaseSync(join(c, PROJECT_DB))
+    expect(db.prepare("SELECT acceptance, updated FROM requirements WHERE id='REQ-1'").get()).toMatchObject({ acceptance: '+3V3 between 3.1 V and 3.6 V', updated: 200 })
+    expect((db.prepare('SELECT id FROM runs ORDER BY id').all() as { id: string }[]).map((r) => r.id)).toEqual(['run-docs'])
+    db.close()
+  })
+
   it('never puts the token in a URL or an error', async () => {
     const r = await resolveDbConflict({ remote: '/nowhere/at/all.git', head: 'claude/x', base: 'main', token: 'ghp_secret' })
     expect(r.ok).toBe(false)
