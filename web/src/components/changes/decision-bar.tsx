@@ -20,13 +20,13 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { type DecisionMode, decisionMode } from '@/lib/guided'
+import { type DecisionMode, answersLine, decisionMode } from '@/lib/guided'
 import type { ChangeDetail, Part } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export interface DecisionBarProps {
   change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & {
-    verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined
+    verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; answers?: ChangeDetail['answers']
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
     infra_failed?: ChangeDetail['infra_failed']
   }
@@ -52,7 +52,7 @@ export const ASK_MAX = 4000
 export const DISCARD_MAX = 2000
 
 /** The words beside the buttons, for each mode. */
-export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; applies?: ChangeDetail['applies'] }, acceptSays?: string): string {
+export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; applies?: ChangeDetail['applies']; answers?: ChangeDetail['answers'] }, acceptSays?: string): string {
   const who = `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)}`
   // trace applies it by itself: nobody accepts it, and the bar says what it waits for
   if (c.applies === 'auto' && c.state === 'open') {
@@ -60,6 +60,8 @@ export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'bl
     const rest = c.blockers.filter((b) => !/nobody needs to accept it/.test(b))
     return `trace applies it once its checks pass, with nothing for anyone to do.${rest.length ? ` For now: ${rest.join(' ')}` : ''}`
   }
+  // an answer of yours is not in it yet: trace applies it (or, when it will not on its own, you ask for it)
+  if (mode === 'ready' && c.verdict === 'unfinished' && c.answers?.length) return answersLine(c.answers)
   // it waits on a person's approval, not on more work: say what to approve; it updates by itself once approved
   if (mode === 'ready' && c.verdict === 'unfinished' && c.awaiting?.length) return `${who} says this waits for ${c.awaiting.join(' and ')} to be approved. Once it is, this updates by itself.`
   if (mode === 'ready' && c.verdict === 'unfinished') return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says this is not finished. trace recommends asking for changes; accepting adds it to the design as it is.`
@@ -94,7 +96,8 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
   const mayAccept = change.applies !== 'auto'
   // the specialist says it is not finished: asking for changes is the step trace recommends, so it leads
   // the specialist says it is not finished and has more to do (not merely waiting on an approval)
-  const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length
+  // (while trace applies an answer, nothing is for this person to do: asking for changes leads only once it will not)
+  const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length && (!change.answers?.length || change.answers.some((a) => a.stopped))
   // in conflict: the step to take is bringing it up to date, so it leads; accepting waits for it
   const resolvable = !!onResolve && offersResolve(mode, change)
   // a check that did not run properly: running it again is the step to take, so it leads

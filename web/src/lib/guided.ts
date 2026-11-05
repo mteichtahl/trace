@@ -5,7 +5,7 @@
  * criterion is done, the first unmet one is now, the next is next, then the gate's signature) and the screens still
  * show where the project is.
  */
-import type { ChangeDetail, ChangeSummary, ChangeVerdict, Gate, Journey, NextStep, Stage, StageStep } from './types'
+import type { ChangeDetail, ChangeSummary, ChangeVerdict, Gate, Journey, NextStep, PendingAnswer, Stage, StageStep } from './types'
 
 /** The stage the project is in (current or reopened), with its place among the visible stages. */
 export function currentStage(j: Pick<Journey, 'stages'>): { stage: Stage; index: number; total: number } | null {
@@ -119,6 +119,20 @@ export function checksWords(c: ChangeSummary['checks']): string {
   return `${c.passed === counted ? (c.passed === 1 ? '1 check' : `${c.passed} checks`) : `${c.passed} of ${counted} checks`} passed`
 }
 
+/** "your answer to "…"": the questions a change still waits on, the first few by their words. */
+const answersOf = (xs: readonly PendingAnswer[]): string =>
+  `your ${xs.length === 1 ? 'answer' : 'answers'} to ${xs.slice(0, 2).map((a) => `"${a.text.replace(/\s+/g, ' ').trim().slice(0, 100)}"`).join(' and ')}${xs.length > 2 ? ` and ${xs.length - 2} more` : ''}`
+
+/**
+ * What a change waits for while an answer is not in it yet (test-esp32 log #131): trace applying it, or, when trace
+ * will not on its own, the person asking for changes with it. Never "accept".
+ */
+export function answersLine(xs: readonly PendingAnswer[]): string {
+  const stopped = xs.filter((a) => a.stopped)
+  if (stopped.length) return `trace has not applied ${answersOf(stopped)}: ${stopped[0]?.stopped}. Ask for changes with the answer before accepting it.`
+  return `Waiting for trace to apply ${answersOf(xs)}. Once it has, this updates by itself.`
+}
+
 /** One line under a change's title: what it waits for, in plain words. */
 export function changeLine(c: ChangeSummary): string {
   if (c.checks_denied) return 'trace may not read its checks: an admin gives trace\'s GitHub token "Actions: read" and "Commit statuses: read".'
@@ -129,7 +143,7 @@ export function changeLine(c: ChangeSummary): string {
     case 'checking': return `${checksWords(c.checks)}. Ready to review when the last one finishes.`
     case 'failing': return `${checksWords(c.checks)}. trace is fixing it.`
     case 'conflict': return 'The design moved on since this was made. trace will bring it up to date.'
-    case 'unfinished': return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says it is not finished. trace recommends asking for changes.`
+    case 'unfinished': return c.answers?.length ? answersLine(c.answers) : `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says it is not finished. trace recommends asking for changes.`
     case 'applying': return 'Its checks passed: trace applies it now.'
     default: return blockedLine(c)
   }

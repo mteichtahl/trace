@@ -570,6 +570,15 @@ const ITEM_WHAT: Readonly<Record<WorkItem['kind'], string>> = {
   'ci-red': 'The required check failed on pull request', conflict: 'Merge conflict on pull request', 'agent-fix': 'Issue for the agent',
 }
 
+/**
+ * Whether a task's specialist is checked against its request (router.ts misPicked): only a person's own pick for new
+ * work. A specialist's delegation, a resumed task (its agent was settled when it first ran) and a task that carries on
+ * an existing branch (a carry-on after an answer, a revision asked for with "Ask for changes": the specialist whose work
+ * is on it) go where they say. Checked, a Documentation carry-on whose answer was about firmware was moved to the
+ * Implementation specialist and queued behind a layout job (test-esp32 log #122).
+ */
+export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.branch
+
 function prepared(p: WorkItemJob | TaskJob): Prepared {
   if (p.kind === 'work-item') {
     const it: WorkItem = p.item
@@ -597,9 +606,7 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
   return {
     slot: `task-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
     branch: '', from: 'maybe', ...(p.issue ? { issue: p.issue } : {}),
-    // a person's own pick is checked against the request (router.ts misPicked); a specialist's delegation, and a
-    // resumed task (its agent was settled when it first ran), go where they say
-    route: null, routeInput: { kind: p.agent, text: p.request, checkPick: !isDelegated(p) && !p.resume },
+    route: null, routeInput: { kind: p.agent, text: p.request, checkPick: checksPick(p) },
     job: (branch, _t, stackedOn) => ({ kind: 'task', request: p.request, requestedBy: p.requestedBy, issue: p.issue, branch, ...(stackedOn ? { stackedOn } : {}) }),
     session: (branch) => (p.issue ? `issue-${p.issue}` : sessionIdFor(branch)), query: p.request,
     request: `A person asked: ${p.request}`,

@@ -274,11 +274,19 @@ export interface ChangeSummary {
   verdict: ChangeVerdict
   /** the gate criteria it says it waits on a person's approval of ("layout.renders") */
   awaiting?: string[]
+  /**
+   * your answers to its specialist's questions that trace has not applied to it yet; `stopped`: why trace will not on
+   * its own (a person cancelled the job, or it gave up), so asking for changes with the answer is the step
+   */
+  answers?: PendingAnswer[]
   /** a stacked change: the open change it builds on, which is accepted first (docs/stacked-changes.md) */
   builds_on?: ChangeLink
   /** the open changes built on this one, which follow it into the design */
   built_on_by?: ChangeLink[]
 }
+
+/** An answer a change still waits on (ChangeSummary.answers). */
+export interface PendingAnswer { question: string; text: string; stopped?: string }
 
 /** One change of a stack, as another names it. */
 export interface ChangeLink { number: number; title: string }

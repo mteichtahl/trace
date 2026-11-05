@@ -525,6 +525,7 @@ export const TABLES: readonly TableMap[] = [
 
 /** Tables of a mapped database the ontology leaves out, with why. */
 export const IGNORED_TABLES: Readonly<Record<string, string>> = {
+  'journey.answer_followups': 'trace\'s bookkeeping of answers a job still has to apply (src/core/answer-followups.ts): operational, the answers themselves are journey.questions',
   'journey.skill_drafts': 'one person\'s unsubmitted draft of a guided skill: never part of the record (it is not copied with a release)',
   'jobs.batch': 'the remote machines a job\'s heavy tools ran on (AWS Batch bookkeeping): operational',
   'project.verify_merge_notes': 'notes a merge leaves when it renames a requirement: bookkeeping for people reading the merge',
