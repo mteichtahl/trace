@@ -523,7 +523,55 @@ export interface CostView {
   unit_cost?: number | null
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
   lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'tools' | 'order'; amount: number; estimate?: boolean }[]
+  /** spend by job, grouped by stage, work done again marked (admins; null when nothing is recorded) */
+  jobs?: SpendByJobView | null
+  /** the current stage near or past its share of what the budget leaves for cloud work */
+  warning?: SpendWarning
   notes?: string[]
+}
+
+/** One job's estimated cloud spend (cost.get jobs). */
+export interface JobSpendView {
+  /** null: the spend no job claims */
+  id: string | null
+  agent: string | null
+  /** the specialist in words (Verification, Documentation, …) */
+  specialist: string | null
+  title: string
+  stage: string | null
+  stageId: string | null
+  outcome: 'finished' | 'failed' | 'cancelled' | 'lost' | 'running' | 'queued' | 'paused' | 'unknown'
+  started: string | null
+  ended: string | null
+  seconds: number | null
+  amount: number
+  byKind: { agents: number; gpu: number; cpu: number; tools: number }
+  /** delegated worker jobs counted in it */
+  workers: number
+  /** work done again: sent back by a person, redone on an earlier job's change, or the same request again */
+  repeat: { kind: 'sent_back' | 'redone' | 'duplicate'; of: string | null; text: string } | null
+}
+
+export interface SpendByJobView {
+  total: number
+  /** spent on work done again */
+  repeated: number
+  /** spent on jobs that failed, were cancelled or were lost */
+  wasted: number
+  stages: { stage: string; id: string; amount: number; jobs: number; repeated: number; wasted: number }[]
+  /** newest first */
+  jobs: JobSpendView[]
+}
+
+export interface SpendWarning {
+  /** near: past three quarters of its share; over: past its share; spent: nothing left for cloud work */
+  level: 'near' | 'over' | 'spent'
+  stage: string
+  spent: number
+  share: number
+  left: number
+  stagesLeft: number
+  top: JobSpendView[]
 }
 
 /** usage.month (admins): every project's spend this month. */
