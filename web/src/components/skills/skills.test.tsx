@@ -95,6 +95,14 @@ describe('Question answer', () => {
     // a number given for a quantity still says where it comes from
     expect(answerChecks({ ...d, answer: 'about 4 A' }, { unit: 'A', options: [] }).source).toBe('not_met')
   })
+  it('does not resolve with an option that needs a detail until it is given (test-esp32 log #137)', () => {
+    const d = { done: [], option: 'm', answer: '', value: '', source: '', lasts: 'once' as const }
+    const o = { recommended: 'm', options: ['m', 'bare'], needs: { m: "the module's part number" } }
+    expect(answerChecks(d, o).resolves).toBe('not_met')
+    expect(answerChecks({ ...d, detail: 'tbd' }, o).resolves).toBe('not_met')
+    expect(answerChecks({ ...d, detail: 'ER-OLEDM0.96-1' }, o).resolves).toBe('met')
+    expect(answerChecks({ ...d, option: 'bare', reason: 'no module' }, o).resolves).toBe('met')
+  })
   it('does not count a choice kept from an earlier question', () => {
     const d = { done: [], option: 'park', answer: '', value: '', source: '', lasts: 'once' as const }
     expect(answerChecks(d, { options: ['a', 'b'] }).resolves).toBe('not_met')

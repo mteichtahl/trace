@@ -220,7 +220,7 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   p.add(`specialist.${s.kind}.workflow`, role).add('specialist.tools', { tools: tools.map(mcpName).join(', '), mcp_server: MCP_SERVER })
   p.add('specialist.knowledge', { search_tool: mcpName('kb.search'), status_tool: mcpName('kb.status') }).add('specialist.knowledge.data')
   p.add('specialist.journey', { status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), check_tool: mcpName('journey.check'), shape_tool: mcpName('shape.check'), shaped: shapedCriteria().join(', ') || 'none yet', stuck_tool: mcpName('journey.stuck') })
-    .add('specialist.journey.people')
+    .add('specialist.journey.people').add('specialist.journey.recommend')
   if (handoff === 'ask') {
     const others = (c.enabled ?? cfg.agents.enabled).filter((k) => k !== s.kind)
     if (others.length) {

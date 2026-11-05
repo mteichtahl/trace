@@ -25,6 +25,23 @@ describe('DecisionCard', () => {
     expect(screen.getByText('TLV755 datasheet p.12')).toBeInTheDocument()
   })
 
+  it('asks for the detail a recommended answer needs before sending it (test-esp32 log #137)', async () => {
+    const onChoose = vi.fn()
+    const module: Decision = {
+      question: 'Which OLED module should the case be shaped around?', recommended: 'm',
+      options: [{ id: 'm', label: 'A 0.96 inch SSD1306 I2C module', needs: "the module's part number, or a link to its dimensioned drawing" }, { id: 'bare', label: 'A bare panel' }],
+    }
+    render(<DecisionCard decision={module} onChoose={onChoose} />)
+    const send = screen.getByRole('button', { name: 'A 0.96 inch SSD1306 I2C module' })
+    expect(send).toBeDisabled()
+    await userEvent.type(screen.getByLabelText("The module's part number, or a link to its dimensioned drawing"), 'ER-OLEDM0.96-1')
+    expect(send).toBeEnabled()
+    await userEvent.click(send)
+    expect(onChoose).toHaveBeenCalledWith({ option: 'm', recommended: true, answer: 'ER-OLEDM0.96-1' })
+    expect(canSubmit(module, 'm', '', '')).toBe(false)
+    expect(canSubmit(module, 'bare', 'a reason', '')).toBe(true)
+  })
+
   it('sends the recommendation without a reason', async () => {
     const onChoose = vi.fn()
     render(<DecisionCard decision={decision} onChoose={onChoose} />)

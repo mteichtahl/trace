@@ -38,6 +38,7 @@ import {
 } from './journey.js'
 import { BucketDb, type JourneyStoreOptions } from './journey-store.js'
 import { loadHandoffs } from './handoffs.js'
+import { marginWords, tightMargins } from './margins.js'
 import { PROJECTS_PREFIX, projectSlug } from './project.js'
 import { transaction } from './store.js'
 
@@ -174,8 +175,12 @@ export const AgentOptionSchema = z.object({
   recommended: z.boolean().default(false).describe('true for exactly one option: the one you recommend'),
   why: z.string().trim().min(3, 'say why, for every option').max(2000).describe('why: for the recommended one, why you recommend it; for the others, when it would be right'),
   gives_up: z.string().trim().max(1000).optional().describe('what choosing it gives up'),
+  needs: z.string().trim().min(3).max(200).optional().describe('only when this answer needs a detail only the person has: what they must give, in a few words ("the module\'s part number, or a link to its dimensioned drawing"); the app asks them for it before the answer is sent'),
 })
 export type AgentOption = z.input<typeof AgentOptionSchema>
+
+/** An option's words that ask the person to supply something rather than give the answer ("Name the module to buy"). */
+export const ASKS_PERSON = /^\s*(?:please\s+)?(?:name|provide|supply|send|tell|share|upload|attach|look\s+up|find|measure|specify|enter|paste|identify)\b/i
 
 /** Each option valid, exactly one recommended, ids unique; the recommended one first. Throws AgentFactError otherwise. */
 export function checkOptions(given: readonly AgentOption[], o: { min: number }): OptionRow[] {
@@ -189,7 +194,18 @@ export function checkOptions(given: readonly AgentOption[], o: { min: number }):
   if (options.length && rec.length !== 1) throw new AgentFactError(`Recommend exactly one option (${rec.length} are recommended): every decision comes with trace's recommendation.`)
   const ids = new Set(options.map((x) => x.id))
   if (ids.size !== options.length) throw new AgentFactError('Each option needs its own id.')
-  return [...options].sort((a, b) => Number(b.recommended) - Number(a.recommended)).map((x) => ({ id: x.id, label: x.label, recommended: x.recommended, why: x.why, ...(x.gives_up ? { gives_up: x.gives_up } : {}) }))
+  // an option is an answer trace acts on, not a task for the person (test-esp32 log #137: "Name the module to buy" was
+  // recommended, and choosing it named no module); a detail only the person has is asked for with `needs`
+  const task = options.find((x) => !x.needs && ASKS_PERSON.test(x.label))
+  if (task) throw new AgentFactError(`Option ${task.id} ("${task.label}") asks the person to do something, but an option is an answer you act on. Choose the answer yourself from what you read; if it needs a detail only the person has (a part number, a size), put the answer in label and what they must give in needs.`)
+  // a recommendation that only just fits a hard limit says so (test-esp32 log #139)
+  const best = rec[0]
+  const words = best ? `${best.label}. ${best.why}. ${best.gives_up ?? ''}` : ''
+  const tight = tightMargins(words)[0]
+  if (best && tight && !/\bmargin\b/i.test(words)) {
+    throw new AgentFactError(`Option ${best.id} comes to ${tight.value} ${tight.unit} against a ${tight.limit} ${tight.unit} limit: ${marginWords(tight)} of margin. Add it up again from every layer (in a height stack: each board, part, connector, standoff and gap), and say the margin in the option, or recommend one with more room.`)
+  }
+  return [...options].sort((a, b) => Number(b.recommended) - Number(a.recommended)).map((x) => ({ id: x.id, label: x.label, recommended: x.recommended, why: x.why, ...(x.gives_up ? { gives_up: x.gives_up } : {}), ...(x.needs ? { needs: x.needs } : {}) }))
 }
 
 export interface Asker { agent: string; label: string; jobId: string | null }

@@ -515,6 +515,18 @@ export const QUESTIONS: Record<string, SkillView['question']> = {
     sources: [{ kind: 'requirement', label: 'R-006' }, { kind: 'part', label: 'U.FL-R-SMT-1' }],
     searched: [{ kind: 'requirement', label: 'R-006' }, { kind: 'datasheet', label: 'STM32WL RF design guide' }],
   },
+  // a recommended answer that needs a detail only the person has (test-esp32 log #137): choosing it opens a field
+  'acme/panel-controller': {
+    id: 'q-display', to: 'Marc', text: 'Which display module should the front panel cut-out be shaped around?', askedAt: ago(3 * 60 * MIN), blocks: 'the front panel drawing',
+    context: 'The Implementation specialist is drawing the front panel around the display.',
+    recommended: { id: 'ssd1306', label: 'A 0.96 inch SSD1306 I2C module, 27.3 x 27.3 mm board' },
+    options: [
+      { id: 'ssd1306', label: 'A 0.96 inch SSD1306 I2C module, 27.3 x 27.3 mm board', detail: 'The schematic has an SSD1306 on I2C at 0x3C; this is the common module for it.', needs: "the module's part number, or a link to its dimensioned drawing" },
+      { id: 'bare', label: 'A bare 0.96 inch panel on the main board', detail: 'Right when the panel sits on the main board and no module is bought.' },
+    ],
+    sources: [{ kind: 'file', label: 'hardware/panel.kicad_sch' }],
+    searched: [{ kind: 'file', label: 'hardware/panel.kicad_sch' }, { kind: 'memory', label: 'Project notes' }],
+  },
 }
 
 export const WAIVERS_EXTRA: Waiver[] = []

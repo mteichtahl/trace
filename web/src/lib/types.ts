@@ -431,7 +431,8 @@ export interface Question {
   askedAt: string
   blocks?: string
   recommended?: { id: string; label: string }
-  options?: { id: string; label: string }[]
+  /** `needs`: a detail only the person has that the option's answer needs (the app asks for it before sending) */
+  options?: { id: string; label: string; detail?: string; needs?: string }[]
   sources?: EvidenceRef[]
 }
 

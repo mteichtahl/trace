@@ -10,6 +10,7 @@ import { useId, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
@@ -26,6 +27,9 @@ export interface DecisionOption {
   detail?: string
   /** an answer in the person's own words: choosing it asks for "Your answer" as well as "Your reason" */
   free?: boolean
+  /** a detail only the person has that this answer needs ("the module's part number"): choosing it opens a field for
+   * it, and the choice is not sent until it is filled (test-esp32 log #137) */
+  needs?: string
 }
 
 export interface Decision {
@@ -48,7 +52,7 @@ export interface DecisionChoice {
   recommended: boolean
   /** required when not the recommendation */
   reason?: string
-  /** the person's own answer, for a `free` option */
+  /** the person's own answer, for a `free` option; the detail asked for, for an option that `needs` one */
   answer?: string
 }
 
@@ -68,13 +72,21 @@ export interface DecisionCardProps {
   className?: string
 }
 
-/** May this choice be sent? A reason is required when it is not the recommendation. */
+/** May this choice be sent? A reason is required when it is not the recommendation; an option that needs a detail, or
+ * an answer in the person's own words, is sent only with it. */
 export function canSubmit(decision: Decision, option: string | null, reason: string, answer = ''): boolean {
   if (!option) return false
+  const o = decision.options.find((x) => x.id === option)
+  if ((o?.free || o?.needs) && answer.trim().length < 3) return false
   if (option === decision.recommended) return true
-  if (decision.options.find((o) => o.id === option)?.free && !answer.trim()) return false
   return reason.trim().length >= 3
 }
+
+/** The words a chosen option is shown and sent with: its label, and the detail it needs when it needs one. */
+export const chosenWords = (o: DecisionOption | undefined, answer: string | undefined): string | undefined =>
+  o?.needs && answer ? `${o.label}: ${answer}` : answer ?? o?.label
+
+const sentence = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
 
 export function DecisionCard({ decision, onChoose, chosen, detail = 'short', label = 'trace recommends', acceptLabel, actions = true, className }: DecisionCardProps) {
   const rec = decision.options.find((o) => o.id === decision.recommended) ?? decision.options[0]!
@@ -83,7 +95,9 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
   const [reason, setReason] = useState('')
   const [answer, setAnswer] = useState('')
   const [busy, setBusy] = useState(false)
-  const free = !!decision.options.find((o) => o.id === other)?.free
+  const pick = decision.options.find((o) => o.id === other)
+  const free = !!pick?.free
+  const needs = pick?.needs
   const [open, setOpen] = useState(detail === 'full')
   const reasonId = useId()
 
@@ -103,7 +117,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         {decision.question && <p className="text-muted-foreground">{decision.question}</p>}
         <p className="mt-1">
           <span className="font-medium">Chosen: </span>
-          {chosen.answer ?? opt?.label ?? chosen.option}
+          {chosenWords(opt, chosen.answer) ?? chosen.option}
           {chosen.recommended ? <Badge variant="secondary" className="ml-2">Recommended</Badge> : null}
         </p>
         {chosen.reason && <p className="mt-1 text-muted-foreground">Reason: {chosen.reason}</p>}
@@ -142,6 +156,12 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
           <p className="mt-0.5 text-sm">{decision.givesUp}</p>
         </div>
       )}
+      {rec.needs && !other && actions && (
+        <div className="mt-3 space-y-1.5">
+          <Label htmlFor={`${reasonId}-needs`}>{sentence(rec.needs)}</Label>
+          <Input id={`${reasonId}-needs`} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="trace needs this from you to act on the answer" aria-required />
+        </div>
+      )}
 
       {alternatives.length > 0 && (
         <Collapsible open={open} onOpenChange={setOpen} className="mt-3">
@@ -157,17 +177,19 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
                   <li key={a.id} className="rounded-md border p-2.5">
                     <span className="font-medium">{a.label}</span>
                     {a.detail && <span className="block text-xs text-muted-foreground">{a.detail}</span>}
+                    {a.needs && <span className="block text-xs text-muted-foreground">Needs from you: {a.needs}</span>}
                   </li>
                 ))}
               </ul>
             ) : (
-            <RadioGroup value={other ?? ''} onValueChange={(v) => setOther(v)} aria-label="Alternatives">
+            <RadioGroup value={other ?? ''} onValueChange={(v) => { setOther(v); setAnswer('') }} aria-label="Alternatives">
               {alternatives.map((a) => (
                 <Label key={a.id} htmlFor={`${reasonId}-${a.id}`} className="flex cursor-pointer items-start gap-2 rounded-md border p-2.5 font-normal has-[[data-state=checked]]:border-primary">
                   <RadioGroupItem id={`${reasonId}-${a.id}`} value={a.id} className="mt-0.5" />
                   <span>
                     <span className="font-medium">{a.label}</span>
                     {a.detail && <span className="block text-xs text-muted-foreground">{a.detail}</span>}
+                    {a.needs && <span className="block text-xs text-muted-foreground">Needs from you: {a.needs}</span>}
                   </span>
                 </Label>
               ))}
@@ -181,6 +203,12 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         <div className="mt-3 space-y-1.5">
           <Label htmlFor={`${reasonId}-answer`}>Your answer</Label>
           <Textarea id={`${reasonId}-answer`} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="What the agent should do, with a number and unit for a quantity" rows={2} aria-required />
+        </div>
+      )}
+      {other && needs && (
+        <div className="mt-3 space-y-1.5">
+          <Label htmlFor={`${reasonId}-answer`}>{sentence(needs)}</Label>
+          <Input id={`${reasonId}-answer`} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="trace needs this from you to act on the answer" aria-required />
         </div>
       )}
       {other && (
@@ -201,7 +229,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
       {actions && <div className="mt-4 flex flex-wrap gap-2">
         {other ? (
           <>
-            <Button disabled={!canSubmit(decision, other, reason, answer) || busy} onClick={() => void send({ option: other, recommended: false, reason: reason.trim(), ...(free ? { answer: answer.trim() } : {}) })}>
+            <Button disabled={!canSubmit(decision, other, reason, answer) || busy} onClick={() => void send({ option: other, recommended: false, reason: reason.trim(), ...(free || needs ? { answer: answer.trim() } : {}) })}>
               {busy && <Loader2 className="animate-spin" />}
               {free ? 'Send this answer' : `Choose ${decision.options.find((o) => o.id === other)?.label}`}
             </Button>
@@ -211,12 +239,12 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
           </>
         ) : (
           <>
-            <Button disabled={busy} onClick={() => void send({ option: rec.id, recommended: true })}>
+            <Button disabled={busy || !canSubmit(decision, rec.id, '', answer)} onClick={() => void send({ option: rec.id, recommended: true, ...(rec.needs ? { answer: answer.trim() } : {}) })}>
               {busy && <Loader2 className="animate-spin" />}
               {acceptLabel ?? rec.label}
             </Button>
             {alternatives.length > 0 && (
-              <Button variant="outline" onClick={() => setOpen(true)}>
+              <Button variant="outline" onClick={() => { setOpen(true); setAnswer('') }}>
                 Choose another
               </Button>
             )}

@@ -254,6 +254,18 @@ add({ id: 'specialist.journey.people', mode: 'locked', prompt: 'specialist', var
     'owns is met only by their own act. An unanswered question is not an answer: never act on the recommended option as',
     'if it had been chosen.',
   ].join('\n') })
+add({ id: 'specialist.journey.recommend', mode: 'locked', prompt: 'specialist', vars: {},
+  description: 'That a recommended option is an answer the agent can act on, and that one close to a hard limit says so, with every layer of its sum (test-esp32 log #137, #139).',
+  default: [
+    'RECOMMENDATIONS: every option you offer, the recommended one above all, is an answer you can act on, never a task',
+    'for the person ("Name the module to buy" is not an answer). Choose it yourself from what you read: name the part,',
+    'the value, the place. When it needs a detail only the person has (a part number, a size they measured), put the',
+    'answer in the label and what they must give in needs; the app asks them for it before the answer is sent.',
+    'Before you offer a quantity against a hard limit (a height, a size, a current, a temperature), add it up from every',
+    'layer and show the sum: in a height stack, each board (a module\'s own board too), part, connector, socket, standoff,',
+    'adhesive and gap. Say the margin left. Under 5 % of the limit, or under 1 mm for a size or height, is too close:',
+    'say so in the option, and recommend one with more room when there is one.',
+  ].join('\n') })
 add({ id: 'specialist.handoff', mode: 'editable', prompt: 'specialist', then: ['specialist.handoff.rules'],
   vars: { tool: text('the hand-off tool, by MCP name'), status_tool: text('the journey status tool, by MCP name'), ask_tool: text('the journey question tool, by MCP name'), specialists: list('the specialists it may ask, one "- <kind>: the <name> specialist" per line') },
   description: 'When a specialist hands a question to another specialist (journey.handoff), and how it writes the request.',

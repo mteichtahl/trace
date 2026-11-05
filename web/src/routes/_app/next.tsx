@@ -48,6 +48,11 @@ export function inboxItems(items: InboxItem[] | undefined): InboxItem[] {
   return (items ?? []).filter((i) => INBOX_KINDS.includes(i.kind))
 }
 
+const needsOf = (qn: Journey['questions'][number] | undefined, id: string): { needs?: string } => {
+  const needs = qn?.options?.find((o) => o.id === id)?.needs
+  return needs ? { needs } : {}
+}
+
 /** The Decision card for a question: the recommendation first, then the question's other options, then Other answer. */
 export function decisionFor(item: InboxItem, journey?: Journey): Decision {
   const qn = journey?.questions.find((x) => x.id === item.questionId)
@@ -56,7 +61,8 @@ export function decisionFor(item: InboxItem, journey?: Journey): Decision {
   return {
     question: qn?.text ?? item.summary.replace(/\*\*/g, ''),
     recommended: rec?.id ?? '__other',
-    options: [...(rec ? [{ id: rec.id, label: rec.label }] : []), ...opts.map((o) => ({ id: o.id, label: o.label })), { id: '__other', label: 'Other answer', detail: 'In your own words', free: true }],
+    // an option that needs a detail from the person keeps it, so the card asks for it before sending (test-esp32 log #137)
+    options: [...(rec ? [{ id: rec.id, label: rec.label, ...needsOf(qn, rec.id) }] : []), ...opts.map((o) => ({ id: o.id, label: o.label, ...needsOf(qn, o.id) })), { id: '__other', label: 'Other answer', detail: 'In your own words', free: true }],
     evidence: item.sources ?? qn?.sources,
     blocks: item.blocks ?? qn?.blocks,
   }
@@ -100,7 +106,7 @@ function Next() {
     setBusy(item.id)
     try {
       const own = c.option === '__other'
-      const r = await call('question.answer', { repo: item.repo, question: item.questionId, ...(own ? { answer: c.answer } : { option: c.option }), ...(c.reason ? { reason: c.reason } : {}) })
+      const r = await call('question.answer', { repo: item.repo, question: item.questionId, ...(own ? { answer: c.answer } : { option: c.option, ...(c.answer ? { answer: c.answer } : {}) }), ...(c.reason ? { reason: c.reason } : {}) })
       // cleared here at once; the live event refetches Home, the bell and the project everywhere else
       qc.setQueryData<InboxItem[]>(['inbox', {}], (xs) => xs?.filter((x) => x.id !== item.id))
       void qc.invalidateQueries({ queryKey: ['inbox'] })
