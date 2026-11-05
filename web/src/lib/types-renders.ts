@@ -2,10 +2,13 @@
  * The Renders tab's record, as renders.list answers it (src/api/actions-renders.ts): each revision's photorealistic
  * renders, newest first, and the revisions whose renders are still being made.
  */
-export type Shot = 'board' | 'board-top' | 'board-bottom' | 'case' | 'board-in-case' | 'exploded'
+export type Shot = 'board' | 'board-top' | 'board-bottom' | 'case' | 'board-in-case' | 'exploded' | 'turntable'
+
+/** The turntable is a video (MP4) of the closed case turning once; every other shot is a picture (PNG). */
+export const isVideo = (s: Shot): boolean => s === 'turntable'
 
 export interface RenderPicture {
-  /** the file name: <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png, also the run artifact's name */
+  /** the file name: <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png (the turntable's .mp4), also the run artifact's name */
   name: string
   shot: Shot
   label: string
