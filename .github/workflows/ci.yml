@@ -107,7 +107,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.12" }
-      - run: pip install -q -e 'python[dev]'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22" }
+      # Printing documents (python/tests/test_docs_publish.py): Mermaid's command line and Chromium's headless shell,
+      # as the tools image has them (agent/Dockerfile.tools), so a diagram is really drawn here; pandoc and Typst for
+      # the PDF. Mermaid never downloads its own browser.
+      - name: Mermaid, Chromium's headless shell and pandoc
+        env: { PUPPETEER_SKIP_DOWNLOAD: "1" }
+        run: |
+          npm install -g --no-fund --no-audit '@mermaid-js/mermaid-cli@11.16.0'
+          npx -y 'playwright@1.64.1' install --with-deps chromium-headless-shell
+          command -v pandoc >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends pandoc; }
+      - run: pip install -q -e 'python[dev,docs]'
       - run: python -m pytest -q python/tests
 
   # The screen smoke test, Tier 1 (docs/smoke-test.md): every screen of the web app in mock mode loads, shows its data

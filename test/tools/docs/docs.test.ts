@@ -4,8 +4,8 @@
  * to a PDF kept as the run's artifact. The 'docs' job kind runs on the tools function.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { skeleton } from '../../../src/docs/catalog.js'
@@ -62,7 +62,22 @@ describe('docs tools', () => {
 
 // ------------------------------------------------------------------ end to end, where the programs are
 
-const chromium = process.env.TRACE_CHROMIUM ?? ['/opt/pw-browsers/chromium-1248/chrome-linux64/chrome'].find((p) => existsSync(p))
+// TRACE_CHROMIUM, else Playwright's headless shell or browser wherever it was installed (any version)
+function findChromium(): string | undefined {
+  if (process.env.TRACE_CHROMIUM) return process.env.TRACE_CHROMIUM
+  const roots = [process.env.PLAYWRIGHT_BROWSERS_PATH, '/opt/pw-browsers', join(homedir(), '.cache', 'ms-playwright')].filter((r): r is string => !!r && existsSync(r))
+  const tails = [['chromium_headless_shell-', ['chrome-headless-shell-linux64/chrome-headless-shell', 'chrome-linux/headless_shell']], ['chromium-', ['chrome-linux64/chrome', 'chrome-linux/chrome']]] as const
+  for (const [prefix, files] of tails) {
+    for (const root of roots) {
+      for (const d of readdirSync(root).filter((n) => n.startsWith(prefix)).sort().reverse()) {
+        const hit = files.map((f) => join(root, d, f)).find((f) => existsSync(f))
+        if (hit) return hit
+      }
+    }
+  }
+  return undefined
+}
+const chromium = findChromium()
 const has = (cmd: string, args: string[]): boolean => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0
 const programs = has('pandoc', ['--version']) && has('mmdc', ['--version']) && has(process.env.TRACE_PYTHON || 'python3', ['-c', 'import typst']) && !!chromium && existsSync(join(PY_DIR, 'tracebridge', 'docs'))
 
@@ -121,5 +136,33 @@ describe.skipIf(!programs)('docs.publish, with pandoc, Mermaid and Typst here', 
     const md = replaceSection(skeleton('hld', CTX), 'data-flow', '## Data flow\n\n<!-- scribe:figure kind="data-flow" source="x" -->\n```mermaid\nflowchart LR\n  A --> \n  ((((\n```\n_Broken._')
     const r = repo('broken', { 'docs/design/high-level-design.md': md })
     await expect(inRepo(r, () => call('docs.publish', {}))).rejects.toThrow(/diagram 1 \(flowchart LR\) does not draw/)
+  }, 180_000)
+
+  // Log #34, #94: the browser behind Mermaid could not start on the tools function, so no PDF was made and the
+  // documentation specialist stopped to ask the person to fix trace
+  it('a browser that cannot start leaves the diagram as its source, and the document still prints', async () => {
+    const was = process.env.TRACE_CHROMIUM
+    process.env.TRACE_CHROMIUM = '/bin/false'
+    try {
+      const md = replaceSection(skeleton('hld', CTX), 'data-flow', '## Data flow\n\n<!-- scribe:figure kind="data-flow" source="ontology:architecture" -->\n```mermaid\nflowchart LR\n  A[USB] --> B[ESP32]\n```\n_How readings reach the display._')
+      const r = repo('no-browser', { 'docs/design/high-level-design.md': md })
+      const out = await inRepo(r, () => call('docs.publish', { out_dir: 'out' }))
+      const d = out.documents[0]
+      expect(d).toMatchObject({ kind: 'hld', diagrams: 1, not_drawn: [1] })
+      expect(d.not_drawn_why).toMatch(/not the diagram/)
+      expect(d.note).toMatch(/printed as their Mermaid source.*not in the document/)
+      expect(readFileSync(d.written).subarray(0, 5).toString()).toBe('%PDF-')
+      const run = await inRepo(r, () => call('trace.run', { id: d.run_id }))
+      expect(run.status).toBe('pass')
+      expect(run.summary).toMatch(/1 printed as Mermaid source/)
+      // a release copy is kept for good, so never one without its diagrams
+      process.env.TRACE_PROJECT_HOME = join(dir, 'bucket2', 'projects', 'acme', 'nob')
+      process.env.TRACE_PROJECT = 'acme/nob'
+      await expect(inRepo(r, () => call('docs.publish', { release: 'A' }))).rejects.toThrow(/not kept as revision A's release copy: diagram\(s\) 1 could not be drawn/)
+    } finally {
+      delete process.env.TRACE_PROJECT_HOME
+      delete process.env.TRACE_PROJECT
+      if (was === undefined) delete process.env.TRACE_CHROMIUM; else process.env.TRACE_CHROMIUM = was
+    }
   }, 180_000)
 })

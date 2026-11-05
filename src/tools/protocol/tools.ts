@@ -798,8 +798,13 @@ export const diagramTool = defineTool({
       let from = a.from ?? c.start
       let to = a.to ?? c.end
       if (a.transaction !== undefined) {
-        const tx = decode.filter((x) => x.tx === a.transaction)
-        if (!tx.length) throw new ToolError(`no transaction ${a.transaction} in the decoded rows (there are ${new Set(decode.map((x) => x.tx)).size})`)
+        // a run recorded before its rows were numbered (the UART model's, log #69) is one transaction: 0
+        const numbered = decode.some((x) => x.tx !== undefined)
+        const tx = numbered ? decode.filter((x) => x.tx === a.transaction) : a.transaction === 0 ? decode : []
+        if (!tx.length) {
+          const have = [...new Set(decode.map((x) => x.tx).filter((n): n is number => n !== undefined))].sort((x, y) => x - y)
+          throw new ToolError(`no transaction ${a.transaction} in the decoded rows (${have.length ? `there are ${have.length}, numbered ${have[0]} to ${have[have.length - 1]}` : decode.length ? 'there is one, numbered 0' : 'there are none'})`)
+        }
         const t0 = Math.min(...tx.map((x) => x.t0))
         const t1 = Math.max(...tx.map((x) => x.t1))
         const pad = (t1 - t0) * 0.06

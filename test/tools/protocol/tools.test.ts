@@ -299,6 +299,24 @@ describe('protocol.diagram', () => {
     expect(d.png).toSatisfy((p: Obj) => (typeof p.skipped === 'string' && /rasteriser/.test(p.skipped)) || typeof p.bytes === 'number')
   })
 
+  // Log #69: docs.figures draws transaction 0 of each protocol model; the UART model's rows had no transaction
+  // number, so it failed with "no transaction 0 in the decoded rows (there are 1)"
+  it('zooms to a transaction of a UART model, and says which transactions there are when asked for one it lacks', async () => {
+    const m = await call('protocol.model', { protocol: 'uart', config: { baud: 115200 }, transactions: [{ text: 'OK' }, { bytes: [0x55] }] })
+    const first = await call('protocol.diagram', { run_id: m.run_id, transaction: 0, png: false })
+    const second = await call('protocol.diagram', { run_id: m.run_id, transaction: 1, png: false })
+    const win = (d: Obj): number[] => ((d.panels as Obj[])[0] as Obj).window as number[]
+    const w = new Work()
+    const svg0 = new TextDecoder().decode(w.getArtifact(first.run_id as string, 'diagram.svg') as Uint8Array)
+    w.close()
+    expect(svg0).toContain("0x4f 'O'")
+    expect(svg0).toContain("0x4b 'K'")
+    // the second transaction (one byte) is later than the first (two), and half as long
+    expect(win(second)[0]!).toBeGreaterThan(win(first)[0]!)
+    expect(win(second)[1]! - win(second)[0]!).toBeLessThan(0.6 * (win(first)[1]! - win(first)[0]!))
+    await expect(call('protocol.diagram', { run_id: m.run_id, transaction: 2, png: false })).rejects.toThrow(/no transaction 2 in the decoded rows \(there are 2, numbered 0 to 1\)/)
+  })
+
   it('spec mode draws the datasheet timing at the spec limits, and compares with a capture', async () => {
     const d = await call('protocol.diagram', { spec: { device: 'adc-y', protocol: 'spi' } })
     expect(((d.panels as Obj[])[0] as Obj).title).toMatch(/adc-y: SPI spec timing/)
