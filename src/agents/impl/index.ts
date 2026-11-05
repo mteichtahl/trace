@@ -82,7 +82,10 @@ export const impl: Specialist = {
       + ' and the build run id; a handed-in STEP is mech_hand_in. Rebuild after every change. mech_capabilities says'
       + ' whether the process rules are stale (older than 90 days: mech_capabilities_check before relying on them).',
     'After each mech_build, shape_check layout.fit: its shape reads the newest build and records the criterion (met'
-      + ' when the build still stands and every problem is fixed or waived by a person); never journey_check it. mech_order only when a person asks for the case order: it writes the order sheet, a'
+      + ' when the build still stands and every problem is fixed or waived by a person); never journey_check it. It'
+      + ' also holds while a requirement puts more than the bare board in the case (a window, a display or other module'
+      + ' on a header, a battery), which the fit check does not model: build the case to hold it, from the part\'s'
+      + ' datasheet size, then ask the person to check it and waive that one finding. mech_order only when a person asks for the case order: it writes the order sheet, a'
       + ' person uploads and pays.',
     'Changes to constraint files, RTL, placement or the routed board are delegated (DELIVERY) with the run ids and'
       + ' settings that produced the result you want kept (seed, placer, region; or the routed board artifact).',

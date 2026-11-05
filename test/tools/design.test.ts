@@ -143,6 +143,19 @@ describe('design.architecture', () => {
     expect(again.options.filter((o) => o.recommended).map((o) => o.id)).toEqual(['A'])
   })
 
+  it('a part off the board is kept with its size, and is always a key part (#136)', async () => {
+    await call('design.architecture', { action: 'set_option', option: { id: 'A', name: 'Header display', summary: 'An OLED module on a 4-pin header.' } })
+    await expect(call('design.architecture', { action: 'set_blocks', id: 'A', blocks: [{ id: 'display', name: 'Display', parts: [{ mpn: 'SSD1306-0.96-I2C', off_board: true, size_mm: [27.3, 27.8] }] }] })).rejects.toThrow()
+    const b = await call('design.architecture', { action: 'set_blocks', id: 'A', blocks: [{ id: 'display', name: 'Display', parts: [
+      { mpn: '2.54-1*4PFemale', role: 'header', key: true },
+      { mpn: 'SSD1306-0.96-I2C', role: '0.96 inch OLED module', off_board: true, size_mm: [27.3, 27.8, 3.7] },
+    ] }] }) as { blocks: { parts: unknown[] }[] }
+    expect(b.blocks[0]?.parts).toEqual([
+      { mpn: '2.54-1*4PFemale', role: 'header', key: true },
+      { mpn: 'SSD1306-0.96-I2C', role: '0.96 inch OLED module', off_board: true, size_mm: [27.3, 27.8, 3.7], key: true },
+    ])
+  })
+
   it('a person\'s fixed criteria and choice stand over trace\'s', () => {
     const dir = freshDb()
     const db = openProject(dir)
