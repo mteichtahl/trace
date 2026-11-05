@@ -80,6 +80,23 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
   },
 }
 
+// the panel controller's current gate, still settling (test-esp32 #142): two record changes are open and a job waits on
+// a waiver of the case fit findings, so the gate is not ready for review, but each finding is waivable from the Overview
+// and from the gate's pending page
+const FIT = (ref: string, text: string) => ({ id: `layout.fit@urn:trace:acme:acme%2Fpanel-controller:case-finding:${ref}`, text })
+export const PANEL_GATE: Partial<GateMore> = {
+  pending: [
+    '2 open record changes: #21 (case settings) and #22 (lid-mounted display).',
+    'The Implementation specialist\'s job is waiting for your answer on the case fit.',
+  ],
+  criteria: [
+    crit('pf1', 'Timing closes at 100 MHz', 'run_t100', 'run', 'Timing: worst slack +0.42 ns.', false),
+    crit('pf2', 'Every requirement that can be checked is verified or waived', 'record', 'record', '14 of 14 verified.', false),
+    { ...crit('layout.fit', 'The board fits its case', 'run_fit7', 'run', 'Case fit: 3 findings.', false, 'not_met'),
+      findings: [FIT('Q1', 'Nothing covers Q1 from above: it sits under the display window.'), FIT('R4', 'Nothing covers R4 from above: it sits under the display window.'), FIT('R5', 'Nothing covers R5 from above: it sits under the display window.')] },
+  ],
+}
+
 // ------------------------------------------------------------------ runs (the `run` action, with the assumed extras)
 
 const plot: PlotData = {
@@ -515,6 +532,19 @@ export const QUESTIONS: Record<string, SkillView['question']> = {
     sources: [{ kind: 'requirement', label: 'R-006' }, { kind: 'part', label: 'U.FL-R-SMT-1' }],
     searched: [{ kind: 'requirement', label: 'R-006' }, { kind: 'datasheet', label: 'STM32WL RF design guide' }],
   },
+}
+
+// an agent's question whose recommended option waives (test-esp32 #142): choosing it records the waivers
+QUESTIONS['acme/panel-controller'] = {
+  id: 'aq1967542f437743', to: 'you', text: 'Q1, R4 and R5 sit under the display window, so the fit check finds nothing covering them from above. The module glass covers the window, but the fit engine does not model it. Waive the three findings, or model the module under the lid?', askedAt: ago(25 * MIN), blocks: 'the case fit (layout.fit)',
+  context: 'The Implementation specialist is building the case.',
+  recommended: { id: 'waive', label: 'Waive the Q1, R4, R5 findings' },
+  options: [
+    { id: 'waive', label: 'Waive the Q1, R4, R5 findings', detail: 'The module glass covers the window; the fit engine does not model it.', waiver: 'Records a waiver in your name: 3 findings, rated cosmetic, this revision only. Risk: A part under the window could touch the display glass. Checked instead: Bring up, when the lid is fitted.' },
+    { id: 'model', label: 'Model the module under the lid in case.py', detail: 'The fit is measured, not waived; about an hour more of agent time.' },
+  ],
+  sources: [{ kind: 'run', label: 'run_fit7', summary: 'Case fit: 3 findings.' }],
+  searched: [{ kind: 'run', label: 'run_fit7' }],
 }
 
 export const WAIVERS_EXTRA: Waiver[] = []
