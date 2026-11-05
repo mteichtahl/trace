@@ -324,7 +324,17 @@ export const BUILD: BuildView = {
         { ref: 'J2', name: 'Antenna connector', lcsc: 'C88374', stock: 9771, then: 0.18, now: 0.18 },
         { ref: 'C1–C14', name: '100 nF capacitors, 0402', lcsc: 'C1525', stock: 9830112, then: 0.002, now: 0.002 },
       ],
-      files: ['gerbers.zip', 'bom-jlcpcb.csv', 'cpl-jlcpcb.csv'],
+      files: ['gerbers.zip', 'bom-jlcpcb.csv', 'cpl-jlcpcb.csv', 'hardware.csv'],
+      hardware: {
+        run: 'run_bom_hw', case_stale: false,
+        notes: ['The case closes without screws (press or snap fit).'],
+        lines: [
+          { qty: 1, item: 'Case base', kind: 'panel', size: '62 × 44 × 18.5 mm', length_mm: null, for: ['base'], mpn: null, lcsc: null, source: 'case', note: 'PA12, MJF, JLC3DP' },
+          { qty: 1, item: 'Case lid', kind: 'panel', size: '62 × 44 × 3 mm', length_mm: null, for: ['lid'], mpn: null, lcsc: null, source: 'case', note: 'PA12, MJF, JLC3DP' },
+          { qty: 1, item: 'Antenna panel nut and washer', kind: 'panel', size: null, length_mm: null, for: ['MP1'], mpn: 'SMA-NUT-W', lcsc: null, source: 'schematic', note: null },
+          { qty: 4, item: 'M2.5 pan head screw, 6 mm', kind: 'mounting', size: 'M2.5', length_mm: 6, for: ['H1', 'H2', 'H3', 'H4'], mpn: null, lcsc: null, source: 'case', note: 'thread-forming screw for plastic' },
+        ],
+      },
       checkedAt: ago(2 * HOUR),
       wait: { id: 'w-ord', what: 'Waiting for JLCPCB to confirm the order', text: 'Starts once the order is recorded', lastCheckedAt: ago(2 * MIN), nextCheckAt: ahead(13 * MIN) },
       meanwhile: [{ title: 'Bring-up firmware build', state: 'done' }, { title: 'Bring-up plan', state: 'running' }, { title: 'Bench wiring view', state: 'todo' }, { title: 'Test scripts dry-run', state: 'todo' }],

@@ -78,7 +78,7 @@ export interface Actions {
   }
   /** admin: what the project is (Settings): written to the journey record, not the repository */
   'project.update': {
-    args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null }; later?: ('certify' | 'produce' | 'sustain')[] }
+    args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; hardware?: boolean }; later?: ('certify' | 'produce' | 'sustain')[] }
     result: { repo: string; version: number }
   }
   // a project's lifecycle (src/api/actions-lifecycle.ts): paused holds it as it is; retired hides it until an admin restores it

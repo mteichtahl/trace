@@ -43,7 +43,7 @@ export interface JourneyMore extends Journey {
   decisions?: DecisionEntry[]
   /** what the project is (Settings): its icon, build plan and the later stages it has */
   icon?: ProjectIcon
-  build?: { quantity: number; unit_cost: number | null; budget: number | null; currency: string; fab: string }
+  build?: { quantity: number; unit_cost: number | null; budget: number | null; currency: string; fab: string; hardware?: boolean }
   later?: ('certify' | 'produce' | 'sustain')[]
 }
 
@@ -399,6 +399,10 @@ export interface RunRecordView {
 
 // ------------------------------------------------------------------ build (build.get, needs building)
 
+/** One line of the panel and mounting hardware list (kicad.bom / kicad.fab with hardware). */
+export interface HardwareLine { qty: number; item: string; kind: 'panel' | 'mounting'; size: string | null; length_mm: number | null; for: string[]; mpn: string | null; lcsc: string | null; source: string; note: string | null }
+export interface HardwareList { lines: HardwareLine[]; notes: string[]; case_stale: boolean; run: string | null }
+
 export interface OrderView {
   id: string
   release: string
@@ -415,6 +419,11 @@ export interface OrderView {
   options: { option: string; value: string }[]
   parts: { ref: string; name: string; lcsc: string; stock: number; then: number; now: number }[]
   files: string[]
+  /**
+   * The panel and mounting hardware list (build.get, when the build plan includes it): kept apart from the parts, bought
+   * separately and never sent to the assembler. null when it is asked for but no run made it yet; absent when not asked.
+   */
+  hardware?: HardwareList | null
   checkedAt?: string
   number?: string
   paid?: number | null

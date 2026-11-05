@@ -16,7 +16,7 @@
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Check, Download, FileText, Loader2 } from 'lucide-react'
+import { Check, Download, FileText, Loader2, Wrench } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -37,7 +37,7 @@ import { projectId, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ago, money } from '@/lib/format'
 import { useAction, useCall, useJourney } from '@/lib/queries'
-import type { OrderView } from '@/lib/types-s1'
+import type { HardwareLine, HardwareList, OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
 import { DeploysPanel } from '@/components/project/deploys'
@@ -238,6 +238,8 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
             </p>
             <div className="mt-3"><DataTable id="order-parts" persist={false} data={o.parts} columns={partCols} getRowId={(r) => r.ref} noun="lines" /></div>
           </section>
+
+          <HardwareSection repo={repo} hardware={o.hardware} />
         </div>
 
         <aside className="space-y-4">
@@ -298,5 +300,70 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
         </Section>
       )}
     </div>
+  )
+}
+
+// ------------------------------------------------------------------ panel and mounting hardware
+
+const KIND_LABEL: Record<HardwareLine['kind'], string> = { panel: 'Panel', mounting: 'Mounting' }
+const SOURCE_LABEL: Record<string, string> = { case: 'Case build', board: 'Mounting holes', schematic: 'Schematic' }
+
+/**
+ * The panel and mounting hardware: its own list beside the parts, bought separately (never part of the JLCPCB assembly
+ * order). Off by default: when the build plan does not include it, one line says so with a way to turn it on.
+ */
+function HardwareSection({ repo, hardware }: { repo: string; hardware: HardwareList | null | undefined }) {
+  const { user } = useAuth()
+  const admin = user?.class === 'admin'
+  const update = useCall('project.update', (a) => [['journey.get', a.repo], ['build.get', a.repo]])
+  const cols = useMemo<ColumnDef<HardwareLine, any>[]>(() => [
+    { accessorKey: 'qty', header: 'Qty', size: 70, meta: { label: 'Qty', kind: 'number', align: 'right' } },
+    {
+      accessorKey: 'item', header: 'Item', size: 260, meta: { label: 'Item', kind: 'text' },
+      cell: ({ row }) => <span><span className="font-medium">{row.original.item}</span>{row.original.for.length > 0 && <span className="block font-mono text-xs text-muted-foreground">{row.original.for.join(' ')}</span>}</span>,
+    },
+    { id: 'kind', accessorFn: (l) => KIND_LABEL[l.kind], header: 'Kind', size: 110, meta: { label: 'Kind', kind: 'enum' } },
+    { id: 'size', accessorFn: (l) => l.size ?? '', header: 'Size', size: 150, meta: { label: 'Size', kind: 'text' }, cell: ({ row }) => row.original.size ?? <span className="text-muted-foreground">—</span> },
+    { id: 'length', accessorFn: (l) => l.length_mm ?? -1, header: 'Length', size: 90, meta: { label: 'Length', kind: 'number', align: 'right' }, cell: ({ row }) => (row.original.length_mm !== null ? `${row.original.length_mm} mm` : <span className="text-muted-foreground">{row.original.source === 'board' ? 'To suit' : '—'}</span>) },
+    { id: 'part', accessorFn: (l) => l.mpn ?? l.lcsc ?? '', header: 'Part number', size: 130, meta: { label: 'Part number', kind: 'text', mono: true }, cell: ({ row }) => row.original.mpn ?? row.original.lcsc ?? <span className="text-muted-foreground">Any</span> },
+    { id: 'source', accessorFn: (l) => SOURCE_LABEL[l.source] ?? l.source, header: 'From', size: 130, meta: { label: 'From', kind: 'enum' } },
+  ], [])
+
+  if (hardware === undefined) {
+    return (
+      <section className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed p-4 text-sm" aria-label="Panel and mounting hardware">
+        <Wrench className="size-4 text-muted-foreground" aria-hidden />
+        <p className="flex-1 text-muted-foreground">Panel and mounting hardware (case parts, screws, knobs) is not included in this build.</p>
+        {admin && (
+          <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ repo, build: { hardware: true } }, { onSuccess: () => toast('Hardware list included.', { description: 'trace makes it as a separate list beside the parts.' }), onError: (e) => toast.error('Could not include it.', { description: String(e) }) })}>
+            {update.isPending && <Loader2 className="animate-spin" />}Include it
+          </Button>
+        )}
+      </section>
+    )
+  }
+
+  const items = hardware?.lines.reduce((n, l) => n + l.qty, 0) ?? 0
+  return (
+    <section className="rounded-xl border p-5" aria-labelledby="hardware">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 id="hardware" className="text-lg font-semibold">Panel and mounting hardware</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {hardware ? `${items} item${items === 1 ? '' : 's'} in ${hardware.lines.length} line${hardware.lines.length === 1 ? '' : 's'}. ` : ''}A separate list: bought on its own, not part of the JLCPCB assembly order.
+          </p>
+        </div>
+        {hardware?.lines.length ? <Button size="sm" variant="outline" onClick={() => toast('The hardware list (hardware.csv) downloads with the release files.')}><Download /> hardware.csv</Button> : null}
+      </div>
+      {hardware?.case_stale && <p className="mt-3 flex flex-wrap items-center gap-2 text-sm"><StatusBadge status="warning" label="Case out of date" /> The case was built for an earlier board. trace rebuilds it before you order.</p>}
+      {hardware === null ? (
+        <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" aria-hidden /> trace makes the hardware list with the next parts list check.</p>
+      ) : hardware.lines.length ? (
+        <div className="mt-3"><DataTable id="order-hardware" persist={false} data={hardware.lines} columns={cols} getRowId={(r) => `${r.item}|${r.for.join(' ')}`} noun="lines" /></div>
+      ) : null}
+      {hardware && hardware.notes.length > 0 && (
+        <ul className="mt-3 space-y-1 text-xs text-muted-foreground">{hardware.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+      )}
+    </section>
   )
 }
