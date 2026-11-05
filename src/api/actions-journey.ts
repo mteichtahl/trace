@@ -197,6 +197,10 @@ async function keepFollowup(ctx: Context, repo: string, f: Omit<Followup, 'state
   await writeJourney(ctx, repo, (db) => { putFollowup(db, f, Date.now() / 1000); return { result: {} } }).catch(() => undefined)
 }
 
+/** An answer that recorded waivers (an option that waives) says so, as the Waiver skill would: " 3 waivers are recorded in your name." */
+export const waivedWords = (q: { waivers?: string[] | undefined }): string =>
+  q.waivers?.length ? ` ${q.waivers.length === 1 ? 'A waiver is' : `${q.waivers.length} waivers are`} recorded in your name.` : ''
+
 /**
  * After an answer: when the job that asked has ended, a task for the same specialist on that job's branch, told the
  * answer. A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
@@ -700,7 +704,7 @@ export const JOURNEY_ACTIONS = {
     const before = await designBefore(ctx, a.repo)
     const answered = await journeyWrite(ctx, a.repo, (db) => {
       const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason, lasts: a.lasts }, { facts })
-      return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
+      return { result: { repo: a.repo, question: q, summary: `Answered.${waivedWords(q)} The agent carries on.` } }
     })
     // saved: the wait from asked to answered (src/api/process-metrics.ts)
     recordAnswered(a.repo, answered.question)
@@ -712,7 +716,8 @@ export const JOURNEY_ACTIONS = {
     if (!asked?.jobId) return docs.started ? { ...answered, started: [docs.started] } : answered
     const carried: { started?: string[]; jobError?: string } = await carryOn(ctx, a.repo, asked, answered.question, a.lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
     const started = [...(carried.started ?? []), ...(docs.started ? [docs.started] : [])]
-    return { ...answered, ...carried, ...(started.length ? { started } : {}) }
+    const said = (carried as { summary?: string }).summary
+    return { ...answered, ...carried, ...(said ? { summary: said.replace(/^Answered\./, `Answered.${waivedWords(answered.question)}`) } : {}), ...(started.length ? { started } : {}) }
   }),
 
   'stuck.dismiss': def('write', Repo.extend({ job: Id, reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {

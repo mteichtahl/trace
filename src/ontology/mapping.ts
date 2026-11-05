@@ -73,6 +73,7 @@ const options: FieldMap = {
   fields: {
     id: { ignore: 'the option\'s id within its question' }, label: { prop: 'label' }, recommended: { prop: 'isRecommended', as: 'bool' },
     why: { prop: 'justification' }, gives_up: { prop: 'givesUp' },
+    waives: { ignore: 'what choosing it would waive: the waivers an answer records are their own rows, mapped from waivers' },
   },
 }
 const revision = { ref: 'revision', type: 'Revision' } as const

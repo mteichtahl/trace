@@ -174,6 +174,48 @@ describe('the journey record', () => {
     expect(gateView(rec(), 'define', ADMIN).criteria.find((c) => c.id === 'define.measurable')?.status).toBe('waived')
     expect(() => addWaiver(db, base, signer)).toThrow(/already waived/)
   })
+
+  // test-esp32 #142: the answer "Waive the Q1, R4, R5 findings" was not a waiver, and the person had nowhere to take one
+  it('an answer choosing an option that waives records the waivers in the person\'s name, with its reason, risk and severity', () => {
+    for (const g of ['define', 'architect', 'capture', 'prove']) { meetAll(g); openAll(g); signGate(db, g, signer) }
+    const found = ['Q1', 'R4', 'R5'].map((r) => `layout.fit@urn:trace:case-finding:${r}`)
+    const waives = { targets: found.map((id) => ({ kind: 'finding' as const, id })), risk: 'A part under the window could touch the display glass.', severity: 'cosmetic' as const, caught_where: 'Bring up: fit the lid', scope: 'this revision only' }
+    const ask = (): string => askQuestion(db, { askedBy: 'the Implementation specialist', text: 'Three parts sit under the display window with nothing covering them from above (layout.fit). Waive them or model the module glass?', blocks: 'layout.fit', options: [
+      { id: 'waive', label: 'Waive the Q1, R4, R5 findings', recommended: true, why: 'The module glass covers the window; the fit engine does not model it.', waives },
+      { id: 'model', label: 'Model the module under the lid in case.py', why: 'Measured, not waived, but a longer job.' },
+    ] })
+    // another option records nothing
+    answerQuestion(db, ask(), signer, { option: 'model', reason: 'measure it instead' })
+    expect(rec().waivers).toEqual([])
+    // the recommendation chosen with no reason of the person's: the option's why is the reason
+    const q = ask()
+    const v = answerQuestion(db, q, signer, { option: 'waive' })
+    expect(v.waivers).toHaveLength(3)
+    expect(rec().waivers.map((w) => ({ kind: w.targetKind, target: w.target, by: w.by, severity: w.severity, stage: w.stage }))).toEqual(found.map((target) => ({ kind: 'finding', target, by: ADMIN.label, severity: 'cosmetic', stage: 'layout' })))
+    expect(rec().waivers[0]).toMatchObject({ reason: 'The module glass covers the window; the fit engine does not model it.', risk: waives.risk, caughtWhere: 'Bring up: fit the lid', scope: 'this revision only' })
+    const logged = rec().decisions.filter((d) => d.kind === 'waiver.added')
+    expect(logged).toHaveLength(3)
+    expect(logged[0]?.summary).toMatch(new RegExp(`in answer to question ${q}`))
+    // the gate lists them for the signer to acknowledge, as any waiver of the stage
+    expect(gateView(rec(), 'layout', ADMIN).waivers).toHaveLength(3)
+    // asked again: a finding already waived is not waived twice; the person's own reason is kept
+    answerQuestion(db, ask(), signer, { option: 'waive', reason: 'The glass sits 1 mm above the parts.' })
+    expect(rec().waivers).toHaveLength(3)
+  })
+
+  it('an option that waives a criterion records it; a vague reason is refused and the answer is not kept', () => {
+    const waives = { targets: [{ kind: 'criterion' as const, id: 'define.measurable' }], risk: 'Range could fall short.', severity: 'degraded' as const, caught_where: 'Bring up', scope: 'this revision only' }
+    const q = askQuestion(db, { askedBy: 'the Verification specialist', text: 'Waive define.measurable until the range test on the bench?', blocks: 'define.measurable', options: [
+      { id: 'a', label: 'Keep asking for a number', recommended: true, why: 'A number makes it testable.' },
+      { id: 'w', label: 'Waive it until bring-up', why: 'ok', waives },
+    ] })
+    expect(() => answerQuestion(db, q, signer, { option: 'w', reason: 'bench' })).toThrow(/records a waiver in your name/)
+    expect(rec().questions.find((x) => x.id === q)?.answeredAt).toBeNull()
+    expect(rec().waivers).toEqual([])
+    const v = answerQuestion(db, q, signer, { option: 'w', reason: 'The range test needs the bench.' })
+    expect(v.waivers).toHaveLength(1)
+    expect(gateView(rec(), 'define', ADMIN).criteria.find((c) => c.id === 'define.measurable')?.status).toBe('waived')
+  })
 })
 
 describe('signing a gate', () => {

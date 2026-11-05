@@ -253,6 +253,9 @@ add({ id: 'specialist.journey.people', mode: 'locked', prompt: 'specialist', var
     'People decide; agents prepare. You cannot sign a gate, take a waiver or answer a question, and a criterion a person',
     'owns is met only by their own act. An unanswered question is not an answer: never act on the recommended option as',
     'if it had been chosen.',
+    'To let a person waive findings or a criterion, offer it as an option with waives (each finding or criterion by id,',
+    'the risk and severity): their choosing it records the waiver in their name. Do not ask them to go and waive by hand',
+    'what that option records, and do not ask again what an open question already asks.',
   ].join('\n') })
 add({ id: 'specialist.handoff', mode: 'editable', prompt: 'specialist', then: ['specialist.handoff.rules'],
   vars: { tool: text('the hand-off tool, by MCP name'), status_tool: text('the journey status tool, by MCP name'), ask_tool: text('the journey question tool, by MCP name'), specialists: list('the specialists it may ask, one "- <kind>: the <name> specialist" per line') },

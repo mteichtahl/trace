@@ -431,7 +431,8 @@ export interface Question {
   askedAt: string
   blocks?: string
   recommended?: { id: string; label: string }
-  options?: { id: string; label: string }[]
+  /** `waiver`: choosing it records a waiver in the person's name (what, risk, severity), in words */
+  options?: { id: string; label: string; detail?: string; waiver?: string }[]
   sources?: EvidenceRef[]
 }
 
