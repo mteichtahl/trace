@@ -6,10 +6,14 @@
  */
 import { App } from 'aws-cdk-lib'
 import { TraceEdgeStack, edgeNeeded } from './edge.js'
+import { assertImageLockInSync, stageImageFiles } from './lockfile.js'
 import { infraPropsFromEnv, stackName } from './props.js'
-import { TraceStack } from './stack.js'
+import { REPO_ROOT, TraceStack } from './stack.js'
 
 const props = infraPropsFromEnv()
+// before the stack hashes the image sources: a clone's agent/ copies are refreshed, and a stale lock stops the deploy here
+stageImageFiles(REPO_ROOT)
+assertImageLockInSync(REPO_ROOT)
 const app = new App()
 new TraceStack(app, stackName(props.prefix), props)
 if (edgeNeeded(props)) new TraceEdgeStack(app, props)
