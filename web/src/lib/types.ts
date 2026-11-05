@@ -559,6 +559,12 @@ export interface Journey {
   /** criteria met on evidence that has since gone out of date, each with its gate and why (journey.get `stale_evidence`) */
   staleEvidence?: { criterion: string; gate: string; text: string; why: string }[]
   /**
+   * After a change of requirements took the project back (journey.get `resign`, src/api/reopen-scope.ts): the gates
+   * to sign again, each `agree` (the changed requirements agreed first), `kept` (its evidence stands, nothing is
+   * redone), `redo` (the part the change reaches is done again) or `signed` (signed again already), with why
+   */
+  resign?: { requirements: string[]; edits: string; gates: { gate: string; name: string; stage: string; state: 'agree' | 'kept' | 'redo' | 'signed'; why: string }[] }
+  /**
    * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
    * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
    * again, `why` says what happened), drafted (waiting in a change) or done

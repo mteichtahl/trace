@@ -895,29 +895,50 @@ const stageFor = (r: Pick<JourneyRecord, 'stages'>, stage: StageId): StageRow | 
  * what changed.
  */
 function rewindCriteria(db: DatabaseSync, r: JourneyRecord, target: StageRow, by: string, t: number): void {
+  for (const c of rewound(r, target)) db.prepare('UPDATE gate_criteria SET status=\'not_met\', checked_at=?, checked_by=?, updated=? WHERE id=?').run(t, by, t, c.id)
+}
+
+/** The criteria rewindCriteria takes back from `target` on, each met one as it stood, with its evidence. Pure. */
+function rewound(r: JourneyRecord, target: StageRow): CriterionRow[] {
   const stageOf = (gate: string): StageRow | undefined => r.stages.find((s) => s.id === r.gates.find((g) => g.id === gate)?.stage)
-  for (const c of r.criteria) {
+  return r.criteria.filter((c) => {
     const st = stageOf(c.gate)
-    if (!st || st.ord < target.ord || c.status !== 'met') continue
-    if (st.ord === target.ord && c.owner !== 'person') continue
-    db.prepare('UPDATE gate_criteria SET status=\'not_met\', checked_at=?, checked_by=?, updated=? WHERE id=?').run(t, by, t, c.id)
-  }
+    if (!st || st.ord < target.ord || c.status !== 'met') return false
+    return st.ord !== target.ord || c.owner === 'person'
+  })
+}
+
+/**
+ * What a reopen for changed requirements keeps in its decision's detail, so a stage the change does not reach can be
+ * signed again on the same evidence (carryStage; src/api/reopen-scope.ts): the requirements, the stage the project
+ * was in, and each criterion it took back as it stood.
+ */
+export interface ReopenDetail {
+  requirements: string[]
+  from: StageId
+  rewound: { id: string; evidence: Evidence[] }[]
+  /** when it took them back: the time their rows were checked at (absent until written) */
+  at?: number | undefined
 }
 
 /**
  * Take the project back to `stage` in the same revision because something it decided has changed (a requirement or
  * the architecture, before release): the stage is reopened with `reason`, the gates from there on stop counting, and
  * the stale work is done again (rewindCriteria). Nothing happens while the project is at or before that stage;
- * returns the stage the project went back to, or null.
+ * returns the stage the project went back to, or null. `requirements`: the changed requirements it is for, kept with
+ * what it took back (ReopenDetail).
  */
-export function returnForChange(db: DatabaseSync, stage: StageId, reason: string, by: string): StageId | null {
+export function returnForChange(db: DatabaseSync, stage: StageId, reason: string, by: string, o: { requirements?: readonly string[] | undefined } = {}): StageId | null {
   const r = need(db)
   const target = stageFor(r, stage)
   const cur = r.stages.find((s) => s.id === r.journey.currentStage)
   if (!target || !cur || target.ord >= cur.ord) return null
   const t = now()
+  const detail: ReopenDetail | undefined = o.requirements?.length
+    ? { requirements: [...o.requirements], from: cur.id, rewound: rewound(r, target).map((c) => ({ id: c.id, evidence: c.evidence })) }
+    : undefined
   transaction(db, () => {
-    reopenStage(db, r, target.id, reason, by, t)
+    reopenStage(db, r, target.id, reason, by, t, detail)
     rewindCriteria(db, r, target, by, t)
   })
   return target.id
@@ -970,7 +991,7 @@ export function startRevision(db: DatabaseSync, stage: StageId, reason: string, 
  * (returnForChange); after release, the next revision starts there (startRevision). `revision` is set only when a new
  * one started. Null when the project is at or before that stage already.
  */
-export function applyChange(db: DatabaseSync, stage: StageId, reason: string, by: string): { stage: StageId; revision: string | null } | null {
+export function applyChange(db: DatabaseSync, stage: StageId, reason: string, by: string, o: { requirements?: readonly string[] | undefined } = {}): { stage: StageId; revision: string | null } | null {
   const r = need(db)
   const target = stageFor(r, stage)
   const cur = r.stages.find((s) => s.id === r.journey.currentStage)
@@ -979,7 +1000,7 @@ export function applyChange(db: DatabaseSync, stage: StageId, reason: string, by
     const s = startRevision(db, stage, reason, by)
     return { stage: s.stage, revision: s.revision }
   }
-  const back = returnForChange(db, stage, reason, by)
+  const back = returnForChange(db, stage, reason, by, o)
   return back ? { stage: back, revision: null } : null
 }
 
@@ -1773,7 +1794,7 @@ export function returnGate(db: DatabaseSync, id: string, by: Signer, o: { reason
   return { gate: gateView(need(db), id, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' }), reopened }
 }
 
-function reopenStage(db: DatabaseSync, r: JourneyRecord, stage: StageId, reason: string, by: string, t: number): void {
+function reopenStage(db: DatabaseSync, r: JourneyRecord, stage: StageId, reason: string, by: string, t: number, detail?: ReopenDetail): void {
   const target = r.stages.find((s) => s.id === stage) as StageRow
   const later = r.stages.filter((s) => s.ord >= target.ord).map((s) => s.id)
   const gates = r.gates.filter((g) => later.includes(g.stage)).map((g) => g.id)
@@ -1781,7 +1802,32 @@ function reopenStage(db: DatabaseSync, r: JourneyRecord, stage: StageId, reason:
   for (const s of later) db.prepare('UPDATE stages SET finished=NULL, updated=? WHERE id=?').run(t, s)
   db.prepare('UPDATE stages SET reopened_at=?, reopened_reason=?, reopened_by=?, started=COALESCE(started, ?), updated=? WHERE id=?').run(t, reason, by, t, t, stage)
   db.prepare('UPDATE journey SET current_stage=?, updated=? WHERE id=\'current\'').run(stage, t)
-  decide(db, { kind: 'stage.reopened', stage, ref: stage, by, summary: `${STAGE_NAMES[stage]} was reopened: ${reason}` })
+  decide(db, { kind: 'stage.reopened', stage, ref: stage, by, summary: `${STAGE_NAMES[stage]} was reopened: ${reason}`, ...(detail ? { detail: { ...detail, at: t } } : {}) })
+}
+
+/**
+ * Meet `stage`'s criteria again on the evidence they had, after a reopen for changed requirements that do not reach
+ * its work (src/api/reopen-scope.ts): each criterion of its gates a reopen took back (`kept`, from the reopens'
+ * ReopenDetail) is met again with that evidence, unless something changed it since (it is still not met, checked at
+ * the very time of one of the reopens, `at`). Its gates are still signed by a person. The decisions log says what was
+ * kept and why. Returns the criteria met again.
+ */
+export function carryStage(db: DatabaseSync, stage: StageId, kept: readonly ReopenDetail['rewound'][number][], at: readonly number[], o: { by: string; summary: string; detail?: Record<string, unknown> | undefined }): string[] {
+  const r = need(db)
+  const gates = new Set(r.gates.filter((g) => g.stage === stage).map((g) => g.id))
+  const t = now()
+  const out: string[] = []
+  transaction(db, () => {
+    for (const k of kept) {
+      const c = r.criteria.find((x) => x.id === k.id)
+      const since = c?.checkedAt
+      if (!c || !gates.has(c.gate) || c.status !== 'not_met' || since == null || !at.some((x) => Math.abs(x - since) < 1e-6) || out.includes(c.id)) continue
+      db.prepare('UPDATE gate_criteria SET status=\'met\', evidence=?, checked_at=?, checked_by=?, updated=? WHERE id=?').run(JSON.stringify(k.evidence), t, o.by, t, c.id)
+      out.push(c.id)
+    }
+    decide(db, { kind: 'stage.kept', stage, ref: stage, by: o.by, summary: o.summary, detail: { ...o.detail, criteria: out } })
+  })
+  return out
 }
 
 export const VAGUE = /^(it depends|you decide|not needed|n\/?a|none|no|ok|yes|whatever)\.?$/i

@@ -45,6 +45,7 @@ function readWaiver(w: Obj): Waiver {
 
 const STAGE_STATES = new Set(['done', 'current', 'queued', 'reopened', 'skipped'])
 const DRAFTING = new Set(['intent', 'drafting', 'stopped', 'drafted', 'done'])
+const RESIGN = new Set(['agree', 'kept', 'redo', 'signed'])
 
 /**
  * The address of what a next step or an inbox item is about: where it is done. A criterion a person meets in a guided
@@ -317,6 +318,13 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     hasMemory: Boolean(raw.has_memory),
     ...(str(raw.changes_unavailable) ? { changesUnavailable: String(raw.changes_unavailable) } : {}),
     ...(arr(raw.stale_evidence).length ? { staleEvidence: arr(raw.stale_evidence).map((x) => ({ criterion: String(x.criterion), gate: String(x.gate), text: String(x.text), why: String(x.why) })) } : {}),
+    ...(isObj(raw.resign) && arr(raw.resign.gates).length ? { resign: {
+      requirements: (Array.isArray(raw.resign.requirements) ? raw.resign.requirements : []).map(String), edits: String(raw.resign.edits ?? ''),
+      gates: arr(raw.resign.gates).map((g) => ({
+        gate: String(g.gate), name: String(g.name), stage: String(g.stage), why: String(g.why),
+        state: RESIGN.has(String(g.state)) ? String(g.state) as NonNullable<Journey['resign']>['gates'][number]['state'] : 'redo',
+      })),
+    } } : {}),
     ...(isObj(raw.drafting) && DRAFTING.has(String(raw.drafting.state)) ? { drafting: {
       state: String(raw.drafting.state) as NonNullable<Journey['drafting']>['state'],
       ...(isObj(raw.drafting.job) && str(raw.drafting.job.id) ? { jobId: String(raw.drafting.job.id), jobState: String(raw.drafting.job.state) } : {}),
