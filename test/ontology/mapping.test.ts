@@ -11,13 +11,14 @@ import { describe, expect, it } from 'vitest'
 import { applyJourneySchema, EvidenceSchema, JOURNEY_TABLES, OptionSchema } from '../../src/core/journey.js'
 import { applyAgentFactsSchema } from '../../src/core/agent-facts.js'
 import { JOB_CONTROLS_SQL, applyJobIndexSchema } from '../../src/core/job-index.js'
+import { ANSWER_FOLLOWUPS_SQL } from '../../src/core/answer-followups.js'
 import { PROJECT_SCHEMA, applyProjectSchema, projectTables } from '../../src/core/store.js'
 import { PARTS_SCHEMA } from '../../src/tools/parts/db.js'
 import { type DbName, IGNORED_TABLES, LATER_TABLES, TABLES, keyColumns, tableMap } from '../../src/ontology/mapping.js'
 
 async function schemaOf(db: DbName): Promise<DatabaseSync> {
   const d = new DatabaseSync(':memory:')
-  if (db === 'journey') { applyJourneySchema(d, { store: true }); d.exec(JOB_CONTROLS_SQL) }
+  if (db === 'journey') { applyJourneySchema(d, { store: true }); d.exec(JOB_CONTROLS_SQL); d.exec(ANSWER_FOLLOWUPS_SQL) }
   if (db === 'facts') applyAgentFactsSchema(d)
   if (db === 'jobs') applyJobIndexSchema(d)
   if (db === 'project') { for (const f of registeringModules()) await import(f); applyProjectSchema(d) }

@@ -154,6 +154,18 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'wait', why: 'It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Its checks passed: it follows that change into the design once it is accepted.' },
       may_accept: false, blockers: ['It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Accept that one first.'],
     }),
+    // an answer to its specialist's question that trace has not applied yet (test-esp32 log #131): never "accept"
+    summary(16, {
+      title: 'Wi-Fi setup in the user guide', from: 'the Documentation specialist', stage: 'layout', opened_at: ago(50 * MIN), updated_at: ago(40 * MIN),
+      head: { ref: 'claude/task-wifi-docs', sha: HEAD },
+      checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'unfinished',
+      answers: [{ question: 'aqf54afeab7d8d4a', text: 'How does a user clear the saved Wi-Fi network?' }],
+      summary: ['Wrote the Wi-Fi setup section of the user guide.', 'Added a troubleshooting section for a board that does not join the network.'],
+      files: [{ path: 'docs/user-guide.md', status: 'modified', additions: 48, deletions: 2, kind: 'text' }],
+      checks_list: [{ name: 'build', state: 'passed', summary: 'Built.', id: 'job:9401' }, { name: 'Docs links', state: 'passed', summary: null, id: null }],
+      recommendation: { verdict: 'wait', why: 'Waiting for trace to apply your answer to "How does a user clear the saved Wi-Fi network?" to it. Accepted now, it would go into the design without that answer.' },
+      may_accept: true,
+    }),
   ],
 }
 
@@ -231,7 +243,7 @@ function checkDetail(c: ChangeDetail, id: string, admin: boolean) {
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
 const open = (repo: string) => (CHANGES[repo] ?? []).filter((c) => c.state === 'open')
-const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by'] as const
+const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by', 'answers'] as const
 const toSummary = (c: ChangeDetail) => Object.fromEntries(SUMMARY_KEYS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]))
 
 /** After a change is accepted: Capture moves to step 4 and trace starts the stock check. */
