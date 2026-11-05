@@ -40,6 +40,7 @@ import type { JobRow } from '../core/job-index.js'
 import { indexedHandle, isLive } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
 import type { CheckRunDetail, PullFile, PullStatus, PullSummary } from './github.js'
+import type { RequirementEditsView } from './requirement-edits.js'
 import type { PendingAnswer } from '../core/answer-followups.js'
 
 export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
@@ -140,6 +141,8 @@ export interface ChangeDetail extends ChangeSummary {
   may_ask: boolean
   /** when it became ready for a person (readySince), ISO */
   ready_since: string
+  /** the accepted requirements its database edits, said before it is accepted (src/api/requirement-edits.ts) */
+  requirement_edits?: RequirementEditsView
   /**
    * Every check that failed, failed for a reason outside the work (GitHub busy or down, the runner lost: infraReason):
    * which ones, by checks_list id, and why in plain words. The page offers to run them again (change.rerun). Absent:

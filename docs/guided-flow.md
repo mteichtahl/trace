@@ -105,6 +105,14 @@ files are sound, not that the work is done. It is a recommendation, not a blocke
 decision bar then leads with Ask for changes and says accepting takes it as it is. `change.accept` re-reads the status from GitHub (never a kept copy)
 and refuses when the head moved or it is not `may_accept`.
 
+A change whose project database edits a requirement a person accepted (its words, its acceptance criterion, struck or
+removed) says so first, on its page and in the recommendation: "Changes a requirement (REQ-…): accepting it reopens
+Define and every gate after it" (`requirement_edits`, src/api/requirement-edits.ts). Only a requirement change that was
+asked for is expected: an answer whose person said "It changes a requirement", or a change request about one. An
+edit nothing asked for (an answer given as "Just this once" or "A rule for the project") turns the recommendation into
+Ask for changes; the person may still accept it. Accepting reopens Define straight away, from what the review found,
+even while the default branch GitHub serves still reads as before the merge.
+
 `service-policy.ts`: `changes.list`, `change.get`, `change.diff` are `read`; the other three are not open to
 connected systems.
 

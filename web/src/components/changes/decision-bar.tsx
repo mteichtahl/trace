@@ -28,6 +28,7 @@ export interface DecisionBarProps {
   change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & {
     verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; answers?: ChangeDetail['answers']
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
+    recommendation?: ChangeDetail['recommendation'] | undefined
     infra_failed?: ChangeDetail['infra_failed']
   }
   part?: Part
@@ -98,6 +99,8 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
   // the specialist says it is not finished and has more to do (not merely waiting on an approval)
   // (while trace applies an answer, nothing is for this person to do: asking for changes leads only once it will not)
   const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length && (!change.answers?.length || change.answers.some((a) => a.stopped))
+  // ready to accept, yet trace recommends asking (it edits an accepted requirement nothing asked to change): Ask leads
+  const askLeads = unfinished || (mode === 'ready' && change.recommendation?.verdict === 'ask')
   // in conflict: the step to take is bringing it up to date, so it leads; accepting waits for it
   const resolvable = !!onResolve && offersResolve(mode, change)
   // a check that did not run properly: running it again is the step to take, so it leads
@@ -153,9 +156,9 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
                   {several ? 'Run the checks again' : 'Run the check again'}
                 </Button>
               )}
-              {mayAsk && <Button variant={unfinished ? 'default' : 'outline'} size={unfinished ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>}
+              {mayAsk && <Button variant={askLeads ? 'default' : 'outline'} size={askLeads ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>}
               {mayAccept && !resolvable && !rerunnable && (
-                <Button variant={unfinished ? 'outline' : 'default'} size={unfinished ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
+                <Button variant={askLeads ? 'outline' : 'default'} size={askLeads ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
                   {busy === 'accept' && <Loader2 className="animate-spin" aria-hidden />}
                   Accept into the design
                 </Button>

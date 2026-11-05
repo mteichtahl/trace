@@ -9,13 +9,15 @@
  * opened), accepting only the head the person looked at, comments that cannot speak for trace or name an email, a
  * revision request whose title and summary are data, the GitHub cache and budget.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/api/actions.js'
 import { AGENT_WORDS, jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
+import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
@@ -1056,5 +1058,73 @@ describe('when a change became ready for a person (readySince)', () => {
     expect(readySince(null, OPENED)).toBe(OPENED)
     // a check that finished before the change was opened (a branch pushed earlier): ready when it was opened
     expect(readySince([{ status: 'completed', completed_at: '2026-11-02T08:00:00Z' }], OPENED)).toBe(OPENED)
+  })
+})
+
+describe('a change that edits an accepted requirement (test-esp32 log #112)', () => {
+  const DB = '.trace/project.db'
+  const PIN = 'J2 pin order is GND, 3V3, SCL, SDA'
+  const NOTE = 'J2 pin 1 is GND (note only)'
+  let original: Uint8Array
+  /** the seeded database with REQ-367d71 accepted, its acceptance criterion `acceptance` */
+  const withRequirement = (acceptance: string): Uint8Array => {
+    const dir = mkdtempSync(join(scratch, 'req-'))
+    const path = join(dir, 'project.db')
+    writeFileSync(path, original)
+    const d = new DatabaseSync(path)
+    d.exec(`CREATE TABLE IF NOT EXISTS requirements (id TEXT PRIMARY KEY, text TEXT NOT NULL, kind TEXT NOT NULL, acceptance TEXT, source TEXT, page INTEGER, status TEXT NOT NULL DEFAULT 'proposed', tags TEXT, created REAL NOT NULL, updated REAL NOT NULL, by TEXT)`)
+    d.prepare('INSERT OR REPLACE INTO requirements (id, text, kind, acceptance, status, created, updated, by) VALUES (?,?,?,?,?,?,?,?)').run('REQ-367d71', 'The display connector', 'functional', acceptance, 'accepted', 1, acceptance === PIN ? 10 : 20, 'verify')
+    d.close()
+    return readFileSync(path)
+  }
+  const stage = (s: string) => journeyStore(ctx(ADMIN), REPO).update((d) => { d.prepare('UPDATE journey SET current_stage=?').run(s); return { result: null } })
+  const request = (lasts: 'rule' | 'requirement') => JSON.stringify({ request: answeredRequest({ id: 'Q-pins', text: 'Which pin order for J2?', jobId: 'job-x', branch: 'b', answer: 'GND, 3V3, SCL, SDA', reason: null, by: 'Marc', lasts }) })
+
+  beforeAll(async () => {
+    original = github.files.get(`${REPO}:main:${DB}`)!
+    github.files.set(`${REPO}:main:${DB}`, withRequirement(PIN))
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-pins', { kind: 'task', agent: 'verify', title: 'Note the J2 pin order', state: 'succeeded', branch: 'claude/task-pins', endedAt: now - 50, payload: request('rule') }, now)
+      putJob(d, 'job-rail', { kind: 'task', agent: 'verify', title: 'Change the J2 requirement', state: 'succeeded', branch: 'claude/task-rail', endedAt: now - 40, payload: request('requirement') }, now)
+      return { result: null }
+    })
+  })
+  afterAll(async () => { github.files.set(`${REPO}:main:${DB}`, original); await stage('define') })
+  beforeEach(() => {
+    const edited = withRequirement(NOTE)
+    for (const [n, branch] of [[11, 'claude/task-pins'], [12, 'claude/task-rail']] as const) {
+      github.add(n, branch, { title: 'Note the J2 pin order' })
+      github.pulls.get(n)!.files.push({ path: DB, status: 'modified', additions: 0, deletions: 0, patch: null, previous: null })
+      github.files.set(`${REPO}:${sha(n)}:${DB}`, edited)
+    }
+  })
+
+  it('in Define: says so on its page, and still recommends accepting', async () => {
+    await stage('define')
+    const d = await run(USER, 'change.get', { repo: REPO, number: 11 })
+    expect(d.requirement_edits).toMatchObject({ ids: ['REQ-367d71'], reopens: false, asked: null, edits: [{ id: 'REQ-367d71', what: `REQ-367d71: its acceptance criterion changes from "${PIN}" to "${NOTE}".` }] })
+    expect(d.recommendation).toMatchObject({ verdict: 'accept', why: expect.stringMatching(/^Changes an accepted requirement \(REQ-367d71\): accepting it sends it back to Requirements review/) })
+    // a change that leaves the database alone reads nothing more
+    expect((await run(USER, 'change.get', { repo: REPO, number: 1 })).requirement_edits).toBeUndefined()
+  })
+
+  it('past Define, answered as a rule: it reopens Define, and trace recommends asking for changes', async () => {
+    await stage('capture')
+    const d = await run(USER, 'change.get', { repo: REPO, number: 11 })
+    expect(d.requirement_edits).toMatchObject({ reopens: true, asked: null, says: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it.' })
+    expect(d.recommendation).toMatchObject({ verdict: 'ask', why: expect.stringMatching(/reopens Define and every gate after it\. Nothing asked for that/) })
+    // a recommendation, not a rule: the person may still accept it
+    expect(d.may_accept).toBe(true)
+  })
+
+  it('past Define, answered as a requirement change: accept, with the cost first; accepting reopens Define at once', async () => {
+    await stage('capture')
+    const d = await run(USER, 'change.get', { repo: REPO, number: 12 })
+    expect(d.requirement_edits).toMatchObject({ reopens: true, asked: expect.stringMatching(/said the answer changes a requirement/) })
+    expect(d.recommendation).toMatchObject({ verdict: 'accept', why: expect.stringMatching(/^Changes a requirement \(REQ-367d71\): accepting it reopens Define/) })
+    // the default branch still reads as before the merge (GitHub's copy lags): the review's finding reopens Define
+    const r = await run(USER, 'change.accept', { repo: REPO, number: 12, head_sha: sha(12) })
+    expect(r).toMatchObject({ merged: true, back_to: 'define', next: expect.stringMatching(/requirement REQ-367d71 was changed after the requirements baseline/) })
   })
 })

@@ -350,6 +350,21 @@ export interface ChangeDetail extends ChangeSummary {
    * why. The page offers "Run the check again" (change.rerun) instead of "Ask for changes". Absent from an older API.
    */
   infra_failed?: { checks: { id: string; name: string }[]; why: string }
+  /** the accepted requirements its database edits, said before it is accepted; absent: it edits none */
+  requirement_edits?: RequirementEdits
+}
+
+/** change.get: the accepted requirements a change's database edits (src/api/requirement-edits.ts). */
+export interface RequirementEdits {
+  ids: string[]
+  /** accepting it takes the project back to Define, and every gate after it is signed again */
+  reopens: boolean
+  /** what asked for the edit, in words; null: nothing did */
+  asked: string | null
+  /** the headline: "Changes a requirement (REQ-…): accepting it reopens Define and every gate after it." */
+  says: string
+  /** one line per requirement: what it changes */
+  edits: { id: string; what: string }[]
 }
 
 /** change.diff: one file's two sides. */

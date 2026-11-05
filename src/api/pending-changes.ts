@@ -42,7 +42,8 @@ export async function changedRequirements(ctx: Context, repo: string, r: Journey
   return withRecordDb(ctx, repo, (db) => requirementEvidence(db, r).filter((q) => q.status === 'proposed').map((q) => q.id))
 }
 
-const pastDefine = (r: Pick<JourneyRecord, 'stages' | 'journey'>): boolean =>
+/** Whether the project is past Define: a changed requirement then takes it back there. */
+export const pastDefine = (r: Pick<JourneyRecord, 'stages' | 'journey'>): boolean =>
   (r.stages.find((s) => s.id === r.journey.currentStage)?.ord ?? 0) > (r.stages.find((s) => s.id === 'define')?.ord ?? 0)
 
 /** The words a return to Define gives for changed requirements. */

@@ -69,6 +69,7 @@ import { recordAnswered, recordWait } from './process-metrics.js'
 import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
 import { recordEdit } from './edits.js'
 import { recommendationOf } from './changes.js'
+import { REQUIREMENT_CHANGE_SAID } from './requirement-edits.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { editReviewItems, reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
@@ -166,8 +167,11 @@ export function answeredRequest(a: { id: string; text: string; jobId: string; br
     // started again by trace (keepAnswers): an earlier job for this answer stopped before it was applied
     ...(a.again ? [`An earlier job started to apply this answer stopped before it did (${a.again}). The branch may hold part of that work: read it first.`] : []),
     `Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`,
-    ...(a.lasts === 'requirement' ? ['They said this answer changes a requirement. Have the change proposed for a person to accept in Requirements review: the requirement, its new wording and measurable criterion, and why (the Verification specialist owns the requirements: journey.handoff to it unless you are it, then verify.requirements, left proposed). Until it is accepted, treat the requirement as it stands, and say in your report that the change waits on review.'] : []),
+    ...(a.lasts === 'requirement' ? [`${REQUIREMENT_CHANGE_SAID} Have the change proposed for a person to accept in Requirements review: the requirement, its new wording and measurable criterion, and why (the Verification specialist owns the requirements: journey.handoff to it unless you are it, then verify.requirements, left proposed). Until it is accepted, treat the requirement as it stands, and say in your report that the change waits on review.`] : []),
     ...(a.lasts === 'rule' ? ['They made this a rule for the project: remember it (memory.remember) so later jobs apply it without asking again.'] : []),
+    // a rule or a one-off is not a requirement change: an edit of an accepted requirement reopens Define and every
+    // gate after it (test-esp32 log #112), and the change's review page recommends sending it back
+    ...(a.lasts === 'rule' || a.lasts === 'once' ? [`They did not say it changes a requirement: leave every requirement's words, acceptance criterion and status as they are (no verify.requirements edit). If the answer cannot be carried out without changing one, ask (journey.ask) instead.`] : []),
     'Do not redo what the answer does not touch. If the answer cannot be done as given, ask again (journey.ask) with what you found.',
   ].join('\n')
 }
@@ -695,7 +699,7 @@ export const JOURNEY_ACTIONS = {
     const facts = await agentFacts(ctx, a.repo)
     const before = await designBefore(ctx, a.repo)
     const answered = await journeyWrite(ctx, a.repo, (db) => {
-      const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason }, { facts })
+      const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason, lasts: a.lasts }, { facts })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
     })
     // saved: the wait from asked to answered (src/api/process-metrics.ts)
