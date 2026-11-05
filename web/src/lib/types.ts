@@ -166,8 +166,12 @@ export interface Criterion {
   text: string
   status: CriterionStatus
   evidence?: EvidenceRef
+  /** everything it was checked on, in order (the requirements, the runs and their counts), the first being `evidence`:
+   *  the evidence panel lists them all (findings are `findings`) */
+  checked?: EvidenceRef[]
   opened?: boolean
-  /** met on evidence that has since gone out of date: why, in words (not met until trace checks it again) */
+  /** why it reads as not met although it was checked met: its evidence is out of date, or was checked on a change not
+   *  accepted yet, or the accepted record says otherwise (a rule check's warnings), in words */
   stale?: string
   /** not met by its shape (shape.check): each thing still needed, in words naming what to fix, with the id a waiver
    *  of that one finding names */

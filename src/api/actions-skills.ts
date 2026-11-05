@@ -30,7 +30,7 @@ import { filesRead } from '../ontology/lineage.js'
 import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
-  type AgentFacts, type JourneyRecord, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
+  type AgentFacts, type Evidence, type JourneyRecord, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
   STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
@@ -201,6 +201,24 @@ export function baselineCriteria(requirements: readonly { status: string; accept
   const accepted = requirements.length > 0 && requirements.every((q) => q.status === 'accepted')
   const measurable = accepted && requirements.every((q) => NUMBER_WITH_UNIT.test(q.acceptance ?? ''))
   return [['define.accepted', accepted], ['define.measurable', measurable], ['define.firmware', accepted]]
+}
+
+/**
+ * What the requirements baseline gate's criteria were checked on, as their evidence (test-esp32 #32: the evidence said
+ * only that it was checked against the record): the review that was submitted and its counts, then each requirement
+ * with its decision and its acceptance criterion, and each one struck with why. Pure.
+ */
+export function baselineEvidence(requirements: readonly { id: string; text: string; status: string; acceptance?: string | null }[], struck: readonly { id: string; reason: string | null }[], by: string): Evidence[] {
+  const accepted = requirements.filter((q) => q.status === 'accepted').length
+  const head = `Requirements review, submitted by ${by}: ${accepted} of ${requirements.length} accepted${requirements.length > accepted ? `, ${requirements.length - accepted} not decided` : ''}, ${struck.length} struck`
+  return [
+    { kind: 'skill', ref: 'requirements-review', label: head },
+    ...requirements.map((q) => ({
+      kind: 'requirement', ref: q.id,
+      label: `${q.id} ${q.status}${q.acceptance ? `, measured by "${q.acceptance}"` : ', with no acceptance criterion'}: ${q.text}`.slice(0, 300),
+    })),
+    ...struck.map((q) => ({ kind: 'requirement', ref: q.id, label: `${q.id} struck${q.reason ? `: ${q.reason}` : ''}`.slice(0, 300) })),
+  ]
 }
 
 /** The job Intent builder's Submit starts (src/api/drafting.ts, where requirements.draft starts it again too). */
@@ -451,7 +469,7 @@ export const SKILL_ACTIONS = {
       // whether every requirement is accepted (or struck) and each accepted one measurable, as the record now stands
       if (a.skill === 'requirements-review') {
         const have = new Set((loadJourney(db)?.criteria ?? []).map((c) => c.id))
-        const evidence = [{ kind: 'skill', ref: 'requirements-review', label: `Requirements review, submitted by ${by.label}` }]
+        const evidence = baselineEvidence(i.requirements, i.struck, by.label)
         for (const [id, ok] of baselineCriteria(i.requirements)) if (have.has(id)) setCriterion(db, id, ok ? 'met' : 'not_met', evidence, by.label)
       }
       // Architecture choice is the person's approval of the blocks and key parts the architecture gate waits for
