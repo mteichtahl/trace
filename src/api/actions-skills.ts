@@ -302,7 +302,7 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       return {
         question: {
           id: q.id, to: q.askedOf || q.askedOfSub ? 'you' : q.askedPart === 'admins' ? 'the admins' : 'the contributors', text: q.text, askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: q.blocks } : {}),
-          ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}), ...(o.waives ? { waiver: optionWaiverWords(o.waives) } : {}) })),
+          ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}), ...(o.waives ? { waiver: optionWaiverWords(o.waives) } : {}), ...(o.needs ? { needs: o.needs } : {}) })),
           sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ?? s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
         },
       }

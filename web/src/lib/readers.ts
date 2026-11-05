@@ -310,7 +310,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       id: String(q.id), to: q.for === 'you' ? 'you' : q.for === 'contributors' ? 'the contributors' : q.for === 'admins' ? 'the admins' : 'a person on the project', text: String(q.text),
       askedAt: String(q.asked_at), ...(str(q.blocks) ? { blocks: String(q.blocks) } : {}),
       ...(rec ? { recommended: { id: String(rec.id), label: String(rec.label) } } : {}),
-      options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(isObj(o.waives) ? { waiver: waiverWords(o.waives) } : {}) })),
+      options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(isObj(o.waives) ? { waiver: waiverWords(o.waives) } : {}), ...(str(o.needs) ? { needs: String(o.needs) } : {}) })),
       sources: arr(q.sources).map((e) => readEvidence(e, repo)),
     }
   })

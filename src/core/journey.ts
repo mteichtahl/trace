@@ -502,8 +502,10 @@ export const OptionWaiverSchema = z.object({
 })
 export type OptionWaiver = z.output<typeof OptionWaiverSchema>
 
-export interface OptionRow { id: string; label: string; recommended: boolean; why: string; gives_up?: string | undefined; waives?: OptionWaiver | undefined }
-export const OptionSchema = z.object({ id: z.string().min(1).max(40), label: z.string().min(1).max(300), recommended: z.boolean().default(false), why: z.string().max(2000).default(''), gives_up: z.string().max(1000).optional(), waives: OptionWaiverSchema.optional() })
+/** An option of a question. `needs`: the detail only the person has that the answer needs (a part number, a size);
+ * choosing the option opens a field for it, and the answer is not sent without it. */
+export interface OptionRow { id: string; label: string; recommended: boolean; why: string; gives_up?: string | undefined; waives?: OptionWaiver | undefined; needs?: string | undefined }
+export const OptionSchema = z.object({ id: z.string().min(1).max(40), label: z.string().min(1).max(300), recommended: z.boolean().default(false), why: z.string().max(2000).default(''), gives_up: z.string().max(1000).optional(), waives: OptionWaiverSchema.optional(), needs: z.string().min(3).max(200).optional() })
 
 export interface JourneyRow {
   template: Template; revision: string; currentStage: StageId; later: LaterStage[]; start: 'idea' | 'import'
@@ -1875,7 +1877,10 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
   if (q.answeredAt !== null) throw new JourneyError('This question is already answered.')
   const opt = a.option ? q.options.find((o) => o.id === a.option) : undefined
   if (a.option && !opt) throw new JourneyError(q.options.length ? `"${a.option}" is not one of this question's options: choose again, or write an answer.` : 'This question has no options to choose from: write an answer instead.')
-  const text = (a.answer ?? opt?.label ?? '').trim()
+  // an option that needs a detail only the person has (test-esp32 log #137) is an answer only with that detail
+  const detail = opt?.needs ? (a.answer ?? '').trim() : ''
+  if (opt?.needs && (detail.length < 3 || VAGUE.test(detail))) throw new JourneyError(`"${opt.label}" needs ${opt.needs}: give it with the answer.`)
+  const text = (opt?.needs ? `${opt.label}: ${detail}` : a.answer ?? opt?.label ?? '').trim()
   if (!text) throw new JourneyError('Choose an option or write an answer.')
   if (!opt && VAGUE.test(text)) throw new JourneyError('That answer does not unblock the agent. Say what to do, with a number and unit for a quantity.')
   const recommended = q.options.find((o) => o.recommended)
@@ -2141,7 +2146,8 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
       id: `question:${q.id}`, kind: q.kind === 'stuck' ? 'stuck' : 'question', repo, project, stage: q.stage ?? stage,
       summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ` : `${q.askedBy} asks: `}${q.text}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
       since: isoN(q.askedAt), waited: ago(q.askedAt, at), blocking: q.kind === 'stuck' || Boolean(q.blocks?.trim()), action: q.kind === 'stuck' ? 'See options' : 'Answer',
-      ref: { kind: 'question', id: q.id }, ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}),
+      // no one-tap answer for an option that needs a detail from the person: they give it in Question answer
+      ref: { kind: 'question', id: q.id }, ...(rec && !rec.needs ? { recommended: { id: rec.id, label: rec.label } } : {}),
     })
   }
   // each revision's renders, newly ready, to everyone on the project until they open them (docs/revision-renders.md)
