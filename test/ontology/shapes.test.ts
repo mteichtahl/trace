@@ -128,6 +128,28 @@ describe.skipIf(!shacl)('architect.mapped over the project\'s graph (pySHACL)', 
     expect((await check()).findings.map((f) => f.focus)).toEqual([iri('requirement', 'REQ-PWR-001')])
   }, 60_000)
 
+  it('a requirement that depends on a part off the board is mapped only once a block names it, with its size (#136)', async () => {
+    // test-esp32's: the display block's only part was the header the module plugs into, so no display was chosen
+    req('REQ-f79396', 'The display connects on a 4-pin 2.54 mm header (3.3 V, GND, SCL, SDA).')
+    const t = Date.now() / 1000
+    const display = (parts: unknown[]): void => {
+      db.prepare('INSERT OR REPLACE INTO arch_blocks (option, id, name, role, parts, requirements, status, updated, by) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run('A', 'display', 'OLED header', 'display', JSON.stringify(parts), '["REQ-f79396"]', 'proposed', t, 'impl')
+    }
+    const header = { mpn: '2.54-1*4PFemale', role: '1x4 2.54 mm female header', key: true }
+    display([header])
+    const r = await check()
+    expect(r.findings).toEqual([expect.objectContaining({
+      focus: iri('requirement', 'REQ-f79396'),
+      message: '"The display connects on a 4-pin 2.54 mm header (3.3 V, GND, SCL, SDA)." depends on a display off the board, and no block serving it names one with its size. Add it as a key part.',
+    })])
+    // named off the board but with no size: the case still cannot be made for it
+    display([header, { mpn: 'SSD1306-0.96-I2C', role: '0.96 inch OLED module', key: true, off_board: true }])
+    expect((await check()).findings.map((f) => f.focus)).toEqual([iri('requirement', 'REQ-f79396')])
+    display([header, { mpn: 'SSD1306-0.96-I2C', role: '0.96 inch OLED module', key: true, off_board: true, size_mm: [27.3, 27.8, 3.7] }])
+    expect(await check()).toEqual({ conforms: true, findings: [] })
+  }, 60_000)
+
   it('nothing to map is not met: no requirements, or no architecture', async () => {
     startJourney(db, { template: 'board', by: ADMIN.label, name: 'Soil sensor' })
     db.exec('DELETE FROM arch_blocks; DELETE FROM arch_scores; DELETE FROM arch_connections; DELETE FROM arch_options')

@@ -366,6 +366,12 @@ trace:mpn a owl:DatatypeProperty ;
     skos:altLabel "MPN" ;
     rdfs:range xsd:string .
 
+trace:isOffBoard a owl:DatatypeProperty ;
+    rdfs:label "off the board" ;
+    rdfs:comment "Whether the part sits off the board, in the case: a display, sensor module or battery on a header, connector or cable." ;
+    rdfs:domain trace:BlockPart ;
+    rdfs:range xsd:boolean .
+
 trace:servesRequirement a owl:ObjectProperty ;
     rdfs:label "serves" ;
     rdfs:comment "A requirement a block, a sheet or a test serves." ;
