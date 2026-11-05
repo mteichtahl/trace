@@ -50,8 +50,20 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
     },
     forecast: '**Next: Prove.** Forecast 2 days of agent time, about US$11 of cloud use.',
     criteria: [
-      crit('c1', 'Electrical rules check is clean', 'run_51c0', 'run', 'ERC on push 7f3e21: 0 errors, 1 warning, waived as W-3.', true),
-      crit('c2', 'No conflicts with datasheets', 'run_4a11', 'run', 'Datasheet limits: 31 parts checked, 0 conflicts open.', true),
+      // everything each was checked on (journey.get: every piece of its evidence, and the accepted record's counts)
+      { ...crit('c1', 'Electrical rules check is clean', 'run_51c0', 'run', 'ERC on push 7f3e21: 0 errors, 1 warning, waived as W-3.', true),
+        checked: [
+          { kind: 'run', label: 'kicad_erc: 0 errors, 1 warning', id: 'run_51c0', to: '/p/acme~soil-sensor/runs/run_51c0' },
+          { kind: 'run', label: 'Electrical rule check, run run_51c0: 0 errors, 1 warning, 0 excluded in KiCad; 0 to fix or waive, 1 waived', id: 'run_51c0', to: '/p/acme~soil-sensor/runs/run_51c0' },
+        ] },
+      { ...crit('c2', 'No conflicts with datasheets', 'run_4a11', 'run', 'Datasheet limits: 31 parts checked, 0 conflicts open.', true),
+        checked: [
+          { kind: 'run', label: 'Datasheet limits, run run_4a11: 31 parts checked, 0 conflicts open', id: 'run_4a11', to: '/p/acme~soil-sensor/runs/run_4a11' },
+          { kind: 'datasheet', label: 'U3 TLV75533: 500 mA out, Vin max 6 V, dropout 0.3 V max', id: 'U3' },
+          { kind: 'datasheet', label: 'U1 STM32WLE5: VDD 1.8-3.6 V, 31 mA max in transmit', id: 'U1' },
+          { kind: 'datasheet', label: 'U4 SHT40: VDD 1.08-3.6 V, I2C at 400 kHz', id: 'U4' },
+          { kind: 'datasheet', label: 'C2 2.2 µF X5R: 10 V rated, 3.3 V applied', id: 'C2' },
+        ] },
       crit('c5', 'Every sheet names its requirements', 'record', 'record', 'Power, MCU, Radio and Sensor each list the requirements they serve.', true),
       crit('c4', 'Firmware pin plan matches the schematic', 'run_62de', 'run', 'Pin plan: 18 used pins agree between the schematic and the firmware configuration.', true),
       crit('c7', 'Power sheet reviewed by a person', 'record', 'record', 'Waits for the power and USB-C input change to be accepted.', false, 'not_met'),

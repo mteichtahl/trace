@@ -1,7 +1,7 @@
 /**
  * Mock answers for the guided flow (docs/guided-flow.md): each stage's guide and the Soil sensor's Capture steps on
  * journey.get, and the change actions (changes.list, change.get, change.diff, change.accept, change.ask,
- * change.discard) over two open changes. Accepting moves Capture to step 4 and starts the stock check; state lives in
+ * change.discard, change.rerun) over the open changes. Accepting moves Capture to step 4 and starts the stock check; state lives in
  * memory for the session. The files a change touches have a before (base) and an after (head) version, served by
  * files.url through `changeFileContent`.
  */
@@ -154,6 +154,23 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'wait', why: 'It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Its checks passed: it follows that change into the design once it is accepted.' },
       may_accept: false, blockers: ['It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Accept that one first.'],
     }),
+    // a sound change whose trace-prs jobs died on GitHub's rate limit (test-esp32 run 2, #126, #128): run them again,
+    // never ask for changes
+    summary(16, {
+      title: 'Sensor board layout, rev A', from: 'the layout specialist', stage: 'layout', opened_at: ago(3 * MIN), updated_at: ago(2 * MIN), mergeable: 'unstable',
+      checks: { total: 3, passed: 1, failed: 2, running: 0, skipped: 0, failing: ['trace-prs'] }, verdict: 'blocked',
+      summary: ['Placed and routed the sensor board on two layers, 48 × 30 mm.', 'The design rule check passes with no violations.'],
+      files: [{ path: 'docs/renders/front.svg', status: 'modified', additions: 2, deletions: 2, kind: 'image' }],
+      checks_list: [
+        { name: 'Design rule check', state: 'passed', summary: 'No violations', id: 'job:9401' },
+        { name: 'open-pr', state: 'failed', summary: null, id: 'job:9402' },
+        { name: 'automerge', state: 'failed', summary: null, id: 'job:9403' },
+      ],
+      requirements: ['R-002', 'R-006'],
+      recommendation: { verdict: 'wait', why: 'GitHub was busy (it limited how many requests trace could make), so the open-pr and automerge checks did not run properly. That says nothing about the work. Run them again; trace recommends once they have run.' },
+      may_accept: false, blockers: ['The open-pr and automerge checks did not run properly: GitHub was busy (it limited how many requests trace could make). Run them again.'],
+      infra_failed: { checks: [{ id: 'job:9402', name: 'open-pr' }, { id: 'job:9403', name: 'automerge' }], why: 'GitHub was busy (it limited how many requests trace could make)' },
+    }),
   ],
 }
 
@@ -212,6 +229,12 @@ const CHECK_DETAIL: Record<string, CheckMock> = {
     ],
     log: { text: CLEAR_LOG, truncated: true }, started: 4, took: 3,
   },
+  'job:9401': { text: 'KiCad checked the board: 0 violations, 0 unconnected pads.', started: 3, took: 38 },
+  'job:9402': {
+    annotations: [{ path: '.github', line: null, level: 'failure', title: null, message: 'Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.' }],
+    log: { text: 'Run actions/github-script\nGitHub was busy: it limited trace\'s requests, and would take 2140 s to allow more, longer than this job may wait.\nError: Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.', truncated: false }, started: 2, took: 4,
+  },
+  'job:9403': { annotations: [{ path: '.github', line: null, level: 'failure', title: null, message: 'Unhandled error: HttpError: API rate limit exceeded for user ID 1817657.' }], started: 2, took: 3 },
   'cr:5605': { started: 2 },
   'cr:5606': { started: 2 },
 }
@@ -311,6 +334,21 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
       c.blockers = ['trace is merging the newest design into it; its checks run again after.']
       c.checks = c.checks ? { ...c.checks, passed: 0, running: c.checks.total } : null
       return later(ok({ text: 'trace is bringing it up to date with the newest design now. Its checks run again once it has, and it comes back to you.', remade: false, worker: true, conflict: true }))
+    case 'change.rerun': {
+      if (reviewer) return fail('Only contributors can run a check again.')
+      const again = c.infra_failed?.checks ?? []
+      if (!again.length) return fail('None of its checks failed for a reason outside the work, so there is nothing to run again here.')
+      // as GitHub: the failed jobs run again, so the change is checking until they pass
+      const ids = new Set(again.map((x) => x.id))
+      c.checks_list = c.checks_list.map((k) => (k.id && ids.has(k.id) ? { ...k, state: 'running' as const } : k))
+      c.checks = c.checks ? { ...c.checks, failed: 0, running: again.length, failing: [] } : null
+      c.mergeable = 'unknown'
+      c.verdict = 'checking'
+      delete c.infra_failed
+      c.blockers = [`${again.length === 1 ? '1 check is' : `${again.length} checks are`} still running.`]
+      c.recommendation = { verdict: 'wait', why: `${again.length === 1 ? '1 check is' : `${again.length} checks are`} still running. Wait for ${again.length === 1 ? 'it' : 'them'} to finish.` }
+      return later(ok({ checks: again.map((x) => x.name), runs: 1 }))
+    }
     case 'change.discard':
       if (reviewer) return fail('Only contributors can discard a change.')
       c.state = 'closed'

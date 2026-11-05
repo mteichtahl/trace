@@ -395,8 +395,16 @@ describe('the agents\' facts in the journey', () => {
     await expect(facts().update((db) => ({ result: addCriterionCheck(db, by, { criterion: 'define.accepted', status: 'met', evidence: [{ kind: 'run', ref: 'x' }] }, r) }))).rejects.toThrow(/a person's to meet/)
     // Firmware template: define is all person-owned; architect.mapped is trace's
     await facts().update((db) => ({ result: addCriterionCheck(db, by, { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: 'run-map' }] }, r) }))
-    const j = await run(USER, 'journey.get', { repo: 'acme/other' }) as { gates: { id: string; criteria: { id: string; status: string; evidence: unknown[] }[] }[] }
-    expect(j.gates.find((g) => g.id === 'architect')?.criteria.find((c) => c.id === 'architect.mapped')).toMatchObject({ status: 'met', evidence: [{ kind: 'run', ref: 'run-map' }] })
+    type Got = { gates: { id: string; criteria: { id: string; status: string; evidence: unknown[]; stale?: string }[] }[] }
+    const mapped = async (): Promise<Got['gates'][number]['criteria'][number] | undefined> =>
+      ((await run(USER, 'journey.get', { repo: 'acme/other' })) as Got).gates.find((g) => g.id === 'architect')?.criteria.find((c) => c.id === 'architect.mapped')
+    // its run was made on the job's branch: until the change holding it is accepted, the default branch's record does
+    // not hold it, and the criterion is not met (test-esp32 #43, #57)
+    expect(await mapped()).toMatchObject({ status: 'not_met', stale: expect.stringMatching(/change that is not accepted yet/) })
+    // accepted: the run is in the default branch's record, and the check counts
+    seedProject('acme/other', (db) => { db.prepare("INSERT INTO runs (id, kind, started, status) VALUES ('run-map', 'shape.check', ?, 'pass')").run(Date.now() / 1000) })
+    expect(await mapped()).toMatchObject({ status: 'met', evidence: [{ kind: 'run', ref: 'run-map' }] })
+    const j = await run(USER, 'journey.get', { repo: 'acme/other' }) as Got
     expect(j.gates.find((g) => g.id === 'define')?.criteria.every((c) => c.status === 'not_met')).toBe(true)
   })
 

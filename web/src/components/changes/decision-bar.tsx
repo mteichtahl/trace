@@ -9,11 +9,13 @@
  * - A change in conflict leads with "Bring it up to date" (change.resolve, src/api/conflicts.ts): trace makes an edit
  *   again on the newest design, or has its worker merge the newest design in, at once and even if it gave up before.
  *   Accept is not offered beside it: a change in conflict cannot be accepted until it is brought up to date.
+ * - A change whose checks failed only because GitHub was busy or the runner was lost (infra_failed) leads with "Run the
+ *   check again" (change.rerun): that failure says nothing about the work, so it is not a reason to ask for changes.
  * - An edit a person made in the app (docs/stay-in-trace.md) has no specialist to ask, so no Ask for changes; its author
  *   or an admin may discard it; one trace applies by itself (an admin's own edit, a hand-in) has no Accept: the bar says
  *   trace applies it once its checks pass.
  */
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Loader2, RefreshCw, RotateCw } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -26,6 +28,7 @@ export interface DecisionBarProps {
   change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & {
     verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
+    infra_failed?: ChangeDetail['infra_failed']
   }
   part?: Part
   /** the note box's words, carried into Accept and Ask */
@@ -39,7 +42,9 @@ export interface DecisionBarProps {
   onDiscard: (reason: string) => void
   /** a change in conflict: trace brings it up to date now (change.resolve). Absent: no button */
   onResolve?: () => void
-  busy?: 'accept' | 'ask' | 'discard' | 'resolve' | null
+  /** checks that did not run properly: trace runs them again now (change.rerun). Absent: no button */
+  onRerun?: () => void
+  busy?: 'accept' | 'ask' | 'discard' | 'resolve' | 'rerun' | null
   className?: string
 }
 
@@ -71,7 +76,11 @@ export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'bl
 export const offersResolve = (mode: DecisionMode, c: Pick<ChangeDetail, 'state'> & { verdict?: ChangeDetail['verdict'] }): boolean =>
   c.state === 'open' && c.verdict === 'conflict' && mode !== 'read-only' && mode !== 'closed'
 
-export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept, onAsk, onDiscard, onResolve, busy, className }: DecisionBarProps) {
+/** Whether the bar offers "Run the check again": an open change whose only failures were GitHub's or the runner's. */
+export const offersRerun = (mode: DecisionMode, c: Pick<ChangeDetail, 'state'> & { infra_failed?: ChangeDetail['infra_failed'] }): boolean =>
+  c.state === 'open' && !!c.infra_failed?.checks.length && mode !== 'read-only' && mode !== 'closed'
+
+export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept, onAsk, onDiscard, onResolve, onRerun, busy, className }: DecisionBarProps) {
   const mode = decisionMode(change, part)
   const [confirm, setConfirm] = useState<'ask' | 'discard' | null>(null)
   const [text, setText] = useState('')
@@ -88,6 +97,9 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
   const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length
   // in conflict: the step to take is bringing it up to date, so it leads; accepting waits for it
   const resolvable = !!onResolve && offersResolve(mode, change)
+  // a check that did not run properly: running it again is the step to take, so it leads
+  const rerunnable = !!onRerun && offersRerun(mode, change)
+  const several = (change.infra_failed?.checks.length ?? 0) > 1
 
   return (
     <div role="region" aria-label="Your decision" className={cn('sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6 max-md:bottom-16', className)}>
@@ -132,8 +144,14 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
                   Bring it up to date
                 </Button>
               )}
+              {rerunnable && (
+                <Button size="lg" onClick={() => onRerun?.()} disabled={!!busy}>
+                  {busy === 'rerun' ? <Loader2 className="animate-spin" aria-hidden /> : <RotateCw aria-hidden />}
+                  {several ? 'Run the checks again' : 'Run the check again'}
+                </Button>
+              )}
               {mayAsk && <Button variant={unfinished ? 'default' : 'outline'} size={unfinished ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>}
-              {mayAccept && !resolvable && (
+              {mayAccept && !resolvable && !rerunnable && (
                 <Button variant={unfinished ? 'outline' : 'default'} size={unfinished ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
                   {busy === 'accept' && <Loader2 className="animate-spin" aria-hidden />}
                   Accept into the design

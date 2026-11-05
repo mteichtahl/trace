@@ -147,6 +147,8 @@ export interface ActionDeps {
   /** the runs log group (TRACE_RUNS_LOG_GROUP, src/core/run-logs.ts); absent or null: run.log falls back to what the job
    * index and GitHub keep */
   runLogs?: () => RunLogsReader | null
+  /** waits `ms` (a test's is instant); absent: a timer. change.accept waits on GitHub working out a merge with it */
+  sleep?: (ms: number) => Promise<void>
 }
 
 /** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's
