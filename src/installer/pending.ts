@@ -26,13 +26,14 @@ import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectC
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { z } from 'zod'
 import { type InfraInput, InfraPropsSchema } from '../infra/props.js'
-import { projectSlug } from '../core/project.js'
+import { PENDING_PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import type { Answers } from './answers.js'
 
 type ProjectAnswer = Answers['projects'][number]
 
-/** Under the central bucket (the API's PENDING_PREFIX + pendingKey). */
-export const PENDING_PROJECTS_PREFIX = 'installation/pending-projects/'
+/** Under the central bucket (the API's PENDING_PREFIX + pendingKey); its writes are live events for the project's
+ * setup notice (src/web/journey-events.ts). */
+export { PENDING_PROJECTS_PREFIX }
 
 /** The most projects an update leaves in a flat stack (src/infra/props.ts layout 'flat': about 20 fit). */
 export const FLAT_UPDATE_MAX = 15

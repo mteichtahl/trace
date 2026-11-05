@@ -30,6 +30,12 @@
  *             turned them on: what is new in Next for them. The journey record's own writes (a gate signed, waived or
  *             made ready by a person) come here too, for push only: they publish no live event (see below)
  *
+ *   agent     a new project's request for its own agent (installation/pending-projects/<owner>/<repo>.json,
+ *             src/installer/pending.ts), written by the API when the project is created and by the installation update
+ *             when it has added the project (or failed to): `record.changed { repo, what: 'agent' }` to everyone on the
+ *             project, so the setup notice looks again at once instead of at its next poll (test-esp32 log #5: the
+ *             notice still said "queued" half an hour after the update finished). Nothing in the record is read
+ *
  *   run logs  the runs log group's subscription (src/infra/web.ts) sends each batch of a run's lines here:
  *             `log.appended { repo, kind, id, lines }` to everyone on the project, at most once a second per stream,
  *             never the lines themselves (onRunLogs)
@@ -46,7 +52,7 @@ import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER, applyAgentFactsSchema } from '../co
 import { BucketDb, JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
 import { BENCH_DB } from '../core/bench.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER, JobIndexStore, changedSince } from '../core/job-index.js'
-import { PROJECTS_PREFIX } from '../core/project.js'
+import { PENDING_PROJECTS_PREFIX, PROJECTS_PREFIX } from '../core/project.js'
 import { parseStream } from '../core/run-logs.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
 import { DynamoLedger, type PushDeps, type PushOutcome, pushForProject } from './push-sender.js'
@@ -74,6 +80,15 @@ export function projectOfKey(key: string): string | null {
 /** The project whose journey record the key is, or null for any other key (push only: see the file's comment). */
 export function projectOfJourneyKey(key: string): string | null {
   const m = JOURNEY_KEY.exec(key)
+  if (!m?.[1] || m[1].includes('..')) return null
+  return m[1].toLowerCase()
+}
+
+const PENDING_KEY = new RegExp(`^${PENDING_PROJECTS_PREFIX}([A-Za-z0-9-]+/[A-Za-z0-9._-]+)\\.json$`)
+
+/** The project whose agent request the key is, or null for any other key. */
+export function projectOfPendingKey(key: string): string | null {
+  const m = PENDING_KEY.exec(key)
   if (!m?.[1] || m[1].includes('..')) return null
   return m[1].toLowerCase()
 }
@@ -178,12 +193,26 @@ async function onJobIndex(repo: string, e: S3ObjectEvent, d: JourneyEventsDeps):
   return { repo, changed: everyone.length, notified: 0, jobs: events.length }
 }
 
+/** A write of a new project's agent request: `record.changed { what: 'agent' }` to everyone on the project. */
+async function onAgentRequest(repo: string, d: JourneyEventsDeps): Promise<{ repo: string; changed: number; notified: number }> {
+  const access = new Central({ home: `s3://${d.bucket}/access`, ...(d.s3 ? { s3: d.s3 } : {}) })
+  const audience = await access.query((db) => audienceOf(db, repo))
+  const everyone = [...new Set([...audience.admins, ...audience.contributors, ...audience.reviewers])]
+  const ev: LiveEvent = { type: 'record.changed', repo, what: 'agent', at: new Date(d.now()).toISOString() }
+  const results = await Promise.allSettled(everyone.map((sub) => d.publisher.publish(userChannel(sub), [ev])))
+  const failed = results.filter((r) => r.status === 'rejected').length
+  if (failed) d.log({ warning: 'journey-events: some agent events were not delivered', repo, failed, of: everyone.length })
+  return { repo, changed: everyone.length - failed, notified: 0 }
+}
+
 /** One S3 event: what was published, to how many people (tests read it). */
 export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): Promise<{ repo: string | null; changed: number; notified: number; jobs?: number; pushed?: number }> {
   const key = e.detail?.object?.key ?? ''
   const ours = e.detail?.bucket?.name === d.bucket
   const indexed = ours ? projectOfIndexKey(key) : null
   if (indexed) return onJobIndex(indexed, e, d)
+  const pending = ours ? projectOfPendingKey(key) : null
+  if (pending) return onAgentRequest(pending, d)
   // a person's write of the journey record: its live events are the web backend's; here, push only
   const journal = ours ? projectOfJourneyKey(key) : null
   if (journal) {

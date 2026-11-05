@@ -19,6 +19,14 @@ on:
     branches: [main, "claude/**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      # Started by the API when a project is created in the web app (src/api/actions-projects.ts startUpdate): only
+      # add the new project. The tests are skipped and the update deploys main as it is, which every commit reached
+      # through a pull request with this workflow green; they were about half of a new project's wait.
+      add_projects:
+        description: Only add projects created in the web app (skip the tests; main passed them already)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +36,7 @@ jobs:
   # vitest starts a fork per core and each Verilator build asks for every core too, so Verilator crashed ("attempted
   # to destroy locked Thread Pool") and the API tests' setup timed out
   typescript:
+    if: ${{ !inputs.add_projects }}
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","typescript"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
@@ -75,6 +84,7 @@ jobs:
   # The web app, the runtimes' start and the harness bundle need neither KiCad nor Python: in a job of their own they
   # run alongside the TypeScript tests instead of after them, which takes about a minute off every run
   web-and-build:
+    if: ${{ !inputs.add_projects }}
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","web-and-build"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
@@ -101,6 +111,7 @@ jobs:
           git diff --exit-code harness/dist || { echo "harness/dist is stale: run npm run build and commit it"; exit 1; }
 
   python-bridge:
+    if: ${{ !inputs.add_projects }}
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","python-bridge"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
@@ -114,6 +125,7 @@ jobs:
   # and does one thing, on a desktop and a phone. Not yet among the jobs "tests pass" waits for: it becomes required
   # once it has run green for a while (one known intermittent failure is open, docs/smoke-test.md "Findings").
   smoke:
+    if: ${{ !inputs.add_projects }}
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","smoke"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
@@ -142,9 +154,14 @@ jobs:
     needs: [typescript, web-and-build, python-bridge]
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","tests-pass"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     steps:
+      # a run that only adds projects (add_projects) skips the tests on purpose: skipped counts as passed there only
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: for r in $RESULTS; do [ "$r" = success ] || { echo "a job ended $r"; exit 1; }; done
+          ADD_PROJECTS: ${{ inputs.add_projects && 'true' || 'false' }}
+        run: |
+          for r in $RESULTS; do
+            [ "$r" = success ] || { [ "$ADD_PROJECTS" = true ] && [ "$r" = skipped ]; } || { echo "a job ended $r"; exit 1; }
+          done
 
   update-installation:
     needs: tests-pass
