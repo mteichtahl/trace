@@ -29,7 +29,7 @@ export class ApiError extends Error {
 type Repo = { repo: string }
 
 /** What job.control can do; a job's view lists the ones the API can do for it now (`controls`). */
-export type JobOp = 'pause' | 'resume' | 'cancel' | 'move_up'
+export type JobOp = 'pause' | 'resume' | 'cancel' | 'move_up' | 'restart' | 'dismiss'
 
 /** Every action the app calls: its arguments and its answer. */
 export interface Actions {
@@ -172,7 +172,7 @@ export interface Actions {
   'board.check': { args: Repo & { serial: string; check: string; kind: 'count' | 'visual' | 'fault' | 'hand' | 'label'; result: 'pass' | 'fail' | 'marked'; ref?: string; note?: string; photo?: string }; result: { ok: true } }
   'usage.month': { args: { month?: string }; result: import('./types-s1').UsageMonth }
   /** pause (a running task stops at its next safe point; a queued one is held), resume, move up, cancel */
-  'job.control': { args: { id: string; op: JobOp; reason?: string; repo?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null; pausing?: boolean; held?: boolean; jobId?: string; position?: number } }
+  'job.control': { args: { id: string; op: JobOp; reason?: string; repo?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null; pausing?: boolean; held?: boolean; dismissed?: boolean; jobId?: string; position?: number } }
   /** the project's jobs (its job index), each agent's status, the hand-offs between its specialists, the remote jobs running */
   'jobs.list': { args: Repo; result: import('./types').ProjectJobs }
   /** decline a pending hand-off between specialists, with a reason in one line (contributors and admins) */

@@ -30,6 +30,7 @@ import { HeldNextCard, useLifecycle } from '@/components/project/lifecycle'
 import { RunLine, runControls, splitRuns } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
+import { LostJobActions, useLostJob } from '@/components/lost-job'
 import { useNow } from '@/components/use-now'
 import { Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
@@ -66,6 +67,7 @@ function Overview() {
   const [sheet, setSheet] = useState<Stage | null>(null)
   const celebrate = useStageCelebration(j.data)
   const actions = useChangeActions(repo)
+  const lostJob = useLostJob(repo)
   // the change the next step is about: whether this person may accept it straight from the card
   const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
   const change = useQuery({ ...q('change.get', { repo, number: changeNo ?? 0 }), enabled: !!changeNo && part !== 'reviewer' })
@@ -145,17 +147,27 @@ function Overview() {
       ))}
     </div>
   )
-  // trace lost contact with these: nothing is running for them. Drafting the requirements can be started again
+  // trace lost contact with these: nothing is running for them. Each can be started again or dismissed (its view's
+  // controls); drafting the requirements is started again as drafting (requirements.draft)
   const lostList = (
     <div className="divide-y rounded-xl border">
-      {lostJobs.map((r) => (
-        <div key={r.id}>
-          <RunLine run={r} />
-          {projects.data !== undefined && write && d.drafting?.state === 'stopped' && d.drafting.jobId === r.id && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
-        </div>
-      ))}
+      {lostJobs.map((r) => {
+        const drafting = d.drafting?.state === 'stopped' && d.drafting.jobId === r.id
+        return (
+          <div key={r.id}>
+            <RunLine run={r} />
+            {projects.data !== undefined && write && drafting && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
+            {/* paused or retired: nothing starts, but it can still be dismissed */}
+            {projects.data !== undefined && write && !drafting && <LostJobActions run={held ? { ...r, controls: r.controls?.filter((c) => c !== 'restart') } : r} onAct={lostJob} className="mx-5 mb-4" />}
+          </div>
+        )
+      })}
     </div>
   )
+  // the next step is a lost job's: its Start again (or Dismiss), drawn by the card
+  const lostNext = (d.next.action?.call === 'job.restart' || d.next.action?.call === 'job.dismiss') && nextRun && projects.data !== undefined && write
+    ? <LostJobActions run={nextRun} onAct={lostJob} size="lg" />
+    : undefined
   // in each agent's queue order: Move up, Hold and Cancel for people allowed to
   const queuedList = (
     <div className="divide-y rounded-xl border">
@@ -200,7 +212,7 @@ function Overview() {
       onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
       accepting={actions.accept.isPending}
       resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
-      callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" /> : undefined}
+      callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" /> : lostNext}
     />
   )
 

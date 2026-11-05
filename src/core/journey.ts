@@ -650,6 +650,9 @@ export interface StepView {
   /** trace's step it works on at the same time as the person's step `now` (a change to review that it does not wait
    * on): "trace · alongside you", never "after you" (withChanges) */
   alongside?: true
+  /** trace's step `now` while the job doing it ended without finishing (src/api/actions-jobs.ts lostJobStep): "trace ·
+   * stopped", never as if trace were working on it */
+  stopped?: true
 }
 export interface StageView {
   id: StageId; name: string; optional: boolean; state: StageState; met: number; total: number; progress: string

@@ -16,7 +16,7 @@ import { lifecycleAction, withLifecycle } from './lifecycle'
 import { templatesAction } from './templates'
 import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
-import { handoffsOf, jobsAction, jobsOf } from './jobs'
+import { handoffsOf, jobsAction, jobsOf, lostStepOf, stoppedStepsOf } from './jobs'
 import { changesAction } from './changes'
 import { deploysAction } from './deploys'
 import { healthAction } from './health'
@@ -55,7 +55,7 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })
     case 'projects': return ok(withLifecycle(PROJECTS))
     case 'inbox': return ok(inbox)
-    case 'journey.get': return JOURNEYS[repo] ? ok({ ...JOURNEYS[repo], jobs: jobsOf(repo), handoffs: handoffsOf(repo) }) : json({ ok: false, error: 'no access' }, 403)
+    case 'journey.get': return JOURNEYS[repo] ? ok({ ...JOURNEYS[repo], stages: stoppedStepsOf(repo, JOURNEYS[repo].stages), next: lostStepOf(repo, JOURNEYS[repo].next), jobs: jobsOf(repo), handoffs: handoffsOf(repo) }) : json({ ok: false, error: 'no access' }, 403)
     case 'project.update': {
       // the mock journeys are already in the app's shape (lib/readers.ts passes them through), so patch that shape
       const j = JOURNEYS[repo] as (typeof JOURNEYS)[string] & Record<string, unknown> | undefined

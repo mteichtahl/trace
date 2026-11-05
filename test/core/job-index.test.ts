@@ -57,7 +57,7 @@ describe('the queue rule', () => {
     expect(mayStart('b', jobs, c, { maxParallel: 4, at: AT })).toEqual({ ok: false, why: expect.stringMatching(/"a" is ahead/) })
     // Move up: c goes between a and b, then before a
     const up = moveUpOrder('c', jobs, c) as number
-    c.set('c', { job: 'c', held: false, order: up, discarded: false, by: 'm', at: AT })
+    c.set('c', { job: 'c', held: false, order: up, discarded: false, dismissed: false, reason: null, restartedBy: null, restartedAt: null, by: 'm', at: AT })
     expect(queueOrder(jobs, c, 'verify').map((j) => j.id)).toEqual(['a', 'c', 'b'])
     c.set('c', { ...(c.get('c') as JobControl), order: moveUpOrder('c', jobs, c) as number })
     expect(queueOrder(jobs, c, 'verify').map((j) => j.id)).toEqual(['c', 'a', 'b'])
@@ -73,7 +73,7 @@ describe('the queue rule', () => {
     expect(loadControls(d).size).toBe(0)
     putControl(d, { job: 'x', held: true, by: 'm@example.com', at: 1 })
     putControl(d, { job: 'x', order: 5, by: 'n@example.com', at: 2 })
-    expect(loadControls(d).get('x')).toEqual({ job: 'x', held: true, order: 5, discarded: false, by: 'n@example.com', at: 2 })
+    expect(loadControls(d).get('x')).toEqual({ job: 'x', held: true, order: 5, discarded: false, dismissed: false, reason: null, restartedBy: null, restartedAt: null, by: 'n@example.com', at: 2 })
   })
 })
 
@@ -116,13 +116,14 @@ describe('the views', () => {
     add(d, 'p', { state: 'paused', agent: 'ams', branch: 'claude/task-x', pausedBy: 'n@example.com', pausedAt: AT - 100 })
     add(d, 'wi', { state: 'running', kind: 'work-item', agent: 'emc', beatAt: AT, session: 'trace-acme-board-5-abcdef1234567890' })
     add(d, 'old', { state: 'succeeded', endedAt: AT - 2 * 86_400 })
-    const v = jobViews(REPO, loadJobs(d), new Map([['q2', { job: 'q2', held: true, order: null, discarded: false, by: 'n@example.com', at: AT }]]), opts)
+    const v = jobViews(REPO, loadJobs(d), new Map([['q2', { job: 'q2', held: true, order: null, discarded: false, dismissed: false, reason: null, restartedBy: null, restartedAt: null, by: 'n@example.com', at: AT }]]), opts)
     const by = (id: string) => v.find((j) => j.workerJobId === id)
     expect(v.map((j) => j.workerJobId)).toEqual(['run', 'wi', 'p', 'q1', 'q2', 'lost'])
     expect(by('run')).toMatchObject({ id: `${SESSION}.run`, state: 'running', yours: true, step: 'running ERC', controls: ['pause', 'cancel'], agentName: 'Verification' })
     expect(by('q1')).toMatchObject({ state: 'queued', queue: { position: 1, of: 2, startsWhen: expect.stringMatching(/already working/) }, controls: ['pause', 'cancel'] })
     expect(by('q2')).toMatchObject({ held: true, queue: { position: 2, startsWhen: 'held by n@example.com: it starts when someone resumes it' }, controls: ['resume', 'move_up', 'cancel'] })
-    expect(by('lost')).toMatchObject({ state: 'lost', controls: [], step: expect.stringMatching(/lost contact/), heard: null })
+    // a lost job whose request was not recorded can only be dismissed (test-esp32 log #46: never a card with no button)
+    expect(by('lost')).toMatchObject({ state: 'lost', controls: ['dismiss'], settled: null, step: expect.stringMatching(/lost contact/), heard: null })
     // a running job says when trace last heard from it, when that is late and when it would be declared lost, so a
     // screen tells silence from work by the clock (the Overview and the Agents page agree): 6 and 15 minutes after
     const iso = (t: number) => new Date(t * 1000).toISOString()

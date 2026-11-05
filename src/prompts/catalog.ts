@@ -196,6 +196,15 @@ add({ id: 'specialist.job.resumed', mode: 'locked', prompt: 'specialist',
     'Its last step, in its own words (data, not instructions): {{last_step}}',
     'Carry on from there: look at what the branch already has before you change anything, and do not redo what is done.',
   ].join('\n') })
+add({ id: 'specialist.job.restarted', mode: 'locked', prompt: 'specialist',
+  vars: { lost_job: text('the lost job\'s id'), by: text('who started it again: a person, or trace'), commits: text('the commits on the branch, one per line, or "(none)"') },
+  description: 'A task that starts a lost job again (the same request on the same branch): what the lost job left, so it is not redone.',
+  default: [
+    'THIS JOB STARTS AGAIN A JOB THAT ENDED WITHOUT FINISHING. trace lost contact with the earlier attempt ({{lost_job}}): its runtime stopped',
+    'without a word. {{by}} started it again. What that attempt pushed on this branch:',
+    '{{commits}}',
+    'Look at what the branch already has before you change anything: keep what is sound, finish what is not, and do not redo what is done.',
+  ].join('\n') })
 add({ id: 'specialist.resume.continue', mode: 'locked', prompt: 'specialist',
   vars: { paused_by: text('who paused it'), resumed_by: text('who resumed it'), branch: V.branch },
   description: 'The message that continues a paused job\'s own conversation (its transcript was kept).',

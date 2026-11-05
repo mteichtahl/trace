@@ -94,7 +94,7 @@ export function readSteps(v: unknown): StageStep[] | undefined {
       id: str(s.id) ?? `step-${i + 1}`, text: String(s.text),
       owner: STEP_OWNERS.has(s.owner as StepOwner) ? (s.owner as StepOwner) : 'contributors',
       state: STEP_STATES.has(s.state as StepState) ? (s.state as StepState) : 'later',
-      ref, ...(str(s.who) ? { who: String(s.who) } : {}), ...(s.alongside === true ? { alongside: true } : {}),
+      ref, ...(str(s.who) ? { who: String(s.who) } : {}), ...(s.alongside === true ? { alongside: true } : {}), ...(s.stopped === true ? { stopped: true } : {}),
     }
   })
 }
@@ -340,7 +340,8 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
 // ------------------------------------------------------------------ jobs (jobs.list, journey.get's jobs)
 
 const RUN_STATE: Record<string, RunSummary['state']> = { running: 'running', queued: 'queued', paused: 'paused', succeeded: 'done', failed: 'failed', aborted: 'cancelled', lost: 'lost' }
-const OPS = new Set(['pause', 'resume', 'cancel', 'move_up'])
+const OPS = new Set(['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'])
+type Op = NonNullable<RunSummary['controls']>[number]
 
 /** One job view of the API (src/api/actions-jobs.ts IndexedJob) as a run line's summary. */
 export function readJob(j: Obj): RunSummary {
@@ -355,12 +356,13 @@ export function readJob(j: Obj): RunSummary {
     ...(typeof j.typicalS === 'number' ? { typicalS: j.typicalS } : {}),
     ...(str(j.where) ? { where: String(j.where) } : {}),
     ...(q ? { startsWhen: String(q.startsWhen), position: Number(q.position) } : {}),
-    controls: (Array.isArray(j.controls) ? j.controls : []).filter((c): c is 'pause' | 'resume' | 'cancel' | 'move_up' => OPS.has(String(c))),
+    controls: (Array.isArray(j.controls) ? j.controls : []).filter((c): c is Op => OPS.has(String(c))),
     ...(str(j.agent) ? { agent: String(j.agent) } : {}), ...(str(j.agentName) ? { agentName: String(j.agentName) } : {}),
     ...(str(j.startedBy) ? { startedBy: String(j.startedBy) } : {}), yours: Boolean(j.yours), held: Boolean(j.held),
     ...(str(j.pausedBy) ? { pausedBy: String(j.pausedBy) } : {}), ...(str(j.branch) ? { branch: String(j.branch) } : {}),
     ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.error) ? { error: String(j.error) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
     ...(isObj(j.handoff) && str(j.handoff.id) ? { handoff: { id: String(j.handoff.id), ...(str(j.handoff.from) ? { from: String(j.handoff.from) } : {}), ...(str(j.handoff.fromName) ? { fromName: String(j.handoff.fromName) } : {}) } } : {}),
+    ...(isObj(j.settled) && (j.settled.how === 'dismissed' || j.settled.how === 'restarted') ? { settled: { how: j.settled.how, by: String(j.settled.by ?? ''), at: String(j.settled.at ?? ''), ...(str(j.settled.reason) ? { reason: String(j.settled.reason) } : {}) } } : {}),
     ...(isObj(j.heard) && str(j.heard.at) && str(j.heard.overdueAt) && str(j.heard.lostAt) ? { heard: { at: String(j.heard.at), overdueAt: String(j.heard.overdueAt), lostAt: String(j.heard.lostAt) } } : {}),
   }
 }

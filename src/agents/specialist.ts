@@ -116,7 +116,9 @@ export type SpecialistJob =
       /** the open change its new branch started from: a stacked change (docs/stacked-changes.md) */
       stackedOn?: string | undefined
       /** it carries on a paused job whose conversation was not kept: what was done (src/agents/runtime/job.ts) */
-      resumed?: Resumed | undefined }
+      resumed?: Resumed | undefined
+      /** it starts a lost job again: what that job left on the branch (src/agents/runtime/job.ts) */
+      restarted?: Restarted | undefined }
   /** Another specialist asked for it (journey.handoff): the recorded request, which it answers with journey.handoff_answer. */
   | { kind: 'handoff'; handoff: Handoff; branch: string; stackedOn?: string | undefined }
   /** `tracectl agent prompt`: no job, for review. */
@@ -178,6 +180,7 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
       })
       if (job.stackedOn) p.add('specialist.job.stacked', { base: job.stackedOn, default_branch: cfg.branch })
       if (job.resumed) p.add('specialist.job.resumed', { paused_by: job.resumed.pausedBy, paused_at: job.resumed.pausedAt, commits: job.resumed.commits || '(none)', last_step: job.resumed.lastStep || '(not recorded)' })
+      if (job.restarted) p.add('specialist.job.restarted', { lost_job: job.restarted.lostJob, by: job.restarted.by, commits: job.restarted.commits || '(none)' })
       return
     case 'handoff': {
       const h = job.handoff
@@ -248,6 +251,9 @@ export function specialistPrompt(s: Specialist, c: PromptContext): string {
 
 /** What a resumed task knows of the paused job it carries on. */
 export interface Resumed { pausedBy: string; pausedAt: string; resumedBy: string; commits: string; lastStep: string }
+
+/** What a restarted task knows of the lost job it starts again: its id, who started it again, its commits on the branch. */
+export interface Restarted { lostJob: string; by: string; commits: string }
 
 /** The message that continues a paused job's own conversation (its transcript was kept and restored). */
 export function composeResumeNote(r: Resumed, branch: string, layers: Layers = NO_LAYERS): Composed {

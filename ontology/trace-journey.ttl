@@ -710,7 +710,7 @@ trace:answersHandOff a owl:ObjectProperty ;
 
 trace:resumes a owl:ObjectProperty ;
     rdfs:label "carries on" ;
-    rdfs:comment "The paused job this one carries on." ;
+    rdfs:comment "The paused job this one carries on, or the lost one it starts again." ;
     rdfs:domain trace:Job ;
     rdfs:range trace:Job .
 
@@ -740,7 +740,7 @@ trace:lostAt a owl:DatatypeProperty ;
 
 trace:controlsJob a owl:ObjectProperty ;
     rdfs:label "controls job" ;
-    rdfs:comment "The job held, moved or discarded." ;
+    rdfs:comment "The job held, moved, discarded, dismissed or started again." ;
     rdfs:domain trace:JobControl ;
     rdfs:range trace:Job .
 
@@ -755,6 +755,24 @@ trace:discarded a owl:DatatypeProperty ;
     rdfs:comment "Whether the job was discarded." ;
     rdfs:domain trace:JobControl ;
     rdfs:range xsd:boolean .
+
+trace:dismissed a owl:DatatypeProperty ;
+    rdfs:label "dismissed" ;
+    rdfs:comment "Whether a person dismissed the lost job: it ended without finishing and is no longer needed." ;
+    rdfs:domain trace:JobControl ;
+    rdfs:range xsd:boolean .
+
+trace:restartedBy a owl:DatatypeProperty ;
+    rdfs:label "started again by" ;
+    rdfs:comment "Who started the lost job again: a person, or trace on its own." ;
+    rdfs:domain trace:JobControl ;
+    rdfs:range xsd:string .
+
+trace:restartedAt a owl:DatatypeProperty ;
+    rdfs:label "started again at" ;
+    rdfs:comment "When the lost job was started again." ;
+    rdfs:domain trace:JobControl ;
+    rdfs:range xsd:dateTime .
 
 # ================================================================== orders and boards
 

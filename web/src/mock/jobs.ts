@@ -1,9 +1,10 @@
 /**
  * Mock jobs: each project's job index as jobs.list answers it (the same jobs journey.get carries), and job.control's
- * four ops, in memory for the session, so Home's Running now, a project's "trace is doing" and Queued, and Agents and
- * tools show running, paused, held and queued work and react to Pause, Resume, Move up and Cancel.
+ * ops, in memory for the session, so Home's Running now, a project's "trace is doing", Ended without finishing and
+ * Queued, and Agents and tools show running, paused, held, queued and lost work and react to Pause, Resume, Move up,
+ * Cancel, Start again and Dismiss. A lost job holds up the next step until it is settled (lostStepOf).
  */
-import type { AgentState, Handoff, ProjectJobs, RunSummary } from '@/lib/types'
+import type { AgentState, Handoff, Journey, ProjectJobs, RunSummary } from '@/lib/types'
 
 const MIN = 60_000
 const ago = (ms: number): string => new Date(Date.now() - ms).toISOString()
@@ -24,6 +25,9 @@ const JOBS: Record<string, RunSummary[]> = {
     { id: 'job_w1', title: 'Asked by the Implementation specialist: Move the LED driver pins to bank 2', state: 'running', agent: 'worker', agentName: 'Worker', step: 'Editing the pin constraints', stepIndex: 1, stepCount: 3, startedAt: ago(2 * MIN), typicalS: 300, controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_2', from: 'impl', fromName: 'Implementation' } },
     { id: 'job_v2', title: 'Simulate the LED current limit', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running the transient corners', startedAt: ago(40 * MIN), typicalS: 900, controls: ['pause', 'cancel'], startedBy: 'trace' },
     { id: 'job_e1', title: 'Asked by the Implementation specialist: Check the antenna keep-out once routing is done', state: 'queued', agent: 'emc', agentName: 'EMC', position: 1, startsWhen: 'starts when the routing job ends', controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_3', from: 'impl', fromName: 'Implementation' } },
+    // a job that ended without finishing (test-esp32 log #45, #46): Start again or Dismiss, and the next step says so
+    { id: 'job_l1', title: 'Write the timing constraints for the LED driver', state: 'lost', agent: 'impl', agentName: 'Implementation', startedAt: ago(40 * MIN), branch: 'claude/task-led-timing-constraints', controls: ['restart', 'dismiss'], startedBy: 'marc@example.com', yours: true,
+      step: 'trace lost contact with it: its runtime stopped without a word for more than 15 minutes. Its last lines: "running the impl specialist on acme/panel-controller (max 120 turns, 73 tools)".' },
   ],
   'acme/motor-driver': [
     { id: 'job_a1', title: 'Size the current-sense amplifier', state: 'paused', agent: 'ams', agentName: 'Analog and mixed-signal', stepIndex: 4, stepCount: 6, pausedBy: 'trace (waiting on your answer)', controls: ['resume', 'cancel'], startedBy: 'trace' },
@@ -126,6 +130,7 @@ export function jobsAction(name: string, a: Record<string, unknown>): Answer | u
     return { ok: true, result: { repo, declined: { id: h.id, reason: String(a.reason), by: 'you', at: new Date().toISOString() }, job: { cancelled: true, note: 'Its queued job was cancelled.' }, summary: `Declined: the ${h.toName} specialist will not answer it, and the asking specialist is told why.` } }
   }
   if (name !== 'job.control') return undefined
+  if (a.op === 'restart' || a.op === 'dismiss') return lostControl(String(a.id), a.op, typeof a.reason === 'string' ? a.reason : null)
   const all = Object.values(JOBS).flat()
   const j = all.find((x) => x.id === a.id)
   const list = Object.values(JOBS).find((l) => l.some((x) => x.id === a.id))
@@ -155,4 +160,49 @@ export function jobsAction(name: string, a: Record<string, unknown>): Answer | u
     default:
       return { ok: true, result: { ok: false, reason: 'Unknown control.' } }
   }
+}
+
+/** Start again (a new queued attempt on the same branch) or Dismiss a lost job, as job.control does. */
+function lostControl(id: string, op: 'restart' | 'dismiss', reason: string | null): Answer {
+  const list = Object.values(JOBS).find((l) => l.some((x) => x.id === id))
+  const j = list?.find((x) => x.id === id)
+  if (!j || !list) return { ok: true, result: { ok: false, reason: 'There is no such job.' } }
+  if (j.state !== 'lost' || j.settled || !j.controls?.includes(op)) return { ok: true, result: { ok: false, reason: j.settled ? 'It was settled already.' : 'Only a job that ended without finishing can be started again or dismissed.' } }
+  const at = new Date().toISOString()
+  j.controls = []
+  if (op === 'dismiss') {
+    j.settled = { how: 'dismissed', by: 'you', at, ...(reason ? { reason } : {}) }
+    return { ok: true, result: { ok: true, dismissed: true, kept: 'Dismissed: it leaves the overview, and the decision is in the project\'s history.' } }
+  }
+  j.settled = { how: 'restarted', by: 'you', at }
+  const again: RunSummary = { id: `${j.id}_2`, title: j.title, state: 'queued', agent: j.agent, agentName: j.agentName, position: 1, startsWhen: 'starts when it is its turn', controls: ['pause', 'cancel'], startedBy: j.startedBy, yours: j.yours, branch: j.branch }
+  list.push(again)
+  return { ok: true, result: { ok: true, state: 'queued', jobId: again.id, kept: `It starts again on ${j.branch ?? 'its branch'}, from what the lost attempt left there.` } }
+}
+
+/**
+ * The next step while a job of the project ended without finishing (src/api/actions-jobs.ts lostJobStep): it names the
+ * job and offers Start again, in place of a step that would have the person carry on or say trace is working.
+ */
+export function lostStepOf(repo: string, next: Journey['next']): Journey['next'] {
+  const j = jobsOf(repo).find((x) => x.state === 'lost' && !x.settled)
+  if (!j || (next.kind !== 'task' && next.kind !== 'working')) return next
+  const can = j.controls?.includes('restart') ?? false
+  return {
+    kind: 'task', owner: 'you', short: `you start "${j.title}" again`,
+    summary: `The ${j.agentName ?? 'trace'} job "${j.title}" ended without finishing: trace lost contact with it, and nothing is doing its work now.${can ? ' **trace recommends starting it again: it carries on from what the lost attempt left on its branch.**' : ''}`,
+    lead: `The ${j.agentName ?? 'trace'} job "${j.title}" ended without finishing: trace lost contact with it, and nothing is doing its work now.`,
+    ...(can ? { recommend: { text: 'trace recommends starting it again: it carries on from what the lost attempt left on its branch.' } } : {}),
+    why: 'Until it is started again, nothing does its work, and the steps that wait on it wait too.',
+    action: { label: can ? 'Start it again' : 'Dismiss it', call: can ? 'job.restart' : 'job.dismiss' },
+    reviewer: { summary: `The ${j.agentName ?? 'trace'} job "${j.title}" ended without finishing; it waits for a contributor to start it again.` },
+    step: null, after: 'Once it is started again, trace carries on with the work. If it is no longer needed, dismiss it on the overview instead.',
+    ref: { kind: 'action', id: can ? 'job.restart' : 'job.dismiss' }, jobId: j.id,
+  }
+}
+
+/** The stage's steps while a lost job holds up the next step: trace's step now reads as stopped. */
+export function stoppedStepsOf(repo: string, stages: Journey['stages']): Journey['stages'] {
+  if (!jobsOf(repo).some((x) => x.state === 'lost' && !x.settled)) return stages
+  return stages.map((s) => (s.steps ? { ...s, steps: s.steps.map((x) => (x.state === 'now' && x.owner === 'trace' ? { ...x, stopped: true } : x)) } : s))
 }
