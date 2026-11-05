@@ -26,6 +26,7 @@ export interface DecisionBarProps {
   change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & {
     verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
+    recommendation?: ChangeDetail['recommendation'] | undefined
   }
   part?: Part
   /** the note box's words, carried into Accept and Ask */
@@ -86,6 +87,8 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
   // the specialist says it is not finished: asking for changes is the step trace recommends, so it leads
   // the specialist says it is not finished and has more to do (not merely waiting on an approval)
   const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length
+  // ready to accept, yet trace recommends asking (it edits an accepted requirement nothing asked to change): Ask leads
+  const askLeads = unfinished || (mode === 'ready' && change.recommendation?.verdict === 'ask')
   // in conflict: the step to take is bringing it up to date, so it leads; accepting waits for it
   const resolvable = !!onResolve && offersResolve(mode, change)
 
@@ -132,9 +135,9 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
                   Bring it up to date
                 </Button>
               )}
-              {mayAsk && <Button variant={unfinished ? 'default' : 'outline'} size={unfinished ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>}
+              {mayAsk && <Button variant={askLeads ? 'default' : 'outline'} size={askLeads ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>}
               {mayAccept && !resolvable && (
-                <Button variant={unfinished ? 'outline' : 'default'} size={unfinished ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
+                <Button variant={askLeads ? 'outline' : 'default'} size={askLeads ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
                   {busy === 'accept' && <Loader2 className="animate-spin" aria-hidden />}
                   Accept into the design
                 </Button>

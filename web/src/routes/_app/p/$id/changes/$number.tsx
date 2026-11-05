@@ -1,7 +1,8 @@
 /**
  * Review a change (/p/:id/changes/:number): what trace did in plain words, the files it touched in trace's own viewers
  * (schematics and boards in KiCanvas with Before / After, text as a diff, pictures side by side), its checks, the
- * requirements it covers, trace's recommendation with its reason, a note box for the specialist, and the decision bar
+ * requirements it covers, an accepted requirement its database edits (said at the top, with what accepting costs),
+ * trace's recommendation with its reason, a note box for the specialist, and the decision bar
  * (Discard, Ask for changes, Accept into the design). Reviewers read it; the bar says why they cannot decide. GitHub's
  * own page is only in the admins' More menu (docs/stay-in-trace.md, decision C).
  *
@@ -32,6 +33,7 @@ import { ChangeFileView } from '@/components/changes/change-file-view'
 import { viewerKind } from '@/components/files/kinds'
 import { ChangeRequirements } from '@/components/changes/change-requirements'
 import { DecisionBar } from '@/components/changes/decision-bar'
+import { RequirementEditsNotice, acceptWithEdits } from '@/components/changes/requirement-edits'
 import { useChangeActions } from '@/components/changes/use-change-actions'
 import { TabSkeleton, useCoverage } from '@/components/project/shared'
 import { Rich } from '@/components/rich'
@@ -100,7 +102,8 @@ function Review() {
   const busy = actions.accept.isPending ? 'accept' : actions.ask.isPending ? 'ask' : actions.discard.isPending ? 'discard' : actions.resolve.isPending ? 'resolve' : null
   // the next step is this change: its place in the stage, and what accepting moves
   const isNext = !!j.data && j.data.next.kind === 'review' && changeOf(j.data.next) === number
-  const acceptSays = place && isNext ? `Accepting adds it to the design and moves ${place.stage} to step ${Math.min(place.total, place.index + 1)}.` : 'Accepting adds it to the design.'
+  // an accepted requirement it edits is what accepting costs most: said instead of the step it moves (log #112)
+  const acceptSays = d.requirement_edits ? acceptWithEdits(d.requirement_edits) : place && isNext ? `Accepting adds it to the design and moves ${place.stage} to step ${Math.min(place.total, place.index + 1)}.` : 'Accepting adds it to the design.'
   const back = () => void navigate({ to: '/p/$id', params: { id } })
 
   return (
@@ -123,6 +126,7 @@ function Review() {
         </div>
         <MoreForAdmins links={[d.url ? { label: 'This change on GitHub', href: d.url } : null]} />
       </div>
+      {d.requirement_edits && d.state === 'open' && <RequirementEditsNotice className="mt-4" edits={d.requirement_edits} />}
       {d.rule_blocks && d.state === 'open' && <RuleFix repo={repo} change={d} onFixed={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })} note={note.trim()} />}
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">

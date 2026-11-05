@@ -48,6 +48,8 @@
  * (`<!--`, `-->`, which trace's own workflows read as instructions) and @mentions neutralised: it is posted as trace's
  * account, so it must not be able to speak for trace or ping people in its name.
  */
+import { existsSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { isAdmin, standing } from '../core/access.js'
 import { readSettings, resolve } from '../core/config.js'
@@ -56,7 +58,7 @@ import { STAGE_NAMES, decide, loadJourney, mergeAgentFacts } from '../core/journ
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { fence } from '../agents/specialist.js'
 import { Composer, NO_LAYERS } from '../prompts/resolve.js'
-import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
@@ -71,7 +73,8 @@ import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type Pu
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { recordRework, recordWait } from './process-metrics.js'
 import { jobLogEnd, repoJob } from './actions-health.js'
-import { backToDefine, changedRequirements } from './pending-changes.js'
+import { backToDefine, changedRequirements, pastDefine } from './pending-changes.js'
+import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -198,14 +201,14 @@ async function writes(ctx: Context, repo: string): Promise<boolean> {
  * it is; else "no such change" (a person's own pull request, a fork's, one another login opened, or an edit branch
  * someone pushed to: src/api/changes.ts traceJob and editOf).
  */
-async function traceChange(ctx: Context, gh: ReturnType<typeof changesApi>, repo: string, number: number): Promise<{ pull: PullDetail; job: JobRow | null; edit: AppEdit | null; rule: ProjectRule }> {
+async function traceChange(ctx: Context, gh: ReturnType<typeof changesApi>, repo: string, number: number): Promise<{ pull: PullDetail; job: JobRow | null; edit: AppEdit | null; rule: ProjectRule; rows: JobRow[] }> {
   const [pull, rows, rule] = await Promise.all([gh.pullDetail(repo, number), jobRows(ctx, repo), projectRule(ctx, repo)])
   const job = pull ? traceJob({ head: pull.head.ref, headRepo: pull.head.repo, author: pull.author }, jobsByBranch(rows, rule), rule) : null
   // an edit is read from its store each time (never a kept copy): accepting decides on it
   const recorded = pull && !job ? await editStore(ctx).get(repo, pull.head.ref).catch(() => null) : null
   const edit = pull && recorded ? editOf({ head: pull.head.ref, headRepo: pull.head.repo, sha: pull.head.sha }, new Map([[recorded.branch, recorded]]), repo) : null
   if (!pull || (!job && !edit)) throw new ActionError(`${repo} has no change #${number} from trace.`)
-  return { pull, job, edit, rule }
+  return { pull, job, edit, rule, rows }
 }
 
 const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: PullStatus['checks'], denied = false): ChangeFacts => ({ state: p.state, draft: p.draft, mergeable: p.mergeable, checks, ...(denied ? { checks_denied: true } : {}) })
@@ -272,6 +275,13 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const checksList = checkLines(runs)
   const requirements = requirementIds(pull.title, pull.body, ...commits)
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
+  // an accepted requirement its database edits: said before it is accepted (src/api/requirement-edits.ts)
+  const edits = pull.state === 'open' && files.some((f) => f.path === PROJECT_DB_PATH)
+    ? await cached(keep, repo, `requirement-edits:${number}:${sha}`, () => requirementEditsOf(ctx, gh, repo, pull, found.rows, stack.stacked?.base ?? null)).catch((e: unknown) => {
+      logLine(ctx, { warning: 'change.get: the requirements it edits could not be read', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
+      return null
+    })
+    : null
   return {
     ...sum,
     verdict: verdictOf(facts),
@@ -279,11 +289,37 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     summary: summaryBullets({ jobSummary: job.summary, body: pull.body, commits }),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
-    recommendation: recommendationOf(facts, { passed, requirements, from: sum.from }),
+    recommendation: withRequirementEdits(recommendationOf(facts, { passed, requirements, from: sum.from }), edits),
+    ...(edits ? { requirement_edits: edits } : {}),
     ...acceptance(facts, write),
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
     ready_since: readySince(runs, pull.created_at),
     rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
+  }
+}
+
+/**
+ * The accepted requirements change `pull`'s database edits, against the design as it stands (the default branch's
+ * database, with people's decisions from the journey record), and what on its branch asked for that. Null when it
+ * edits none, or carries no database.
+ */
+async function requirementEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullDetail, jobs: readonly JobRow[], base: string | null): Promise<RequirementEditsView | null> {
+  const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, pull.head.sha))
+  try {
+    if (!existsSync(t.db)) return null
+    const head = new DatabaseSync(t.db, { readOnly: true })
+    try {
+      return await withRecordDb(ctx, repo, (design) => {
+        const edits = requirementEdits(design, head)
+        if (!edits.length) return null
+        const r = loadJourney(design)
+        return editsView(edits, r ? pastDefine(r) : false, requirementAsked(jobs, [pull.head.ref, ...(base ? [base] : [])], r))
+      })
+    } finally {
+      head.close()
+    }
+  } finally {
+    t.cleanup()
   }
 }
 
@@ -556,7 +592,11 @@ export const CHANGE_ACTIONS = {
     // record cannot be read now, journey.get and gate.sign find the change before any gate past Define is signed
     const back = await (async () => {
       const r = await withJourneyDb(ctx, repo, (db) => loadJourney(db))
-      return r ? backToDefine(ctx, repo, r, await changedRequirements(ctx, repo, r), by) : null
+      // the requirements its review page said it edits count too: the default branch read straight after the merge
+      // can still be the copy from before it (test-esp32 log #112: Define reopened only at the next accept)
+      if (!r) return null
+      const ids = [...new Set([...await changedRequirements(ctx, repo, r).catch(() => [] as string[]), ...(d.requirement_edits?.ids ?? [])])]
+      return backToDefine(ctx, repo, r, ids, by)
     })().catch(() => null)
     if (back) {
       return {

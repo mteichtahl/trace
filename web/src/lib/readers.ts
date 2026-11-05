@@ -8,7 +8,7 @@
  */
 import type {
   AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeLink, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
-  HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, Waiver,
+  HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RequirementEdits, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, Waiver,
 } from './types'
 import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
 import { CRITERION_SKILLS } from './step-skills'
@@ -175,7 +175,15 @@ export function readChange(raw: unknown): ChangeDetail {
     may_accept: c.may_accept === true,
     blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),
     base: ref(c.base), head: ref(c.head),
+    ...(readRequirementEdits(c.requirement_edits) ? { requirement_edits: readRequirementEdits(c.requirement_edits)! } : {}),
   }
+}
+
+/** change.get's requirement_edits: the accepted requirements it edits, or nothing (none, or an older API). */
+function readRequirementEdits(v: unknown): RequirementEdits | null {
+  if (!isObj(v) || !str(v.says)) return null
+  const edits = arr(v.edits).map((e) => ({ id: str(e.id) ?? '', what: str(e.what) ?? '' })).filter((e) => e.id && e.what)
+  return { ids: (Array.isArray(v.ids) ? v.ids : []).map(String), reopens: v.reopens === true, asked: str(v.asked) ?? null, says: String(v.says), edits }
 }
 
 /** change.diff: one file's two sides. */

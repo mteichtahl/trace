@@ -120,6 +120,13 @@ describe('reading the change actions', () => {
     expect(readChange({ ...summary, url: 'https://evil.example/x' }).url).toBe('')
   })
 
+  it('change.get: keeps the accepted requirements a change edits, so the page can say so before accepting (log #112)', () => {
+    const edits = { ids: ['REQ-367d71'], reopens: true, asked: null, says: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it.', edits: [{ id: 'REQ-367d71', what: 'REQ-367d71: its acceptance criterion changes.' }] }
+    expect(readChange({ ...summary, requirement_edits: edits }).requirement_edits).toEqual(edits)
+    expect(readChange({ ...summary }).requirement_edits).toBeUndefined()
+    expect(readChange({ ...summary, requirement_edits: { ids: ['x'] } }).requirement_edits).toBeUndefined()
+  })
+
   it('the pill is the API\'s word, else worked out from the checks and mergeable state', () => {
     expect(verdictOf({ checks: null, mergeable: 'clean', verdict: 'conflict' })).toBe('conflict')
     expect(verdictOf({ checks: { total: 2, passed: 1, failed: 1, running: 0, skipped: 0, failing: ['ERC'] }, mergeable: 'clean' })).toBe('failing')

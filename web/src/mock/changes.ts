@@ -154,6 +154,22 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'wait', why: 'It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Its checks passed: it follows that change into the design once it is accepted.' },
       may_accept: false, blockers: ['It builds on "Power and USB-C input sheet" (change 12), which is not accepted yet. Accept that one first.'],
     }),
+    // a change whose database edits an accepted requirement nothing asked to change (test-esp32 log #112)
+    summary(16, {
+      title: 'OLED connector pin-order note', from: 'the Verification specialist', opened_at: ago(5 * MIN), updated_at: ago(3 * MIN),
+      checks: { total: 3, passed: 3, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
+      summary: ['Only the note string changed: J2\'s pin order (GND, 3V3, SCL, SDA) is now a project rule.', 'Did not change any wiring, symbol or net.'],
+      files: [{ path: '.trace/project.db', status: 'modified', additions: 0, deletions: 0, kind: 'binary' }],
+      checks_list: [{ name: 'build', state: 'passed', summary: 'Built.' }, { name: 'trace-prs', state: 'passed', summary: null }, { name: 'Electrical rules check', state: 'passed', summary: 'No errors' }],
+      requirements: ['REQ-367d71'],
+      requirement_edits: {
+        ids: ['REQ-367d71'], reopens: true, asked: null,
+        says: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it.',
+        edits: [{ id: 'REQ-367d71', what: 'REQ-367d71: its acceptance criterion changes from "J2 pins in the order GND, VCC, SCL, SDA, checked against the OLED module\'s datasheet" to "J2 pin order matches the OLED module (GND, 3V3, SCL, SDA), as the project rule says".' }],
+      },
+      recommendation: { verdict: 'ask', why: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it. Nothing asked for that: no answer said it changes a requirement, and no change request did. Ask for changes so it leaves the requirement as agreed. If the new wording is right, you can still accept it, then agree it in Requirements review and sign the gates again.' },
+      may_accept: true,
+    }),
   ],
 }
 

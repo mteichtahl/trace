@@ -1719,7 +1719,7 @@ export const VAGUE = /^(it depends|you decide|not needed|n\/?a|none|no|ok|yes|wh
  * With `facts`, a question an agent keeps in its own facts (src/core/agent-facts.ts) is answered here under its id: the
  * question is copied into this record with the answer, so the record keeps what was asked and the agent reads the answer.
  */
-export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { option?: string | undefined; answer?: string | undefined; reason?: string | undefined }, o: { facts?: AgentFacts | null | undefined } = {}): QuestionView {
+export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { option?: string | undefined; answer?: string | undefined; reason?: string | undefined; lasts?: 'once' | 'rule' | 'requirement' | undefined }, o: { facts?: AgentFacts | null | undefined } = {}): QuestionView {
   const r0 = need(db)
   if (!r0.questions.some((x) => x.id === id) && o.facts) {
     const fact = withFacts(r0, o.facts).questions.find((x) => x.id === id)
@@ -1749,6 +1749,8 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
     decide(db, {
       kind: 'question.answered', stage: q.stage, ref: id, by: by.label,
       summary: `${q.askedBy} asked: ${q.text} Answered: ${text}${differs && recommended ? ` (not the recommended ${recommended.label}, because ${reason})` : ''}.`,
+      // what the person said it lasts as: only "It changes a requirement" backs an agent's edit of one (src/api/requirement-edits.ts)
+      ...(a.lasts ? { detail: { lasts: a.lasts } } : {}),
     })
     // the person's answer is their approval: the criterion they approved is met, with the question and what it showed
     for (const c of approved) {
