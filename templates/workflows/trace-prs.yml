@@ -12,6 +12,13 @@
 # Behaviour is set in .trace/config.yml (read from __TR_BRANCH__, never from a PR). Kill switch: repository
 # variable TRACE_PRS = 'false'. Needs the TRACE_TOKEN secret for its actions to start builds.
 #
+# Who it acts as: trace's GitHub app, when the installer has set the TRACE_GITHUB_APP_BROKER and TRACE_GITHUB_APP_ROLE
+# variables and the app is installed on this repository. Each job assumes the repository's token role (GitHub OIDC; it
+# may do nothing but ask the broker) and asks the installation's token broker, which holds the app's key and gives a
+# token for this repository alone, on the app's own rate limit: busy hours no longer use up the quota of the person
+# whose token TRACE_TOKEN is (docs/agent-identity.md). Otherwise, and for opening a pull request (trace knows its changes
+# by the login that opened them, TRACE_AGENT_LOGIN), TRACE_TOKEN.
+#
 # How work is found: events. A push to a branch opens its PR; a PR opened, reopened, made ready, retargeted or
 # (un)labelled gets auto-merge; a push to __TR_BRANCH__ (a merge, which leaves other PRs behind) moves the update
 # queue on, and so does every finished __TR_BUILD_NAME__ run (a head PR whose build failed is not merged, so no push
@@ -51,11 +58,22 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      id-token: write          # GitHub OIDC -> TRACE_GITHUB_APP_ROLE (asks the token broker for trace's GitHub app's token)
     steps:
+      # trace's GitHub app (its own rate limit): AWS credentials from the repository's token role, to ask the broker
+      # with. Left out, or refused, the step acts as TRACE_TOKEN (src/harness/app-token.ts)
+      - if: vars.TRACE_GITHUB_APP_BROKER != '' && vars.TRACE_GITHUB_APP_ROLE != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_GITHUB_APP_ROLE }}
+          role-session-name: trace-open-pr-${{ github.run_id }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
       - uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
           task: open-pr
           token: ${{ secrets.TRACE_TOKEN }}
+          broker-url: ${{ vars.TRACE_GITHUB_APP_BROKER }}
 
   automerge:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'pull_request'
@@ -65,11 +83,22 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      id-token: write          # GitHub OIDC -> TRACE_GITHUB_APP_ROLE (asks the token broker for trace's GitHub app's token)
     steps:
+      # trace's GitHub app (its own rate limit): AWS credentials from the repository's token role, to ask the broker
+      # with. Left out, or refused, the step acts as TRACE_TOKEN (src/harness/app-token.ts)
+      - if: vars.TRACE_GITHUB_APP_BROKER != '' && vars.TRACE_GITHUB_APP_ROLE != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_GITHUB_APP_ROLE }}
+          role-session-name: trace-automerge-${{ github.run_id }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
       - uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
           task: automerge
           token: ${{ secrets.TRACE_TOKEN }}
+          broker-url: ${{ vars.TRACE_GITHUB_APP_BROKER }}
 
   update-queue:
     if: >-
@@ -83,8 +112,19 @@ jobs:
       contents: read
       pull-requests: read
       checks: read
+      id-token: write          # GitHub OIDC -> TRACE_GITHUB_APP_ROLE (asks the token broker for trace's GitHub app's token)
     steps:
+      # trace's GitHub app (its own rate limit): AWS credentials from the repository's token role, to ask the broker
+      # with. Left out, or refused, the step acts as TRACE_TOKEN (src/harness/app-token.ts)
+      - if: vars.TRACE_GITHUB_APP_BROKER != '' && vars.TRACE_GITHUB_APP_ROLE != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_GITHUB_APP_ROLE }}
+          role-session-name: trace-update-queue-${{ github.run_id }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
       - uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
           task: update-queue
           token: ${{ secrets.TRACE_TOKEN }}
+          broker-url: ${{ vars.TRACE_GITHUB_APP_BROKER }}

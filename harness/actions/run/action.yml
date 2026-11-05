@@ -9,6 +9,10 @@ inputs:
     description: TRACE_TOKEN, a fine-grained token whose pushes, merges and PRs start workflows. May be empty (the task then degrades and says so).
     required: false
     default: ''
+  broker-url:
+    description: "trace's token broker for its GitHub app (vars.TRACE_GITHUB_APP_BROKER), a function URL with IAM sign-in. With the step's AWS credentials (the repository's token role, vars.TRACE_GITHUB_APP_ROLE), a step given token acts as the app's installation on the repository, on its own rate limit; else as token, as before."
+    required: false
+    default: ''
   job-token:
     description: The job's GITHUB_TOKEN (used to read the settings, the Checks API, and as the fallback).
     required: false
@@ -139,6 +143,7 @@ runs:
         AP: ${{ github.action_path }}
         TRACE_TASK: ${{ inputs.task }}
         OWN_TOKEN: ${{ inputs.token }}
+        BROKER_URL: ${{ inputs.broker-url }}
         JOB_TOKEN: ${{ inputs.job-token }}
         ITEM: ${{ inputs.item }}
         AGENT: ${{ inputs.agent }}
