@@ -112,7 +112,8 @@
  *   actions-cost.ts      cost.get, usage.month
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-design.ts    design.decide
- *   actions-changes.ts   changes.list, change.get, change.check, change.diff, change.accept, change.ask, change.discard
+ *   actions-changes.ts   changes.list, change.get, change.check, change.diff, change.accept, change.ask, change.discard,
+ *                        change.rerun
  *                        (people's app edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
  *   actions-rules.ts     repo.rules.fix
  *   actions-handin.ts    design.handin (KiCad files handed in: one commit on trace/handin-…, recorded as an app edit)
@@ -131,7 +132,7 @@
  *                        next drift check (docs/scribe.md "Publishing")
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
- *   actions-changes.ts   changes.list, change.get, change.check, change.diff (read); change.accept, change.ask, change.discard (write,
+ *   actions-changes.ts   changes.list, change.get, change.check, change.diff (read); change.accept, change.ask, change.discard, change.rerun (write,
  *                        never a connected system's): the pull requests trace's jobs opened, reviewed and accepted
  *                        in the app as changes (docs/guided-flow.md)
  *

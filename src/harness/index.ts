@@ -18,7 +18,7 @@ import { delegateStep, reportStep, specialistStep } from './actions.js'
 import * as ci from './ci-doctor.js'
 import * as deploy from './deploy.js'
 import { dispatchTask } from './dispatch.js'
-import { retried } from './retry.js'
+import { RATE_LIMIT_BUDGET_MS, patient, retried } from './retry.js'
 import * as prs from './prs.js'
 import type { Context, Core, Deps, GitHub, TaskEnv } from './types.js'
 import * as worker from './worker.js'
@@ -149,10 +149,14 @@ export async function mayRun(name: string, context: Context, core: Core, env: No
 }
 
 async function runTask(args: { github: GitHub; context: Context; core: Core; getOctokit: (token: string) => GitHub }, env: TaskEnv & { TRACE_TASK?: string; JOB_TOKEN?: string }, task: (d: Deps) => Promise<void> | void): Promise<void> {
+  // GitHub's rate limits are waited out, not failed on (retry.ts patient): a used-up quota is GitHub being busy, and
+  // a check that fails for it says nothing about the work (test-esp32 run 2, #126). One budget for the whole job
+  const limits = { say: (s: string): void => args.core.warning(s), budget: { leftMs: RATE_LIMIT_BUDGET_MS } }
+  const github = patient(args.github, limits)
   if (!(await mayRun(env.TRACE_TASK ?? '', args.context, args.core, process.env))) return
-  const jobApi = env.JOB_TOKEN ? args.getOctokit(env.JOB_TOKEN) : args.github
+  const jobApi = env.JOB_TOKEN ? patient(args.getOctokit(env.JOB_TOKEN), limits) : github
   // prompt overrides matter only to the steps that build prompts: the others need not read the installation's store
   const prompting = ['worker-prompt', 'worker-delegate'].includes(env.TRACE_TASK ?? '')
   const { cfg, prompts } = prompting ? await loadProject(jobApi, args.context, args.core) : { cfg: await loadConfig(jobApi, args.context, args.core), prompts: undefined }
-  await task({ github: args.github, jobApi, context: args.context, core: args.core, cfg, env, ...(prompts ? { prompts } : {}) })
+  await task({ github, jobApi, context: args.context, core: args.core, cfg, env, ...(prompts ? { prompts } : {}) })
 }
