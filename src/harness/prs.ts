@@ -5,6 +5,8 @@
  *                another open PR's branch is stacked on it (stack.ts): its PR targets that branch, not the default one.
  *                A branch whose change a person discarded gets none (src/core/discarded.ts), and a branch that
  *                follows a discarded change says so in its PR, with the person's reason.
+ *                It is titled by the first commit that is not a specialist's record (src/core/change-contents.ts),
+ *                and a PR still titled as a record is titled again once a push brings work into it.
  *   automerge    every PR to the default branch merges itself once its required checks pass (unless held).
  *   updateQueue  first the stacks are kept in order (stack.ts restack); then trace's own PRs (held ones too) whose only conflict is .trace/project.db get the default branch
  *                merged in with the database merged (db-conflict.ts; up to DB_RESOLVE_PER_RUN a run); then the oldest
@@ -15,6 +17,7 @@
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
 import { type Discarded, afterBranch, discardedBranch, discardedChange, followsOf } from '../core/discarded.js'
+import { changeTitle, recordTitle } from '../core/change-contents.js'
 import { commentOnce, globMatch } from './util.js'
 import { resolveDbConflict } from './db-conflict.js'
 import { settle } from './mergeable.js'
@@ -34,7 +37,7 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
   if (wip && new RegExp(`(^|[-_/])${escapeRe(wip)}([-_/]|$)`, 'i').test(branch)) return say(`\`${branch}\` is marked work in progress: no PR opened.`)
 
   const open = (await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 1 })).data
-  if (open[0]) return say(`#${open[0].number} is already open for \`${branch}\`.`)
+  if (open[0]) return retitle(github, { owner, repo, pr: open[0], ownToken: Boolean(env.OWN_TOKEN) }, say)
   // a change a person discarded stays discarded: a job that pushed to its branch afterwards does not bring it back
   // (test-esp32 log #75). Any doubt opens nothing, like the stack check below
   let retired: Discarded | null
@@ -74,8 +77,8 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
   }
   const commits = cmp.data.commits
   const subject = (m: string): string => m.split('\n')[0] ?? ''
-  const first = subject(commits[0]?.commit.message ?? branch)
-  const title = commits.length === 1 ? first : `${first.replace(/\.$/, '')} (+${commits.length - 1} more)`
+  // named by the work in it, not by a specialist's record that came first (test-esp32 log #144)
+  const title = changeTitle(commits.map((c) => c.commit.message)) || branch
   const rest = commits.length === 1 ? (commits[0]?.commit.message ?? '').split('\n').slice(1).join('\n').trim() : ''
   // work that follows a discarded change (src/agents/runtime/job.ts moved it to <branch>-after-<number>): its PR links
   // that change and carries the person's reason, so whoever reviews it sees what was rejected. Not readable: no line
@@ -98,6 +101,24 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
 export function followsLine(d: Discarded): string {
   const reason = d.reason ? `, with this reason:\n\n${d.reason.split('\n').map((l) => `> ${l}`).join('\n')}` : '.'
   return `This follows #${d.number}, which ${d.by} discarded${reason}`
+}
+
+/**
+ * A push to a branch whose pull request is open: its title, when it is still a specialist's record title (as opened:
+ * a person who renamed it is left alone), is named again by the work its commits now hold. In the test run a "docs
+ * specialist's record" change came to carry a whole case design, a schematic field and board text under that title
+ * (test-esp32 log #144).
+ */
+async function retitle(github: GitHub, o: { owner: string; repo: string; pr: { number: number; title: string; base: { ref: string } }; ownToken: boolean }, say: (s: string) => Promise<void>): Promise<void> {
+  const { owner, repo, pr } = o
+  const already = `#${pr.number} is already open for its branch.`
+  if (!recordTitle(pr.title)) return say(already)
+  const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number: pr.number, per_page: 100 }).catch(() => null)
+  const title = commits ? changeTitle(commits.map((c) => c.commit.message)) : ''
+  if (!title || recordTitle(title) || title === pr.title) return say(already)
+  if (!o.ownToken) return say(`${already} It holds more than a record now; with a TRACE_TOKEN secret it would be retitled "${title}".`)
+  await github.rest.pulls.update({ owner, repo, pull_number: pr.number, title: title.slice(0, 250) })
+  return say(`${already} It holds more than a specialist's record now: retitled "${title}".`)
 }
 
 const ENABLE = 'mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }'

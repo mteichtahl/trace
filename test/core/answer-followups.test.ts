@@ -5,7 +5,7 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { type Followup, MAX_ATTEMPTS, MISSING_AFTER_S, STALE_QUEUED_S, followupStatus, loadFollowups, pendingAnswers, putFollowup, updateFollowup } from '../../src/core/answer-followups.js'
+import { type Followup, MAX_ATTEMPTS, MISSING_AFTER_S, STALE_QUEUED_S, carryOnPlace, followupStatus, landedOn, loadFollowups, pendingAnswers, putFollowup, updateFollowup } from '../../src/core/answer-followups.js'
 import type { JobRow } from '../../src/core/job-index.js'
 import { type ChangeFacts, changeSummary, recommendationOf, verdictOf } from '../../src/api/changes.js'
 import { checksPick } from '../../src/agents/runtime/job.js'
@@ -14,7 +14,7 @@ const AT = 1_800_000_000
 const BRANCH = 'claude/task-wifi-docs'
 
 const f = (o: Partial<Followup> = {}): Followup => ({
-  question: 'aqf54afeab7d8d4a', text: 'How does a user clear the saved Wi-Fi network?', askedJob: 'job-ask', branch: BRANCH, agent: 'docs',
+  question: 'aqf54afeab7d8d4a', text: 'How does a user clear the saved Wi-Fi network?', askedJob: 'job-ask', branch: BRANCH, agent: 'docs', stackOn: null,
   answer: 'Reopen the setup access point after 60 s without the saved network', reason: null, lasts: 'rule', by: 'marc@example.com', bySub: 'sub-marc',
   job: 'job-c1', attempts: 1, state: 'pending', note: null, answeredAt: AT - 600, startedAt: AT - 600, updatedAt: AT - 600, ...o,
 })
@@ -76,6 +76,54 @@ describe('the record of follow-ups', () => {
     expect(loadFollowups(db)[0]).toMatchObject({ job: null, attempts: 2, state: 'pending', note: 'job job-c1 was stopped', updatedAt: AT + 1 })
     expect(updateFollowup(db, 'aq-none', { state: 'applied' }, AT)).toBe(false)
   })
+
+  it('reads a record written before carry-ons could stack, and adds the column on the next write', () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(`CREATE TABLE answer_followups (
+      question TEXT PRIMARY KEY, text TEXT NOT NULL, asked_job TEXT NOT NULL, branch TEXT NOT NULL, agent TEXT NOT NULL,
+      answer TEXT NOT NULL, reason TEXT, lasts TEXT, by TEXT, by_sub TEXT,
+      job TEXT, attempts INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'pending', note TEXT,
+      answered_at REAL NOT NULL, started_at REAL NOT NULL, updated_at REAL NOT NULL)`)
+    db.prepare(`INSERT INTO answer_followups (question, text, asked_job, branch, agent, answer, attempts, answered_at, started_at, updated_at) VALUES ('aq-old', 'Old?', 'job-ask', ?, 'docs', 'yes', 1, ?, ?, ?)`).run(BRANCH, AT, AT, AT)
+    expect(loadFollowups(db)[0]).toMatchObject({ question: 'aq-old', stackOn: null })
+    expect(updateFollowup(db, 'aq-old', { stackOn: BRANCH }, AT + 1)).toBe(true)
+    expect(loadFollowups(db)[0]).toMatchObject({ stackOn: BRANCH })
+  })
+})
+
+describe('where an answer\'s carry-on works (test-esp32 log #144)', () => {
+  const HANDOFF = 'claude/handoff-hoac40d08bf1664e'
+  // the run: the Documentation specialist answered a hand-off on its own branch (its record); the Implementation
+  // specialist was sent there to check the answer, and asked about the case
+  const rows = [
+    row('job-docs', { agent: 'docs', branch: HANDOFF, handoff: 'hoac40d08bf1664e', state: 'succeeded', queuedAt: AT - 9000 }),
+    row('job-impl', { agent: 'impl', branch: HANDOFF, state: 'succeeded', queuedAt: AT - 5000 }),
+  ]
+
+  it('on the asking job\'s branch when the branch is its specialist\'s own work', () => {
+    expect(carryOnPlace(rows, { id: 'job-docs', agent: 'docs' }, HANDOFF)).toEqual({ branch: HANDOFF })
+    // a later job of the same specialist on its own branch
+    expect(carryOnPlace([...rows, row('job-docs-2', { agent: 'docs', branch: HANDOFF, queuedAt: AT - 100 })], { id: 'job-docs-2', agent: 'docs' }, HANDOFF)).toEqual({ branch: HANDOFF })
+    // a branch no listed job started: as before
+    expect(carryOnPlace([], { id: 'job-x', agent: 'impl' }, BRANCH)).toEqual({ branch: BRANCH })
+  })
+
+  it('on a change of its own, stacked on it, when another specialist\'s work is on the branch', () => {
+    expect(carryOnPlace(rows, { id: 'job-impl', agent: 'impl' }, HANDOFF)).toEqual({ stackOn: HANDOFF, owner: 'docs' })
+    // a worker row's branch stands for the specialist job that started it
+    const viaWorker = [row('job-docs', { agent: 'docs', branch: null, queuedAt: AT - 9000 }), row('w-1', { agent: null, kind: 'worker', parentJob: 'job-docs', branch: HANDOFF, queuedAt: AT - 8000 }), rows[1] as JobRow]
+    expect(carryOnPlace(viaWorker, { id: 'job-impl', agent: 'impl' }, HANDOFF)).toEqual({ stackOn: HANDOFF, owner: 'docs' })
+  })
+
+  it('a stacked carry-on holds up its own change once its job names it, never the one it stacks on', () => {
+    const stacked = f({ agent: 'impl', branch: HANDOFF, stackOn: HANDOFF, job: 'job-c1' })
+    expect(pendingAnswers([stacked], [...rows, row('job-c1', { agent: 'impl', branch: null })], AT).size).toBe(0)
+    const named = pendingAnswers([stacked], [...rows, row('job-c1', { agent: 'impl', branch: 'claude/task-case-answer' })], AT)
+    expect([...named.keys()]).toEqual(['claude/task-case-answer'])
+    expect(landedOn(stacked, [row('job-c1', { branch: 'claude/task-case-answer' })])).toBe('claude/task-case-answer')
+    // later docs work on the branch it stacks on does not apply it
+    expect(followupStatus(stacked, [...rows, row('job-c1', { agent: 'impl', branch: null }), row('job-docs-3', { agent: 'docs', branch: HANDOFF, state: 'succeeded', queuedAt: AT - 10 })], AT).state).toBe('waiting')
+  })
 })
 
 describe('a change with an answer still to apply', () => {
@@ -116,5 +164,7 @@ describe('a task on an existing branch keeps its specialist', () => {
     expect(checksPick(t)).toBe(true)
     expect(checksPick({ ...t, branch: BRANCH })).toBe(false)
     expect(checksPick({ ...t, resume: { job: 'job-p', by: 'm' } })).toBe(false)
+    // a carry-on on a change of its own, stacked on another specialist's (log #144)
+    expect(checksPick({ ...t, stackOn: BRANCH })).toBe(false)
   })
 })

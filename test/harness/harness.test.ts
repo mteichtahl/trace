@@ -111,6 +111,41 @@ describe('open-pr', () => {
     expect(String(g.called('pulls.create')[0]!.args.body)).not.toMatch(/This follows/)
   })
 
+  it('names a change by the work in it, not by a specialist\'s record that came first (test-esp32 log #144)', async () => {
+    const record = 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)\n\nWhat its tools wrote to the project\'s record.'
+    const f = fakeGithub({
+      'pulls.list': [],
+      'repos.compareCommits': { ahead_by: 2, commits: [{ sha: SHA('a'), commit: { message: record } }, { sha: SHA('b'), commit: { message: 'Case: printed two-part shell\n\nbody' } }] },
+      'pulls.create': { number: 20, html_url: 'u' },
+    })
+    await prs.openPr(deps(f, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/x' }), { OWN_TOKEN: 't' }))
+    expect(f.called('pulls.create')[0]!.args.title).toBe('Case: printed two-part shell (+1 more)')
+    // only records: named as before
+    const g = fakeGithub({ 'pulls.list': [], 'repos.compareCommits': { ahead_by: 1, commits: [{ sha: SHA('a'), commit: { message: record } }] }, 'pulls.create': { number: 21, html_url: 'u' } })
+    await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/y' }), { OWN_TOKEN: 't' }))
+    expect(g.called('pulls.create')[0]!.args.title).toBe('trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)')
+  })
+
+  it('titles an open record change again once a push brings design work into it', async () => {
+    const open = { number: 20, title: 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)', base: { ref: 'main' } }
+    const commits = [
+      { sha: SHA('a'), commit: { message: 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)' } },
+      { sha: SHA('b'), commit: { message: 'trace: the impl specialist\'s record (job-mw3awisf-29f0f73e)' } },
+      { sha: SHA('c'), commit: { message: 'Case: printed two-part shell, MJF PA12-HP at JLC3DP' } },
+    ]
+    const f = fakeGithub({ 'pulls.list': [open], 'pulls.listCommits': commits })
+    const core = fakeCore()
+    await prs.openPr(deps(f, core, cfgOf(), context({ ref: 'refs/heads/claude/handoff-hoac40d08bf1664e' }), { OWN_TOKEN: 't' }))
+    expect(f.called('pulls.update')[0]!.args).toMatchObject({ pull_number: 20, title: 'Case: printed two-part shell, MJF PA12-HP at JLC3DP (+2 more)' })
+    expect(core.text).toMatch(/retitled/)
+    // a title a person chose, or one with records only, is left alone
+    for (const [title, list] of [['Case design, reviewed', commits], [open.title, commits.slice(0, 2)]] as const) {
+      const g = fakeGithub({ 'pulls.list': [{ ...open, title }], 'pulls.listCommits': list })
+      await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/handoff-hoac40d08bf1664e' }), { OWN_TOKEN: 't' }))
+      expect(g.called('pulls.update'), title).toHaveLength(0)
+    }
+  })
+
   it('opens nothing without a token and says why', async () => {
     const f = fakeGithub({ 'pulls.list': [], 'repos.compareCommits': { ahead_by: 1, commits: [{ sha: SHA('a'), commit: { message: 'x' } }] } })
     const core = fakeCore()

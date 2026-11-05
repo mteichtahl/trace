@@ -1,7 +1,8 @@
 /**
  * Answers trace still has to apply (test-esp32 log #131, #122). When a person answers an agent's question, the work it
  * blocks changes only once a job acts on the answer: the asking job itself when it is still queued, running or paused
- * (it reads the answer), else a carry-on task on the asking job's branch (src/api/actions-journey.ts carryOn). That job
+ * (it reads the answer), else a carry-on task on the asking job's branch (src/api/actions-journey.ts carryOn), or, when
+ * that branch holds another specialist's work, on a change of its own stacked on it (carryOnPlace). That job
  * lived only in its worker's queue: when it was lost, cancelled by its runtime shutting down, or never reached the
  * index, nothing remembered the answer, the queued item left the Overview without running, and the change it blocked
  * was still recommended for accepting without it.
@@ -12,7 +13,9 @@
  *   answer_followups   one row per answered question: the asking job and its branch and specialist, what the person
  *                      answered (and how long it lasts), the job expected to apply it (`job`: the asker, or the
  *                      carry-on started for it), how many carry-ons were started (`attempts`), and its state: pending,
- *                      applied, or stopped (a person cancelled its job, or trace gave up after MAX_ATTEMPTS)
+ *                      applied, or stopped (a person cancelled its job, or trace gave up after MAX_ATTEMPTS).
+ *                      `stack_on`: its carry-on opens a change of its own on top of that branch, which holds another
+ *                      specialist's work (test-esp32 log #144); once its job's branch is known, that is its `branch`
  *
  * followupStatus reads a pending row against the project's job index (pure):
  *
@@ -21,7 +24,8 @@
  *   waiting   its job is queued, running or paused, or another job on its branch started after the answer is
  *   restart   its job failed, was aborted by anything but a person, was lost (no heartbeat), was queued with no word for
  *             STALE_QUEUED_S (its runtime is gone: a queued job rewrites its row every few minutes), or never reached
- *             the index within MISSING_AFTER_S: a new carry-on is started on the same branch (journey.get)
+ *             the index within MISSING_AFTER_S: a new carry-on is started on the same branch (journey.get), or, for
+ *             one on a change of its own whose branch is not known yet, stacked on the same branch again
  *   stopped   a person cancelled its job, or MAX_ATTEMPTS carry-ons did not apply it: nothing starts on its own, and
  *             the change still is not recommended for accepting
  *
@@ -42,16 +46,28 @@ export const ANSWER_FOLLOWUPS_SQL = `CREATE TABLE IF NOT EXISTS answer_followups
   question TEXT PRIMARY KEY, text TEXT NOT NULL, asked_job TEXT NOT NULL, branch TEXT NOT NULL, agent TEXT NOT NULL,
   answer TEXT NOT NULL, reason TEXT, lasts TEXT, by TEXT, by_sub TEXT,
   job TEXT, attempts INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'pending', note TEXT,
-  answered_at REAL NOT NULL, started_at REAL NOT NULL, updated_at REAL NOT NULL
+  answered_at REAL NOT NULL, started_at REAL NOT NULL, updated_at REAL NOT NULL, stack_on TEXT
 )`
+
+/** The table, with the columns added since it was first made (a journey record written before has none of them). */
+function ensureTable(db: DatabaseSync): void {
+  db.exec(ANSWER_FOLLOWUPS_SQL)
+  const cols = new Set((db.prepare('PRAGMA table_info(answer_followups)').all() as { name: string }[]).map((c) => c.name))
+  if (!cols.has('stack_on')) db.exec('ALTER TABLE answer_followups ADD COLUMN stack_on TEXT')
+}
 
 export type FollowupState = 'pending' | 'applied' | 'stopped'
 
 /** One answer a job has to apply. */
 export interface Followup {
   question: string; text: string
-  /** the job that asked, its branch and its specialist */
+  /** the job that asked, its branch (where the answer's work goes) and its specialist */
   askedJob: string; branch: string; agent: string
+  /**
+   * Set: the answer's work goes on a change of its own, stacked on this branch (the asking job's, which holds another
+   * specialist's work: carryOnPlace). Its carry-on's branch is not known until its job names it (landedOn).
+   */
+  stackOn: string | null
   answer: string; reason: string | null; lasts: string | null
   /** who answered: their label, and their Cognito sub (the carry-on runs as their request) */
   by: string | null; bySub: string | null
@@ -70,24 +86,25 @@ export function loadFollowups(db: DatabaseSync): Followup[] {
   return (db.prepare('SELECT * FROM answer_followups ORDER BY answered_at').all() as Record<string, unknown>[]).map((r) => ({
     question: String(r.question), text: String(r.text), askedJob: String(r.asked_job), branch: String(r.branch), agent: String(r.agent),
     answer: String(r.answer), reason: str(r.reason), lasts: str(r.lasts), by: str(r.by), bySub: str(r.by_sub),
-    job: str(r.job), attempts: Number(r.attempts), state: (['applied', 'stopped'].includes(String(r.state)) ? String(r.state) : 'pending') as FollowupState,
+    stackOn: str(r.stack_on), job: str(r.job), attempts: Number(r.attempts), state: (['applied', 'stopped'].includes(String(r.state)) ? String(r.state) : 'pending') as FollowupState,
     note: str(r.note), answeredAt: Number(r.answered_at), startedAt: Number(r.started_at), updatedAt: Number(r.updated_at),
   }))
 }
 
 /** Record (or record again, for an answer given again) an answer a job has to apply. */
-export function putFollowup(db: DatabaseSync, f: Omit<Followup, 'state' | 'note' | 'updatedAt'> & { state?: FollowupState; note?: string | null }, at: number): void {
-  db.exec(ANSWER_FOLLOWUPS_SQL)
-  db.prepare(`INSERT OR REPLACE INTO answer_followups (question, text, asked_job, branch, agent, answer, reason, lasts, by, by_sub, job, attempts, state, note, answered_at, started_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+export function putFollowup(db: DatabaseSync, f: Omit<Followup, 'state' | 'note' | 'updatedAt' | 'stackOn'> & { state?: FollowupState; note?: string | null; stackOn?: string | null }, at: number): void {
+  ensureTable(db)
+  db.prepare(`INSERT OR REPLACE INTO answer_followups (question, text, asked_job, branch, agent, answer, reason, lasts, by, by_sub, job, attempts, state, note, answered_at, started_at, updated_at, stack_on)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     f.question, f.text.slice(0, 2000), f.askedJob, f.branch, f.agent, f.answer.slice(0, 4000), f.reason, f.lasts, f.by, f.bySub,
-    f.job, f.attempts, f.state ?? 'pending', f.note ?? null, f.answeredAt, f.startedAt, at)
+    f.job, f.attempts, f.state ?? 'pending', f.note ?? null, f.answeredAt, f.startedAt, at, f.stackOn ?? null)
 }
 
 /** Change one follow-up's job, attempts, state or note. False when there is none for that question. */
-export function updateFollowup(db: DatabaseSync, question: string, set: Partial<Pick<Followup, 'job' | 'attempts' | 'state' | 'note' | 'startedAt'>>, at: number): boolean {
+export function updateFollowup(db: DatabaseSync, question: string, set: Partial<Pick<Followup, 'job' | 'attempts' | 'state' | 'note' | 'startedAt' | 'branch' | 'stackOn'>>, at: number): boolean {
   if (!loadFollowups(db).some((f) => f.question === question)) return false
-  const cols: Record<string, string> = { job: 'job', attempts: 'attempts', state: 'state', note: 'note', startedAt: 'started_at' }
+  ensureTable(db)
+  const cols: Record<string, string> = { job: 'job', attempts: 'attempts', state: 'state', note: 'note', startedAt: 'started_at', branch: 'branch', stackOn: 'stack_on' }
   const entries = Object.entries(set).filter(([, v]) => v !== undefined) as [string, string | number | null][]
   db.prepare(`UPDATE answer_followups SET ${[...entries.map(([k]) => `${cols[k]}=?`), 'updated_at=?'].join(', ')} WHERE question=?`).run(...entries.map(([, v]) => v), at, question)
   return true
@@ -109,7 +126,8 @@ const cancelledByPerson = (j: Pick<JobRow, 'error'>): string | null => {
 export function followupStatus(f: Followup, rows: readonly JobRow[], at: number): FollowupStatus {
   if (f.state === 'applied') return { state: 'applied', job: f.job ?? '', why: f.note ?? 'Applied.' }
   // work on the branch that started after the answer: a carry-on, or a person's own revision
-  const after = rows.filter((r) => r.branch === f.branch && !r.parentJob && (r.queuedAt ?? r.startedAt ?? 0) >= f.answeredAt)
+  // (a carry-on on a change of its own has no branch until its job names it: work on the branch it stacks on is not it)
+  const after = f.stackOn ? [] : rows.filter((r) => r.branch === f.branch && !r.parentJob && (r.queuedAt ?? r.startedAt ?? 0) >= f.answeredAt)
   const own = f.job ? rows.find((r) => r.id === f.job) : undefined
   const done = [own, ...after].find((r) => r?.state === 'succeeded')
   if (done) return { state: 'applied', job: done.id, why: `Applied by job ${done.id}.` }
@@ -137,15 +155,65 @@ export interface PendingAnswer {
   stopped?: string
 }
 
-/** The answers each branch still waits on (followupStatus not applied), by branch. Pure. */
+/**
+ * The answers each branch still waits on (followupStatus not applied), by branch. Pure. A carry-on on a change of its
+ * own holds up that change only, once its job names its branch: never the change it stacks on, which holds another
+ * specialist's work the answer does not touch.
+ */
 export function pendingAnswers(followups: readonly Followup[], rows: readonly JobRow[], at: number): Map<string, PendingAnswer[]> {
   const out = new Map<string, PendingAnswer[]>()
   for (const f of followups) {
     const s = followupStatus(f, rows, at)
     if (s.state === 'applied') continue
-    const list = out.get(f.branch) ?? []
+    const branch = f.stackOn ? landedOn(f, rows) : f.branch
+    if (!branch) continue
+    const list = out.get(branch) ?? []
     list.push({ question: f.question, text: f.text, ...(s.state === 'stopped' ? { stopped: s.why } : {}) })
-    out.set(f.branch, list)
+    out.set(branch, list)
   }
   return out
+}
+
+/** The branch a job works on: its own row's, else one its worker pushed to (a specialist's row may not carry it). */
+export function jobBranch(rows: readonly JobRow[], id: string): string | null {
+  const row = rows.find((r) => r.id === id)
+  if (!row) return null
+  return row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null
+}
+
+/** Where a carry-on on a change of its own landed: its job's branch, once the job names one (null until then). */
+export function landedOn(f: Pick<Followup, 'job' | 'stackOn'>, rows: readonly JobRow[]): string | null {
+  if (!f.job) return null
+  const b = jobBranch(rows, f.job)
+  return b && b !== f.stackOn ? b : null
+}
+
+/** Where the carry-on for an answered question works (carryOnPlace). */
+export type CarryOnPlace =
+  | { branch: string }
+  /** a change of its own on top of `stackOn`, whose work is `owner`'s (a specialist kind) */
+  | { stackOn: string; owner: string }
+
+/**
+ * Where the carry-on for a question asked by job `asked` on `branch` works (test-esp32 log #144). On that branch when
+ * it is the asking specialist's own work: started by a job of that specialist (the asking job itself, an earlier job
+ * of its, or a person's task given to it). When another specialist started it, and the asking job only ran there (sent
+ * to check a hand-off's answer, on the hand-off's branch), the carry-on opens a change of its own, stacked on that
+ * branch so it starts from what the asking job saw: its work is reviewed as its own change, under its own name, and
+ * never lands in another specialist's change (a docs "record" change that came to carry a whole case design). A
+ * branch no known job started is taken as the asker's, as before. Pure.
+ */
+export function carryOnPlace(rows: readonly JobRow[], asked: Pick<JobRow, 'id' | 'agent'>, branch: string): CarryOnPlace {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  // the jobs that worked on it, each as its top job (a worker's row stands for the specialist job that started it)
+  const top = new Map<string, JobRow>()
+  for (const r of rows) {
+    if (r.branch !== branch) continue
+    const t = (r.parentJob ? byId.get(r.parentJob) : undefined) ?? r
+    top.set(t.id, t)
+  }
+  const when = (r: JobRow): number => r.queuedAt ?? r.startedAt ?? r.updatedAt
+  const first = [...top.values()].sort((a, b) => when(a) - when(b))[0]
+  if (!first || first.id === asked.id || !first.agent || first.agent === asked.agent) return { branch }
+  return { stackOn: branch, owner: first.agent }
 }

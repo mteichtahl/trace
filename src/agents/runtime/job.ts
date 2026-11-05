@@ -622,9 +622,11 @@ const ITEM_WHAT: Readonly<Record<WorkItem['kind'], string>> = {
  * work. A specialist's delegation, a resumed task (its agent was settled when it first ran) and a task that carries on
  * an existing branch (a carry-on after an answer, a revision asked for with "Ask for changes": the specialist whose work
  * is on it) go where they say. Checked, a Documentation carry-on whose answer was about firmware was moved to the
- * Implementation specialist and queued behind a layout job (test-esp32 log #122).
+ * Implementation specialist and queued behind a layout job (test-esp32 log #122). A task stacked on an open change is
+ * follow-up work too: a carry-on whose asking job ran on another specialist's branch opens a change of its own on top
+ * of it (src/core/answer-followups.ts carryOnPlace), and stays with the specialist that asked.
  */
-export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.branch
+export const checksPick = (p: TaskJob): boolean => !isDelegated(p) && !p.resume && !p.branch && !p.stackOn
 
 function prepared(p: WorkItemJob | TaskJob): Prepared {
   if (p.kind === 'work-item') {
