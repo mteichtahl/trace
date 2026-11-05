@@ -122,7 +122,13 @@ export const JOURNEYS: Record<string, Journey> = {
     name: 'Panel controller',
     template: 'fpga',
     revision: 'Rev B',
-    stages: stages(['Define', 'Architect', 'Prove', 'Layout', 'Release', 'Bring up'], 2, 4, 7),
+    // Prove's steps: trace's step now is the one its lost job was doing (mock/jobs.ts job_l1: "trace · stopped")
+    stages: stages(['Define', 'Architect', 'Prove', 'Layout', 'Release', 'Bring up'], 2, 4, 7, { 2: { steps: [
+      { id: 'sim', text: 'Simulate the LED current limit', owner: 'trace', state: 'done', ref: { kind: 'criterion', id: 'prove.sim' } },
+      { id: 'timing', text: 'Write the timing constraints and meet timing', owner: 'trace', state: 'now', ref: { kind: 'criterion', id: 'prove.timing' } },
+      { id: 'plan', text: 'Review the test plan', owner: 'you', state: 'next', ref: { kind: 'criterion', id: 'prove.plan' } },
+      { id: 'sign', text: 'Sign the verification gate', owner: 'admins', state: 'later', ref: { kind: 'gate', id: 'prove' } },
+    ] } }),
     gates: gates(stages(['Define', 'Architect', 'Prove', 'Layout', 'Release', 'Bring up'], 2, 4, 7), false),
     current: 'prove',
     next: {

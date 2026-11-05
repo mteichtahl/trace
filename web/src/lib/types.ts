@@ -141,6 +141,8 @@ export interface StageStep {
   who?: string
   /** trace's step it works on at the same time as the person's step now (a change it does not wait on) */
   alongside?: boolean
+  /** trace's step now, while the job doing it ended without finishing: "trace · stopped", never as if being worked on */
+  stopped?: boolean
   /** an in-app address that does the step (its guided skill, gate or change), worked out by the reader */
   to?: string
 }
@@ -464,7 +466,7 @@ export interface RunSummary {
   /** queued: what it waits for ("starts when the schematic gate is signed") */
   startsWhen?: string
   /** what job.control can do for it now (the job view's `controls`); absent: not known, the screen's own choice */
-  controls?: ('pause' | 'resume' | 'cancel' | 'move_up')[]
+  controls?: ('pause' | 'resume' | 'cancel' | 'move_up' | 'restart' | 'dismiss')[]
   /** the agent doing it (verify, impl, …, worker) and its name in words (jobs.list) */
   agent?: string
   agentName?: string
@@ -486,6 +488,8 @@ export interface RunSummary {
   handoff?: { id: string; from?: string; fromName?: string }
   /** running: when trace last heard from it, when that is late (overdue), and when it is declared lost if still silent */
   heard?: { at: string; overdueAt: string; lostAt: string }
+  /** lost: dismissed by a person (with their reason) or started again; it then leaves "Ended without finishing" */
+  settled?: { how: 'dismissed' | 'restarted'; by: string; at: string; reason?: string }
 }
 
 /** Where a hand-off between specialists stands (src/core/handoffs.ts). */

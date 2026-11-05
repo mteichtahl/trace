@@ -80,7 +80,8 @@ export function stepLabel(steps: StageStep[], i: number): string {
   switch (s.state) {
     case 'done': return `${who} · done`
     case 'waived': return `${who} · waived`
-    case 'now': return `${who} · now`
+    // the job doing it ended without finishing: never as if trace were working on it (test-esp32 log #46)
+    case 'now': return s.stopped ? `${who} · stopped` : `${who} · now`
     case 'next': {
       const now = steps.find((x) => x.state === 'now')
       return now?.owner === 'you' ? `${who} · after you` : now ? `${who} · after ${ownerWord(now).replace(/^An? /, 'the ').replace(/^You$/, 'you')}` : `${who} · next`
