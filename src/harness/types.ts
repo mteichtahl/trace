@@ -32,6 +32,10 @@ export interface Context {
 /** Values a workflow step passes in (action inputs → environment). */
 export interface TaskEnv {
   OWN_TOKEN?: string
+  /** trace's GitHub app (vars.TRACE_APP_ID, secrets.TRACE_APP_KEY): with both, the step acts as the app's installation
+   * on the repository, when the app is installed there (src/harness/app-token.ts) */
+  APP_ID?: string
+  APP_KEY?: string
   ITEM?: string
   /** worker-prompt/worker-dispatch: the specialist to use instead of the item's route. */
   AGENT?: string
@@ -61,6 +65,9 @@ export interface Deps {
   github: GitHub
   /** The job's own GITHUB_TOKEN client (the Checks API, and the fallback when TRACE_TOKEN is rejected). */
   jobApi: GitHub
+  /** The person's TRACE_TOKEN client, when `github` is trace's GitHub app (src/harness/app-token.ts): for the writes
+   * whose author trace reads (opening a pull request: trace tells its changes apart by TRACE_AGENT_LOGIN). Absent: `github`. */
+  author?: GitHub
   context: Context
   core: Core
   cfg: TraceConfig

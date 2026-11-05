@@ -23,7 +23,7 @@ import { type Deps, type GitHub, PullRequestPayload, errorMessage, errorStatus, 
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-export async function openPr({ github, context, core, cfg, env }: Deps): Promise<void> {
+export async function openPr({ github, author, context, core, cfg, env }: Deps): Promise<void> {
   const { owner, repo } = context.repo
   const say = async (s: string): Promise<void> => { await core.summary.addRaw(`${s}\n`).write() }
   if (!cfg.prs.auto_open) return say('prs.auto_open is off.')
@@ -74,7 +74,9 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
     ...commits.map((c) => `- ${c.sha.slice(0, 7)} ${subject(c.commit.message)}`),
     ...(rest ? ['', rest] : []),
   ].join('\n')
-  const pr = await github.rest.pulls.create({ owner, repo, head: branch, base, title: title.slice(0, 250), body })
+  // opened as TRACE_TOKEN's account even when the rest is the app's: trace tells its changes apart by the login that
+  // opened them (TRACE_AGENT_LOGIN), and one request a branch spends little of the person's quota
+  const pr = await (author ?? github).rest.pulls.create({ owner, repo, head: branch, base, title: title.slice(0, 250), body })
   return say(`Opened #${pr.data.number}${parent ? `, stacked on #${parent.number}` : ''}: ${pr.data.html_url}`)
 }
 

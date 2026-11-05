@@ -2,6 +2,8 @@
 #
 # Every finished run of "__TR_BUILD_NAME__": flaky failures are re-run once; real ones label the PR __TR_CI_RED__
 # or open an __TR_AGENT_FIX__ issue for the worker; a pass clears both. Kill switch: variable TRACE_CI = 'false'.
+# It acts as trace's GitHub app when the app is installed on this repository (TRACE_APP_ID, TRACE_APP_KEY), else as
+# TRACE_TOKEN (templates/workflows/trace-prs.yml says why).
 #
 # Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account)
 # once `tracectl install` has set it up, and on GitHub's ubuntu-24.04 runners until then. The switch is the repository
@@ -35,3 +37,5 @@ jobs:
         with:
           task: ci-doctor
           token: ${{ secrets.TRACE_TOKEN }}
+          app-id: ${{ vars.TRACE_APP_ID }}
+          app-key: ${{ secrets.TRACE_APP_KEY }}

@@ -19,6 +19,7 @@ import * as ci from './ci-doctor.js'
 import * as deploy from './deploy.js'
 import { dispatchTask } from './dispatch.js'
 import { RATE_LIMIT_BUDGET_MS, patient, retried } from './retry.js'
+import { appCredentials, chooseToken, fallback } from './app-token.js'
 import * as prs from './prs.js'
 import type { Context, Core, Deps, GitHub, TaskEnv } from './types.js'
 import * as worker from './worker.js'
@@ -152,11 +153,30 @@ async function runTask(args: { github: GitHub; context: Context; core: Core; get
   // GitHub's rate limits are waited out, not failed on (retry.ts patient): a used-up quota is GitHub being busy, and
   // a check that fails for it says nothing about the work (test-esp32 run 2, #126). One budget for the whole job
   const limits = { say: (s: string): void => args.core.warning(s), budget: { leftMs: RATE_LIMIT_BUDGET_MS } }
-  const github = patient(args.github, limits)
+  const person = patient(args.github, limits)
   if (!(await mayRun(env.TRACE_TASK ?? '', args.context, args.core, process.env))) return
-  const jobApi = env.JOB_TOKEN ? patient(args.getOctokit(env.JOB_TOKEN), limits) : github
+  const jobApi = env.JOB_TOKEN ? patient(args.getOctokit(env.JOB_TOKEN), limits) : person
+  const github = await actAs(args, env, person, limits)
   // prompt overrides matter only to the steps that build prompts: the others need not read the installation's store
   const prompting = ['worker-prompt', 'worker-delegate'].includes(env.TRACE_TASK ?? '')
   const { cfg, prompts } = prompting ? await loadProject(jobApi, args.context, args.core) : { cfg: await loadConfig(jobApi, args.context, args.core), prompts: undefined }
-  await task({ github, jobApi, context: args.context, core: args.core, cfg, env, ...(prompts ? { prompts } : {}) })
+  await task({ github, jobApi, author: person, context: args.context, core: args.core, cfg, env, ...(prompts ? { prompts } : {}) })
+}
+
+/**
+ * The client the task acts through: trace's GitHub app's installation on this repository, with a quota of its own, when
+ * the step is given the app's credentials and the app is installed here; else the person's (TRACE_TOKEN), as before
+ * (app-token.ts). Only a step given the person's token changes: one that has only the job's token keeps it.
+ */
+export async function actAs(args: { context: Context; core: Core; getOctokit: (token: string) => GitHub },
+  env: TaskEnv, person: GitHub, limits: Parameters<typeof patient>[1], o: { fetch?: Parameters<typeof chooseToken>[1]['fetch'] } = {}): Promise<GitHub> {
+  if (!env.OWN_TOKEN) return person
+  const { owner, repo } = args.context.repo
+  const choice = await chooseToken(appCredentials(env), { owner, repo, api: process.env.GITHUB_API_URL, ...(o.fetch ? { fetch: o.fetch } : {}) })
+  if (choice.kind === 'person') {
+    args.core.info(`trace acts as TRACE_TOKEN's account here: ${choice.why}.`)
+    return person
+  }
+  args.core.info(`trace acts as its GitHub app here (${choice.login}), on the app's own rate limit.`)
+  return fallback(patient(args.getOctokit(choice.token), limits), person, (s) => args.core.warning(s))
 }

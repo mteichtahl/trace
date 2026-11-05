@@ -12,6 +12,11 @@
 # Behaviour is set in .trace/config.yml (read from __TR_BRANCH__, never from a PR). Kill switch: repository
 # variable TRACE_PRS = 'false'. Needs the TRACE_TOKEN secret for its actions to start builds.
 #
+# Who it acts as: trace's GitHub app, when the installer has set the TRACE_APP_ID variable and TRACE_APP_KEY secret and
+# the app is installed on this repository: each job gets a token for this repository alone, on the app's own rate
+# limit, so busy hours no longer use up the quota of the person whose token TRACE_TOKEN is. Otherwise, and for opening
+# a pull request (trace knows its changes by the login that opened them, TRACE_AGENT_LOGIN), TRACE_TOKEN.
+#
 # How work is found: events. A push to a branch opens its PR; a PR opened, reopened, made ready, retargeted or
 # (un)labelled gets auto-merge; a push to __TR_BRANCH__ (a merge, which leaves other PRs behind) moves the update
 # queue on, and so does every finished __TR_BUILD_NAME__ run (a head PR whose build failed is not merged, so no push
@@ -56,6 +61,8 @@ jobs:
         with:
           task: open-pr
           token: ${{ secrets.TRACE_TOKEN }}
+          app-id: ${{ vars.TRACE_APP_ID }}
+          app-key: ${{ secrets.TRACE_APP_KEY }}
 
   automerge:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'pull_request'
@@ -70,6 +77,8 @@ jobs:
         with:
           task: automerge
           token: ${{ secrets.TRACE_TOKEN }}
+          app-id: ${{ vars.TRACE_APP_ID }}
+          app-key: ${{ secrets.TRACE_APP_KEY }}
 
   update-queue:
     if: >-
@@ -88,3 +97,5 @@ jobs:
         with:
           task: update-queue
           token: ${{ secrets.TRACE_TOKEN }}
+          app-id: ${{ vars.TRACE_APP_ID }}
+          app-key: ${{ secrets.TRACE_APP_KEY }}

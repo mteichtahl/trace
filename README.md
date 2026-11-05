@@ -185,6 +185,25 @@ Variables or Administration, which the agents never need), give an admin token f
 while installing and never stored, unless you choose it as the token CodeBuild keeps (Advanced → Build runners). A project's own agent token
 (Advanced) isolates that project's agent on GitHub, as [Project isolation](#project-isolation) explains.
 
+**trace's GitHub app** (its own rate limit). The workflows' harness steps (`open-pr`, `automerge`, `update-queue`,
+`ci-doctor`) act as trace's GitHub app when it is installed on the repository: each job gets an installation token for
+that repository alone, good for an hour, with the app's own quota (5,000 requests an hour and more, per installation).
+Without it they spend the quota of the person whose token `TRACE_TOKEN` is, which ten open pull requests and busy agents
+used up in an hour (test-esp32 run 2, #126). What each project repository needs for it:
+
+| What | Where | For |
+| --- | --- | --- |
+| The app's id | Variable `TRACE_APP_ID` | Asking GitHub for the app's installation on the repository |
+| The app's private key (PEM) | Secret `TRACE_APP_KEY` | Signing that request; never leaves the step |
+| The app installed on the repository | The app's installation | Its token; not installed: `TRACE_TOKEN`, with a notice |
+| Contents, Pull requests, Issues, Actions: read and write; Checks, Metadata: read | The app's permissions | What the steps do; a request the app is refused is made with `TRACE_TOKEN` instead, with a warning naming it |
+
+Still `TRACE_TOKEN`'s: opening a pull request (trace tells its changes apart by the login that opened them,
+`TRACE_AGENT_LOGIN`), pushes made with git (not API requests, so no quota), and a step with neither the variable nor the
+secret. The app needs no `workflows` permission: a branch update that changes `.github/workflows/**` falls back to
+`TRACE_TOKEN`. The agents' own steps (Claude's pushes and comments) keep `TRACE_TOKEN` for now
+(`src/harness/app-token.ts`).
+
 **Nothing on the default path needs the AWS console.** The preflight's fixes are API calls (the Anthropic use-case form,
 `PutUseCaseForModelAccess`; the model agreement, `CreateFoundationModelAgreement`; quota increases,
 `RequestServiceQuotaIncrease`; a failed first deploy, `DeleteStack`; a stuck rollback, `ContinueUpdateRollback`; a
