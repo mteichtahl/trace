@@ -14,9 +14,9 @@ import { Central, S3Backend } from '../../src/core/central.js'
 import { loadJourney, startJourney } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
 import type { LiveEvent, Publisher } from '../../src/web/events.js'
-import { LOG_EVENT_EVERY_MS, MAX_JOB_EVENTS, NEW_WITHIN_S, decodeLogs, onObjectCreated, onRunLogs, projectOfIndexKey, projectOfJourneyKey, projectOfKey } from '../../src/web/journey-events.js'
+import { LOG_EVENT_EVERY_MS, MAX_JOB_EVENTS, NEW_WITHIN_S, decodeLogs, onObjectCreated, onRunLogs, projectOfIndexKey, projectOfJourneyKey, projectOfKey, projectOfPendingKey } from '../../src/web/journey-events.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
-import { projectHash } from '../../src/core/project.js'
+import { PENDING_PROJECTS_PREFIX, projectHash } from '../../src/core/project.js'
 import { FakeS3 } from '../core/fake-s3.js'
 
 const BUCKET = 'central-bucket'
@@ -182,6 +182,33 @@ describe('live updates when a job changes', () => {
     })
     await r.run(r.event(INDEX))
     expect(r.pub.to('user-1')).toEqual([{ type: 'job.updated', repo: 'acme/board', jobId: null, state: null, at: expect.any(String) }])
+  })
+})
+
+describe('live updates when a new project\'s agent is added (log #5)', () => {
+  const PENDING = 'installation/pending-projects/acme/board.json'
+
+  it('takes the project from the agent request\'s key only (the installer\'s prefix, owner and repository)', () => {
+    expect(PENDING.startsWith(PENDING_PROJECTS_PREFIX)).toBe(true)
+    expect(projectOfPendingKey(PENDING)).toBe('acme/board')
+    expect(projectOfPendingKey('installation/pending-projects/Acme/my.board.json')).toBe('acme/my.board')
+    expect(projectOfPendingKey('installation/pending-projects/acme/board.txt')).toBeNull()
+    expect(projectOfPendingKey('installation/pending-projects/acme/../board.json')).toBeNull()
+    expect(projectOfPendingKey('installation/props.json')).toBeNull()
+    expect(projectOfPendingKey('projects/acme/board/journey-agent/facts.db')).toBeNull()
+    expect(projectOfKey(PENDING)).toBeNull()
+  })
+
+  it('the update marking it added tells everyone on the project to look at its agent again, without reading the request', async () => {
+    const r = await rig()
+    // nothing is written at the key: the record is never read, only its key
+    expect(await r.run(r.event(PENDING))).toEqual({ repo: 'acme/board', changed: 4, notified: 0 })
+    expect(r.pub.sent.map((x) => x.channel).sort()).toEqual(['/trace/users/admin-1', '/trace/users/guest-1', '/trace/users/user-1', '/trace/users/user-2'])
+    for (const x of r.pub.sent) expect(x.events).toEqual([{ type: 'record.changed', repo: 'acme/board', what: 'agent', at: expect.any(String) }])
+    // another bucket's write of the same key is not this installation's
+    r.pub.sent = []
+    expect(await r.run(r.event(PENDING, 'other-bucket'))).toEqual({ repo: null, changed: 0, notified: 0 })
+    expect(r.pub.sent).toEqual([])
   })
 })
 

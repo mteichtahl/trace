@@ -44,6 +44,9 @@ export const sameProject = (a: string, b: string): boolean => a.trim().toLowerCa
 
 /** S3 prefixes (no leading or trailing slash). */
 export const PROJECTS_PREFIX = 'projects'
+/** Where a project created in the web app asks for its own agent until an update of the installation adds it
+ * (src/installer/pending.ts; this one with its trailing slash): installation/pending-projects/<owner>/<repo>.json */
+export const PENDING_PROJECTS_PREFIX = 'installation/pending-projects/'
 /** Each project's large run outputs kept outside its run record (src/core/artifact-store.ts): projects/<slug>/artifacts/<sha256> */
 export const ARTIFACTS_FOLDER = 'artifacts'
 export const JOBS_PREFIX = 'jobs'

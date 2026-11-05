@@ -17,8 +17,9 @@
  *                                  runner (per-project cloud resources need the stack deployed again): the self-update
  *                                  job, or the installer (src/installer/pending.ts; cloudWait says which, and when).
  *                                  With the self-update on, the API starts that job now (startUpdate: trace's ci
- *                                  workflow on its branch, by hand), so the project's agent arrives within the hour
- *                                  instead of at the next merge; until then its tools answer that it is being set up
+ *                                  workflow on its branch, by hand, with add_projects so it skips trace's own tests),
+ *                                  so the project's agent arrives in minutes instead of at the next merge; until then
+ *                                  its tools answer that it is being set up
  *                             and answers each step's outcome, plus that last part as a wait. A step that fails stops
  *                             the ones that depend on it and says so; the request can be sent again (every step is
  *                             safe to repeat).
@@ -26,9 +27,12 @@
  *                             and, while it is not, how its setting up stands: from the request projects.create
  *                             recorded under installation/pending-projects/ (pending, added by an update, or failed),
  *                             and, with the self-update on, the installation update's run on GitHub (queued, running,
- *                             finished). Answers when it should be ready (usually within the hour of the request or
- *                             of the update starting) and when to look again: nothing announces the update's end, so
- *                             the app looks again at next_check_s (agentSetup). The link to the update's run and how
+ *                             finished). Answers when it should be ready (from how long this installation's recent
+ *                             updates took, typicalUpdateMs; within the hour when none finished yet) and when to look
+ *                             again. The update marking the request added (or failed) is an event: the bucket's write
+ *                             of the record reaches the app as `record.changed { what: 'agent' }`
+ *                             (src/web/journey-events.ts); the run on GitHub sends none, so while it runs the app also
+ *                             looks again at next_check_s (agentSetup). The link to the update's run and how
  *                             to start it again (trace's own repository) are an admin's only
  *   project.update    admin   change what a project is after it is made: its name, description, icon, build plan
  *                             (quantity, unit cost, budget) and later stages, in the journey record (Settings). The
@@ -47,7 +51,7 @@ import { forgetNoJourney } from '../core/journey-store.js'
 import { register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
 import { FLAT_UPDATE_MAX, type PendingRecord, PendingRecordSchema } from '../installer/pending.js'
-import type { GitHubApi, RunSummary } from './github.js'
+import { GitHubError, type GitHubApi, type RunSummary } from './github.js'
 import { cached } from './github-cache.js'
 import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
 import { appliesOf } from '../core/app-edits.js'
@@ -125,31 +129,76 @@ export function cloudWait(selfUpdate: string | undefined = process.env.TRACE_SEL
 
 /** The workflow whose update-installation job deploys the installation (.github/workflows/ci.yml). */
 export const UPDATE_WORKFLOW = 'ci.yml'
+/**
+ * The ci workflow's input that makes a run started by hand only add projects: it skips trace's own tests and goes
+ * straight to the update. What it deploys is main as it is, and every commit on main passed those tests in its pull
+ * request; the tests were about half of the update's time (test-esp32 run 1, log #2: 15 minutes in all).
+ */
+export const ADD_PROJECTS_INPUT = 'add_projects'
 
 /**
- * Start the self-update now (a workflow_dispatch run of trace's ci workflow on the self-update's branch: its
- * update-installation job runs on workflow_dispatch too), and say what the project waits for. Without the self-update,
- * or when GitHub refuses (the API's token may not run workflows in trace's repository), the wait is cloudWait's.
- * Several projects created close together each start a run; the job's concurrency group runs one deploy at a time and
- * keeps only the newest waiting, which takes in every pending project.
+ * Start the self-update now (a workflow_dispatch run of trace's ci workflow on the self-update's branch, with
+ * ADD_PROJECTS_INPUT: its update-installation job runs on workflow_dispatch too), and say what the project waits for.
+ * A branch whose ci workflow does not know the input yet (GitHub answers 422) gets a plain run, tests and all. Without
+ * the self-update, or when GitHub refuses (the API's token may not run workflows in trace's repository), the wait is
+ * cloudWait's. Several projects created close together each start a run; the job's concurrency group runs one deploy
+ * at a time and keeps only the newest waiting, which takes in every pending project.
  */
-export async function startUpdate(gh: Pick<GitHubApi, 'dispatchWorkflow'>, selfUpdate: string | undefined = process.env.TRACE_SELF_UPDATE, layout: string | undefined = process.env.TRACE_LAYOUT): Promise<{ started: boolean; text: string }> {
+export async function startUpdate(gh: Pick<GitHubApi, 'dispatchWorkflow' | 'dispatchWorkflowWith'>, selfUpdate: string | undefined = process.env.TRACE_SELF_UPDATE, layout: string | undefined = process.env.TRACE_LAYOUT): Promise<{ started: boolean; text: string }> {
   const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
-  if (!m || !gh.dispatchWorkflow) return { started: false, text: cloudWait(selfUpdate, layout) }
+  if (!m || (!gh.dispatchWorkflow && !gh.dispatchWorkflowWith)) return { started: false, text: cloudWait(selfUpdate, layout) }
   const [, repo = '', branch = ''] = m
   try {
-    await gh.dispatchWorkflow(repo, UPDATE_WORKFLOW, branch)
+    if (gh.dispatchWorkflowWith) {
+      try {
+        await gh.dispatchWorkflowWith(repo, UPDATE_WORKFLOW, branch, { [ADD_PROJECTS_INPUT]: 'true' })
+      } catch (e) {
+        // "Unexpected inputs provided": that branch's ci workflow is older than the input
+        if (!(e instanceof GitHubError && e.status === 422) || !gh.dispatchWorkflow) throw e
+        await gh.dispatchWorkflow(repo, UPDATE_WORKFLOW, branch)
+      }
+    } else {
+      await gh.dispatchWorkflow!(repo, UPDATE_WORKFLOW, branch)
+    }
   } catch (e) {
     return { started: false, text: `${cloudWait(selfUpdate, layout)} (trace could not start it itself: ${message(e)}.)` }
   }
   const flat = layout === 'flat' ? ` This installation keeps every project in one stack (the flat layout): the project gets no knowledge base, and the update adds it only while there are fewer than ${FLAT_UPDATE_MAX} projects. Admin › Installation says how to move to one nested stack per project.` : ''
-  return { started: true, text: `Started the installation update: ${repo}'s ci workflow on ${branch} tests trace and then deploys the installation with this project's agent${layout === 'flat' ? '' : ' and knowledge base'}, usually within the hour. Until it finishes, the project's tools answer that its agent is being set up.${flat}` }
+  // plain words (log #4): the run on GitHub is in the admins' More menu on the project page, not named here
+  return { started: true, text: `trace is updating itself to add this project's agent${layout === 'flat' ? '' : ' and knowledge base'}. The project page shows how far it has got and about when it will be ready.${flat}` }
 }
 
 // ------------------------------------------------------------------ project.agent
 
-/** How long a new project's agent usually takes: the update's tests and deploy (startUpdate's "within the hour"). */
+/** How long a new project's agent takes when nothing better is known (no finished update to go by): "within the hour". */
 export const SETUP_MS = 60 * 60_000
+/** How many of the latest successful update runs the estimate is taken from (typicalUpdateMs). */
+export const TYPICAL_RUNS = 5
+/** The estimate is never under this: a deploy alone takes a few minutes. */
+export const TYPICAL_MIN_MS = 5 * 60_000
+/** How far past its estimate an update may run before the notice says it is taking longer than usual. */
+export const LATE_SLACK_MS = 10 * 60_000
+
+/**
+ * How long the update usually takes in this installation: the median of the latest TYPICAL_RUNS successful runs of the
+ * ci workflow on the self-update's branch (created to last updated), those started by hand first (projects.create's,
+ * which skip the tests), else any; null when none finished yet. The log's run took 15 minutes while the notice said an
+ * hour (test-esp32 run 1, log #2 and #5). Pure.
+ */
+export function typicalUpdateMs(runs: readonly RunSummary[], branch: string): number | null {
+  const ok = runs.filter((r) => r.path.endsWith(`/${UPDATE_WORKFLOW}`) && (r.branch ?? '') === branch && r.status === 'completed' && r.conclusion === 'success')
+    .map((r) => ({ event: r.event, ms: Date.parse(r.updated_at ?? '') - Date.parse(r.created_at), at: r.created_at }))
+    .filter((r) => Number.isFinite(r.ms) && r.ms > 0)
+    .sort((a, b) => b.at.localeCompare(a.at))
+  const byHand = ok.filter((r) => r.event === 'workflow_dispatch')
+  const pick = (byHand.length ? byHand : ok).slice(0, TYPICAL_RUNS).map((r) => r.ms).sort((a, b) => a - b)
+  if (!pick.length) return null
+  const mid = pick.length % 2 ? pick[(pick.length - 1) / 2]! : (pick[pick.length / 2 - 1]! + pick[pick.length / 2]!) / 2
+  return Math.max(TYPICAL_MIN_MS, Math.round(mid / 60_000) * 60_000)
+}
+
+/** "about 15 minutes", or "under an hour" without an estimate. Pure. */
+const usualWords = (ms: number | null | undefined): string => (ms ? `about ${Math.round(ms / 60_000)} minutes` : 'under an hour')
 /** How often the app looks again while the agent is being set up, and once the update has finished (the API picks up
  * the new runtime within a few minutes of the deploy). */
 export const SETUP_CHECK_S = 60
@@ -181,7 +230,8 @@ export interface AgentSetup {
   update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string; steps?: UpdateStep[]; failed_log?: string | null } | null
   /** when it should be ready (an estimate), or null */
   expected_by: string | null
-  /** how many seconds until the app should look again (nothing announces the update's end); null once ready */
+  /** how many seconds until the app should look again (the run on GitHub announces nothing; the record's change does,
+   * as a live event); null once ready */
   next_check_s: number | null
 }
 
@@ -249,6 +299,8 @@ export function agentSetup(o: {
   layout?: string | undefined
   /** the run's steps and, once it failed, the failing step's log tail (updateProgress); absent: not read */
   progress?: { steps: UpdateStep[]; failed_log: string | null } | null
+  /** how long this installation's update usually takes (typicalUpdateMs); absent or null: SETUP_MS */
+  typicalMs?: number | null
 }): AgentSetup {
   const now = o.now ?? Date.now()
   const base = { repo: o.repo, requested_at: o.record?.requested_at ?? null, update: null, expected_by: null }
@@ -294,20 +346,23 @@ export function agentSetup(o: {
     }
   }
   const from = Date.parse(o.run?.created_at ?? r.requested_at ?? '') || now
-  const expected = from + SETUP_MS
-  const late = now > expected
+  // from this installation's own recent updates when there are any (typicalUpdateMs), else the hour
+  const usual = o.typicalMs ?? null
+  const expected = from + (usual ?? SETUP_MS)
+  const late = now > expected + (usual ? LATE_SLACK_MS : 0)
   const progress = !update
-    ? (o.selfUpdate ? 'The installation update was asked for; it tests trace and then deploys this project\'s agent, usually within the hour.' : 'The agent is added the next time an admin runs the installer.')
-    : update.status === 'queued' ? 'The installation update is queued on GitHub; once it starts it usually takes under an hour.'
-      : update.status === 'running' ? 'The installation update is running: it tests trace and then deploys this project\'s agent.'
+    ? (o.selfUpdate ? `trace has asked for the installation update that adds this project's agent; it usually takes ${usualWords(usual)}.` : 'The agent is added the next time an admin runs the installer.')
+    : update.status === 'queued' ? `The installation update is waiting for its turn to start; once it starts it usually takes ${usualWords(usual)}.`
+      : update.status === 'running' ? 'The installation update is running: it is adding this project\'s agent to the installation.'
         : update.status === 'finished' ? 'The installation update has finished; trace is checking that it added this project\'s agent.'
           : `The installation update failed, so this project's agent is not set up yet. ${o.admin ? 'You can start the update again (Actions → ci → Run workflow on trace\'s repository) or run the installer.' : 'An admin can start the update again or run the installer.'}`
   const retried = r.attempts > 0 && update?.status !== 'failed' ? ' An earlier update with it failed; this one tries again.' : ''
   return {
     ...base, ready: false, state: 'setting_up', update,
     expected_by: o.selfUpdate ? new Date(expected).toISOString() : null,
-    // a failed run waits for a person to start another; the app still looks again, less often
-    next_check_s: update?.status === 'failed' ? STALLED_CHECK_S : SETUP_CHECK_S,
+    // a failed run waits for a person to start another; the app still looks again, less often. A finished one is
+    // marked added within a minute or so: looked at sooner (the live event usually comes first)
+    next_check_s: update?.status === 'failed' ? STALLED_CHECK_S : update?.status === 'finished' ? ADDED_CHECK_S : SETUP_CHECK_S,
     text: `${progress}${retried}${o.selfUpdate && late && update?.status !== 'failed' ? ' It is taking longer than usual.' : ''}`,
   }
 }
@@ -320,17 +375,18 @@ async function pendingRecord(ctx: Context, repo: string): Promise<PendingRecord 
   return r.success ? r.data : null
 }
 
-/** The self-update's update run for this request on GitHub, or null (no self-update, or GitHub would not say). */
-async function updateRun(ctx: Context, requestedAt: string | null, selfUpdate: string | undefined): Promise<RunSummary | null> {
+/** The self-update's update run for this request on GitHub, and how long its updates usually take (typicalUpdateMs);
+ * nulls when there is no self-update or GitHub would not say. */
+async function updateRun(ctx: Context, requestedAt: string | null, selfUpdate: string | undefined): Promise<{ run: RunSummary | null; typicalMs: number | null }> {
   const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
-  if (!m?.[1] || !m[2]) return null
+  if (!m?.[1] || !m[2]) return { run: null, typicalMs: null }
   const [repo, branch] = [m[1], m[2]]
   try {
     const gh = await ctx.deps.github()
     const runs = await cached(ctx.deps.githubCache, repo, 'update-runs', () => gh.workflowRuns(repo, 30), RUN_TTL_MS)
-    return updateRunFor(runs, branch, requestedAt)
+    return { run: updateRunFor(runs, branch, requestedAt), typicalMs: typicalUpdateMs(runs, branch) }
   } catch {
-    return null
+    return { run: null, typicalMs: null }
   }
 }
 
@@ -380,9 +436,9 @@ export const PROJECT_ACTIONS = {
     const hasAgent = jobs.hasAgent ? jobs.hasAgent(repo) : true
     const selfUpdate = process.env.TRACE_SELF_UPDATE
     const record = hasAgent ? null : await pendingRecord(ctx, repo).catch(() => null)
-    const run = !hasAgent && record?.status === 'pending' ? await updateRun(ctx, record.requested_at ?? null, selfUpdate) : null
+    const { run, typicalMs } = !hasAgent && record?.status === 'pending' ? await updateRun(ctx, record.requested_at ?? null, selfUpdate) : { run: null, typicalMs: null }
     const progress = run ? await updateProgress(ctx, run, selfUpdate) : null
-    return agentSetup({ repo, hasAgent, record, run, progress, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
+    return agentSetup({ repo, hasAgent, record, run, progress, typicalMs, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
   }),
 
   'projects.create': def('admin', Create, async (a, ctx) => {
@@ -496,7 +552,7 @@ export const PROJECT_ACTIONS = {
 
     return {
       repo, ok: !steps.some((s) => s.state === 'failed'), steps, people,
-      waits: [{ id: 'installation-update', what: 'the project\'s agent and knowledge base', text: cloud }],
+      waits: [{ id: 'installation-update', what: 'The project\'s agent and knowledge base', text: cloud }],
       journey,
     }
   }),
