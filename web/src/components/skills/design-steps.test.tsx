@@ -42,3 +42,33 @@ describe('Architecture choice: compare the options', () => {
     expect(screen.getByText('42')).toBeInTheDocument()
   })
 })
+
+describe('Architecture choice: Accept the key parts (test-esp32 #38, #96)', () => {
+  const check = { run: 'r1', at: '2026-11-05T00:00:00Z', boards: 10, order_code: 'C2838502', need: 10, status: 'ok', flags: [], stock: 2140, unit_price: 2.71, currency: 'USD', note: null }
+  const parts = {
+    ...view,
+    key_parts: {
+      option: 'A', quantity: 10, parts: [
+        { block: 'tmr', block_name: 'Timer', mpn: 'NE555DR', role: 'astable', off_board: false, check, standing: 'ok', why: null, exception: null },
+        { block: 'tmr', block_name: 'Timer', mpn: 'SSD1306-MODULE', role: null, off_board: true, check: { ...check, order_code: null, status: 'short', stock: 6, unit_price: 0.5 }, standing: 'problem', why: 'Short: 10 needed, 6 in stock.', exception: { reason: 'Four from the last build.', by: 'Priya', scope: 'part' } },
+        { block: 'tmr', block_name: 'Timer', mpn: 'LED-RED', role: null, off_board: false, check: null, standing: 'unchecked', why: 'Not checked for stock yet: trace runs the parts check at the build quantity.', exception: null },
+      ],
+    },
+  } as unknown as SkillView
+  it('lists each key part with its part number, supplier code, stock against the need, price and exception', () => {
+    render(<DesignSteps repo="acme/x" skill="architecture-choice" step="parts" view={parts} draft={{}} setDraft={() => undefined} />)
+    expect(screen.getByText('Key parts of option A: Classic astable')).toBeInTheDocument()
+    expect(screen.getByText(/for the 10 boards the project builds/)).toBeInTheDocument()
+    const rows = screen.getAllByRole('row')
+    expect(rows[1]).toHaveTextContent('NE555DR')
+    expect(rows[1]).toHaveTextContent('C2838502')
+    expect(rows[1]).toHaveTextContent('2,140')
+    expect(rows[1]).toHaveTextContent('US$2.71')
+    expect(rows[1]).toHaveTextContent('In stock')
+    expect(rows[2]).toHaveTextContent('Excepted')
+    expect(rows[2]).toHaveTextContent('Short: 10 needed, 6 in stock.')
+    expect(rows[2]).toHaveTextContent('Exception, by Priya: Four from the last build.')
+    expect(rows[2]).toHaveTextContent('(off the board)')
+    expect(rows[3]).toHaveTextContent('Not checked')
+  })
+})

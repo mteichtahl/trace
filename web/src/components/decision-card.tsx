@@ -1,7 +1,8 @@
 /**
  * Every decision comes with a recommendation. The recommended option is first and marked "trace recommends", with
  * why (cited evidence chips) and what it gives up; the alternatives are folded below. Choosing anything other than
- * the recommendation opens "Your reason", which must be filled before the choice is sent.
+ * the recommendation opens "Your reason", which must be filled before the choice is sent. So does choosing an option
+ * another one outscores (`reasonNeeded`), the recommendation included (test-esp32 #96).
  *
  * Used in chat (HITL `ask_person`), in skills, at gates and for agents' questions.
  */
@@ -57,6 +58,8 @@ export interface Decision {
   givesUp?: string
   /** what it blocks while unanswered */
   blocks?: string
+  /** options that need the person's reason even when recommended (another scores higher), with why, in words */
+  reasonNeeded?: Record<string, string>
 }
 
 export interface DecisionChoice {
@@ -90,7 +93,7 @@ export function canSubmit(decision: Decision, option: string | null, reason: str
   if (!option) return false
   const o = decision.options.find((x) => x.id === option)
   if ((o?.free || o?.needs) && answer.trim().length < 3) return false
-  if (option === decision.recommended) return true
+  if (option === decision.recommended && !decision.reasonNeeded?.[option]) return true
   return reason.trim().length >= 3
 }
 
@@ -112,6 +115,9 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
   const needs = pick?.needs
   const [open, setOpen] = useState(detail === 'full')
   const reasonId = useId()
+  // the recommendation itself asks for a reason when another option scores higher
+  const recNeeds = decision.reasonNeeded?.[rec.id]
+  const otherNeeds = other ? decision.reasonNeeded?.[other] : undefined
 
   const send = async (c: DecisionChoice) => {
     setBusy(true)
@@ -227,6 +233,13 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
           <Input id={`${reasonId}-answer`} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="trace needs this from you to act on the answer" aria-required />
         </div>
       )}
+      {!other && recNeeds && actions && (
+        <div className="mt-3 space-y-1.5">
+          <Label htmlFor={reasonId}>Your reason</Label>
+          <Textarea id={reasonId} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={`One line: why ${rec.label} all the same`} rows={2} aria-required />
+          <p className="text-xs text-muted-foreground">{recNeeds}: say why you take this one. It is kept with the decision.</p>
+        </div>
+      )}
       {other && (
         <div className="mt-3 space-y-1.5">
           <Label htmlFor={reasonId}>Your reason</Label>
@@ -238,7 +251,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
             rows={2}
             aria-required
           />
-          <p className="text-xs text-muted-foreground">Required when you choose something other than the recommendation. It is kept with the decision.</p>
+          <p className="text-xs text-muted-foreground">{otherNeeds ? `Required: it is not the recommendation, and ${otherNeeds.charAt(0).toLowerCase()}${otherNeeds.slice(1)}.` : 'Required when you choose something other than the recommendation.'} It is kept with the decision.</p>
         </div>
       )}
 
@@ -255,7 +268,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
           </>
         ) : (
           <>
-            <Button disabled={busy || !canSubmit(decision, rec.id, '', answer)} onClick={() => void send({ option: rec.id, recommended: true, ...(rec.needs ? { answer: answer.trim() } : {}) })}>
+            <Button disabled={busy || !canSubmit(decision, rec.id, reason, answer)} onClick={() => void send({ option: rec.id, recommended: true, ...(recNeeds ? { reason: reason.trim() } : {}), ...(rec.needs ? { answer: answer.trim() } : {}) })}>
               {busy && <Loader2 className="animate-spin" />}
               {acceptLabel ?? rec.label}
             </Button>
