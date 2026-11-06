@@ -28,7 +28,7 @@ import { useAuth } from '@/lib/auth'
 import { ago, initials } from '@/lib/format'
 import { ME_KEY, usePrefs, useSetMe } from '@/lib/prefs'
 import { CHANNELS, NOTIFY_KINDS, notifyLock, notifyPrefs } from '@/lib/settings-catalog'
-import { type PushState, turnOn } from '@/lib/push'
+import { type PushState, registerWorker, turnOn } from '@/lib/push'
 import { useProjects } from '@/lib/queries'
 import type { MeDoc, Prefs } from '@/lib/types'
 import { createCredential, passkeysSupported } from '@/lib/webauthn'
@@ -273,6 +273,8 @@ export function NotificationsGroup() {
   const save = useSave()
   const projects = useProjects()
   const [pushAsk, setPushAsk] = useState(false)
+  // the worker is ready before a Push switch is tapped (start registers it too; this covers a start that failed)
+  useEffect(() => { void registerWorker()?.catch(() => undefined) }, [])
   const setChannel = async (kind: string, ch: string, on: boolean) => {
     // push on: this device must be subscribed first (the browser asks; on an iPhone, trace must be on the Home Screen)
     if (ch === 'push' && on) {

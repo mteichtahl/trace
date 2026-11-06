@@ -17,7 +17,7 @@ Push is standard Web Push. It works in Chrome, Edge and Firefox on desktop and A
 
 | Piece | Where | What it does |
 | --- | --- | --- |
-| Service worker | `web/public/sw.js` | Shows a push as a notification. A tap opens or focuses trace on the item. It caches nothing. |
+| Service worker | `web/public/sw.js` | Shows a push as a notification. A tap opens or focuses trace on the item. It caches nothing. The app registers it every time it opens (`keepFresh` in `web/src/lib/push.ts`), whether or not push is on, so it is there before a person turns push on. |
 | Manifest and icons | `web/public/manifest.webmanifest` | Make trace installable, which iPhone push needs. |
 | Device subscriptions | `src/core/push-subscriptions.ts` | One row per browser, in the access store beside preferences: endpoint, keys, time zone, label. At most 10 per person. |
 | API | `src/api/actions-push.ts`, `src/web/push-routes.ts` | `push.subscribe`, `push.unsubscribe`, `push.devices` (always the asker's own devices), and `GET /api/push/key` for the public key. |

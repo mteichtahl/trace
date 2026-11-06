@@ -9,8 +9,9 @@
  *   turnOn     asks permission (only ever from a tap: browsers refuse otherwise), subscribes with the installation's
  *              public key, and tells the server this device (its time zone for quiet hours, a short label)
  *   turnOff    unsubscribes this device, here and on the server
- *   keepFresh  on every start: when permission is granted and this device should be subscribed but the browser
- *              dropped it (or the key changed), subscribes again, quietly
+ *   keepFresh  on every start: registers the service worker (so it is there before any tap, and a tapped notification
+ *              always has a worker to open it), then, when permission is granted and this device should be subscribed
+ *              but the browser dropped it (or the key changed), subscribes again, quietly
  *
  * Whether a kind is pushed at all is a preference (notifications.kinds.<kind>.push): the caller sets those.
  */
@@ -53,7 +54,11 @@ let registration: Promise<ServiceWorkerRegistration> | null = null
 /** The service worker, registered once (it caches nothing: the app always loads fresh). */
 export function registerWorker(): Promise<ServiceWorkerRegistration> | null {
   if (!pushSupported() || import.meta.env.VITE_MOCK === '1' && !import.meta.env.VITE_PUSH_IN_MOCK) return null
-  registration ??= navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(() => navigator.serviceWorker.ready)
+  // a failed registration (offline at start, say) is tried again on the next call rather than remembered
+  registration ??= navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(() => navigator.serviceWorker.ready).catch((e: unknown) => {
+    registration = null
+    throw e
+  })
   return registration
 }
 
@@ -102,10 +107,16 @@ export async function turnOff(): Promise<PushState> {
   return 'off'
 }
 
-/** On start: re-subscribe quietly when this device was on and the browser dropped it. Never asks permission. */
+/**
+ * On start: register the service worker, then re-subscribe quietly when this device was on and the browser dropped
+ * it. Never asks permission. The worker is registered whether or not push was ever turned on here: registering it
+ * only from turnOn left a device that had not turned push on yet with no worker at all.
+ */
 export async function keepFresh(): Promise<void> {
   try {
-    if (!pushSupported() || Notification.permission !== 'granted' || localStorage.getItem(LOCAL) !== 'on') return
+    if (!pushSupported()) return
+    await registerWorker()
+    if (Notification.permission !== 'granted' || localStorage.getItem(LOCAL) !== 'on') return
     await turnOn()
   } catch {
     /* tried again on the next start */
