@@ -44,7 +44,7 @@ describe('what an act changes (test-esp32 log #17, #123, #148, #153)', () => {
   })
 
   it('every act a person takes on a project is in the table: accept, discard, ask for changes, answers, waivers, signing, the skills', () => {
-    for (const a of ['change.accept', 'change.discard', 'change.ask', 'question.answer', 'waiver.add', 'gate.sign', 'skill.submit', 'design.decide', 'stuck.dismiss', 'handoff.decline', 'task', 'job.control']) {
+    for (const a of ['change.accept', 'change.discard', 'change.ask', 'question.answer', 'waiver.add', 'waiver.withdraw', 'gate.sign', 'skill.submit', 'design.decide', 'stuck.dismiss', 'handoff.decline', 'task', 'job.control']) {
       expect(writeInvalidations(a, { repo: R }), a).toContainEqual(['journey.get', R])
     }
     // the changes' own screens too
