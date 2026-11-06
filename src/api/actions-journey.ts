@@ -17,6 +17,9 @@
  *                                    them, or drafting them again when the job stopped
  *   requirements.draft      write    start the drafting job again (lost, failed, cancelled or never started), the same
  *                                    request and agent as Intent builder's Submit, as a new attempt
+ *   journey.start_work      write    start trace's work on its criterion that nothing works on (src/api/owned-work.ts):
+ *                                    the next step's Start it, once trace's own start of it ended without meeting it
+ *                                    or was refused. journey.get starts it on its own the first time
  *   journey.criterion.open  read     record that this person opened a criterion's (or a waiver's) evidence: the Sign
  *                                    button needs every one opened by the signer. Reviewers may open evidence too
  *   gate.sign               admin    sign a gate: every criterion met or waived, every piece of evidence and every
@@ -81,12 +84,13 @@ import { loadJobs } from '../core/job-index.js'
 import { evidenceStaleness } from './evidence-freshness.js'
 import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { docsFor } from '../docs/catalog.js'
-import { docsAfterDesign, docsReleaseRequest, recordNow, startScribe, startStageScribe } from './docs-follow.js'
+import { docsAfterDesign, docsReleaseRequest, docsRequest, recordNow, startScribe, startStageScribe } from './docs-follow.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
 import { dueRetry, stuckFor, stuckLook } from './stuck-checks.js'
 import { waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
+import { OWNED_REFUSED, OWNED_STARTED, type OwnedDue, ownedDue, ownedStep, reviewWaits, stageSince } from './owned-work.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
@@ -387,8 +391,9 @@ async function startReleaseDocs(ctx: Context, repo: string, revision: string, ti
 
 /**
  * The work a stage starts when the gate before it is signed: the specialist and what it is asked. Architect: the
- * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect). A stage with
- * trace-owned criteria and no entry here starts nothing, and waits with the next step saying trace is working.
+ * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect). A criterion of
+ * trace's still not met once that work ended, with nothing else working on it, is started on its own (startOwnedWork,
+ * src/api/owned-work.ts): by this entry's specialist, or by trace's router for a stage with no entry here.
  */
 export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
   architect: {
@@ -521,6 +526,82 @@ export async function startFollowOn(ctx: Context, repo: string, r: JourneyRecord
 }
 
 /**
+ * What starting trace's criterion `id` asks, and of whom (test-esp32 log #161): the documents' criterion is Scribe's;
+ * a FOLLOW_ON criterion its own specialist's, as asked; any other the stage's specialist (STAGE_WORK), told to finish
+ * that criterion only, with the stage's request for what the stage is about. A stage with no STAGE_WORK leaves the
+ * agent to trace's router. Pure.
+ */
+export function ownedWork(stage: StageId, id: string, text: string): { agent?: (typeof SPECIALIST_KINDS)[number]; request: string; started: string; scribe?: true } {
+  const name = STAGE_NAMES[stage]
+  const what = text.replace(/\.$/, '')
+  if (id.endsWith('.docs')) return { scribe: true, request: docsRequest(`${name}'s documents criterion is not met, and nothing was working on it.`, { stage, also: ['journey'] }), started: 'The Documentation agent brings the project\'s documents up to date.' }
+  const follow = FOLLOW_ON[id]
+  if (follow) return { agent: follow.agent, request: follow.request, started: follow.started }
+  const work = STAGE_WORK[stage]
+  const request = [
+    `The project is in ${name}. Its criterion "${what}" (${id}) is not met, and no job is working on it: the stage's earlier work ended without meeting it.`,
+    'Read the gate with journey_status and what the record holds for that criterion. Work already on the default branch stands: do not redo it. Do what is left for this criterion only, and record it with its check (journey.check, or shape.check for a criterion checked by shape).',
+    'If a person must decide something first, ask with journey.ask. If it cannot be met, say why in your result, naming what would meet it.',
+    ...(work ? ['', 'What the stage asks, for context:', work.request] : []),
+  ].join('\n')
+  const who = work ? `The ${SPECIALIST_WORDS[work.agent]} agent` : 'trace'
+  return { ...(work ? { agent: work.agent } : {}), request, started: `${who} works on "${what}".` }
+}
+
+/**
+ * Start trace's work on its criterion `id` (ownedWork), as trace (`auto`: journey.get, once a stage opening, refused
+ * when a start for it is in the record since: two looks at once start one job) or as a person (journey.start_work).
+ * The start is logged before the job is asked for, so a look while it starts reads "starting"; a refused start is
+ * logged too, with its reason, so the next step says why. Answers what started, or why not.
+ */
+export async function startOwnedWork(ctx: Context, repo: string, r: Pick<JourneyRecord, 'journey'>, id: string, text: string, o: { auto: boolean }): Promise<{ started?: string; jobId?: string; jobError?: string; skipped?: true }> {
+  const stage = r.journey.currentStage
+  const work = ownedWork(stage, id, text)
+  const what = text.replace(/\.$/, '')
+  const by = o.auto ? 'trace' : label(ctx.principal)
+  const claimed = await writeJourney(ctx, repo, (db) => {
+    const now = loadJourney(db)
+    const since = now ? stageSince(now) : 0
+    if (o.auto && now?.decisions.some((d) => (d.kind === OWNED_STARTED || d.kind === OWNED_REFUSED) && d.ref === id && d.at >= since)) return { result: { ok: false }, changed: false }
+    decide(db, {
+      kind: OWNED_STARTED, stage, ref: id, by,
+      summary: o.auto ? `Nothing was working on "${what}", so trace started its work. ${work.started}` : `${by} started trace's work on "${what}". ${work.started}`,
+      detail: { auto: o.auto, ...(work.agent ? { agent: work.agent } : {}) },
+    })
+    return { result: { ok: true } }
+  })
+  if (!claimed.ok) return { skipped: true }
+  let out: { started?: string; jobId?: string; jobError?: string }
+  try {
+    if (work.scribe) {
+      const d = await startScribe(ctx, repo, work.request)
+      out = d.started ? { started: d.started, ...(d.jobId ? { jobId: d.jobId } : {}) } : { jobError: d.jobError ?? d.skipped ?? 'trace did not accept the job.' }
+    } else {
+      const s = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request: work.request, ...(work.agent ? { agent: work.agent } : {}), requestedBy: by, requestedBySub: ctx.principal.sub })
+      out = s.accepted ? { started: work.started, jobId: s.jobId } : { jobError: s.reason ?? 'trace did not accept the job.' }
+    }
+  } catch (e) { out = { jobError: e instanceof Error ? e.message : String(e) } }
+  if (out.jobError) {
+    const reason = out.jobError.replace(/\s+/g, ' ').slice(0, 300).replace(/\.$/, '')
+    await writeJourney(ctx, repo, (db) => {
+      decide(db, { kind: OWNED_REFUSED, stage, ref: id, by: 'trace', summary: `trace could not start its work on "${what}": ${reason}.`, detail: { reason } })
+      return { result: {} }
+    }).catch(() => undefined)
+  }
+  return out
+}
+
+/** journey.get's step for trace's criterion with nothing working on it (ownedDue): its work started now when due. */
+async function ownedNow(ctx: Context, repo: string, r: JourneyRecord, next: NextStep, due: OwnedDue, viewer: Viewer): Promise<{ step: NextStep; stopped: boolean; started?: string }> {
+  if (due.state !== 'start') return ownedStep(next, due, viewer)
+  const s = await startOwnedWork(ctx, repo, r, due.criterion, due.text, { auto: true })
+    .catch((e: unknown): Awaited<ReturnType<typeof startOwnedWork>> => ({ jobError: e instanceof Error ? e.message : String(e) }))
+  if (s.skipped) return ownedStep(next, { ...due, state: 'starting' }, viewer)
+  if (s.jobError || !s.started) return ownedStep(next, { ...due, state: 'stopped', why: `trace could not start its work: ${(s.jobError ?? 'it did not accept the job').replace(/\.$/, '')}.` }, viewer)
+  return { ...ownedStep(next, { ...due, state: 'starting' }, viewer, { words: s.started, job: s.jobId ?? null }), started: s.started }
+}
+
+/**
  * A gate is not the next step while a requirement an agent changed after the requirements baseline is still
  * unaccepted: the gates check the design against the accepted requirements, so the change is the person's to decide
  * first, in Requirements review. Only after the baseline (before it, Requirements review itself is how the
@@ -632,19 +713,49 @@ export const JOURNEY_ACTIONS = {
         (e: unknown) => logLine(ctx, { warning: 'journey.get: the stuck checks could not be run again', repo, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) }),
       )
     }
+    // a person's review while trace's work for it is still under way: trace is working, not "your move" (#33, #92)
+    const reviewing = jobs.error ? lostNext : reviewWaits(lostNext, r, { gates: view.gates, rows: jobs.rows, repo, at, words: STAGE_WORK[r.journey.currentStage]?.started })
     // who the step waits on when it would say trace is working and nothing of trace's is (test-esp32 log #146, #147)
-    const waits = waitsOn(lostNext, { changes: open.list.map((x) => x.change), working: jobs.error ? 1 : workingNow(jobs.rows, at), gates: view.gates, viewer, at })
-    const next = waits.step
-    const stages = waitsOnSteps(lostNext !== drafted && lostNext.job_id ? stoppedSteps(view.stages) : view.stages, waits.owner)
+    const working = jobs.error ? 1 : workingNow(jobs.rows, at)
+    const waits = waitsOn(reviewing, { changes: open.list.map((x) => x.change), working, gates: view.gates, viewer, at })
+    // trace's criterion with nothing at all working on it (#161): trace starts its work once, on its own; after that,
+    // or when it cannot, the step says so with Start it (journey.start_work), never "trace is working" over nothing
+    const due = waits.step !== reviewing || held || open.error ? null
+      : ownedDue(waits.step, r, { gates: view.gates, rows: jobs.rows, working, queued: jobs.queue?.queued.length ?? 0, changes: open.list.length, at })
+    const owned = due ? await ownedNow(ctx, repo, r, waits.step, due, viewer) : null
+    const next = owned?.step ?? waits.step
+    const stages = waitsOnSteps(owned?.stopped || (lostNext !== drafted && lostNext.job_id) ? stoppedSteps(view.stages) : view.stages, waits.owner)
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, stages, next: await changedFirst(ctx, repo, r, next),
       ...(restarted.length ? { jobs_restarted: restarted } : {}),
+      ...(owned?.started ? { work_started: [owned.started] } : {}),
       ...(drafting ? { drafting: { state: drafting.state, job: drafting.job, why: drafting.why || null } } : {}),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}), ...(kept.length ? { answers_restarted: kept } : {}),
       ...(seen && staleCriteria(seen).length ? { stale_evidence: staleCriteria(seen) } : {}),
       ...(resign ? { resign } : {}),
       ...(open.error ? { changes_unavailable: open.error.slice(0, 200) } : {}),
     }
+  }),
+
+  // trace's criterion of the current stage with nothing working on it (src/api/owned-work.ts, test-esp32 log #161): the
+  // next step's Start it. The criterion named, or the first of trace's the stage has not met (as the next step picks
+  // it). Refused, in words, while a job of trace's is working on the project, or the project is paused or retired
+  'journey.start_work': def('write', Repo.extend({ criterion: Id.optional() }), async (a, ctx) => {
+    await assertNotHeld(a.repo).catch((e: unknown) => { throw new ActionError(e instanceof Error ? e.message : String(e)) })
+    const [rec, list] = await Promise.all([recordNow(ctx, a.repo), listJobs(ctx, a.repo)])
+    if (!rec) throw new ActionError('This project has not started its journey yet.')
+    const busy = workingNow(list.rows) + list.queue.queued.length
+    if (busy) throw new ActionError(`trace is working on this project already (${busy === 1 ? '1 job' : `${busy} jobs`} queued or running): see what it is doing on the Overview.`)
+    const stale = await evidenceStaleness(ctx, a.repo, rec).catch(() => undefined)
+    const seen = stale ? withStaleEvidence(rec, stale) : rec
+    const left = designWorkLeft(seen).filter((c) => c.owner === 'trace')
+    const docs = seen.criteria.filter((c) => c.id.endsWith('.docs') && c.status !== 'met' && seen.gates.some((g) => g.id === c.gate && g.stage === seen.journey.currentStage)
+      && !seen.waivers.some((w) => w.targetKind === 'criterion' && w.target === c.id && w.closedAt === null))
+    const c = a.criterion ? [...left, ...docs].find((x) => x.id === a.criterion) : (left[0] ?? docs[0])
+    if (!c) throw new ActionError(a.criterion ? `${a.criterion} is not a criterion of trace's that ${STAGE_NAMES[seen.journey.currentStage]} still needs.` : `Every criterion of trace's in ${STAGE_NAMES[seen.journey.currentStage]} is met or waived: there is nothing to start.`)
+    const s = await startOwnedWork(ctx, a.repo, seen, c.id, c.text, { auto: false })
+    if (!s.started) throw new ActionError(`trace could not start its work on "${c.text.replace(/\.$/, '')}": ${(s.jobError ?? 'it did not accept the job').replace(/\.$/, '')}.`)
+    return { repo: a.repo, criterion: c.id, jobId: s.jobId ?? null, started: [s.started] }
   }),
 
   // the drafting job stopped (lost, failed, cancelled, or never started) with the intent submitted and no requirements:
