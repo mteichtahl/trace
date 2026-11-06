@@ -645,7 +645,7 @@ Quality bar:
 - Every part with a single source, or not active in lifecycle, is acknowledged.
 - The expected cost for the build quantity is stated.
 
-Produces: the approved release report, which the Release stage stores with the package.
+Produces: the approved release report, which the Release stage stores with the package. The report is the `report.md` of the Verification agent's newest `verify.report` run, read from the record: coverage, the interference prechecks and estimates, the parts list check against the build quantity, and every waiver still open. Its open items say "None" only when nothing is open. The review's evidence names that run.
 
 ### Order submit
 
