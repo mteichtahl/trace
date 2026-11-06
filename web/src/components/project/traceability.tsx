@@ -166,8 +166,11 @@ export function traceElements(l: TraceLayout, links: readonly TraceLink[], selec
         label, failing: r.failing, dashed: false, lit: lit(ek), side: 'left', width: COL.ev.w,
         body: (
           <>
-            <StatusBadge status={v.status} label={label} plain />
-            <span className="block truncate font-mono text-[11px] text-muted-foreground">{test ? `${test.id}${test.last_run ? ` · ${test.last_run}` : ''}` : 'no test planned'}</span>
+            <StatusBadge status={v.status} label={v.label} plain />
+            {/* a verified requirement's set-aside tests on the line under it, where the test would be: said, not clipped */}
+            {label !== v.label
+              ? <span className="block truncate text-[11px] text-waived" title={label}>{r.row.note}</span>
+              : <span className="block truncate font-mono text-[11px] text-muted-foreground">{test ? `${test.id}${test.last_run ? ` · ${test.last_run}` : ''}` : 'no test planned'}</span>}
           </>
         ),
       },
