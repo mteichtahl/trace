@@ -97,7 +97,7 @@ import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafti
 import type { JobRow } from '../core/job-index.js'
 import { type Followup, carryOnPlace, followupStatus, landedOn, loadFollowups, putFollowup, updateFollowup } from '../core/answer-followups.js'
 import { assertNotHeld } from './held.js'
-import { type ReopenedWork, finishRequest, keptOf, readTrace, reopenedWork, resignBasis, resignPlan, scopedRequest } from './reopen-scope.js'
+import { type ReopenedWork, finishRequest, keptOf, readTrace, reopenHeadline, reopenedWork, resignBasis, resignPlan, scopedRequest } from './reopen-scope.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -871,7 +871,9 @@ export const JOURNEY_ACTIONS = {
     let kickoff: { jobId?: string; started?: string[]; jobError?: string } = {}
     if (work && request) {
       try {
-        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        // named by what it does (its request leads with why the stage is open again: test-esp32 #196)
+        const headline = reopened ? reopenHeadline(reopened.stage, reopened.scope.kept) : undefined
+        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, ...(headline ? { headline } : {}), agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
         kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
       } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
     }

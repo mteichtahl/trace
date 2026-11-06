@@ -25,6 +25,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { UsageKind, UsageRow } from './cost.js'
 import type { BatchRow, JobRow } from './job-index.js'
 import { STAGE_IDS, type StageId } from './journey-catalog.js'
+import { shownJobTitle } from './plain-words.js'
 
 export interface StageMark { at: number; stage: StageId }
 
@@ -173,7 +174,7 @@ export function spendByJob(o: {
     const ended = j?.endedAt ?? null
     const outcome = j ? outcomeOf(j, o.now, o.staleAfter) : 'unknown'
     rows.push({
-      id: key, agent: j?.agent ?? s.agent, title: j?.title ?? 'A job no longer in the job index',
+      id: key, agent: j?.agent ?? s.agent, title: j ? shownJobTitle(j) : 'A job no longer in the job index',
       stage: stageAt(o.timeline, started ?? j?.queuedAt ?? s.first), outcome, started, ended,
       seconds: started === null ? null : Math.max(0, Math.round((ended ?? (outcome === 'running' ? o.now : j?.beatAt ?? o.now)) - started)),
       amount, byKind: s.byKind, workers: workers.get(key)?.size ?? 0, repeat: repeats.get(key) ?? null,
