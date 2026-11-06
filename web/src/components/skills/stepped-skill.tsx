@@ -46,6 +46,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       submitLabel={def.submit}
       onSubmit={() => s.submit()}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >

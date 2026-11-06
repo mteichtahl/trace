@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { baselineCriteria } from '../../src/api/actions-skills.js'
+import { baselineCriteria, baselineWhy, recordedWords } from '../../src/api/actions-skills.js'
 import { agentFactsStore, journeyStore } from '../../src/api/action-kit.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -318,6 +318,30 @@ describe('the guided skills read the design record', () => {
     expect(github.calls).toEqual([])
   })
 
+  it('Requirements review partly refused: Submit records the decisions, says which criterion is still not met, which requirement and what to do, and keeps the draft (test-esp32 #89)', async () => {
+    // an open question names REQ-2, so the bar lets it through undecided; the baseline gate's criteria wait on it
+    const facts = agentFactsStore({ principal: ADMIN, deps }, REPO)
+    const record = (await journeyStore({ principal: ADMIN, deps }, REPO).read((db) => loadJourney(db))).result
+    const asked = await facts.update((db) => ({ result: addAgentQuestion(db, { agent: 'verify', label: 'the Verification specialist', jobId: null }, {
+      text: 'Is REQ-2 measured at one reading every 15 minutes, or every 5?', options: [{ id: 'a', label: '15 minutes', recommended: true, why: 'the intent' }, { id: 'b', label: '5 minutes', recommended: false, why: 'a guess' }],
+    }, record) }))
+    const draft = {
+      decisions: [{ requirement: 'REQ-1', choice: 'accept' }, { requirement: 'REQ-3', choice: 'strike', reason: 'The farm manager reads it on the phone app.' }],
+      uncovered: [{ statement: 'INT-purpose', reason: 'The purpose is covered by the requirements as a whole.' }, { statement: 'INT-board', reason: 'Checked by Board setup against the outline.' }],
+      no_conflicts: true,
+    }
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 5, data: draft })
+    expect(Object.values(await checks('requirements-review')).filter((c) => c.status === 'not_met')).toEqual([])
+    const r = await run(USER, 'skill.submit', { repo: REPO, skill: 'requirements-review', draft }) as { recorded?: string; criteria?: { id: string; status: string; text: string; why?: string; step?: string }[]; draft_kept?: boolean }
+    expect(r.recorded).toBe('1 requirement accepted, 1 requirement struck, 2 intent lines left out')
+    expect(r.criteria?.find((c) => c.id === 'define.accepted')).toMatchObject({ status: 'not_met', text: expect.any(String), step: 'decide', why: 'REQ-2 waits on an open question: answer it, then accept or strike it here.' })
+    expect(r.draft_kept).toBe(true)
+    // the draft is still there, at the step it was left
+    const v = await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' }) as { draft?: { no_conflicts?: boolean }; step?: number }
+    expect(v).toMatchObject({ draft: { no_conflicts: true }, step: 5 })
+    await run(USER, 'question.answer', { repo: REPO, question: asked.result, option: 'a' })
+  })
+
   it('Requirements review: the person confirms no conflicts; Submit records the baseline gate\'s criteria from the record', async () => {
     const draft = {
       decisions: [{ requirement: 'REQ-1', choice: 'accept' }, { requirement: 'REQ-2', choice: 'accept' }, { requirement: 'REQ-3', choice: 'strike', reason: 'The farm manager reads it on the phone app.' }],
@@ -335,7 +359,12 @@ describe('the guided skills read the design record', () => {
     expect(c.conflicts).toMatchObject({ status: 'met', detail: expect.stringMatching(/you confirmed/) })
     const before = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string }[] }[] }
     expect(before.gates.find((g) => g.id === 'define')?.criteria.filter((x) => x.status === 'met').map((x) => x.id) ?? []).not.toContain('define.accepted')
-    expect(await run(USER, 'skill.submit', { repo: REPO, skill: 'requirements-review', draft: { ...draft, no_conflicts: true } })).toMatchObject({ ok: true })
+    const done = await run(USER, 'skill.submit', { repo: REPO, skill: 'requirements-review', draft: { ...draft, no_conflicts: true } }) as { ok: boolean; recorded?: string; criteria?: { id: string; status: string }[]; draft_kept?: boolean }
+    // the answer says what it recorded and that every criterion it set is met, and the draft is gone
+    expect(done).toMatchObject({ ok: true, recorded: expect.stringMatching(/^2 requirements accepted, 1 requirement struck/) })
+    expect(done.criteria?.map((c) => [c.id, c.status])).toEqual([['define.accepted', 'met'], ['define.measurable', 'met'], ['define.firmware', 'met']])
+    expect(done.draft_kept).toBeUndefined()
+    expect((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' }) as { draft?: unknown }).draft ?? null).toBeNull()
     const after = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string; evidence: { kind: string }[] }[] }[] }
     const define = after.gates.find((g) => g.id === 'define')!.criteria
     // its evidence is what was checked: the review, then each requirement with its decision (test-esp32 #32)
@@ -406,5 +435,22 @@ describe('the requirements baseline from the record', () => {
     expect(baselineCriteria([{ status: 'accepted', acceptance: 'exactly 2 copper layers' }, { status: 'proposed', acceptance: '5 mA' }]).map(([, ok]) => ok)).toEqual([false, false, false])
     expect(baselineCriteria([{ status: 'accepted', acceptance: '0.45-0.55 Hz' }, { status: 'accepted', acceptance: 'each 5.1 kΩ ± 1 %' }]).map(([, ok]) => ok)).toEqual([true, true, true])
     expect(baselineCriteria([{ status: 'accepted', acceptance: 'clearly visible' }])).toEqual([['define.accepted', true], ['define.measurable', false], ['define.firmware', true]])
+  })
+  it('says why each one is not met, naming the requirements and the step that fixes it (test-esp32 #89)', () => {
+    const none = (): boolean => false
+    expect(baselineWhy([{ id: 'R1', status: 'accepted', acceptance: '5 mA' }], none)).toEqual({})
+    expect(baselineWhy([{ id: 'R1', status: 'proposed' }, { id: 'R2', status: 'proposed' }, { id: 'R3', status: 'proposed' }], (id) => id === 'R3')).toMatchObject({
+      'define.accepted': { step: 'decide', why: 'R3 waits on an open question: answer it, then accept or strike it here; R1, R2 are not accepted or struck yet: decide each in Decide.' },
+      'define.measurable': { step: 'decide', why: 'It is checked once every requirement is accepted or struck.' },
+    })
+    expect(baselineWhy([{ id: 'R1', status: 'accepted', acceptance: 'clearly visible' }, { id: 'R2', status: 'accepted', acceptance: '5 mA' }], none))
+      .toEqual({ 'define.measurable': { step: 'testable', why: 'R1 has no number with a unit in its acceptance criterion: give one in Make it testable.' } })
+    expect(baselineWhy([], none)['define.accepted']).toMatchObject({ why: 'No requirements are recorded yet.' })
+  })
+  it('counts what a submission recorded in words', () => {
+    expect(recordedWords([])).toBeUndefined()
+    expect(recordedWords([{ kind: 'requirement', choice: 'accepted' }, { kind: 'requirement', choice: 'accepted' }, { kind: 'requirement', choice: 'struck' }, { kind: 'intent.uncovered', choice: 'left_out' }]))
+      .toBe('2 requirements accepted, 1 requirement struck, 1 intent line left out')
+    expect(recordedWords([{ kind: 'pins.agreed', choice: 'agreed' }])).toBe("1 part's pin plan agreed")
   })
 })

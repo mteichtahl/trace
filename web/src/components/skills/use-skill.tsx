@@ -2,10 +2,14 @@
  * What every guided skill screen shares: its definition (definitions.ts), the record's view of it (skill.get), the
  * person's draft (kept with their preferences), the steps for the stepper, the quality bar (the checker's verdicts,
  * with any the screen works out itself laid over them), Close back to where the person was, and Submit.
+ *
+ * Submit says what it came to on the skill's page whatever the skill (submit-outcome.tsx): refused, or recorded with
+ * a criterion it sets still not met, it stays here with the draft kept, says what blocked it and which step fixes it;
+ * met in full, it says what it recorded, the criteria it set change on screen at once, and the person returns.
  */
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useTraceContext } from '@/components/chat/context'
 import type { FocusStep } from '@/components/focus/focus-layout'
@@ -17,6 +21,7 @@ import type { CriterionStatus } from '@/lib/types'
 import type { SkillView } from '@/lib/types-s1'
 import { type SkillDef, checksOf } from './definitions'
 import { useSkillDraft } from './draft'
+import { type SubmitOutcome, SubmitOutcomePanel, applyCriteria, doneWords, partlyOutcome, refusedOutcome } from './submit-outcome'
 
 export interface SkillDraftBase {
   /** step ids the person has finished */
@@ -69,30 +74,51 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
   // done steps can be revisited; later ones open once reached
   const onStep = useCallback((id: string) => goTo(id), [goTo])
 
-  /** Submit: the action given (or skill.submit), then the draft is discarded and the person returns. */
+  /** Submit: the action given (or skill.submit); then what it came to (submit-outcome.tsx). */
   // one submission at a time: a second click (or the bar's other Submit button) while the first is on its way would
   // record the skill twice
   const submitting = useRef(false)
   const qc = useQueryClient()
+  // what the last submission came to, while the person is still here: refused, or partly
+  const [outcome, setOutcome] = useState<SubmitOutcome | null>(null)
   // done: the toast, or what to say from the call's answer (an answer's summary says whether the agent carried on)
-  const submit = useCallback(async (run?: () => Promise<unknown>, done: string | ((result: unknown) => string) = `${def.name}: submitted.`) => {
+  const submit = useCallback(async (run?: () => Promise<unknown>, done: string | ((result: unknown) => string) = `${def.name} submitted.`) => {
     if (submitting.current) return
     submitting.current = true
+    setOutcome(null)
+    // no draft save may land after the submission and bring back the draft it discards
+    draft.hold()
+    const reread = (): void => {
+      // what the submission changed (the journey, the gate's criteria, the inbox, the skill's own view) is read again,
+      // so the page the person is on shows it at once (lib/after-write.ts reads them again for every act; here for a
+      // submission made some other way, or refused, too, without starting again a refetch already on its way)
+      for (const k of [['journey.get', repo], ['skill.get', repo], ['skill.drafts', repo], ['design.get', repo], ['requirements.trace', repo], ['inbox']]) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
+    }
     try {
       const result = await (run ? run() : import('@/lib/api').then(({ call }) => call('skill.submit', { repo, skill: def.id, draft: draft.data })))
+      applyCriteria(qc, repo, result)
+      const partly = partlyOutcome(result)
+      if (partly) {
+        // recorded, but a criterion it sets is not met yet: stay, keep the draft, say which and what to do
+        draft.keep()
+        reread()
+        setOutcome(partly)
+        return
+      }
       draft.discard()
-      // what the submission changed (the journey, the gate's criteria, the inbox, the skill's own view) is read again,
-      // so the page the person returns to shows it at once (lib/after-write.ts reads them again for every act; here
-      // for a submission made some other way too, without starting again a refetch already on its way)
-      for (const k of [['journey.get', repo], ['skill.get', repo], ['skill.drafts', repo], ['design.get', repo], ['requirements.trace', repo], ['inbox']]) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
-      toast(typeof done === 'function' ? done(result) : done)
+      reread()
+      toast(typeof done === 'function' ? done(result) : doneWords(done, result))
       close()
     } catch (e) {
-      toast.error(`${def.name} was not submitted. Your work is kept as a draft.`, { description: e instanceof Error ? e.message : String(e) })
+      // refused: the person stays on the skill with the draft kept, and the page says what blocked it
+      draft.keep()
+      reread()
+      setOutcome(refusedOutcome(def, e instanceof Error ? e.message : String(e)))
     } finally {
       submitting.current = false
     }
   }, [def, repo, draft, close, qc])
+  const outcomeNode = outcome ? <SubmitOutcomePanel def={def} outcome={outcome} onJump={goTo} onDismiss={() => setOutcome(null)} /> : null
 
   useTraceContext({ label: def.name, description: 'The guided skill the person is doing', value: { skill: def.id, repo, step: step.title, stepNumber: stepIndex + 1, of: def.steps.length } }, 'skill')
   useCommands([
@@ -100,5 +126,5 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
     { id: 'skill-close', label: `Leave ${def.name} (the draft is kept)`, run: close },
   ])
 
-  return { j, view, draft, stepIndex, step, steps, onStep, goTo, next, close, submit, context }
+  return { j, view, draft, stepIndex, step, steps, onStep, goTo, next, close, submit, context, outcome: outcomeNode }
 }

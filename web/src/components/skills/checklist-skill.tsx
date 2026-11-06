@@ -118,6 +118,7 @@ export function ChecklistSkill({ repo, def }: { repo: string; def: SkillDef }) {
       submitLabel={def.submit}
       onSubmit={() => s.submit()}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       aside={aside}
       stop={{ visible: powered, onStop: () => void stop() }}
