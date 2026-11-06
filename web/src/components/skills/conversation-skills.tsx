@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
 import { FOCUS_AGENT_ID } from '@/components/chat/agent'
+import { useTraceContext } from '@/components/chat/context'
 import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
@@ -69,6 +70,49 @@ export function withIntentDecision<D extends { decisions?: IntentDecision[] }>(d
 
 const DECIDED_WORD: Record<IntentDecision['choice'], string> = { accept: 'Accepting', edit: 'Rewording', reject: 'Rejecting' }
 
+/**
+ * A statement's badge. The view the panel reads lays the person's draft over the record (so the quality bar shows what
+ * Submit would record), which made a saved edit read "Accepted" while the note said it was still in the draft and the
+ * record did not have it (test-esp32 #22). A decision still in the draft reads "Not submitted"; a flag the check still
+ * raises on it (the new words lack a number) is shown over that. Pure.
+ */
+export function statementBadge(st: Pick<IntentStatement, 'state' | 'flag'>, decision?: Pick<IntentDecision, 'choice'>): { status: 'met' | 'yours' | 'warning' | 'failing'; label: string } {
+  const flagged = st.state !== 'accepted' && st.state !== 'draft'
+  if (decision && !flagged) return { status: 'yours', label: 'Not submitted' }
+  return { status: STATE_WORD[st.state].status, label: st.flag ?? STATE_WORD[st.state].label }
+}
+
+/** The line under a statement the person decided in the draft: what it will be, and that Submit records it. Pure. */
+export const decidedNote = (choice: IntentDecision['choice']): string => `${DECIDED_WORD[choice]} in your draft. Submit intent records it.`
+
+/**
+ * The statements Submit intent accepts as worded: shown, not decided in the draft, and not accepted in the record
+ * already (actions-skills pendingDecisions accepts every one left proposed). Pure.
+ */
+export function undecidedStatements(statements: readonly Pick<IntentStatement, 'id' | 'state'>[], decisions: readonly Pick<IntentDecision, 'statement'>[]): string[] {
+  const named = new Set(decisions.map((d) => d.statement))
+  return statements.filter((x) => !named.has(x.id) && x.state !== 'accepted').map((x) => x.id)
+}
+
+/** Submit's words: it says when it also accepts the statements left in draft (test-esp32 #26). Pure. */
+export function intentSubmitLabel(submit: string, undecided: number): string {
+  return undecided ? `${submit} (accepts ${undecided} still in draft)` : submit
+}
+
+/**
+ * What trace's chat is told about the draft: the decisions made here are not in the record until Submit intent, so the
+ * chat says the same as the panel (test-esp32 #22: it said the edits had not reached the record while the badge said
+ * Accepted). Pure.
+ */
+export function intentDraftContext(decisions: readonly IntentDecision[], undecided: readonly string[]) {
+  return {
+    submitted: false,
+    note: 'These decisions are in the person\'s Intent builder draft, not in the record. They are recorded when the person presses Submit intent; until then the record still has the statements as the agents wrote them. Submit intent also accepts, as worded, every statement still in draft.',
+    decisions: decisions.map((d) => ({ statement: d.statement, choice: d.choice, ...(d.text ? { words: d.text } : {}), ...(d.reason ? { reason: d.reason } : {}) })),
+    acceptedAtSubmit: undecided,
+  }
+}
+
 const FIELDS: { id: InterfaceField; label: string; hint: string }[] = [
   { id: 'type', label: 'Type', hint: 'USB device, I2C, antenna' },
   { id: 'connector', label: 'Connector', hint: 'USB-C receptacle, 4-pin header' },
@@ -107,7 +151,8 @@ function InterfaceFields({ st }: { st: IntentStatement }) {
  * words) or Reject (with a line why). Editing an interface statement shows its five fields beside the words (test-esp32
  * #20): the ones the person changes are kept as typed, the others are read from the new words. The decision goes into
  * the draft; the quality bar (skill.get, the draft laid over the record) moves with it, and Submit intent records it.
- * Statements left undecided are accepted at Submit.
+ * Statements left undecided are accepted at Submit, and Submit's words say how many. Until Submit a decision reads
+ * "Not submitted" (statementBadge), the way trace's chat is told it (intentDraftContext).
  */
 function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; decision?: IntentDecision; onDecide: (d: Omit<IntentDecision, 'statement'> | null) => void }) {
   const [mode, setMode] = useState<'edit' | 'reject' | null>(null)
@@ -124,7 +169,7 @@ function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; d
     <li className="space-y-1.5 text-sm">
       <div className="flex items-start justify-between gap-3">
         <span>{decision?.choice === 'edit' && decision.text ? decision.text : st.text}</span>
-        <StatusBadge status={STATE_WORD[st.state].status} label={st.flag ?? STATE_WORD[st.state].label} className="shrink-0" />
+        <StatusBadge {...statementBadge(st, decision)} className="shrink-0" />
       </div>
       {mode !== 'edit' && <InterfaceFields st={st} />}
       {mode ? (
@@ -149,7 +194,7 @@ function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; d
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-1 text-xs">
-          {decision && <span className="mr-1 text-muted-foreground">{DECIDED_WORD[decision.choice]} in your draft</span>}
+          {decision && <span className="mr-1 text-muted-foreground">{decidedNote(decision.choice)}</span>}
           {decision ? (
             <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => onDecide(null)}>Undo</Button>
           ) : (
@@ -183,6 +228,8 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const shown = new Set((intent?.statements ?? []).map((x) => x.id))
   const rejected = decisions.filter((d) => d.choice === 'reject' && !shown.has(d.statement))
   const decide = (statement: string, d: Omit<IntentDecision, 'statement'> | null) => s.draft.setData((x) => withIntentDecision(x, statement, d))
+  const undecided = undecidedStatements(intent?.statements ?? [], decisions)
+  useTraceContext(decisions.length || undecided.length ? { label: 'Intent draft', description: 'The person\'s Intent builder draft, not submitted yet', value: intentDraftContext(decisions, undecided) } : null, 'intent-draft')
 
   const aside = (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -254,7 +301,7 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
       onStep={(id) => s.goTo(id)}
       stepsExtra={<p className="px-2 text-xs text-muted-foreground">You can stop at any time. The draft is kept and trace picks up at the topic you left.</p>}
       checks={checks}
-      submitLabel={def.submit}
+      submitLabel={intentSubmitLabel(def.submit ?? 'Submit', undecided.length)}
       onSubmit={() => s.submit(async () => {
         // Submit starts the Verification agent drafting the candidate requirements (skill.submit); say whether it did
         const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string; queued?: boolean }
