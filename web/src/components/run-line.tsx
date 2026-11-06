@@ -9,10 +9,11 @@
  * A running job's view says when trace last heard from it (`heard`). A job whose runtime stops sends no event, so the
  * line reads that against the clock rather than trusting the screen's last look: past the overdue time it says plainly
  * that trace has not heard from it and when it will be declared lost, and past that time it shows as lost
- * (runState), the same as the Agents page and the job index say once they look again.
+ * (runState), the same as the Agents page and the job index say once they look again. A job waiting on a person's
+ * answer (`waiting`, askingOf) says so and whose, with Answer it, rather than "still running" (#197).
  */
-import { Circle, CircleAlert, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck, SquareTerminal } from 'lucide-react'
-import { useState } from 'react'
+import { Circle, CircleAlert, CircleHelp, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck, SquareTerminal } from 'lucide-react'
+import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -20,7 +21,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { about, duration, time } from '@/lib/format'
-import type { RunSummary } from '@/lib/types'
+import type { Question, RunSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { timeAgainstUsual } from './log-view'
 import { useNow } from './use-now'
@@ -38,8 +39,26 @@ export interface RunLineProps {
   onOpen?: (run: RunSummary) => void
   /** Watch: open the run's log (RunSheet, run `job:<id>`); offered while it runs or is paused */
   onWatch?: (run: RunSummary) => void
+  /**
+   * the open question the job waits on (askingOf): the line says it is waiting on an answer, and whose, rather than
+   * "still running", with `answer` (an "Answer it" link) beside it (#197)
+   */
+  waiting?: { question: Pick<Question, 'text' | 'to'>; answer?: ReactNode }
   className?: string
 }
+
+/**
+ * The open question job `run` waits on: one asked in it (by the API's id, the job index's, or a handle ending in it),
+ * the newest. Questions without a job are no job's. Pure.
+ */
+export function askingOf(run: Pick<RunSummary, 'id' | 'workerJobId' | 'state'>, questions: readonly Question[]): Question | undefined {
+  if (run.state !== 'running' && run.state !== 'paused') return undefined
+  const mine = questions.filter((q) => q.jobId && (q.jobId === run.id || q.jobId === run.workerJobId || run.id.endsWith(`.${q.jobId}`)))
+  return mine.sort((a, b) => b.askedAt.localeCompare(a.askedAt))[0]
+}
+
+/** Whose answer a job waits on: "Waiting on your answer", "Waiting on an answer from the admins". Pure. */
+export const waitingWords = (q: Pick<Question, 'to'>): string => (q.to === 'you' ? 'Waiting on your answer' : `Waiting on an answer from ${q.to}`)
 
 /**
  * Where a run stands now, by the clock: a running job not heard from since its overdue time is `silent`, and one past
@@ -97,12 +116,12 @@ export function runDetail(run: RunSummary, now: number): string {
   return parts.join(' · ')
 }
 
-export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, onOpen, onWatch, className }: RunLineProps) {
+export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, onOpen, onWatch, waiting, className }: RunLineProps) {
   const now = useNow(run.etaS === undefined && run.startedAt ? 1000 : 60_000)
   const [confirm, setConfirm] = useState(false)
   const st = runState(run, now)
   const active = st === 'running'
-  const Icon = st === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : st === 'lost' || st === 'silent' ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
+  const Icon = waiting && st !== 'lost' ? CircleHelp : st === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : st === 'lost' || st === 'silent' ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
   // only what the job system can do for this job, when its view says (job.control answers ok: false for the rest)
   const can = (op: 'pause' | 'resume' | 'cancel' | 'move_up') => !run.controls || run.controls.includes(op)
   const pause = can('pause') ? onPause : undefined
@@ -132,7 +151,7 @@ export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, o
 
   return (
     <div className={cn('flex items-center gap-4 px-5 py-4', className)} data-density-item>
-      <Icon className={cn('size-4 shrink-0', active ? 'animate-spin text-primary' : 'text-muted-foreground')} aria-hidden />
+      <Icon className={cn('size-4 shrink-0', active && !waiting ? 'animate-spin text-primary' : waiting ? 'text-primary' : 'text-muted-foreground')} aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="text-sm">
           {onOpen ? (
@@ -147,13 +166,18 @@ export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, o
             </>
           )}
         </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{runDetail(run, now)}</p>
-        {run.progress !== undefined && active && (
+        {waiting && st !== 'lost' ? (
+          <p className="mt-0.5 text-xs text-muted-foreground"><span className="font-medium text-foreground">{waitingWords(waiting.question)}:</span> {waiting.question.text}</p>
+        ) : (
+          <p className="mt-0.5 text-xs text-muted-foreground">{runDetail(run, now)}</p>
+        )}
+        {run.progress !== undefined && active && !waiting && (
           <div className="mt-2 h-1 max-w-[360px] overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(run.progress * 100)} aria-label={`${run.title} progress`}>
             <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.round(run.progress * 100)}%` }} />
           </div>
         )}
       </div>
+      {waiting && st !== 'lost' && waiting.answer}
       {onWatch && (st === 'running' || st === 'silent' || run.state === 'paused') && (
         <Button variant="outline" size="sm" className="shrink-0" onClick={() => onWatch(run)} aria-label={`Watch ${run.title}`}>
           <SquareTerminal /> Watch
