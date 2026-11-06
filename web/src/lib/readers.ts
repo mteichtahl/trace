@@ -43,7 +43,7 @@ function readWaiver(w: Obj): Waiver {
     // what it is on, in words (test-esp32 #155); the raw kind and id only from an API before it said
     id: String(w.id), title: sentence(str(w.about) ?? `${str(target.kind) ?? 'item'} ${str(target.id) ?? ''}`.trim()), reason: String(w.reason ?? ''),
     ...(w.criterion === null || str(w.criterion) ? { criterion: str(w.criterion) ?? null } : {}),
-    risk: riskOf(w.severity), caught: str(w.caught_where) ?? 'Nowhere: accepted for good', acknowledged: Boolean(w.acknowledged),
+    risk: riskOf(w.severity), caught: str(w.caught_where) ?? 'Nowhere: accepted for good', acknowledged: Boolean(w.acknowledged), opened: Boolean(w.opened_by_you),
     severity: str(w.severity), riskText: str(w.risk), scope: str(w.scope),
     ...(str(w.by) ? { by: String(w.by) } : {}), ...(str(w.at) ? { at: String(w.at) } : {}),
     ...(str(target.kind) && str(target.id) ? { target: { kind: String(target.kind), id: String(target.id) } } : {}),

@@ -36,7 +36,7 @@ export function criterionStatusLabel(c: Pick<Criterion, 'id' | 'status'>, gate: 
 export interface SignState {
   /** criterion ids whose evidence this person opened (from the record, plus this session) */
   opened: Set<string>
-  /** waiver ids acknowledged */
+  /** waiver ids ticked this session ("I've read this waiver"): each tick records an open */
   acknowledged: Set<string>
   admin: boolean
   online: boolean
@@ -52,6 +52,14 @@ export interface Blocker {
 
 export const isOpened = (c: Criterion, s: Pick<SignState, 'opened'>): boolean => !!c.opened || s.opened.has(c.id)
 
+/**
+ * Whether this person has read a waiver for the signing at hand: opened by the record's rule (journey.get
+ * `opened_by_you`), or ticked this session. An acknowledgement from an earlier signing of a reopened stage does not
+ * count: the record asks for the waiver to be opened again, and the box showed it ticked and locked, so the open was
+ * never sent and the gate could not be signed (test-esp32-e2e, the Layout gate after the budget change).
+ */
+export const isWaiverRead = (w: Pick<Waiver, 'id' | 'opened'>, s: { acknowledged: ReadonlySet<string> }): boolean => !!w.opened || s.acknowledged.has(w.id)
+
 /** What still stands between this person and Sign; empty means Sign is enabled. */
 export function signBlockers(gate: Pick<Gate, 'criteria' | 'waivers'> & { pending?: string[] }, s: SignState): Blocker[] {
   const out: Blocker[] = []
@@ -64,7 +72,7 @@ export function signBlockers(gate: Pick<Gate, 'criteria' | 'waivers'> & { pendin
   if (notMet.length) out.push({ id: 'met', text: `${notMet.length} ${notMet.length > 1 ? 'criteria' : 'criterion'} not met`, items: notMet.map((c) => c.id) })
   const unopened = gate.criteria.filter((c) => !isOpened(c, s))
   if (unopened.length) out.push({ id: 'opened', text: `Open the evidence for ${unopened.length} more criteri${unopened.length > 1 ? 'a' : 'on'}`, items: unopened.map((c) => c.id) })
-  const unack = gate.waivers.filter((w) => !w.acknowledged && !s.acknowledged.has(w.id))
+  const unack = gate.waivers.filter((w) => !isWaiverRead(w, s))
   if (unack.length) out.push({ id: 'acknowledged', text: `Acknowledge ${unack.length} waiver${unack.length > 1 ? 's' : ''}`, items: unack.map((w) => w.id) })
   if (!s.admin) out.push({ id: 'admin', text: 'Only an admin can sign', items: [] })
   if (!s.online) out.push({ id: 'online', text: 'Signing needs the connection; it is refused offline', items: [] })

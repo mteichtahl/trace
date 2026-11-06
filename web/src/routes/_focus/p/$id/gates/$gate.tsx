@@ -18,7 +18,6 @@ import { ArrowRight, Clock, KeyRound, Loader2, Lock, Receipt, X } from 'lucide-r
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
@@ -35,10 +34,11 @@ import { useCommands } from '@/components/shell/command-menu'
 import { LiveDot } from '@/components/shell/live-dot'
 import { EvidenceBody, EvidencePanel } from '@/components/skills/evidence-sheet'
 import { CriterionFindings } from '@/components/criterion-findings'
-import { type Blocker, criterionStatusLabel, isOpened, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
+import { type Blocker, criterionStatusLabel, isOpened, isWaiverRead, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
 import { WaiverRating } from '@/components/waiver-rating'
 import { reauthenticate } from '@/components/skills/reauth'
 import { StatusBadge } from '@/components/status-badge'
+import { WaiverAcknowledge } from '@/components/waiver-acknowledge'
 import { WaiverActions } from '@/components/waiver-actions'
 import { EmptyState, ErrorState, Loading, NotShared, OfflineBanner, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
@@ -325,7 +325,17 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
             ) : (
               <ul className="mt-3 divide-y">
                 {g.waivers.map((w) => {
-                  const ack = !!w.acknowledged || acknowledged.has(w.id)
+                  const tick = (on: boolean) => {
+                    setAcknowledged((s) => { const n = new Set(s); if (on) n.add(w.id); else n.delete(w.id); return n })
+                    // the record needs the signer to have opened each waiver of the stage for this signing, as for the
+                    // evidence: sent whenever the record does not count it yet (the box is locked once it does)
+                    if (on) openCriterion.mutate({ repo, waiver: w.id }, {
+                      onError: () => {
+                        setAcknowledged((s) => { const n = new Set(s); n.delete(w.id); return n })
+                        toast.error('Could not record that you read this waiver. Tick it again when back online.')
+                      },
+                    })
+                  }
                   return (
                     <li key={w.id} className="py-3 first:pt-0 last:pb-0">
                       <div className="flex gap-3">
@@ -339,14 +349,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                           <WaiverActions repo={repo} waiver={w} className="pt-1" />
                         </div>
                       </div>
-                      <Label className="mt-3 flex cursor-pointer items-center gap-2 border-t pt-3 font-normal">
-                        <Checkbox checked={ack} disabled={!!w.acknowledged} onCheckedChange={(v) => {
-                          setAcknowledged((s) => { const n = new Set(s); if (v) n.add(w.id); else n.delete(w.id); return n })
-                          // the record needs the signer to have opened each waiver of the stage, as for the evidence
-                          if (v) openCriterion.mutate({ repo, waiver: w.id }, { onError: () => toast.error('Could not record that you read this waiver. Tick it again when back online.') })
-                        }} />
-                        Acknowledge: I've read this waiver and where it is caught.
-                      </Label>
+                      <WaiverAcknowledge waiver={w} ticked={acknowledged} onTick={tick} className="mt-3 border-t pt-3" />
                     </li>
                   )
                 })}
@@ -415,7 +418,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
         <Button variant="ghost" className="mt-1 w-full" onClick={() => setReturning(true)}>Return…</Button>
       </div>
 
-      <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={[...acknowledged]} onSigned={onDone} />
+      <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={g.waivers.filter((w) => isWaiverRead(w, state)).map((w) => w.id)} onSigned={onDone} />
       <ReturnDialog open={returning} onOpenChange={setReturning} repo={repo} gate={g} stage={from?.name} id={id} onReturned={onDone} />
       <SignOffDialog criterion={signingOff} onClose={() => setSigningOff(null)} pending={confirmCriterion.isPending}
         onSignOff={(note) => signingOff && confirmCriterion.mutate({ repo, criterion: signingOff.id, met: true, note }, {

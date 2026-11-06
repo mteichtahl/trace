@@ -20,8 +20,10 @@ export const ROUTE_LOG = ['Loading hardware/soil-sensor.kicad_pcb', 'Net classes
 
 // ------------------------------------------------------------------ gates
 
-// the mock's criteria have short ids (c1, c2), so each waiver says which one it counts for, as journey.get does
-const W3: Waiver = { id: 'W-3', title: 'Electrical rule check: VBAT pin not driven on U2.', reason: "Driven by the battery through J1, which the check can't see.", risk: 'degraded', caught: 'Bring-up step 3 (unpowered rail check).', by: 'Marc Teichtahl', target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, criterion: 'c1', mayWithdraw: true }
+// the mock's criteria have short ids (c1, c2), so each waiver says which one it counts for, as journey.get does.
+// W-3 was acknowledged at an earlier signing of the stage, before it was reopened: its box is to tick again
+// (test-esp32-e2e, the Layout gate after the budget change)
+const W3: Waiver = { id: 'W-3', acknowledged: true, opened: false, title: 'Electrical rule check: VBAT pin not driven on U2.', reason: "Driven by the battery through J1, which the check can't see.", risk: 'degraded', caught: 'Bring-up step 3 (unpowered rail check).', by: 'Marc Teichtahl', target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, criterion: 'c1', mayWithdraw: true }
 // one of each rating, on different criteria and one on a requirement (the stage's only), so the gate page shows each
 // criterion counting its own waivers and each rating in the form's words (test-esp32 #156, #157)
 const W_SCHEMATIC: Waiver[] = [

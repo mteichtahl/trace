@@ -22,7 +22,7 @@ import { AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, loadAge
 import { addHandoff, handoffTitle, loadHandoffs, markStarted } from '../../src/core/handoffs.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
-import { askQuestion, loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
+import { addWaiver, askQuestion, loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
 import { allTools } from '../../src/tools/index.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject, storedMime } from '../../src/core/store.js'
@@ -37,7 +37,7 @@ const REVIEWER = { sub: 'w-rev', email: 'w-rev@example.com', groups: ['trace-use
 const GUEST = { sub: 'w-guest', email: 'w-guest@example.com', groups: ['trace-guests'] }
 const OUTSIDER = { sub: 'w-out', email: 'w-out@example.com', groups: ['trace-users'] }
 
-const github = new FakeGitHub(['acme/web', 'acme/other', 'acme/secret', 'acme/fresh', 'acme/ident', 'acme/houserules', 'acme/reopened'])
+const github = new FakeGitHub(['acme/web', 'acme/other', 'acme/secret', 'acme/fresh', 'acme/ident', 'acme/houserules', 'acme/reopened', 'acme/rewaived'])
 const cognito = new FakeCognito()
 const scratch = mkdtempSync(join(tmpdir(), 'trace-web-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-bucket-'))
@@ -894,5 +894,38 @@ describe('opening evidence again after it stopped counting', () => {
     expect(new Set(versions).size).toBe(ids.length)
     expect(Object.values(await openedNow()).every(Boolean)).toBe(true)
     expect(await run(ADMIN, 'gate.sign', { repo, gate: 'define' })).toMatchObject({ advanced_to: 'architect' })
+  })
+  it('a waiver opened before an earlier signature of its reopened stage is opened again, and the gate signs', async () => {
+    // test-esp32-e2e, the Layout gate after the budget change: the case-fit waivers opened and acknowledged at the
+    // first signing showed as read on the page, so no open was sent, and gate.sign refused with "Open 2 waivers taken
+    // in this stage". The record's one rule (openedBy) answers journey.get, the open and the signature alike
+    const repo = 'acme/rewaived'
+    type Got = { gates: { id: string; criteria: { id: string }[] }[]; waivers: { id: string; opened_by_you: boolean; acknowledged: unknown }[] }
+    const got = async (): Promise<Got> => (await run(ADMIN, 'journey.get', { repo })) as Got
+    const { result: waiver } = await journeyStore({ principal: ADMIN, deps }, repo).update((db) => {
+      startJourney(db, { template: 'board', by: 'seed', name: 'Rewaived' })
+      const w = addWaiver(db, { target: { kind: 'criterion', id: 'define.measurable' }, reason: 'The range test needs the bench.', risk: 'A short range.', severity: 'cosmetic', caught_where: 'Bring up', scope: 'this revision only' }, { hash: 's'.repeat(16), label: 'seed' })
+      for (const row of db.prepare("SELECT id FROM gate_criteria WHERE gate='define'").all()) setCriterion(db, String(row.id), 'met', [{ kind: 'record', ref: 'requirements' }], 'trace')
+      return { result: w.id }
+    })
+    seedProject(repo)
+    const criteria = (await got()).gates.find((g) => g.id === 'define')?.criteria.map((c) => c.id) ?? []
+    const openAll = async (): Promise<void> => { for (const criterion of criteria) await run(ADMIN, 'journey.criterion.open', { repo, criterion }) }
+    await openAll()
+    await run(ADMIN, 'journey.criterion.open', { repo, waiver })
+    expect(await run(ADMIN, 'gate.sign', { repo, gate: 'define', acknowledge: [waiver] })).toMatchObject({ advanced_to: 'architect' })
+    // Define is reopened: the waiver keeps its acknowledgement, but its open is from before the signature
+    await tick()
+    await run(ADMIN, 'gate.return', { repo, gate: 'architect', reason: 'The budget changed: look at Define again.', reopen: 'define' })
+    expect((await got()).waivers.find((w) => w.id === waiver)).toMatchObject({ opened_by_you: false, acknowledged: expect.anything() })
+    await tick()
+    await openAll()
+    await expect(run(ADMIN, 'gate.sign', { repo, gate: 'define' })).rejects.toThrow(/Open 1 waiver taken in this stage/)
+    // opening it again is saved (a new version) and counts, on the page and for the signature
+    const before = ((await run(ADMIN, 'journey.criterion.open', { repo, criterion: criteria[0] as string })) as { version: number }).version
+    const opened = ((await run(ADMIN, 'journey.criterion.open', { repo, waiver })) as { version: number }).version
+    expect(opened).toBe(before + 1)
+    expect((await got()).waivers.find((w) => w.id === waiver)?.opened_by_you).toBe(true)
+    expect(await run(ADMIN, 'gate.sign', { repo, gate: 'define', acknowledge: [waiver] })).toMatchObject({ advanced_to: 'architect' })
   })
 })
