@@ -10,7 +10,9 @@
  *   board.footprints             ref, value, side, position, rotation, pads, attributes
  *   board.outline                Edge.Cuts bounding box (mm)
  *   new Net(board, name)         one net's segments, arcs, vias and pads joined into a graph
- *   net.length_m / byLayer()     total routed length, and per layer
+ *   net.length_m / byLayer()     every track of the net, and per layer (stubs included)
+ *   signalLength(board, name)    THE length of a net, the one every tool reports: pad to pad along its longest run,
+ *                                via barrels included (LENGTH_DEFINITION)
  *   net.path('R4.2', 'U1.7')     the shortest routed path between two pads: length, layers, vias
  *   net.tree('U1.7')             the net cut into branches between pads and forks (a transmission-line model's input)
  *   z0(layer, w), delay(layer, w), capPerM(layer, w)   a copper layer's electrical properties at trace width w
@@ -858,6 +860,16 @@ class Heap {
   }
 }
 
+/** Follow a shortest-path tree back from dst to src, adding each step to the branch. */
+function walk(br: Branch, src: NodeKey, dst: NodeKey, prev: Map<NodeKey, [NodeKey, Edge]>): Branch {
+  for (let u = dst; u !== src;) {
+    const [p, e] = prev.get(u) as [NodeKey, Edge]
+    br.add(p, e)
+    u = p
+  }
+  return br
+}
+
 /** One net's copper as a graph: nodes are track ends, via barrels and pads; edges are tracks and barrels. */
 export class Net {
   readonly segs: Segment[]
@@ -1019,13 +1031,50 @@ export class Net {
     const dst = this.padNodes.get(padId(this.pad(b))) as NodeKey
     const { dist, prev } = this.dijkstra(src)
     if (!dist.has(dst)) throw new PcbError(`${a} and ${b} are not connected by tracks on ${this.name} (copper pours are not followed)`)
-    const br = new Branch(a, b)
-    for (let u = dst; u !== src;) {
-      const [p, e] = prev.get(u) as [NodeKey, Edge]
-      br.add(p, e)
-      u = p
+    return walk(new Branch(a, b), src, dst, prev)
+  }
+
+  /**
+   * The net's signal path: the routed path between its two pads farthest apart along the copper that are on
+   * different parts (for a two-pad net, between its two pads). This is the one length every tool reports for a net
+   * (see LENGTH_DEFINITION): a net with more pads, a USB-C D+ from the MCU to the connector's A6 and B6 with an ESD
+   * part on the way, is as long as its longest run from one part to another, and the shorter runs to the other pads
+   * are stubs off it. Two pads of one part (A6 and B6, an ESD part's flow-through pads) are joined on the part, so
+   * the copper between them is not a run a signal travels end to end; they are paired only when every pad is on one
+   * part. Null when no two pads are joined by tracks. Up to 64 pads every pair is tried; past that the farthest pad
+   * from the first, then the farthest from that (exact when the copper is a tree, as routed signal nets are).
+   */
+  signalPath(): Branch | null {
+    const ids = [...this.padNodes.keys()]
+    if (ids.length < 2) return null
+    const refOf = new Map(this.pads.map((p) => [padId(p), p.ref] as const))
+    const onePart = new Set(refOf.values()).size < 2
+    const farthest = (from: string): { to: string; d: number; prev: Map<NodeKey, [NodeKey, Edge]> } => {
+      const { dist, prev } = this.dijkstra(this.padNodes.get(from) as NodeKey)
+      let to = ''
+      let d = -1
+      for (const id of ids) {
+        if (id === from || (!onePart && refOf.get(id) === refOf.get(from))) continue
+        const x = dist.get(this.padNodes.get(id) as NodeKey)
+        if (x !== undefined && x > d + 1e-12) {
+          to = id
+          d = x
+        }
+      }
+      return { to, d, prev }
     }
-    return br
+    let best: { from: string; to: string; d: number; prev: Map<NodeKey, [NodeKey, Edge]> } | null = null
+    const starts = ids.length <= 64 ? ids : [ids[0] as string]
+    for (const from of starts) {
+      const f = farthest(from)
+      if (f.to && (!best || f.d > best.d + 1e-12)) best = { from, ...f }
+    }
+    if (best && ids.length > 64) {
+      const g = farthest(best.to)
+      if (g.to && g.d > best.d + 1e-12) best = { from: best.to, ...g }
+    }
+    if (!best) return null
+    return walk(new Branch(best.from, best.to), this.padNodes.get(best.from) as NodeKey, this.padNodes.get(best.to) as NodeKey, best.prev)
   }
 
   /** The shortest-path tree from one pad to every pad, cut into branches at pads and forks. */
@@ -1067,6 +1116,46 @@ export class Net {
       }
     }
     return out
+  }
+}
+
+// ------------------------------------------------------------------ one length for a net
+
+/** What every tool means by a net's length (kicad.net_length, kicad.net, pcb.length_match, emc.precheck). */
+export const LENGTH_DEFINITION = 'pad to pad: the routed path between the net\'s two pads farthest apart along the copper, on different parts (from, to), '
+  + 'tracks on every layer plus via barrels (copper centre to copper centre, from the stackup; via_barrel_mm is null and '
+  + 'barrels are not counted when the stackup is unknown); runs to the net\'s other pads are stubs off this path and not in '
+  + 'it (copper_mm is every track of the net, stubs included)'
+
+export interface SignalLength {
+  net: string
+  /** the path's end pads, "REF.PIN"; null when no two pads are joined by tracks */
+  from: string | null
+  to: string | null
+  /** trace_mm + via_barrel_mm (barrels only when the stackup gives them) */
+  length_mm: number
+  trace_mm: number
+  by_layer_mm: Record<string, number>
+  width_mm: Record<string, number>
+  vias: number
+  via_barrel_mm: number | null
+  delay_ps: number | null
+  /** every track of the net, stubs included: the old "total" */
+  copper_mm: number
+  pads: number
+  unreached: string[]
+  routed: boolean
+}
+
+/** A net's length by LENGTH_DEFINITION: the one measure shared by every tool. */
+export function signalLength(b: Board, name: string): SignalLength {
+  const n = new Net(b, name)
+  const br = n.signalPath()
+  const s = br?.toJSON(b)
+  return {
+    net: name, from: s?.from ?? null, to: s?.to ?? null, length_mm: s?.length_mm ?? 0, trace_mm: s?.trace_mm ?? 0,
+    by_layer_mm: s?.by_layer_mm ?? {}, width_mm: s?.width_mm ?? {}, vias: s?.vias ?? 0, via_barrel_mm: s ? s.via_barrel_mm : 0,
+    delay_ps: s?.delay_ps ?? null, copper_mm: r4(n.length_m * 1e3), pads: n.pads.length, unreached: n.unreached(), routed: n.segs.length > 0,
   }
 }
 

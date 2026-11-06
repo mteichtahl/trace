@@ -128,7 +128,7 @@ export const spectrumTool = defineTool({
 
 export const precheckTool = defineTool({
   name: 'emc.precheck',
-  description: 'Rule-based EMI precheck of a KiCad board from its geometry (no field solver): return-path gaps and plane-split crossings under signal tracks (zone fills sampled along each track), switching-node copper and hot-loop hull area, fast nets near the board edge, layer changes without a stitching via (or capacitor) for the reference, decoupling distance per IC power pin, and an edge-rate spectrum estimate (trapezoid harmonics, I = V/Z0, loop = length x height, Ott DM formula) against CISPR 32 for nets given in `edges` (pre-compliance estimate; common-mode radiation not included). Each finding has a location and its evidence; thresholds are guidelines with stated defaults. Recorded; returns run_id.',
+  description: 'Rule-based EMI precheck of a KiCad board from its geometry (no field solver): return-path gaps and plane-split crossings under signal tracks (zone fills sampled along each track), switching-node copper and hot-loop hull area, fast nets near the board edge, layer changes without a stitching via (or capacitor) for the reference, decoupling distance per IC power pin, and an edge-rate spectrum estimate (trapezoid harmonics, I = V/Z0, loop = the net\'s length, pad to pad as kicad.net_length measures it, x height, Ott DM formula) against CISPR 32 for nets given in `edges` (pre-compliance estimate; common-mode radiation not included). Each finding has a location and its evidence; thresholds are guidelines with stated defaults. Recorded; returns run_id.',
   input: z.object({
     board: z.string().describe('.kicad_pcb path'),
     rules: z.array(z.enum(RULES as unknown as [Rule, ...Rule[]])).optional().describe('default all'),

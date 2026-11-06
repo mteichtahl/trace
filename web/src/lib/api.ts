@@ -154,6 +154,8 @@ export interface Actions {
   'skill.drafts': { args: Repo; result: { drafts: { skill: string; name: string; step: number; steps: number; saved: string }[] } }
   /** submit a skill's result: refused with what is missing unless every check is met or waived */
   'requirements.draft': { args: Repo; result: { repo: string; jobId: string; attempt: number; started: string[] } }
+  /** start trace's work on its criterion that nothing works on (the next step's Start it; src/api/owned-work.ts) */
+  'journey.start_work': { args: Repo & { criterion?: string }; result: { repo: string; criterion: string; jobId: string | null; started: string[] } }
   // recorded: the decisions it recorded, in words; criteria: every gate criterion it set (one not met with why and the
   // skill's step that fixes it); draft_kept: one is still not met, so the draft was kept (src/api/actions-skills.ts)
   'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[]; rule?: RuleProposed; rule_error?: string; recorded?: string; criteria?: SubmitCriterion[]; draft_kept?: boolean } }

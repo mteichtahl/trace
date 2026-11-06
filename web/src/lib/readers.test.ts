@@ -151,6 +151,9 @@ describe('reading the API\'s answers', () => {
       const j = withNext({ kind: 'task', belongs_to: 'you', yours: true, summary: 'x', button: 'Draft the requirements again', ref: { kind: 'action', id: 'requirements.draft' } },
         { drafting: { state: 'stopped', job: { id: 'h.job-1', state: 'lost', error: null }, why: 'It is lost.' } })
       expect(j.next.action).toEqual({ label: 'Draft the requirements again', call: 'requirements.draft' })
+      // trace's criterion that nothing works on: Start it calls journey.start_work (test-esp32 log #161)
+      expect(withNext({ kind: 'task', belongs_to: 'you', yours: true, summary: 'trace is not working on Sign-off: x.', button: 'Start it', ref: { kind: 'action', id: 'journey.start_work' } }).next.action)
+        .toEqual({ label: 'Start it', call: 'journey.start_work' })
       expect(j.drafting).toEqual({ state: 'stopped', jobId: 'h.job-1', jobState: 'lost', why: 'It is lost.' })
       // a reviewer's form of the same step reads the stage: the Define gate's page, a link, never a dead button
       const rev = withNext({ kind: 'task', belongs_to: 'contributors', yours: false, summary: 'x', button: 'Read the stage', ref: { kind: 'gate', id: 'define' } })

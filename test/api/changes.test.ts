@@ -158,8 +158,13 @@ describe('the rules: verdict, recommendation, may_accept', () => {
   })
 
   it('a change that cites a requirement the project does not have says which, and a local name the text defines is the real one', () => {
-    // a numbering of its own, on a line that says it names requirements: R1 to R7 are none of this project's
-    expect(requirementsNamed(ESP32, 'Requirements it covers: R1-R7')).toEqual({ ids: [], unknown: ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'] })
+    // a numbering of its own, even on a line that says it names requirements, is not this project's form: R1 to R7 are
+    // its parts, never said to be requirements it lacks (log #152)
+    expect(requirementsNamed(ESP32, 'Requirements it covers: R1-R7')).toEqual({ ids: [], unknown: [] })
+    // run 2 (#152): a layout change's fit findings near the word "requirements"
+    expect(requirementsNamed(ESP32, 'Layout: fit findings Q1/R4/R5 against the requirements', 'Requirements: REQ-9b1b96. Moved R4 and R5 clear of the case boss.')).toEqual({ ids: ['REQ-9b1b96'], unknown: [] })
+    // a project that numbers its requirements R1, R2 still hears of an R9 it lacks, where a line names requirements
+    expect(requirementsNamed(['R1', 'R2'], 'Requirements: R1, R9', 'R7 sits beside the regulator')).toEqual({ ids: ['R1'], unknown: ['R9'] })
     // an id in the project's own form that is not in its record
     expect(requirementsNamed(ESP32, 'Covers REQ-9b1b96 and REQ-abc123.')).toEqual({ ids: ['REQ-9b1b96'], unknown: ['REQ-abc123'] })
     // "R3 (REQ-9b1b96)": the brief's local name maps to the real id, wherever it is used
@@ -588,7 +593,7 @@ describe('changes.list and change.get', () => {
     const d = await run(USER, 'change.get', { repo: REPO, number: 1 })
     expect(d).toMatchObject({
       // what it holds first (test-esp32 log #144): the fake's change touches a schematic
-      number: 1, summary: ['Changes the design: 1 hardware file', 'extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
+      number: 1, summary: ['Changes the design: 1 hardware file', 'Changes 1 other file: docs/notes.md', 'extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
       files: [{ path: 'hw/power.kicad_sch', kind: 'schematic', status: 'modified' }, { path: 'docs/notes.md', kind: 'text', status: 'added' }],
       checks_list: [{ id: 'cr:100', name: 'build', state: 'passed', summary: 'Built.' }],
       recommendation: { verdict: 'accept', why: 'Its check passed (build), and it can be merged. It covers R1, R2, R3 and R4.' },
@@ -1383,12 +1388,56 @@ describe('a change says what it holds (test-esp32 log #144, #133)', () => {
     ])
   })
 
-  it('a record that is only a record keeps its name, and still says it adds an intent statement', async () => {
+  it('a record that is only a record is named by what it holds, never by its job, and says it adds an intent statement', async () => {
     const p = github.pulls.get(20)!
     p.files = p.files.filter((f) => f.path === DB)
     p.commits = [RECORD]
     const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
-    expect(d.title).toBe(RECORD)
+    // log #14, #59: "trace: the docs specialist's record (job-…)" was its title and its whole summary
+    expect(d.title).toBe('The docs specialist\'s record: 1 intent statement')
     expect((d.summary as string[])[0]).toMatch(/^Adds intent statement INT-wifiprov/)
+    expect((d.summary as string[]).join('\n')).not.toMatch(/job-|specialist's record/)
+  })
+
+  it('a record change brought up to date by a merge is titled by its record, in the list and on its page (log #154)', async () => {
+    const MERGE = `Merge claude/handoff-hobe8233b1531243 into ${HANDOFF} (trace: the project database merged)`
+    const files = github.pulls.get(20)!.files
+    github.add(20, HANDOFF, { title: `${MERGE} (+2 more)` })
+    const p = github.pulls.get(20)!
+    p.files = files
+    p.files = p.files.filter((f) => f.path === DB)
+    p.commits = [MERGE, RECORD, MERGE]
+    const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
+    expect(d.title).toBe('The docs specialist\'s record: 1 intent statement')
+    expect((d.summary as string[]).join('\n')).not.toMatch(/Merge claude/)
+    const listed = ((await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]).find((c) => c.number === 20)
+    expect(listed?.title).toBe('The docs specialist\'s record: 1 intent statement')
+    // with work in it, by the work
+    p.commits = [MERGE, RECORD, 'Case: printed two-part shell']
+    const work = ((await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]).find((c) => c.number === 20)
+    expect(work?.title).toBe('Case: printed two-part shell (+2 more)')
+  })
+
+  it('names the requirements its record adds, and says what every job on its branch did (log #27, #18)', async () => {
+    const dir = mkdtempSync(join(scratch, 'reqs-'))
+    const path = join(dir, 'project.db')
+    writeFileSync(path, withIntent())
+    const db = new DatabaseSync(path)
+    db.exec('CREATE TABLE IF NOT EXISTS requirements (id TEXT PRIMARY KEY, text TEXT NOT NULL, kind TEXT NOT NULL, acceptance TEXT, status TEXT NOT NULL DEFAULT \'proposed\', created REAL NOT NULL, updated REAL NOT NULL)')
+    db.prepare('INSERT INTO requirements (id, text, kind, created, updated) VALUES (?, ?, ?, 1, 1)').run('REQ-a1b2c3', 'The board fits 50 x 35 mm', 'functional')
+    db.close()
+    github.files.set(`${REPO}:${sha(20)}:${DB}`, readFileSync(path))
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-first', { kind: 'task', agent: 'docs', title: 'Draft the intent', state: 'succeeded', branch: HANDOFF, endedAt: now - 300, summary: '- drafted 12 intent statements from your answers' }, now)
+      putJob(d, 'job-mw3ashi6', { kind: 'task', agent: 'docs', title: 'Answer the hand-off', state: 'succeeded', branch: HANDOFF, endedAt: now - 30, summary: '- set the board size\n- split the power' }, now)
+      return { result: null }
+    })
+    const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
+    expect(d.requirements).toContain('REQ-a1b2c3')
+    const summary = d.summary as string[]
+    expect(summary).toContain('Adds requirement REQ-a1b2c3 (proposed): "The board fits 50 x 35 mm"')
+    expect(summary.indexOf('drafted 12 intent statements from your answers')).toBeGreaterThan(-1)
+    expect(summary.indexOf('drafted 12 intent statements from your answers')).toBeLessThan(summary.indexOf('set the board size'))
   })
 })
