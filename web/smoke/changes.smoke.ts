@@ -4,7 +4,9 @@ import { expect, test } from './fixtures'
 
 test('the changes table lists changes and one opens for review @phone', async ({ app, page }) => {
   await app.open(projectPath('/changes'))
-  const row = await app.tableHasRows()
+  const first = await app.tableHasRows()
+  // a change whose checks cannot start offers "Run the checks again" in place of Accept: open one that can be reviewed
+  const row = first.locator('xpath=../*').filter({ visible: true }).filter({ hasNotText: /cannot start/i }).first()
   await row.click()
   await expect(page).toHaveURL(/\/changes\/\d+/)
   await expect(page.getByRole('heading', { name: 'What trace did' })).toBeVisible()
