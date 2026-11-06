@@ -383,6 +383,17 @@ const SYSTEM: Principal = { sub: 'c-svc', email: null, groups: ['trace-users'], 
 const REPO = 'acme/changes'
 
 interface FakePull { detail: PullDetail; status: PullStatus; files: PullFile[]; commits: string[]; runs: CheckRunDetail[] }
+/** The check runs a status's counts are made of (GitHub counts what it lists): 'build' passing, the failing ones by name; none unread. */
+function runsOf(c: PullStatus['checks'], number: number): CheckRunDetail[] {
+  if (!c?.total) return []
+  const run = (name: string, status: string, conclusion: string | null, i: number): CheckRunDetail => ({ name, status, conclusion, summary: null, id: `cr:${number * 100 + i}` })
+  const out: CheckRunDetail[] = []
+  for (let i = 0; i < c.passed; i++) out.push({ ...run(i ? `build ${i + 1}` : 'build', 'completed', 'success', out.length), summary: 'Built.' })
+  for (let i = 0; i < c.failed; i++) out.push(run(c.failing[i] ?? `failing ${i + 1}`, 'completed', 'failure', out.length))
+  for (let i = 0; i < c.running; i++) out.push(run(`running ${i + 1}`, 'in_progress', null, out.length))
+  for (let i = 0; i < c.skipped; i++) out.push(run(`skipped ${i + 1}`, 'completed', 'skipped', out.length))
+  return out
+}
 /** The head sha of change `n` in the fake (40 hex, as GitHub's). */
 const sha = (n: number): string => n.toString(16).padStart(40, 'a')
 
@@ -409,7 +420,7 @@ class ChangesGitHub extends FakeGitHub {
     this.pulls.set(number, {
       detail, status: { number, title, url: detail.url, state: 'open', draft: false, mergeable: detail.mergeable, head, sha: detail.head.sha, updated_at: detail.updated_at, checks: c, ...(o.checks_denied ? { checks_denied: true } : {}) },
       files: [{ path: 'hw/power.kicad_sch', status: 'modified', additions: 10, deletions: 2, patch: null, previous: null }, { path: 'docs/notes.md', status: 'added', additions: 3, deletions: 0, patch: '@@ +1,3 @@', previous: null }],
-      commits: [`${title}\n\ncovers R2`], runs: [{ name: 'build', status: 'completed', conclusion: c && c.failed ? 'failure' : 'success', summary: 'Built.', id: `cr:${number * 100}` }],
+      commits: [`${title}\n\ncovers R2`], runs: runsOf(c, number),
     })
   }
   private live(): void { if (this.down) throw new Error('GitHub is unreachable') }
@@ -614,6 +625,22 @@ describe('changes.list and change.get', () => {
     const none = await run(USER, 'change.get', { repo: REPO, number: 1 })
     expect(none).toMatchObject({ requirements: [], requirements_unknown: ['R8'] })
     expect((none.recommendation as { why: string }).why).not.toMatch(/covers/)
+  })
+
+  it('one count of its checks: the card, the heading and the recommendation count the checks its page lists (test-esp32 #201)', async () => {
+    // GitHub's status counted two workflows; its page lists their jobs: three passed, two skipped
+    github.add(1, 'claude/task-reqs', { checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] } })
+    github.pulls.get(1)!.runs = [
+      { name: 'automerge', status: 'completed', conclusion: 'success', summary: null, id: 'job:1' },
+      { name: 'check', status: 'completed', conclusion: 'success', summary: null, id: 'job:2' },
+      { name: 'tests pass', status: 'completed', conclusion: 'success', summary: null, id: 'job:3' },
+      { name: 'open-pr', status: 'completed', conclusion: 'skipped', summary: null, id: 'job:4' },
+      { name: 'rerun', status: 'completed', conclusion: 'skipped', summary: null, id: 'job:5' },
+    ]
+    const d = await run(USER, 'change.get', { repo: REPO, number: 1 }) as { checks: Record<string, unknown>; checks_list: unknown[]; recommendation: { why: string } }
+    expect(d.checks).toMatchObject({ total: 5, passed: 3, skipped: 2, failed: 0, running: 0 })
+    expect(d.checks_list).toHaveLength(5)
+    expect(d.recommendation.why).toMatch(/^All 3 checks passed \(automerge, check and tests pass\), and it can be merged\./)
   })
 
   it('a change its specialist calls unfinished is listed as that, and its page recommends asking for changes', async () => {

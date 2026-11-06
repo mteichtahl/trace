@@ -63,7 +63,7 @@ describe('what a change holds', () => {
     expect(r.requirements.changed.map((x) => x.id)).toEqual(['REQ-1'])
     expect(r.requirements.added).toEqual([])
     // a database with neither table adds nothing
-    expect(recordChanges(new DatabaseSync(':memory:'), new DatabaseSync(':memory:'))).toEqual({ intent: { added: [], changed: [] }, requirements: { added: [], changed: [] }, tables: [], options: null })
+    expect(recordChanges(new DatabaseSync(':memory:'), new DatabaseSync(':memory:'))).toEqual({ intent: { added: [], changed: [] }, requirements: { added: [], changed: [] }, tables: [], options: null, tested: { requirements: [], tests: [] } })
 
     expect(contentBullets({ paths: PR20, record: r })).toEqual([
       'Changes the design: 2 hardware files and 3 mechanical files',
@@ -161,5 +161,31 @@ describe('a change that holds only a record, or was brought up to date by a merg
     expect(recordRequirementIds(record)).toHaveLength(22)
     expect(recordRequirementIds(null)).toEqual([])
     expect(contentPhrase({ paths: [], record })).toBe('22 requirements')
+  })
+
+  it('a record change that re-runs tests covers the requirements those tests name (test-esp32 #200)', () => {
+    const withReqs = (): DatabaseSync => {
+      const d = db()
+      d.exec('ALTER TABLE test_items ADD COLUMN requirements TEXT')
+      for (const id of ['REQ-f3f79d', 'REQ-4ce9e8', 'REQ-d16b43', 'REQ-other']) d.prepare('INSERT INTO requirements VALUES (?, \'x\', null, \'accepted\', 1)').run(id)
+      const t = d.prepare('INSERT INTO test_items (id, title, method, status, updated, requirements) VALUES (?, ?, \'inspection\', \'pass\', 1, ?)')
+      t.run('TST-029', 'Cost per board', '["REQ-f3f79d"]')
+      t.run('TST-030', 'Cost in all', '["REQ-4ce9e8"]')
+      t.run('TST-020', 'Order cost', '["REQ-d16b43", "REQ-gone"]')
+      t.run('TST-001', 'Boots', '["REQ-other"]')
+      return d
+    }
+    const design = withReqs()
+    const head = withReqs()
+    // the cost tests re-run: new results for TST-029 and TST-030, and TST-020's row changed (its last run)
+    head.prepare('INSERT INTO test_results VALUES (\'run-29\', \'TST-029\', \'pass\', \'ok\', 2)').run()
+    head.prepare('INSERT INTO test_results VALUES (\'run-30\', \'TST-030\', \'pass\', \'ok\', 2)').run()
+    head.prepare('UPDATE test_items SET updated=2 WHERE id=\'TST-020\'').run()
+    const record = recordChanges(design, head)
+    expect(record.tested).toEqual({ requirements: ['REQ-d16b43', 'REQ-f3f79d', 'REQ-4ce9e8'], tests: ['TST-020', 'TST-029', 'TST-030'] })
+    // only the requirements the record has, and none for tests it does not touch
+    expect(recordRequirementIds(record)).toEqual(['REQ-d16b43', 'REQ-f3f79d', 'REQ-4ce9e8'])
+    // an older record change read before this (no tested field) still reads
+    expect(recordRequirementIds({ intent: { added: [], changed: [] }, requirements: { added: [], changed: [] } })).toEqual([])
   })
 })

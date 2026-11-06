@@ -66,7 +66,7 @@ import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 import { assertNotHeld } from './held.js'
 import { draftingJobs } from './drafting.js'
-import { plainTitle } from '../core/plain-words.js'
+import { shownJobTitle } from '../core/plain-words.js'
 import { type QueueFile, WAITS_FOR_AGENT, queuedHandle, readQueue, startQueued } from './agent-queue.js'
 
 export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'] as const
@@ -83,13 +83,19 @@ const DAY_S = 86_400
 
 export type ViewState = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'aborted' | 'lost'
 
-/** What a job is for, in a line, where its title is a prompt (the requirements drafting's is several sentences). */
+/**
+ * What a job is for, in a line: the headline it was started with, or for a row whose title is a prompt (written before
+ * titles were headlines; the requirements drafting's is several sentences) its first plain sentence (core
+ * plain-words.ts shownJobTitle). Every surface that names a job names it by this (jobLine), never by the prompt.
+ */
 export const DRAFTING_HEADLINE = 'Drafting the requirements from your intent'
 export function headlineOf(j: Pick<JobRow, 'kind' | 'title' | 'parentJob' | 'payload'>): { headline?: string } {
   if (draftingJobs([j as JobRow]).length) return { headline: DRAFTING_HEADLINE }
-  const line = plainTitle(j.title)
+  const line = shownJobTitle(j)
   return line && line !== j.title.replace(/\.$/, '') ? { headline: line } : {}
 }
+/** A job as a person reads its name: its headline, else its title. */
+export const jobLine = (j: Pick<IndexedJob, 'title' | 'headline'>): string => j.headline ?? j.title
 
 /** One job as the app reads it. */
 export interface IndexedJob extends JobView {
@@ -268,8 +274,8 @@ export function agentViews(jobs: readonly IndexedJob[], facts: AgentFacts, answe
     const name = AGENT_WORDS[id] ?? id
     const [status, says]: [AgentStatus, string] = s ? ['stuck', `Stuck: ${s.text}`]
       : q ? ['waiting_person', `Waiting on a person: ${q.text}`]
-        : now.length ? ['working', `Working on ${now.map((j) => `"${j.title}"`).join(', ')}`]
-          : queue.length ? ['queued', `${queue.length} queued; next: "${queue[0]?.title ?? ''}"`]
+        : now.length ? ['working', `Working on ${now.map((j) => `"${jobLine(j)}"`).join(', ')}`]
+          : queue.length ? ['queued', `${queue.length} queued; next: "${queue[0] ? jobLine(queue[0]) : ''}"`]
             : ['idle', 'Idle']
     return {
       id, name, status, says: says.slice(0, 300), now: now.map((j) => j.id), queue: queue.map((j) => j.id),
@@ -395,7 +401,7 @@ export async function restartLost(ctx: Context, repo: string, row: JobRow, rows:
     if (o.auto && rec) {
       decide(db, {
         kind: 'job.restarted', stage: rec.journey.currentStage, ref: row.id, by: 'trace', detail: { job: row.id, auto: true, attempt, branch: branch ?? null },
-        summary: `trace started "${row.title}" again on its own${where}: it ended without finishing and left no change. If this attempt stops too, trace asks you.`,
+        summary: `trace started "${shownJobTitle(row)}" again on its own${where}: it ended without finishing and left no change. If this attempt stops too, trace asks you.`,
       })
     }
     return { result: { claimed: true, why: '' } }
@@ -404,15 +410,15 @@ export async function restartLost(ctx: Context, repo: string, row: JobRow, rows:
   const jobs = await ctx.deps.jobs()
   const started = await jobs.startJob({
     kind: 'task', repository: repo, request: p.data.request, requestedBy: p.data.requestedBy, ...(p.data.requestedBySub ? { requestedBySub: p.data.requestedBySub } : {}),
-    ...(agent ? { agent } : {}), ...(branch ? { branch } : {}), restart: { job: row.id, by: o.by }, attempt,
+    ...(p.data.headline ? { headline: p.data.headline } : {}), ...(agent ? { agent } : {}), ...(branch ? { branch } : {}), restart: { job: row.id, by: o.by }, attempt,
   }).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) }))
   await writeJourney(ctx, repo, (db) => {
     const rec = loadJourney(db)
     if (!started.accepted) {
       putControl(db, { job: row.id, by: o.by, at: Date.now() / 1000, restartedBy: null, restartedAt: null })
-      if (o.auto && rec) decide(db, { kind: 'job.restart_failed', stage: rec.journey.currentStage, ref: row.id, by: 'trace', detail: { job: row.id, reason: started.reason ?? null }, summary: `trace could not start "${row.title}" again: ${started.reason ?? 'the job was not accepted'}. Start it again or dismiss it on the overview.` })
+      if (o.auto && rec) decide(db, { kind: 'job.restart_failed', stage: rec.journey.currentStage, ref: row.id, by: 'trace', detail: { job: row.id, reason: started.reason ?? null }, summary: `trace could not start "${shownJobTitle(row)}" again: ${started.reason ?? 'the job was not accepted'}. Start it again or dismiss it on the overview.` })
     } else if (!o.auto && rec) {
-      decide(db, { kind: 'job.restarted', stage: rec.journey.currentStage, ref: row.id, by: o.by, detail: { job: row.id, auto: false, attempt, branch: branch ?? null, new_job: started.jobId }, summary: `${o.by} started "${row.title}" again${where}: it ended without finishing.` })
+      decide(db, { kind: 'job.restarted', stage: rec.journey.currentStage, ref: row.id, by: o.by, detail: { job: row.id, auto: false, attempt, branch: branch ?? null, new_job: started.jobId }, summary: `${o.by} started "${shownJobTitle(row)}" again${where}: it ended without finishing.` })
     }
     return { result: {} }
   }).catch(() => undefined)
@@ -427,7 +433,7 @@ export async function restartLost(ctx: Context, repo: string, row: JobRow, rows:
  * that would have the person carry on, or say trace is working, gives way: a question, a gate, a change to review and a
  * failure stay first, and so does drafting the requirements again (its own action). `lost`: openLostJobs.
  */
-export function lostJobStep(next: NextStep, lost: readonly Pick<IndexedJob, 'id' | 'title' | 'agentName' | 'kind' | 'parentJob' | 'handoff'>[], viewer: Pick<Viewer, 'admin' | 'part'>, canRestart: (id: string) => boolean): NextStep {
+export function lostJobStep(next: NextStep, lost: readonly Pick<IndexedJob, 'id' | 'title' | 'headline' | 'agentName' | 'kind' | 'parentJob' | 'handoff'>[], viewer: Pick<Viewer, 'admin' | 'part'>, canRestart: (id: string) => boolean): NextStep {
   // one that can be started again first: the button then does what the step says
   const j = lost.find((x) => canRestart(x.id)) ?? lost[0]
   if (!j || (next.kind !== 'task' && next.kind !== 'working') || next.ref?.kind === 'action') return next
@@ -436,7 +442,7 @@ export function lostJobStep(next: NextStep, lost: readonly Pick<IndexedJob, 'id'
   const more = lost.length > 1 ? ` ${lost.length - 1} more ${lost.length === 2 ? 'job' : 'jobs'} ended the same way: see the overview.` : ''
   return {
     kind: 'task', belongs_to: mine ? 'you' : 'contributors', yours: mine,
-    summary: `${j.agentName ? `The ${j.agentName} job` : 'A job'} "${j.title}" ended without finishing: trace lost contact with it, and nothing is doing its work now.${more}`,
+    summary: `${j.agentName ? `The ${j.agentName} job` : 'A job'} "${jobLine(j)}" ended without finishing: trace lost contact with it, and nothing is doing its work now.${more}`,
     why: 'Until it is started again, nothing does its work, and the steps that wait on it wait too.',
     recommendation: can ? 'trace recommends starting it again: it carries on from what the lost attempt left on its branch.' : null,
     button: mine ? (can ? 'Start it again' : 'Dismiss it') : 'Read the stage',
@@ -496,7 +502,7 @@ export function jobControls(j: Pick<JobView, 'state' | 'kind'>, jobs: Pick<JobsA
 export const withControls = <J extends JobView>(j: J, jobs: Pick<JobsApi, 'cancel' | 'pause'>): J & { controls: JobOp[] } => ({ ...j, controls: jobControls(j, jobs) })
 
 /** What Resume needs of a paused task's recorded request (the rest of it, its kind and project, is checked apart). */
-const Resumable = TaskPayload.pick({ request: true, requestedBy: true, requestedBySub: true, agent: true, branch: true }).loose()
+const Resumable = TaskPayload.pick({ request: true, headline: true, requestedBy: true, requestedBySub: true, agent: true, branch: true }).loose()
 
 export const JOB_ACTIONS = {
   'jobs.list': def('read', Repo, async ({ repo }, ctx) => {
@@ -587,7 +593,7 @@ export const JOB_ACTIONS = {
         const p = row?.payload ? Resumable.safeParse(JSON.parse(row.payload)) : null
         if (!row || !p?.success || !row.branch) return answer({ ok: false, state: view.state, reason: 'Its request or branch was not recorded, so it cannot be carried on. Start it again as a new task.' })
         const started = await jobs.startJob({
-          kind: 'task', repository: repo, request: p.data.request, requestedBy: p.data.requestedBy,
+          kind: 'task', repository: repo, request: p.data.request, ...(p.data.headline ? { headline: p.data.headline } : {}), requestedBy: p.data.requestedBy,
           ...(p.data.requestedBySub ? { requestedBySub: p.data.requestedBySub } : {}), ...(p.data.agent ?? row.agent ? { agent: (p.data.agent ?? row.agent) as NonNullable<typeof p.data.agent> } : {}),
           branch: row.branch, resume: { job: row.id, by },
         })

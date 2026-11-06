@@ -33,7 +33,10 @@ export interface NextStepCardProps {
   place?: { index: number; total: number; stage?: string } | null
   /** a change ready to accept, and this person may: "Accept now" beside the primary action */
   onAccept?: () => void
+  /** the accept is on its way: the button says so, with a spinner, and takes no second click */
   accepting?: boolean
+  /** the last accept from the card was refused: the API's reason, kept on the card until the next try */
+  acceptRefused?: string | null
   /** extra content under the summary */
   children?: ReactNode
   /** a guided skill left part-way: "Continue: Schematic finish, step 4 of 6" (Focus mode keeps drafts) */
@@ -45,7 +48,7 @@ export interface NextStepCardProps {
   className?: string
 }
 
-export function NextStepCard({ step, part, run, place, onAccept, accepting, children, resume, callButton, pinned, className }: NextStepCardProps) {
+export function NextStepCard({ step, part, run, place, onAccept, accepting, acceptRefused, children, resume, callButton, pinned, className }: NextStepCardProps) {
   const reviewer = part === 'reviewer' && step.reviewer
   const boxed = !reviewer && !!step.recommend
   const summary = reviewer ? step.reviewer!.summary : boxed ? (step.lead ?? step.summary) : step.summary
@@ -113,9 +116,9 @@ export function NextStepCard({ step, part, run, place, onAccept, accepting, chil
             </Button>
           )}
           {!reviewer && onAccept && (
-            <Button variant="outline" size="lg" className="bg-background" onClick={onAccept} disabled={accepting}>
+            <Button variant="outline" size="lg" className="bg-background" onClick={() => onAccept()} disabled={accepting} aria-busy={accepting || undefined}>
               {accepting && <Loader2 className="animate-spin" aria-hidden />}
-              Accept now
+              {accepting ? 'Accepting…' : 'Accept now'}
             </Button>
           )}
           {!reviewer && !onAccept && step.secondary && (
@@ -124,6 +127,12 @@ export function NextStepCard({ step, part, run, place, onAccept, accepting, chil
             </Button>
           )}
         </div>
+      )}
+      {!reviewer && acceptRefused && !accepting && (
+        <p role="alert" className="mt-3 text-sm text-destructive">
+          <span className="font-semibold">Not accepted: </span>
+          {acceptRefused}
+        </p>
       )}
       {step.after && !reviewer && <p className={cn('mt-4 text-sm text-muted-foreground', pinned && 'mt-3')}>{step.after}</p>}
     </section>
