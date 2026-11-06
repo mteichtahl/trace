@@ -184,6 +184,22 @@ describe('open changes in the journey', () => {
     const meets = withChanges(r, journeyView(r, USER), USER, [change({ number: 20, title: 'the case', criteria: ['layout.fit'] })])
     expect(meets.stages.find((s) => s.id === 'layout')!.steps.some((s) => s.alongside)).toBe(false)
   })
+
+  it('says trace goes on meanwhile only while a job is running on it (test-esp32 #204)', () => {
+    signAll('define', 'architect', 'capture', 'prove')
+    for (const k of ['routed', 'drc', 'lengths', 'renders']) setCriterion(db, `layout.${k}`, 'met', [{ kind: 'run', ref: k }], 'trace')
+    const r = rec()
+    const docs = [change({ number: 18, title: 'Docs: the Layout sections', from: 'the Documentation specialist' })]
+    // a job running on it: trace goes on with it alongside the review
+    const running = withChanges(r, journeyView(r, USER), USER, docs, { workingOn: (id) => id === 'layout.fit' })
+    expect(running.next.after).toMatch(/Meanwhile, trace goes on with: the board fits its enclosure/)
+    // nothing running ("trace is doing" 0): the change only needs accepting, and the step never says trace goes on
+    const idle = withChanges(r, journeyView(r, USER), USER, docs, { workingOn: () => false })
+    expect(idle.next).toMatchObject({ kind: 'review', ref: { kind: 'change', id: '18' } })
+    expect(idle.next.after).not.toMatch(/Meanwhile/)
+    expect(idle.next.after).toMatch(/^Once you accept it, its work counts in the design/)
+    expect(idle.stages.find((s) => s.id === 'layout')!.steps.some((s) => s.alongside)).toBe(false)
+  })
 })
 
 describe('the stage\'s design work left (the documents wait for it)', () => {

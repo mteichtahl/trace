@@ -22,6 +22,15 @@ export const VERDICT: Record<Verdict, { status: Status; label: string }> = {
   coverage_gap: { status: 'warning', label: 'Coverage gap' },
 }
 
+/**
+ * A requirement's verdict in words, with what was set aside said beside a verified one ("Verified · TST-031 waived to
+ * Fabricate"): the verification report's rule (src/tools/verify/verdict.ts), so a waiver is never hidden.
+ */
+export function verdictLabel(row: { verdict: Verdict; note?: string | undefined }): string {
+  const base = VERDICT[row.verdict].label
+  return row.verdict === 'verified' && row.note ? `${base} · ${row.note}` : base
+}
+
 /** The coverage matrix (verify.coverage, a read-only tool run through the `tool` action). */
 export function useCoverage(repo: string) {
   return useQuery({

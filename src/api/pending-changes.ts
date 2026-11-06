@@ -32,10 +32,10 @@ export function pendingOf(open: readonly { change: { number: number; title: stri
  * stopped is lost, not working), each named by its headline (never its prompt: test-esp32 #196). The weekly look for
  * work (sweep) and a specialist's own sub-jobs are left out.
  */
-export function stillWorking(jobs: readonly JobRow[], at = Date.now() / 1000): { id: string; title: string; state: string }[] {
+export function stillWorking(jobs: readonly JobRow[], at = Date.now() / 1000): { id: string; title: string; state: string; worker: string }[] {
   return jobs
     .filter((j) => j.kind !== 'sweep' && !j.parentJob && (j.state === 'queued' || j.state === 'paused' || (j.state === 'running' && isLive(j, at))))
-    .map((j) => ({ id: j.handle ?? j.id, title: shownJobTitle(j), state: j.state }))
+    .map((j) => ({ id: j.handle ?? j.id, title: shownJobTitle(j), state: j.state, worker: j.id }))
 }
 
 /** The requirements changed after the baseline and not agreed again (empty before the baseline is signed). */

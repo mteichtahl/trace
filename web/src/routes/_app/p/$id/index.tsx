@@ -28,7 +28,7 @@ import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
 import { HeldNextCard, useLifecycle } from '@/components/project/lifecycle'
-import { RunLine, runControls, splitRuns } from '@/components/run-line'
+import { RunLine, askingOf, runControls, splitRuns } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
 import { RerunStuck } from '@/components/rerun-stuck'
@@ -149,9 +149,16 @@ function Overview() {
     <EmptyState>trace is not working on anything here right now.</EmptyState>
   ) : (
     <div className="divide-y rounded-xl border">
-      {running.map((r) => (
-        <RunLine key={r.id} run={r} {...runControls(write)} onWatch={(x) => watch.onWatch(x)} />
-      ))}
+      {running.map((r) => {
+        // a job blocked on a person's answer says so, with the question to answer, not "still running" (#197)
+        const asked = askingOf(r, d.questions)
+        const answer = asked && part !== 'reviewer' ? (
+          <Link to="/p/$id/do/$skill" params={{ id, skill: 'question-answer' }} search={{ question: asked.id }} className="shrink-0 text-sm text-primary hover:underline" aria-label={`Answer it: ${asked.text}`}>
+            Answer it
+          </Link>
+        ) : undefined
+        return <RunLine key={r.id} run={r} {...runControls(write)} onWatch={(x) => watch.onWatch(x)} {...(asked ? { waiting: { question: asked, answer } } : {})} />
+      })}
       {watch.sheet}
       {waits.data?.waits.map((w) => (
         <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />

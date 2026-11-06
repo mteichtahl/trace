@@ -18,6 +18,7 @@ import type { StockLine } from '../tools/design/key-parts.js'
 import { parseNets, requirementDecisions, requirementsNow } from '../tools/design/record.js'
 import type { Drawing } from '../tools/kicad/export.js'
 import { type CheckReport, parseDrc, parseErc } from '../tools/kicad/checks.js'
+import { type SetAside, type WaiverRef, requirementVerdict, setAsideWords } from '../tools/verify/verdict.js'
 
 export const hasTable = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
 const rows = (db: DatabaseSync, sql: string, ...args: (string | number)[]): Record<string, unknown>[] => db.prepare(sql).all(...args) as Record<string, unknown>[]
@@ -38,23 +39,29 @@ export interface TraceRequirement {
   why: string
   tests: { id: string; title: string; method: string; status: string; last_run: string | null }[]
   waiver: string | null
+  /** what was set aside on it (tests waived, a waiver on it) and in words, as the verification report says it */
+  set_aside?: SetAside[]
+  note?: string
 }
 
 
 /**
- * Every live requirement (not rejected or obsolete) with its evidence status:
- *   waived     an open waiver on the requirement in the journey, or every one of its tests is waived
+ * Every live requirement (not rejected or obsolete) with its evidence status, by the verification report's own rule
+ * (src/tools/verify/verdict.ts, with the journey's waivers):
+ *   waived     every one of its tests is set aside (waived), or an open waiver stands on it and it is not verified
  *   failing    a test of it failed or errored on its last run
- *   verified   it has tests, and every one not waived passed
+ *   verified   it has tests, and every one not set aside passed; what was set aside is said (`note`: "TST-031 waived
+ *              to Fabricate"), so a waiver on a verified requirement is never hidden
  *   untested   no test yet, or a test has not run (planned, blocked)
  */
 /** The waivers a requirement's evidence reads: the journey record's, or the journey as the ontology has it. */
-export type RequirementWaivers = { waivers: readonly { id: string; closedAt: number | null; targetKind: string; target: string; severity: string; reason: string }[] } | null
+export type RequirementWaivers = { waivers: readonly { id: string; closedAt: number | null; targetKind: string; target: string; severity: string; reason: string; caughtWhere?: string | null }[] } | null
 
 export function requirementEvidence(db: DatabaseSync, r: RequirementWaivers): TraceRequirement[] {
   if (!hasTable(db, 'requirements')) return []
   const tests = hasTable(db, 'test_items') ? rows(db, 'SELECT id, title, requirements, method, status, last_run FROM test_items ORDER BY id') : []
-  const waived = new Map((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'requirement').map((w) => [w.target, w]))
+  const waivers: WaiverRef[] = (r?.waivers ?? []).map((w) => ({ id: w.id, targetKind: w.targetKind, target: w.target, caughtWhere: w.caughtWhere ?? null, closedAt: w.closedAt }))
+  const byId = new Map((r?.waivers ?? []).map((w) => [w.id, w]))
   const all = rows(db, 'SELECT * FROM requirements ORDER BY id')
   const decided = requirementDecisions(loadDesignDecisions(db), requirementsNow(all))
   return all.flatMap((q) => {
@@ -67,19 +74,20 @@ export function requirementEvidence(db: DatabaseSync, r: RequirementWaivers): Tr
     const mine = tests.filter((t) => list(t.requirements).includes(id)).map((t) => ({
       id: String(t.id), title: String(t.title), method: String(t.method), status: String(t.status), last_run: t.last_run === null ? null : String(t.last_run),
     }))
-    const w = waived.get(id)
-    const active = mine.filter((t) => t.status !== 'waived')
-    const failed = active.find((t) => t.status === 'fail' || t.status === 'error')
+    const v = requirementVerdict(id, mine, waivers)
+    const w = v.waiver ? byId.get(v.waiver.id) : undefined
+    const note = setAsideWords(v.set_aside)
+    const failed = v.active.find((t) => t.status === 'fail' || t.status === 'error')
     let evidence: Evidence
     let why: string
-    if (w) { evidence = 'waived'; why = `Waived (${w.severity}): ${w.reason}` }
-    else if (mine.length && !active.length) { evidence = 'waived'; why = 'Every test of it is waived.' }
+    if (v.verdict === 'verified') { evidence = 'verified'; why = `${v.active.map((t) => t.id).join(', ')} passed${note ? `; ${note}` : ''}.` }
+    else if (v.verdict === 'waived') { evidence = 'waived'; why = w ? `Waived (${w.severity}): ${w.reason}` : 'Every test of it is waived.' }
     else if (failed) { evidence = 'failing'; why = `${failed.id} ${failed.status === 'fail' ? 'failed' : 'errored'} on its last run.` }
-    else if (active.length && active.every((t) => t.status === 'pass')) { evidence = 'verified'; why = `${active.map((t) => t.id).join(', ')} passed.` }
-    else { evidence = 'untested'; why = mine.length ? `${active.filter((t) => t.status !== 'pass').map((t) => t.id).join(', ')} not run yet.` : 'No test is planned for it yet.' }
+    else { evidence = 'untested'; why = mine.length ? `${v.active.filter((t) => t.status !== 'pass').map((t) => t.id).join(', ')} not run yet.` : 'No test is planned for it yet.' }
     return {
       id, text: String(q.text), kind: String(q.kind), acceptance: q.acceptance === null ? null : String(q.acceptance), source: q.source === null ? null : String(q.source),
       status: String(q.status), evidence, why, tests: mine, waiver: w?.id ?? null,
+      ...(v.set_aside.length ? { set_aside: v.set_aside } : {}), ...(note ? { note } : {}),
     }
   })
 }

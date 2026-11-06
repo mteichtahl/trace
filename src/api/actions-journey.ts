@@ -69,7 +69,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
-  confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
+  confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withAsks, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -89,7 +89,7 @@ import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, ha
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
 import { dueRetry, stuckFor, stuckLook } from './stuck-checks.js'
-import { waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
+import { runningOn, waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
 import { OWNED_REFUSED, OWNED_STARTED, type OwnedDue, ownedDue, ownedStep, reviewWaits, stageSince } from './owned-work.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
@@ -686,7 +686,7 @@ export const JOURNEY_ACTIONS = {
     const changed = withChanges(r, seen ? journeyView(seen, viewer) : journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
-    })))
+    })), { workingOn: jobs.error ? undefined : (id) => runningOn(jobs.rows, id) }) // "Meanwhile, trace goes on with" only over a job running on it (#204)
     // a stage is reviewed and signed only once its work is settled: its gate is locked while a change of it (or an
     // earlier stage) is open or an agent is still working, and the gates into Fabricate while anything is changing
     // a question waiting on a change that is no longer open is out of date (test-esp32 #108); only when the open
@@ -834,7 +834,9 @@ export const JOURNEY_ACTIONS = {
       ])
       const fab = guardsFabricate(now0, a.gate)
       const why = open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null) ?? (fab && changedReqs === null ? 'the requirements could not be read' : null)
-      pending = pendingOf(open.list, why, fab ? (changedReqs ?? []) : [], jobs.rows)
+      // a job waiting on an open question says so in the refusal, as on the gate page (#197)
+      const viewer = await viewerOf(ctx.principal, a.repo)
+      pending = withAsks(pendingOf(open.list, why, fab ? (changedReqs ?? []) : [], jobs.rows), journeyView(now0, viewer, undefined, facts).questions)
     }
     // a criterion met on evidence that is now out of date does not count until it is checked again
     const staleRun = now0 ? await evidenceStaleness(ctx, a.repo, facts ? mergeAgentFacts(now0, facts) : now0) : undefined

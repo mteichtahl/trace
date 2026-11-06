@@ -20,6 +20,8 @@ export interface GateMore extends Gate {
   record?: { notes?: string; acknowledged?: string[]; returned?: { by: string; at: string; reason: string } }
   /** the work still pending that holds it (open changes, jobs still working): while any, it is not reviewed or signed */
   pending?: string[]
+  /** the jobs among it that wait on an open question (#197): the question, its job, and its line in `pending` */
+  asking?: { question: string; text: string; job: string; line: string }[]
 }
 
 /** Journey extras the Decisions tab reads (assumed part of journey.get: "decisions log"). */
@@ -213,6 +215,8 @@ export interface CoverageRow {
   verdict: Verdict
   tests: { id: string; method: string; status: string; last_run: string | null }[]
   points?: { id: string; hits: number; goal: number; met: boolean }[]
+  /** what was set aside on it, in words ("TST-031 waived to Fabricate"): said beside a verified verdict */
+  note?: string
   /** assumed extras where the project has them */
   source?: string | null
   priority?: 'must' | 'should'
@@ -235,6 +239,8 @@ export interface TracedRequirement {
   why: string
   tests: { id: string; title: string; method: string; status: string; last_run: string | null }[]
   waiver: string | null
+  /** what was set aside on it, in words ("TST-031 waived to Fabricate"), the verification report's own words */
+  note?: string
 }
 
 /** One intent line (requirements.trace): agents propose it, a person accepts, edits or rejects it (Intent builder). */
@@ -249,7 +255,8 @@ export interface TraceIntent {
   /** what the Intent builder flags: needs_number, vague, conflict, not_testable, interface_incomplete */
   flags?: string[]
   source?: { kind: 'person' | 'brief' | 'document' | 'design'; ref?: string; quote?: string; page?: number } | null
-  decided?: { by: string; at: string; reason?: string }
+  /** `gate`: the person accepted these words by signing that gate after they were last written */
+  decided?: { by: string; at: string; reason?: string; gate?: string }
   /** a person left it without a requirement, with this reason */
   uncovered?: string
   /** a requirement is derived from it */

@@ -712,6 +712,8 @@ export interface GateView {
   may_sign: boolean; missing: string[]
   /** the pending work that holds it (withPending): while any, it is neither reviewed nor signed */
   pending?: string[]
+  /** the jobs among it that wait on an open question: the question, the job, whose answer, and its line in `pending` */
+  asking?: { question: string; text: string; job: string; for: QuestionView['for']; line: string }[]
 }
 /** What a stage is for, in a person's words (src/core/stage-guides.ts), with what comes after it in this project. */
 export type StageGuideView = StageGuide
@@ -841,10 +843,41 @@ export interface PendingChanges {
    */
   changes: readonly { number: number; title: string; ready?: boolean; stage?: StageId | null | undefined; content?: 'record' | 'docs' | null | undefined }[]
   requirements: readonly string[]
-  /** the agents' jobs still queued, running or paused on the project (absent: not looked at) */
-  work?: readonly { id: string; title: string; state: string }[] | undefined
+  /**
+   * the agents' jobs still queued, running or paused on the project (absent: not looked at). `worker`: the job index's
+   * own id (`id` is the API's), the one a job's questions name; `asking`: the open question it waits on (withAsks)
+   */
+  work?: readonly PendingWork[] | undefined
   unknown?: string | null | undefined
 }
+export interface PendingWork { id: string; title: string; state: string; worker?: string | undefined; asking?: PendingAsk | undefined }
+/** An open question a job still working waits on: until a person answers it, the job does not go on. */
+export interface PendingAsk { question: string; text: string; for: QuestionView['for'] }
+
+/** Whether a question asked in job `job` (the id its agent had) is this job's: by the API's id, the index's, or a handle ending in it. */
+const askedIn = (w: Pick<PendingWork, 'id' | 'worker'>, job: string): boolean => w.id === job || w.worker === job || w.id.endsWith(`.${job}`)
+
+/**
+ * The pending work with the open question each job waits on (#197: a job blocked on a person's answer read as "still
+ * working"). The newest open question asked in the job counts; a stuck report the same, in its plain words. Pure.
+ */
+export function withAsks<P extends PendingChanges | null | undefined>(pending: P, questions: readonly QuestionView[]): P {
+  if (!pending?.work?.length) return pending
+  const open = questions.filter((q) => !q.answered && q.job_id).sort((a, b) => b.asked_at.localeCompare(a.asked_at))
+  if (!open.length) return pending
+  const work = pending.work.map((w) => {
+    const q = open.find((x) => askedIn(w, x.job_id!))
+    return q ? { ...w, asking: { question: q.id, text: q.summary ?? q.text, for: q.for } } : w
+  })
+  return { ...pending, work }
+}
+
+/** Whose answer a job waits on, in words: "your answer", "an answer from the admins". */
+const whoseAnswer = (f: QuestionView['for']): string =>
+  f === 'you' ? 'your answer' : f === 'admins' ? 'an answer from the admins' : f === 'contributors' ? 'an answer from the contributors' : 'an answer from a person on the project'
+
+/** The pending line of a job waiting on a question: what the gate page shows, with Answer it beside it. */
+export const askingLine = (w: { title: string; asking: PendingAsk }): string => `"${w.title}" is waiting on ${whoseAnswer(w.asking.for)}: ${w.asking.text.replace(/\s+/g, ' ').trim()}`
 
 const ordOf = (r: Pick<JourneyRecord, 'stages'>, id: StageId): number => r.stages.find((s) => s.id === id)?.ord ?? -1
 
@@ -904,10 +937,16 @@ export function pendingBlockers(r: Pick<JourneyRecord, 'stages' | 'gates'>, id: 
   if (c) out.push(fab
     ? `Accept or discard ${plural(c, 'open change')} from trace first (${quoted(open)}): what goes to Fabricate must be the design as accepted, with nothing still changing.`
     : `Accept or discard ${plural(c, 'open change')} first (${quoted(open)}): a stage is reviewed and signed once its work is settled.`)
-  const w = pending.work ?? []
+  // a job waiting on a person's answer is not "still working": it says so, and whose answer (#197)
+  for (const a of pendingAsking(pending)) out.push(askingLine(a))
+  const w = (pending.work ?? []).filter((x) => !x.asking)
   if (w.length) out.push(`Wait for ${plural(w.length, 'job')} still working to finish, or stop ${w.length === 1 ? 'it' : 'them'} (${quoted(w)}): the evidence may still change.`)
   return out
 }
+
+/** The pending jobs that wait on a person's answer, each with its question. */
+const pendingAsking = (pending: PendingChanges): (PendingWork & { asking: PendingAsk })[] =>
+  (pending.work ?? []).filter((x): x is PendingWork & { asking: PendingAsk } => !!x.asking)
 
 /**
  * The view with the pending work applied to the gates: each unsigned gate it holds says what is pending (`pending`,
@@ -915,12 +954,16 @@ export function pendingBlockers(r: Pick<JourneyRecord, 'stages' | 'gates'>, id: 
  * settling the work instead: a changed requirement (Requirements review), the oldest open change (ready first), or
  * watching the job still working.
  */
-export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: JourneyView, viewer: Viewer, pending: PendingChanges | null | undefined): JourneyView {
-  if (!pending) return view
+export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: JourneyView, viewer: Viewer, pending0: PendingChanges | null | undefined): JourneyView {
+  if (!pending0) return view
+  // the jobs waiting on an open question say so, with the question to answer (#197)
+  const pending = withAsks(pending0, view.questions)
+  const asking = pendingAsking(pending)
   const gates = view.gates.map((g) => {
     // a gate of a later stage (queued) is not held yet, except the gates into Fabricate, which always show the lock
     const extra = g.signature || (g.state === 'queued' && !guardsFabricate(r, g.id)) ? [] : pendingBlockers(r, g.id, pending)
-    return extra.length ? { ...g, may_sign: false, pending: extra, missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
+    const asks = asking.filter((a) => extra.includes(askingLine(a))).map((a) => ({ question: a.asking.question, text: a.asking.text, job: a.title, for: a.asking.for, line: askingLine(a) }))
+    return extra.length ? { ...g, may_sign: false, pending: extra, ...(asks.length ? { asking: asks } : {}), missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
   })
   let next = view.next
   const locked = next.kind === 'gate' && next.ref?.kind === 'gate' ? gates.find((g) => g.id === next.ref?.id && pendingBlockers(r, g.id, pending).length) : undefined
@@ -939,6 +982,14 @@ export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: Jo
         ...base, kind: change.ready ? 'review' : 'task',
         summary: `${cap(locked.title)} is locked: ${plural(open.length, 'change')} ${open.length === 1 ? 'is' : 'are'} still open. Accept or discard ${open.length === 1 ? 'it' : 'them'} first.`,
         recommendation: change.ready ? `Review "${change.title}" first.` : null, button: mine ? 'Review the change' : 'Read the change', ref: { kind: 'change', id: String(change.number) },
+      }
+    } else if (work.length && work.every((w) => w.asking) && work.some((w) => w.asking?.for === 'you')) {
+      // every job left waits on a question, one of them on this person's answer: answering is the step (#197)
+      const a = work.find((w) => w.asking?.for === 'you')!
+      next = {
+        ...base, kind: 'answer', belongs_to: 'you', yours: true,
+        summary: `${cap(locked.title)} is locked: "${a.title}" is waiting on your answer. ${a.asking!.text}`,
+        recommendation: null, button: 'Answer it', ref: { kind: 'question', id: a.asking!.question }, job_id: a.id,
       }
     } else if (work[0]) {
       next = {
@@ -1614,7 +1665,14 @@ export interface OpenChange { number: number; title: string; from: string; crite
  * is a task or trace working, and a change is open and ready, the next step becomes `review` of the oldest ready one.
  * The current stage's now and next, and the next step's place and what follows, are worked out again.
  */
-export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer, changes: readonly OpenChange[]): JourneyView {
+export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer, changes: readonly OpenChange[], o: {
+  /**
+   * Whether a job of trace's is running on the criterion now (journey.get: from the job index). A step that says trace
+   * "goes on" with it meanwhile needs one: with nothing running, the review is all that is left, and the step says what
+   * follows it (test-esp32 #204: "Meanwhile, trace goes on with …" while trace was doing nothing). Left out: assumed.
+   */
+  workingOn?: ((criterion: string) => boolean) | undefined
+} = {}): JourneyView {
   if (!changes.length) return view
   const r = withoutDismissed(r0)
   const cur = r.journey.currentStage
@@ -1651,7 +1709,7 @@ export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer
   here.steps = markSteps(here.steps, next.ref)
   // trace was working on a criterion the change under review does not meet: it goes on with it meanwhile, so that
   // step is trace's alongside the review, not after it
-  const working = view.next.kind === 'working' && view.next.ref?.kind === 'criterion' ? view.next.ref.id : null
+  const working = view.next.kind === 'working' && view.next.ref?.kind === 'criterion' && (o.workingOn?.(view.next.ref.id) ?? true) ? view.next.ref.id : null
   const reviewed = next.kind === 'review' ? changes.find((c) => String(c.number) === next.ref?.id) : undefined
   const along = working && reviewed && !reviewed.criteria.includes(working) ? here.steps.find((s) => pending(s) && s.ref?.kind === 'criterion' && s.ref.id === working) : undefined
   if (along) along.alongside = true

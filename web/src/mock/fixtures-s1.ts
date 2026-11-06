@@ -49,6 +49,8 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
       crit('ar1', 'At least two options compared on fixed criteria', 'record', 'record', 'Options A, B and C scored on 6 criteria, weights fixed before scoring.', true),
       crit('ar2', 'Every requirement maps to a block', 'record', 'record', '24 of 24 requirements map to a block in option B.', true),
       crit('ar3', 'Every key part in stock for 10 boards', 'run_3c19', 'run', 'All 5 key parts in stock at LCSC.', true),
+      // a long chip beside its criterion (test-esp32 #195: the criterion wrapped one word a line)
+      { ...crit('ar4', 'The design rule check is clean, or each finding is waived', 'run_3d02', 'run', 'DRC on push 2b9e04: 0 errors, 2 warnings.', true), evidence: { kind: 'run', label: 'kicad_drc: 0 errors, 0 unconnected, 0 parity, 2 warnings', id: 'run_3d02', summary: 'DRC on push 2b9e04: 0 errors, 2 warnings.' } },
     ],
     record: { acknowledged: [] },
   },
@@ -97,8 +99,10 @@ const FIT = (ref: string, text: string) => ({ id: `layout.fit@urn:trace:acme:acm
 export const PANEL_GATE: Partial<GateMore> = {
   pending: [
     '2 open record changes: #21 (case settings) and #22 (lid-mounted display).',
-    'The Implementation specialist\'s job is waiting for your answer on the case fit.',
+    // the job waiting on the case fit question: Answer it beside its line (#197)
+    '"Fit the board to the case" is waiting on your answer: Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?',
   ],
+  asking: [{ question: 'aq7c2f0e9d4b1a6c8', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', job: 'Fit the board to the case', line: '"Fit the board to the case" is waiting on your answer: Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?' }],
   criteria: [
     crit('pf1', 'Timing closes at 100 MHz', 'run_t100', 'run', 'Timing: worst slack +0.42 ns.', false),
     crit('pf2', 'Every requirement that can be checked is verified or waived', 'record', 'record', '14 of 14 verified.', false),
@@ -231,7 +235,8 @@ export const COVERAGE: CoverageResult = {
     R('R-004', 'Runs from one 3.7 V lithium cell, 2,000 mAh', 'electrical', 'Input 3.0 to 4.2 V', 'verified', ['TST-004']),
     R('R-006', 'Reaches the gateway at 2 km line of sight', 'functional', '≥ 2 km at SF10, 14 dBm, 10 % packet loss', 'failing', ['TST-H06'], 'fail'),
     R('R-008', 'Charges and configures over USB-C', 'functional', 'USB 2.0 full speed; 500 mA charge', 'untested', ['TST-H08']),
-    R('R-011', 'Battery life at least 2 years at one reading every 15 minutes', 'electrical', '≥ 2 years at 25 °C', 'verified', ['TST-011']),
+    // verified on its passing test, its field test waived to a later stage: the verdict says so (verify verdict.ts)
+    { ...R('R-011', 'Battery life at least 2 years at one reading every 15 minutes', 'electrical', '≥ 2 years at 25 °C', 'verified', ['TST-011']), note: 'TST-H11 waived to Fabricate' },
     R('R-014', 'Output capacitor at least 2.2 µF on the 3V3 rail', 'electrical', 'C ≥ 2.2 µF after derating', 'waived', ['TST-014']),
     R('R-017', 'Meets CISPR 32 class B radiated emissions', 'emc', 'Below the class B limit with 6 dB margin (estimate)', 'untested'),
   ],
@@ -579,6 +584,17 @@ QUESTIONS['acme/panel-controller'] = {
  * merged since).
  */
 export const QUESTIONS_BY_ID: Record<string, NonNullable<SkillView['question']>> = {
+  // the panel controller's case fit, which its job waits on (#197)
+  'aq7c2f0e9d4b1a6c8': {
+    id: 'aq7c2f0e9d4b1a6c8', to: 'you', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', askedAt: ago(14 * MIN), blocks: 'the layout gate',
+    context: 'Asked by the Mechanical specialist.',
+    recommended: { id: 'move', label: 'Move the window' },
+    options: [
+      { id: 'move', label: 'Move the window', detail: 'Clears Q1, R4 and R5; the lid drawing changes.' },
+      { id: 'waive', label: 'Waive the findings', detail: 'The parts stay visible through the window.' },
+    ],
+    sources: [{ kind: 'run', label: 'case fit, run_fit7' }],
+  },
   'aq0e1ed2c4a7b9f31': {
     id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * MIN), blocks: 'the schematic',
     context: 'Asked by the Implementation specialist.',

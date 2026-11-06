@@ -16,7 +16,7 @@
 import type { JobRow } from '../core/job-index.js'
 import { isLive } from '../core/job-index.js'
 import { type GateView, type NextStep, STAGE_NAMES, type StageView, type StepOwner, type Viewer } from '../core/journey.js'
-import type { ChangeSummary } from './changes.js'
+import { type ChangeSummary, criteriaNamed, jobRequest } from './changes.js'
 import { waitedFor } from './stuck-checks.js'
 
 type Change = Pick<ChangeSummary, 'number' | 'title' | 'stuck' | 'checks' | 'state'>
@@ -28,6 +28,13 @@ const named = (cs: readonly Change[]): string => `${cs.length === 1 ? 'change' :
 /** How many of trace's jobs are doing something now: queued, or running and alive (paused and lost ones are not). */
 export const workingNow = (rows: readonly JobRow[], at = Date.now() / 1000): number =>
   rows.filter((j) => j.kind !== 'sweep' && !j.parentJob && (j.state === 'queued' || (j.state === 'running' && isLive(j, at)))).length
+
+/**
+ * Whether one of trace's jobs is running on the criterion `id` now: running and alive (queued, paused and lost ones are
+ * not), and its request names that criterion or none (a job that names none may be on it). Pure.
+ */
+export const runningOn = (rows: readonly JobRow[], id: string, at = Date.now() / 1000): boolean =>
+  rows.some((j) => j.kind !== 'sweep' && !j.parentJob && j.state === 'running' && isLive(j, at) && ((named) => !named.length || named.includes(id))(criteriaNamed(jobRequest(j), j.title)))
 
 /** The findings on the criterion `id` that a person can waive (its evidence of kind finding), while it is not met. */
 export function findingsOf(gates: readonly Pick<GateView, 'criteria'>[], id: string): { text: string; findings: number } | null {
