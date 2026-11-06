@@ -97,8 +97,10 @@ const FIT = (ref: string, text: string) => ({ id: `layout.fit@urn:trace:acme:acm
 export const PANEL_GATE: Partial<GateMore> = {
   pending: [
     '2 open record changes: #21 (case settings) and #22 (lid-mounted display).',
-    'The Implementation specialist\'s job is waiting for your answer on the case fit.',
+    // the job waiting on the case fit question: Answer it beside its line (#197)
+    '"Fit the board to the case" is waiting on your answer: Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?',
   ],
+  asking: [{ question: 'aq7c2f0e9d4b1a6c8', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', job: 'Fit the board to the case', line: '"Fit the board to the case" is waiting on your answer: Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?' }],
   criteria: [
     crit('pf1', 'Timing closes at 100 MHz', 'run_t100', 'run', 'Timing: worst slack +0.42 ns.', false),
     crit('pf2', 'Every requirement that can be checked is verified or waived', 'record', 'record', '14 of 14 verified.', false),
@@ -579,6 +581,17 @@ QUESTIONS['acme/panel-controller'] = {
  * merged since).
  */
 export const QUESTIONS_BY_ID: Record<string, NonNullable<SkillView['question']>> = {
+  // the panel controller's case fit, which its job waits on (#197)
+  'aq7c2f0e9d4b1a6c8': {
+    id: 'aq7c2f0e9d4b1a6c8', to: 'you', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', askedAt: ago(14 * MIN), blocks: 'the layout gate',
+    context: 'Asked by the Mechanical specialist.',
+    recommended: { id: 'move', label: 'Move the window' },
+    options: [
+      { id: 'move', label: 'Move the window', detail: 'Clears Q1, R4 and R5; the lid drawing changes.' },
+      { id: 'waive', label: 'Waive the findings', detail: 'The parts stay visible through the window.' },
+    ],
+    sources: [{ kind: 'run', label: 'case fit, run_fit7' }],
+  },
   'aq0e1ed2c4a7b9f31': {
     id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * MIN), blocks: 'the schematic',
     context: 'Asked by the Implementation specialist.',

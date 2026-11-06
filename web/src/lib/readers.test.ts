@@ -244,3 +244,17 @@ describe('"Use <option>" arrives with the option chosen (#198)', () => {
     expect(withChosen(to, undefined, 'aq1', 'Use GND-VCC')).toBe(to)
   })
 })
+
+describe('a job waiting on a question (#197)', () => {
+  it('reads the job a question was asked in, and the gate\'s asking lines', () => {
+    const a = structuredClone(answers['journey.get']) as unknown as { args: Record<string, unknown>; result: { questions: Record<string, unknown>[]; gates: Record<string, unknown>[] } }
+    a.result.questions[0]!.job_id = 'job-1'
+    const line = '"Check the ERC" is waiting on your answer: What is the supply range?'
+    a.result.gates[0]!.pending = [line]
+    a.result.gates[0]!.asking = [{ question: 'aq1', text: 'What is the supply range?', job: 'Check the ERC', for: 'you', line }]
+    const j = READERS['journey.get']!(a.result, a.args) as JourneyMore
+    expect(j.questions[0]).toMatchObject({ jobId: 'job-1' })
+    expect((j.gates[0] as { asking?: unknown }).asking).toEqual([{ question: 'aq1', text: 'What is the supply range?', job: 'Check the ERC', line }])
+    expect(readJob({ id: 'h.w1', workerJobId: 'w1', title: 'Check the ERC', state: 'running', controls: [] }).workerJobId).toBe('w1')
+  })
+})

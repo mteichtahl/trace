@@ -30,10 +30,10 @@ export function pendingOf(open: readonly { change: { number: number; title: stri
  * The agents' jobs still working on the project: queued, paused, or running and alive (a running job whose heartbeat
  * stopped is lost, not working). The weekly look for work (sweep) and a specialist's own sub-jobs are left out.
  */
-export function stillWorking(jobs: readonly JobRow[], at = Date.now() / 1000): { id: string; title: string; state: string }[] {
+export function stillWorking(jobs: readonly JobRow[], at = Date.now() / 1000): { id: string; title: string; state: string; worker: string }[] {
   return jobs
     .filter((j) => j.kind !== 'sweep' && !j.parentJob && (j.state === 'queued' || j.state === 'paused' || (j.state === 'running' && isLive(j, at))))
-    .map((j) => ({ id: j.handle ?? j.id, title: j.title, state: j.state }))
+    .map((j) => ({ id: j.handle ?? j.id, title: j.title, state: j.state, worker: j.id }))
 }
 
 /** The requirements changed after the baseline and not agreed again (empty before the baseline is signed). */

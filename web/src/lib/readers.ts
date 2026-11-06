@@ -300,6 +300,8 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       missing: Array.isArray(g.missing) ? g.missing.map(String) : [],
       maySign: Boolean(g.may_sign),
       pending: Array.isArray(g.pending) ? g.pending.map(String) : [],
+      // the jobs among it waiting on a question: its line in pending gets Answer it (#197)
+      ...(arr(g.asking).length ? { asking: arr(g.asking).map((a) => ({ question: String(a.question), text: String(a.text), job: String(a.job), line: String(a.line) })) } : {}),
     } as Gate
   })
   const stages: Stage[] = arr(raw.stages).map((s) => {
@@ -350,6 +352,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       ...(rec ? { recommended: { id: String(rec.id), label: String(rec.label) } } : {}),
       options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(isObj(o.waives) ? { waiver: waiverWords(o.waives) } : {}), ...(str(o.needs) ? { needs: String(o.needs) } : {}) })),
       sources: arr(q.sources).map((e) => readEvidence(e, repo)),
+      ...(str(q.job_id) ? { jobId: String(q.job_id) } : {}),
     }
   })
   const decisions = arr(raw.decisions)
@@ -410,6 +413,7 @@ export function readJob(j: Obj): RunSummary {
   return {
     // the plain line when the title is a prompt (test-esp32 #25); the prompt itself stays, for Watch
     id: String(j.id), title: str(j.headline) ?? String(j.title), ...(str(j.headline) ? { request: String(j.title) } : {}), state, repo: str(j.repository),
+    ...(str(j.workerJobId) ? { workerJobId: String(j.workerJobId) } : {}),
     ...(step && state !== 'queued' ? { step } : {}),
     ...(str(j.startedAt) ? { startedAt: String(j.startedAt) } : {}),
     ...(typeof j.typicalS === 'number' ? { typicalS: j.typicalS } : {}),

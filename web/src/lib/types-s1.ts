@@ -20,6 +20,8 @@ export interface GateMore extends Gate {
   record?: { notes?: string; acknowledged?: string[]; returned?: { by: string; at: string; reason: string } }
   /** the work still pending that holds it (open changes, jobs still working): while any, it is not reviewed or signed */
   pending?: string[]
+  /** the jobs among it that wait on an open question (#197): the question, its job, and its line in `pending` */
+  asking?: { question: string; text: string; job: string; line: string }[]
 }
 
 /** Journey extras the Decisions tab reads (assumed part of journey.get: "decisions log"). */
