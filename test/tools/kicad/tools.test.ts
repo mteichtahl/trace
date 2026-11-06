@@ -88,7 +88,10 @@ describe('kicad tools (offline)', () => {
   it('kicad.net_length gives lengths, a path and its electrical figures', async () => {
     const r = await call('kicad.net_length', { project: DEMO_PCB, nets: ['MID', 'GND'], from: 'R1.2', to: 'C1.1' })
     const [mid, gnd] = r.nets as Dict[]
-    expect(mid?.length_mm).toBeCloseTo(29.5 + Math.PI * 2.5, 3)
+    // pad to pad, R2.1 to C1.1, through two vias (3.07 mm of barrel); every track of the net, stubs included, as copper_mm
+    expect(mid).toMatchObject({ from: 'R2.1', to: 'C1.1', vias: 2, via_barrel_mm: 3.07 })
+    expect(mid?.length_mm).toBeCloseTo(35.924, 3)
+    expect(mid?.copper_mm).toBeCloseTo(29.5 + Math.PI * 2.5, 3)
     expect(mid?.unreached_pads).toEqual(['R101.1'])
     expect(gnd?.length_mm).toBe(0)
     expect(r.path).toMatchObject({ from: 'R1.2', to: 'C1.1', vias: 2, model: 'analytic' })

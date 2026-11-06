@@ -12,7 +12,7 @@
 import { relative } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
-import { netNames } from '../kicad/pcb.js'
+import { LENGTH_DEFINITION, netNames } from '../kicad/pcb.js'
 import { needPcb, resolveProject, type Project } from '../kicad/project.js'
 import { cap, recorded } from '../kicad/record.js'
 import { readLayout } from './board.js'
@@ -82,7 +82,7 @@ export const placementCheckTool = defineTool({
 
 export const lengthMatchTool = defineTool({
   name: 'pcb.length_match',
-  description: 'Length matching on a routed KiCad board: differential pair skew (pairs found as KiCad pairs them, names ending +/- or P/N, plus pairs given) and length groups (nets or globs, matched to the longest or a target), against tolerances given here or skew/length constraints in the .kicad_dru (conditions on A./B. NetClass, NetName, inDiffPair, Type, Layer, existsOnLayer, isPlated, Pad_Type, Via_Type, Reference, insideArea/intersectsArea/enclosedByArea on rule areas, with && || ! and parentheses; a rule with any other term is listed as skipped). A rule governs a net when one of its tracks, vias or pads meets the condition. Lengths are routed copper: pad-to-pad for two-pad nets (with delay when the stackup is known), total otherwise; via barrels included unless include_vias is false. Recorded; returns run_id.',
+  description: 'Length matching on a routed KiCad board: differential pair skew (pairs found as KiCad pairs them, names ending +/- or P/N, plus pairs given) and length groups (nets or globs, matched to the longest or a target), against tolerances given here or skew/length constraints in the .kicad_dru (conditions on A./B. NetClass, NetName, inDiffPair, Type, Layer, existsOnLayer, isPlated, Pad_Type, Via_Type, Reference, insideArea/intersectsArea/enclosedByArea on rule areas, with && || ! and parentheses; a rule with any other term is listed as skipped). A rule governs a net when one of its tracks, vias or pads meets the condition. Lengths are the same as kicad.net_length and emc.precheck report: pad to pad along the net\'s longest routed run (both layers; each pair and group row says which pads), via barrels from the stackup included unless include_vias is false, with delay when the stackup is known; stubs to a net\'s other pads are not counted. Recorded; returns run_id.',
   input: z.object({
     project,
     pairs: z.array(z.object({ p: z.string(), n: z.string(), max_skew_mm: z.number().nonnegative().optional() }).strict()).optional(),
@@ -116,6 +116,7 @@ export const lengthMatchTool = defineTool({
           passed, pairs: pc.items, pairs_omitted: pc.omitted, groups: r.groups, failures: r.failures, without_tolerance: r.unknown,
           dru_rules: rules.rules.map((x) => ({ name: x.name, condition: x.condition, skew_max_mm: x.skew_max_mm ?? null, length: x.length ?? null })),
           ...(rules.skipped.length ? { dru_skipped: rules.skipped } : {}),
+          length_definition: LENGTH_DEFINITION + (a.include_vias ? '' : '; via barrels left out here (include_vias false)'),
           note: 'routed copper only: unrouted or partly routed nets are reported as unrouted',
         },
       }

@@ -204,7 +204,10 @@ describe('trace-sample: the values come from the calculators', () => {
     const comps = (await call('kicad.components', {})).components as Dict[]
     for (const c of comps) expect(c.lcsc, String(c.ref)).toMatch(/^C\d+$/)
     const len = await call('kicad.net_length', { nets: ['/ADC_IN'] })
-    expect(len.nets[0].length_mm).toBeCloseTo(38.88, 1)
+    // pad to pad, J2.7 to U2.1: 37.23 mm of track and two barrels (3.09 mm); every track of the net is 38.88 mm
+    expect(len.nets[0]).toMatchObject({ from: 'J2.7', to: 'U2.1', vias: 2 })
+    expect(len.nets[0].length_mm).toBeCloseTo(40.32, 1)
+    expect(len.nets[0].copper_mm).toBeCloseTo(38.88, 1)
     const lm = await call('pcb.length_match', { project: 'hardware/trace-sample.kicad_pro', groups: [{ name: 'i2c', nets: ['/SDA', '/SCL'], tolerance_mm: 5 }] })
     expect(lm.passed).toBe(true)
     expect(lm.dru_rules.map((r: Dict) => r.name)).toEqual(['adc line length', 'header bus length'])

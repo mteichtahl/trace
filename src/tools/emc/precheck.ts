@@ -22,13 +22,13 @@
  *                    power net and the other on ground; none, or farther than decap_mm, is a finding.
  *   edge_spectrum    for each net given in `edges` (frequency, 10-90 % rise time, amplitude): the trapezoid
  *                    harmonic amplitudes (spectrum.ts), the current V_n / Z0 (Z0 of the net's main layer and width,
- *                    Hammerstad-Jensen / IPC-2141A from src/tools/kicad/pcb.ts), the loop area (track length x height to
- *                    its plane), and the differential-mode field at distance_m (Ott, with ground reflection) against
+ *                    Hammerstad-Jensen / IPC-2141A from src/tools/kicad/pcb.ts), the loop area (the net's length, pad to pad as
+ *                    kicad.net_length and pcb.length_match measure it, x height to its plane), and the differential-mode field at distance_m (Ott, with ground reflection) against
  *                    CISPR 32 class A/B. A PRE-COMPLIANCE ESTIMATE: it ignores common-mode (cable) radiation, which
  *                    usually dominates real failures, and the matched-line current assumption can be off either way.
  */
 import { segSeg } from '../pcb/geometry.js'
-import { z0 as layerZ0, type Board, type Layer } from '../kicad/pcb.js'
+import { signalLength, z0 as layerZ0, type Board, type Layer } from '../kicad/pcb.js'
 import { CLOCKISH, convexHull, isGround, isPower, polyArea, SWITCHING, type BoardGeometry, type Poly, type Pt, type ZoneFill } from './board.js'
 import { cisprLimit, CISPR_SOURCE, type CisprClass } from './limits.js'
 import { dBuV, dmField, harmonics, peakToRms } from './spectrum.js'
@@ -414,14 +414,29 @@ function edgeSpectrum(g: BoardGeometry, o: PrecheckOptions, pl: Map<string, Plan
       out.push({ rule: 'edge_spectrum', severity: 'info', net: e.net, layer: null, at: null, message: `${e.net}: no tracks on the board, no estimate`, evidence: {} })
       continue
     }
+    // The loop's length is the net's length as kicad.net_length and pcb.length_match measure it (pad to pad along the
+    // longest run, via barrels included): summing every track here, while the length check went pad to pad with
+    // barrels, gave the same USB pair two lengths 3 mm apart (test-esp32 #159). Every track only when no two pads
+    // are joined by tracks.
+    const sl = signalLength(b, e.net)
     const byLayer = new Map<string, { len: number; w: number }>()
     let length = 0
-    for (const s of segs) {
-      length += s[6]
-      const cur = byLayer.get(s[5]) ?? { len: 0, w: s[4] }
-      cur.len += s[6]
-      byLayer.set(s[5], cur)
+    for (const [ly, len] of Object.entries(sl.by_layer_mm)) byLayer.set(ly, { len, w: sl.width_mm[ly] ?? segs[0]?.[4] ?? 0.2 })
+    const padToPad = sl.from !== null && byLayer.size > 0
+    if (padToPad) length = sl.length_mm
+    else {
+      byLayer.clear()
+      length = 0
+      for (const s of segs) {
+        length += s[6]
+        const cur = byLayer.get(s[5]) ?? { len: 0, w: s[4] }
+        cur.len += s[6]
+        byLayer.set(s[5], cur)
+      }
     }
+    const measured = padToPad
+      ? { path: `${sl.from} to ${sl.to}`, trace_mm: rd(sl.trace_mm, 3), via_barrel_mm: sl.via_barrel_mm === null ? null : rd(sl.via_barrel_mm, 3), vias: sl.vias, length_from: 'pad to pad, as kicad.net_length and pcb.length_match' }
+      : { length_from: 'every track of the net (no two pads joined by tracks)' }
     const main = [...byLayer].sort((a, c) => c[1].len - a[1].len)[0] as [string, { len: number; w: number }]
     const L = b.layers.find((l) => l.name === main[0]) as Layer
     const z = layerZ0(L, main[1].w * 1e-3)
@@ -438,12 +453,12 @@ function edgeSpectrum(g: BoardGeometry, o: PrecheckOptions, pl: Map<string, Plan
       rows.push({ f_hz: hm.f, harmonic: hm.n, current_ua: rd(i * 1e6, 3), e_dbuv_m: rd(ev, 2), limit_dbuv_m: rd(lim.db_uv_m, 2), margin_db: rd(lim.db_uv_m - ev, 2) })
     }
     const worst = [...rows].sort((a, c) => a.margin_db - c.margin_db)[0]
-    tables.push({ net: e.net, loop_area_mm2: rd(length * h, 2), length_mm: rd(length, 2), height_mm: rd(h, 3), z0_ohm: rd(z0, 2), z0_from: z === null ? 'assumed 50 ohm (stackup incomplete)' : `${main[0]}, ${main[1].w} mm`, worst: worst ?? null, harmonics: rows.length })
+    tables.push({ net: e.net, loop_area_mm2: rd(length * h, 2), length_mm: rd(length, 2), ...measured, height_mm: rd(h, 3), z0_ohm: rd(z0, 2), z0_from: z === null ? 'assumed 50 ohm (stackup incomplete)' : `${main[0]}, ${main[1].w} mm`, worst: worst ?? null, harmonics: rows.length })
     if (worst && worst.margin_db < o.warnMarginDb) {
       out.push({
         rule: 'edge_spectrum', severity: worst.margin_db < 0 ? 'error' : 'warn', net: e.net, layer: main[0], at: null,
         message: `${e.net}: estimated differential-mode emission ${worst.e_dbuv_m} dBuV/m at ${(worst.f_hz / 1e6).toPrecision(4)} MHz vs CISPR 32 class ${o.cisprClass} ${worst.limit_dbuv_m} dBuV/m at ${o.distanceM} m (margin ${worst.margin_db} dB) — pre-compliance estimate`,
-        evidence: { ...worst, loop_area_mm2: rd(length * h, 2), z0_ohm: rd(z0, 2), assumption: 'I = V_n / Z0 (matched line), loop = length x height, Ott DM formula with ground reflection, no common-mode', limits: CISPR_SOURCE },
+        evidence: { ...worst, loop_area_mm2: rd(length * h, 2), z0_ohm: rd(z0, 2), assumption: 'I = V_n / Z0 (matched line), loop = length (pad to pad, via barrels included) x height, Ott DM formula with ground reflection, no common-mode', limits: CISPR_SOURCE },
       })
     }
   }
