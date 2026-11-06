@@ -3,7 +3,7 @@ import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { answerChecks, changedFields, withIntentDecision } from './conversation-skills'
+import { answerChecks, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waiverChecks, type WaiverDraft } from './form-skills'
@@ -152,6 +152,33 @@ describe('project icon', () => {
 })
 
 describe('Intent builder decisions', () => {
+  it('an edit saved in the draft reads "Not submitted", not "Accepted", though the view lays it over the record (test-esp32 #22)', () => {
+    // skill.get lays the draft's edit over the record, so the statement comes back accepted
+    expect(statementBadge({ state: 'accepted' }, { choice: 'edit' })).toEqual({ status: 'yours', label: 'Not submitted' })
+    expect(statementBadge({ state: 'accepted' }, { choice: 'accept' })).toEqual({ status: 'yours', label: 'Not submitted' })
+    expect(statementBadge({ state: 'draft' }, { choice: 'edit' })).toEqual({ status: 'yours', label: 'Not submitted' })
+    // a flag the new words still raise is shown over it
+    expect(statementBadge({ state: 'needs_number', flag: 'Needs a number' }, { choice: 'edit' })).toEqual({ status: 'warning', label: 'Needs a number' })
+    // accepted in the record, nothing in the draft
+    expect(statementBadge({ state: 'accepted' })).toEqual({ status: 'met', label: 'Accepted' })
+    expect(decidedNote('edit')).toBe('Rewording in your draft. Submit intent records it.')
+  })
+
+  it('Submit intent says it accepts the statements still in draft (test-esp32 #26)', () => {
+    const statements = [{ id: 's1', state: 'accepted' as const }, { id: 's2', state: 'draft' as const }, { id: 's3', state: 'needs_number' as const }, { id: 's4', state: 'accepted' as const }, { id: 's5', state: 'draft' as const }]
+    // s4 is accepted only in the draft (the view lays it over the record); s5 is reworded there
+    const left = undecidedStatements(statements, [{ statement: 's4' }, { statement: 's5' }])
+    expect(left).toEqual(['s2', 's3'])
+    expect(intentSubmitLabel('Submit intent', left.length)).toBe('Submit intent (accepts 2 still in draft)')
+    expect(intentSubmitLabel('Submit intent', 0)).toBe('Submit intent')
+  })
+
+  it('tells trace\'s chat the draft\'s decisions are not in the record yet (test-esp32 #22)', () => {
+    const c = intentDraftContext([{ statement: 's5', choice: 'edit', text: 'Sleeps under 20 µA.' }], ['s2'])
+    expect(c).toMatchObject({ submitted: false, decisions: [{ statement: 's5', choice: 'edit', words: 'Sleeps under 20 µA.' }], acceptedAtSubmit: ['s2'] })
+    expect(c.note).toMatch(/not in the record/)
+  })
+
   it('keeps one decision per statement in the draft, replaced or removed', () => {
     let d: { done: string[]; decisions?: Parameters<typeof withIntentDecision>[0]['decisions'] } = { done: ['purpose'] }
     d = withIntentDecision(d, 'INT-R4', { choice: 'reject', reason: 'superseded by the full USB-C power input statement' })
