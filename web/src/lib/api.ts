@@ -45,7 +45,7 @@ export interface Actions {
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
   'tools.list': { args: Repo; result: { name: string; description: string; needs: 'read' | 'write'; input: unknown }[] }
   tool: { args: Repo & { name: string; args?: Record<string, unknown> }; result: unknown }
-  task: { args: Repo & { request: string; agent?: string; branch?: string }; result: { accepted: boolean; jobId: string; reason?: string } }
+  task: { args: Repo & { request: string; agent?: string; branch?: string }; result: { accepted: boolean; jobId: string; reason?: string; queued?: boolean } }
   'memory.list': { args: Repo & { agent?: string; limit?: number; includeInactive?: boolean }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.recall': { args: Repo & { query: string; top_k?: number }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.remember': { args: Repo & { text: string; scope: 'personal' | 'project'; thread?: string }; result: { repo: string; recorded: boolean; scope: 'personal' | 'project'; actor: string; session: string; note: string } }
@@ -98,7 +98,9 @@ export interface Actions {
   'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string; started?: string[]; rule?: RuleProposed; rule_error?: string } }
   /** `job`: the stuck agent's job id, or the stuck item's own id (an inbox item's questionId) */
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
-  'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }
+  'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string; replaces?: string }; result: { repo: string; waiver: { id: string } } }
+  /** withdraw a waiver in force with a reason kept in the record: its author or an admin (test-esp32 #149) */
+  'waiver.withdraw': { args: Repo & { waiver: string; reason: string }; result: { repo: string; waiver: { id: string; closed: boolean }; summary: string } }
   inbox: { args: Record<string, never>; result: InboxItem[] }
   /** where a project's time went, by stage (Operations' Process tab) */
   'journey.time': { args: Repo; result: import('./admin-types').JourneyTime }
@@ -218,7 +220,11 @@ export interface Actions {
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true; jobs?: string[] } }
-  'change.rerun': { args: Repo & { number: number }; result: { checks: string[]; runs: number } }
+  /** checks that did not run properly run again; checks no runner picked up (stuck) are cancelled and run again, with
+   * what happened in `summary` */
+  'change.rerun': { args: Repo & { number: number }; result: { checks: string[]; runs: number; summary?: string } }
+  /** every open change's checks no runner picked up, cancelled and run again once an admin fixed the runner */
+  'changes.rerun_stuck': { args: Repo; result: { repo: string; changes: number[]; cancelled: number; rerun: number; later: number; summary: string } }
   /** a change in conflict brought up to date now (src/api/conflicts.ts): an edit made in trace is made again, anything
    * else goes to trace's worker with its earlier attempts set aside. `text`: what happens next, in plain words */
   'change.resolve': { args: Repo & { number: number }; result: { text: string; remade: boolean; worker: boolean; conflict: boolean } }

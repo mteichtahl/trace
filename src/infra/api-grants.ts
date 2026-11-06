@@ -147,6 +147,12 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
     // statements (a policy of its own would be one resource more, which a flat stack of 20 projects has no room for);
     // the external runtime gets none (no action open to systems reads it)
     costPolicy.addStatements(...runLogsReadStatements({ partition: p.partition, region: p.region, account: p.account }, p.prefix))
+    // why a change's checks cannot start (src/api/stuck-checks.ts, test-esp32 log #146): the newest builds of this
+    // installation's CodeBuild runner projects (`<prefix>-ci-*`, src/infra/runner.ts), read only, beside the others
+    costPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'RunnerBuildsRead', actions: ['codebuild:ListBuildsForProject', 'codebuild:BatchGetBuilds'],
+      resources: [`arn:${p.partition}:codebuild:${p.region}:${p.account}:project/${p.prefix}-ci-*`],
+    }))
   } else {
     // build.get's wait lines: the shipped orders' watches, read only
     grantPrefixes(role, p.central, { read: [WATCH_OBJECTS] })

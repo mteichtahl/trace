@@ -65,6 +65,7 @@ import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 import { assertNotHeld } from './held.js'
+import { type QueueFile, WAITS_FOR_AGENT, queuedHandle, readQueue, startQueued } from './agent-queue.js'
 
 export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'] as const
 export type JobOp = (typeof JOB_OPS)[number]
@@ -274,7 +275,7 @@ async function writes(ctx: Context, repo: string): Promise<boolean> {
 }
 
 /** The project's jobs for this person (after their read check): what jobs.list and journey.get answer. */
-export async function listJobs(ctx: Context, repo: string, o: { at?: number } = {}): Promise<{ jobs: IndexedJob[]; batch: (BatchRow & { submittedAt: number })[]; rows: JobRow[] }> {
+export async function listJobs(ctx: Context, repo: string, o: { at?: number } = {}): Promise<{ jobs: IndexedJob[]; batch: (BatchRow & { submittedAt: number })[]; rows: JobRow[]; queue: QueueFile }> {
   const at = o.at ?? Date.now() / 1000
   const [{ result }, controls, write, jobs] = await Promise.all([
     jobIndex(ctx, repo).read((db) => ({ rows: loadJobs(db), batch: loadBatch(db) })),
@@ -282,9 +283,50 @@ export async function listJobs(ctx: Context, repo: string, o: { at?: number } = 
     writes(ctx, repo),
     ctx.deps.jobs(),
   ])
+  // the work asked for while the project's agent was being set up (src/api/agent-queue.ts): started here once the agent
+  // is there, so every look at the project's jobs (journey.get, jobs.list) starts it; until then listed as queued
+  const queue = await agentQueueNow(ctx, repo, jobs)
   const views = jobViews(repo, result.rows, controls, { at, sub: ctx.principal.sub, write, pause: Boolean(jobs.pause), cancel: Boolean(jobs.cancel) })
   const live = new Set(views.filter((j) => j.state === 'running').map((j) => j.workerJobId))
-  return { jobs: views, batch: result.batch.filter((b) => b.endedAt === null && live.has(b.jobId)), rows: result.rows }
+  return { jobs: [...views, ...queuedJobViews(repo, queue, { at, sub: ctx.principal.sub, write })], batch: result.batch.filter((b) => b.endedAt === null && live.has(b.jobId)), rows: result.rows, queue }
+}
+
+/** A queued start claimed this long ago with no job recorded did not start. */
+const STARTING_LOST_MS = 10 * 60 * 1000
+
+/** The project's queued starts, after starting them when its agent is there; an unreadable queue is an empty one. */
+async function agentQueueNow(ctx: Context, repo: string, jobs: JobsApi): Promise<QueueFile> {
+  const store = storeAt(ctx, PROJECTS_PREFIX)
+  try {
+    if (!jobs.hasAgent || jobs.hasAgent(repo)) await startQueued(jobs, store, repo)
+    return await readQueue(store, repo)
+  } catch {
+    return { queued: [], started: [] }
+  }
+}
+
+/**
+ * The queued starts as the app lists jobs: queued, waiting for the project's agent (cancel takes one out), and the
+ * ones that could not start once it was there, as failed, for a day. Pure.
+ */
+export function queuedJobViews(repo: string, q: QueueFile, o: { at: number; sub: string; write: boolean }): IndexedJob[] {
+  const base = (id: string, title: string, agent: string | null, by: string | null, bySub: string | null, queuedAt: string) => ({
+    workerJobId: id, kind: 'task', repository: projectSlug(repo), agent, agentName: agent ? AGENT_WORDS[agent] ?? agent : null, title, number: null,
+    startedBy: by, yours: bySub !== null && bySub === o.sub, held: false, queuedAt, typicalS: null, where: null, branch: null,
+    parentJob: null, resumeOf: null, resumedBy: null, summary: null, pausedBy: null, pausedAt: null, heard: null, handoff: null, settled: null,
+  })
+  const waiting = q.queued.map((s, i): IndexedJob => ({
+    ...base(s.id, s.title, s.payload.agent ?? null, s.payload.requestedBy, s.payload.requestedBySub ?? null, s.queued_at),
+    id: queuedHandle(repo, s.id), state: 'queued', step: `queued: ${WAITS_FOR_AGENT}`, startedAt: null, endedAt: null, error: null,
+    queue: { position: i + 1, of: q.queued.length, startsWhen: WAITS_FOR_AGENT }, waitsForAgent: true, controls: o.write ? ['cancel'] : [],
+  }))
+  // (one claimed and never answered for a while: its look stopped half way, so it did not start)
+  const failed = q.started.filter((s) => s.job === null && (s.error || o.at * 1000 - Date.parse(s.started_at) > STARTING_LOST_MS) && o.at * 1000 - Date.parse(s.started_at) < DAY_S * 1000).map((s): IndexedJob => ({
+    ...base(s.id, s.title, s.agent, null, null, s.queued_at),
+    id: queuedHandle(repo, s.id), state: 'failed', step: null, startedAt: s.started_at, endedAt: s.started_at, queue: null, controls: [],
+    error: `It waited for this project's agent, then could not start: ${s.error ?? 'trace stopped while starting it. Ask for it again'}.`.replace(/\.\.$/, '.'),
+  }))
+  return [...waiting, ...failed]
 }
 
 /**

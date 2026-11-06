@@ -195,6 +195,18 @@ export interface Waiver {
   severity?: string
   riskText?: string
   scope?: string
+  /** who took it and when (journey.get always says; the mock may not) */
+  by?: string
+  at?: string
+  /** what it waives, by kind and id: "Take it again" opens the Waiver skill on it */
+  target?: { kind: string; id: string }
+  /** no longer in force: withdrawn, taken again, or closed with its revision */
+  closed?: boolean
+  /** withdrawn by its author or an admin, with why; `replacedBy` the waiver taken again in its place */
+  withdrawn?: { by: string | null; at: string; reason: string; replacedBy: string | null }
+  /** whether this person may withdraw it or take it again; when not, why (test-esp32 #149) */
+  mayWithdraw?: boolean
+  withdrawBlocked?: string
 }
 
 export interface Gate {
@@ -289,7 +301,16 @@ export interface ChangeSummary {
   built_on_by?: ChangeLink[]
   /** the job behind it is still working: it is not ready to review yet, whatever its checks say */
   working?: boolean
+  /** its checks cannot start: no runner picks them up (src/api/stuck-checks.ts, test-esp32 log #146). Absent: an older API, or not stuck */
+  stuck?: StuckChecks
 }
+
+/**
+ * A change's checks that no runner picks up: how many workflows, since when, the CodeBuild runner they wait for (null:
+ * GitHub's own), why in plain words ("the CodeBuild runner cannot …"), whether the GitHub connection is the cause, and
+ * what an admin does.
+ */
+export interface StuckChecks { runs: number; since: string; runner: string | null; why: string; connection: boolean; fix: string }
 
 /** An answer a change still waits on (ChangeSummary.answers). */
 export interface PendingAnswer { question: string; text: string; stopped?: string }
@@ -579,10 +600,10 @@ export interface Journey {
   resign?: { requirements: string[]; edits: string; gates: { gate: string; name: string; stage: string; state: 'agree' | 'kept' | 'redo' | 'signed'; why: string }[] }
   /**
    * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
-   * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
+   * submitted with the drafting queued until the project's agent is set up (waiting), trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
    * again, `why` says what happened), drafted (waiting in a change) or done
    */
-  drafting?: { state: 'intent' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
+  drafting?: { state: 'intent' | 'waiting' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
   /** small summaries for the side column (assumed) */
   summary?: {
     requirements?: { accepted: number; verified: number; failing: number; untested: number }

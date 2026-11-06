@@ -2,7 +2,8 @@
  * The Decisions tab's timeline: every decision in the record, newest first, grouped by day on one line through time.
  * Each moment says what was decided, the choice, whether it was trace's recommendation (and the reason when it was
  * not), who decided and where it stands. A signed or returned gate is a milestone on the line. Records with no time
- * of their own (a waiver in force) sit together at the end rather than pretending to have happened today.
+ * of their own sit together at the end rather than pretending to have happened today. A waiver shows once, at the
+ * time it was taken, with Withdraw and Take it again while it is in force (components/waiver-actions.tsx).
  *
  * Kind chips and a search narrow the line; the table stays one tap away for sorting and filtering by column.
  */
@@ -12,6 +13,7 @@ import { Highlight } from '@/components/data-table'
 import { SearchContext } from '@/components/data-table/highlight'
 import { type Status, StatusBadge } from '@/components/status-badge'
 import { EmptyState } from '@/components/states'
+import { WaiverActions } from '@/components/waiver-actions'
 import { time } from '@/lib/format'
 import type { DecisionEntry } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
@@ -29,7 +31,7 @@ export const KIND: Record<DecisionKind, { one: string; many: string; icon: Compo
 export const STATE: Record<NonNullable<DecisionEntry['state']>, { status: Status; label: string }> = {
   open: { status: 'waiting', label: 'Open' }, approved: { status: 'done', label: 'Approved' }, rejected: { status: 'failing', label: 'Rejected' },
   signed: { status: 'done', label: 'Signed' }, returned: { status: 'warning', label: 'Returned' }, answered: { status: 'done', label: 'Answered' },
-  active: { status: 'waived', label: 'In force' }, closed: { status: 'done', label: 'Closed' },
+  active: { status: 'waived', label: 'In force' }, closed: { status: 'done', label: 'Closed' }, withdrawn: { status: 'idle', label: 'Withdrawn' },
 }
 
 /** The colour of a moment's marker: green when settled, amber when returned or against trace's advice, red when rejected. */
@@ -37,7 +39,7 @@ function tone(d: DecisionEntry): string {
   if (d.state === 'rejected') return 'border-destructive/40 bg-destructive/10 text-destructive'
   if (d.state === 'returned' || d.recommended === false) return 'border-warning/50 bg-warning/15 text-warning-foreground'
   if (d.state === 'open') return 'border-primary/40 bg-primary/10 text-primary'
-  if (d.state === 'active') return 'border-border bg-muted text-muted-foreground'
+  if (d.state === 'active' || d.state === 'withdrawn') return 'border-border bg-muted text-muted-foreground'
   return 'border-verified/40 bg-verified/10 text-verified'
 }
 
@@ -78,7 +80,7 @@ export function matches(d: DecisionEntry, q: string): boolean {
   return [d.title, d.choice, d.reason, d.by, KIND[d.kind].one].some((t) => t?.toLowerCase().includes(s))
 }
 
-export function DecisionTimeline({ rows, onOpen }: { rows: DecisionEntry[]; onOpen: (d: DecisionEntry) => void }) {
+export function DecisionTimeline({ rows, onOpen, repo }: { rows: DecisionEntry[]; onOpen: (d: DecisionEntry) => void; repo?: string }) {
   const [kind, setKind] = useState<DecisionKind | 'all'>('all')
   const [q, setQ] = useState('')
   const counts = useMemo(() => {
@@ -131,7 +133,7 @@ export function DecisionTimeline({ rows, onOpen }: { rows: DecisionEntry[]; onOp
                 <span>{g.label} <span className="font-normal normal-case tracking-normal">· {g.items.length === 1 ? '1 decision' : `${g.items.length} decisions`}</span></span>
               </h3>
               <ol>
-                {g.items.map((d) => <Moment key={d.id} d={d} onOpen={onOpen} />)}
+                {g.items.map((d) => <Moment key={d.id} d={d} onOpen={onOpen} repo={repo} />)}
               </ol>
             </section>
           ))}
@@ -155,7 +157,7 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
 }
 
 /** One decision on the line. A gate is a milestone: a larger marker and a bolder title. */
-function Moment({ d, onOpen }: { d: DecisionEntry; onOpen: (d: DecisionEntry) => void }) {
+function Moment({ d, onOpen, repo }: { d: DecisionEntry; onOpen: (d: DecisionEntry) => void; repo?: string | undefined }) {
   const Icon = KIND[d.kind].icon
   const milestone = d.kind === 'gate'
   const state = d.state ? STATE[d.state] : undefined
@@ -176,6 +178,11 @@ function Moment({ d, onOpen }: { d: DecisionEntry; onOpen: (d: DecisionEntry) =>
         </p>
       )}
       {d.reason && <p className="mt-1 text-sm text-muted-foreground">Reason: <Highlight text={d.reason} /></p>}
+      {d.waiver?.withdrawn && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          {d.waiver.withdrawn.replacedBy ? 'Taken again' : 'Withdrawn'}{d.waiver.withdrawn.by ? ` by ${d.waiver.withdrawn.by}` : ''}{d.waiver.withdrawn.replacedBy ? '' : `: ${d.waiver.withdrawn.reason}`}
+        </p>
+      )}
     </>
   )
   return (
@@ -197,6 +204,7 @@ function Moment({ d, onOpen }: { d: DecisionEntry; onOpen: (d: DecisionEntry) =>
           {d.to ? (
             <button type="button" className="block w-full text-left outline-none" onClick={(e) => { e.stopPropagation(); onOpen(d) }}>{body}</button>
           ) : body}
+          {d.waiver && repo && !d.waiver.closed && <WaiverActions repo={repo} waiver={d.waiver} className="mt-2" />}
         </div>
         {state && <StatusBadge status={state.status} label={state.label} className="shrink-0" />}
       </div>

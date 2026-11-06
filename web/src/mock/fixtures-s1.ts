@@ -20,7 +20,7 @@ export const ROUTE_LOG = ['Loading hardware/soil-sensor.kicad_pcb', 'Net classes
 
 // ------------------------------------------------------------------ gates
 
-const W3: Waiver = { id: 'W-3', title: 'Electrical rule check: VBAT pin not driven on U2.', reason: "Driven by the battery through J1, which the check can't see.", risk: 'degraded', caught: 'Bring-up step 3 (unpowered rail check).' }
+const W3: Waiver = { id: 'W-3', title: 'Electrical rule check: VBAT pin not driven on U2.', reason: "Driven by the battery through J1, which the check can't see.", risk: 'degraded', caught: 'Bring-up step 3 (unpowered rail check).', by: 'Marc Teichtahl', target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, mayWithdraw: true }
 
 const crit = (id: string, text: string, label: string, kind: 'run' | 'record', summary: string, opened = false, status: Criterion['status'] = 'met'): Criterion => ({
   id, text, status, opened, evidence: { kind, label, id: kind === 'run' ? label : id, summary },
@@ -405,7 +405,11 @@ export const DECISIONS: DecisionEntry[] = [
   { id: 'd3', kind: 'decision', title: 'Architecture: option B, STM32WL with integrated radio', by: 'Marc Teichtahl', at: ago(15 * DAY), choice: 'Option B', recommended: true },
   { id: 'd4', kind: 'question', title: 'Reading interval for battery life', by: 'Priya Shah', at: ago(10 * DAY), choice: 'Every 15 minutes', recommended: true, state: 'answered' },
   { id: 'd5', kind: 'question', title: 'Sensor supply range', by: 'Marc Teichtahl', at: ago(8 * DAY), choice: '3.0 to 3.6 V', recommended: false, reason: 'The probe we stock is rated to 3.0 V, not 2.7 V.', state: 'answered' },
-  { id: 'd6', kind: 'waiver', title: 'W-3: ERC pin-not-driven on U2 VBAT', by: 'Marc Teichtahl', at: ago(5 * HOUR), reason: 'Driven by the battery through J1, which the check cannot see.', state: 'active' },
+  // the log's own words for a waiver, as journey.get has them: matched to the waiver by its ref, so it shows once (test-esp32 #150)
+  { id: 'd6', kind: 'waiver', ref: 'W-3', title: 'A waiver was taken on finding erc:U2.VBAT:pin_not_driven (rated degraded): Driven by the battery through J1, which the check cannot see.', by: 'Marc Teichtahl', at: ago(5 * HOUR), state: 'active' },
+  { id: 'd8', kind: 'waiver', ref: 'W-2', title: 'A waiver was taken on criterion architect.stock (rated degraded): The radio module is on order with a delivery date before Layout.', by: 'Priya Shah', at: ago(16 * DAY), state: 'active' },
+  { id: 'd9', kind: 'waiver', ref: 'W-1', title: 'A waiver was taken on criterion define.measurable (rated safety): The range test needs the bench.', by: 'Marc Teichtahl', at: ago(20 * DAY), state: 'active' },
+  { id: 'd10', kind: 'waiver', ref: 'W-1', title: 'The waiver on criterion define.measurable was withdrawn by Marc Teichtahl: The range limit is measurable after all: 300 m line of sight.', by: 'Marc Teichtahl', at: ago(19.5 * DAY), state: 'withdrawn' },
   { id: 'd7', kind: 'change', title: 'CR-2: move to a 2,000 mAh cell', by: 'Priya Shah', at: ago(12 * DAY), state: 'approved', reason: 'The 1,200 mAh cell could not meet two years at 15-minute readings.' },
 ]
 
@@ -459,12 +463,12 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
         { id: 's3', topic: 'Power', text: 'Runs from one 3.7 V lithium cell, 2,000 mAh.', state: 'accepted' },
         { id: 's4', topic: 'Power', text: 'Battery life of at least 2 years at one reading every 15 minutes.', state: 'draft' },
         { id: 's5', topic: 'Power', text: '"Low power" sleep mode.', state: 'needs_number', flag: 'Needs a number' },
-        { id: 's6', topic: 'Interfaces', text: 'LoRa radio, u.FL antenna, 5.5 kbit/s, both directions; band and range to confirm.', state: 'needs_number', flag: 'Needs a number' },
-        { id: 's7', topic: 'Interfaces', text: 'USB-C, 12 Mbit/s, both directions, for charging and setup.', state: 'draft' },
+        { id: 's6', topic: 'Interfaces', text: 'LoRa radio, u.FL antenna, 5.5 kbit/s, both directions; band and range to confirm.', state: 'needs_number', flag: 'Missing protocol', interface: { type: 'LoRa radio', connector: 'u.FL', rate: '5.5 kbit/s', direction: 'both' }, missing: ['protocol'] },
+        { id: 's7', topic: 'Interfaces', text: 'USB-C, 12 Mbit/s, both directions, for charging and setup.', state: 'draft', interface: { type: 'USB device', connector: 'USB-C receptacle', protocol: 'USB 2.0 full speed', rate: '12 Mbit/s', direction: 'both' }, missing: [] },
       ],
       questions: [{ id: 'oq1', text: 'Which gateway model will the farm use?', owner: 'Marc' }, { id: 'oq2', text: 'Must the enclosure be IP67 or IP65?', owner: 'Priya Shah' }],
     },
-    checks: [{ id: 'answered', status: 'not_met', detail: '6 left' }, { id: 'quantities', status: 'not_met', detail: '1 left' }, { id: 'vague', status: 'not_met', detail: '1 left' }, { id: 'interfaces', status: 'not_met', detail: 'In progress' }, { id: 'conflicts', status: 'met' }, { id: 'testable', status: 'met' }, { id: 'owners', status: 'met' }],
+    checks: [{ id: 'answered', status: 'not_met', detail: '6 left' }, { id: 'quantities', status: 'not_met', detail: '1 left' }, { id: 'vague', status: 'not_met', detail: '1 left' }, { id: 'interfaces', status: 'not_met', detail: 's6 lacks protocol' }, { id: 'conflicts', status: 'met' }, { id: 'testable', status: 'met' }, { id: 'owners', status: 'met' }],
     recommendation: {
       question: "'LoRa' needs a band and a range.", recommended: 'au915', options: [{ id: 'au915', label: 'AU915, 2 km' }, { id: 'other', label: 'Other answer' }],
       why: 'For a farm sensor in Australia trace recommends **AU915** and **2 km line of sight**, from your purpose statement.',

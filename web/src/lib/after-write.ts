@@ -40,6 +40,7 @@ const BY_ACTION: Partial<Record<ActionName, (r: string, a: Args) => QueryKey[]>>
   'stuck.dismiss': project,
   'handoff.decline': project,
   'waiver.add': project,
+  'waiver.withdraw': project,
   'gate.sign': (r) => [...project(r), ['documents.get', r]],
   'gate.return': project,
   'journey.criterion.open': project,

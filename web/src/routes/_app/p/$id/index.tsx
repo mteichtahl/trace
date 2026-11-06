@@ -30,6 +30,7 @@ import { HeldNextCard, useLifecycle } from '@/components/project/lifecycle'
 import { RunLine, runControls, splitRuns } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
+import { RerunStuck } from '@/components/rerun-stuck'
 import { LostJobActions, useLostJob } from '@/components/lost-job'
 import { useNow } from '@/components/use-now'
 import { Section } from '@/components/shell/app-shell'
@@ -215,7 +216,9 @@ function Overview() {
       onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
       accepting={actions.accept.isPending}
       resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
-      callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" /> : lostNext}
+      callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" />
+        // checks no runner picked up: run them again once the runner is fixed (test-esp32 log #146)
+        : d.next.action?.call === 'changes.rerun_stuck' && projects.data !== undefined && write ? <RerunStuck repo={repo} size="lg" /> : lostNext}
     />
   )
 

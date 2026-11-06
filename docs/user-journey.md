@@ -429,7 +429,10 @@ Quality bar, all checked before the intent can be submitted:
 - Every topic is answered or explicitly marked "don't care", or "unknown, decide by" a named stage.
 - Every quantity has a number and a unit; ranges have both ends.
 - No vague words stand alone: "fast", "small", "low power", "robust" and similar are flagged until a number replaces them.
-- Every interface is fully specified (type, connector, protocol, rate, direction).
+- Every interface is fully specified (type, connector, protocol, rate, direction). The draft panel shows the five fields
+  under each interface statement and names the ones not given. Editing an interface statement shows the fields beside
+  the words: a field the person changes is kept as typed, and the others are read again from the new words, so fixing
+  a missing field never needs an agent's job.
 - No internal conflicts: the power budget fits the source, the size fits the connectors, the cost fits the quantity.
 - Each statement can become a testable requirement; those that cannot are flagged for rewording.
 - Open questions are listed with an owner.
@@ -526,6 +529,12 @@ Quality bar:
 - A waiver with a later check creates that check as a test item in the plan.
 
 Produces: a waiver record linked to what it waives; it is listed at every later gate until it closes.
+
+**Withdrawing or correcting a waiver** (src/core/journey.ts `withdrawWaiver`, `withdrawProblem`; the app's components/waiver-actions.tsx). Each waiver in force, wherever it is listed (the Decisions page, the gate), has two actions for its author or an admin; anyone else reads who may. A waiver recorded by answering a question is the person's own and behaves the same.
+
+- **Withdraw** asks why in a sentence, kept in the decisions log with who and when. What it waived counts again: a criterion it covered is not met unless another waiver covers it, and a finding is open again where the rule check is read.
+- **Take it again** opens this skill filled in from the waiver, to correct what was wrong (its severity, its reason). Taking the new one withdraws the old one in the same step, and the record keeps both.
+- **A signed gate stands on it.** A waiver a live signature acknowledged cannot be withdrawn or taken again, since a signature is never edited: an admin reopens that stage first (return the current gate and reopen it), which takes the signature back, and the gate is signed again on what the record then holds. The refusal says so.
 
 ### Board setup
 

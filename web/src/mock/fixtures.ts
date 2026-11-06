@@ -16,6 +16,8 @@ export const PROJECTS: ProjectRef[] = [
   { repo: 'acme/soil-sensor', role: 'write', part: 'contributor' },
   { repo: 'acme/motor-driver', role: 'write', part: 'contributor' },
   { repo: 'acme/panel-controller', role: 'write', part: 'contributor' },
+  // VITE_MOCK_AGENT=setting_up: a project just created in the app, its agent still being set up (mock/small.ts)
+  ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [{ repo: 'acme/flasher', role: 'write' as const, part: 'contributor' as const }] : []),
 ]
 
 const BOARD = ['Define', 'Architect', 'Capture', 'Prove', 'Layout', 'Sign-off', 'Release', 'Fabricate', 'Bring up']
@@ -77,7 +79,13 @@ export const JOURNEYS: Record<string, Journey> = {
     questions: [
       { id: 'q1', to: 'Priya', text: 'Question to Priya: which antenna connector, u.FL or SMA?', askedAt: ago(2 * DAY), blocks: 'nothing yet; Layout needs it' },
     ],
-    waivers: [{ id: 'W-3', title: 'ERC pin-not-driven on U2 VBAT', reason: 'Driven by the battery through J1, which the check cannot see.', risk: 'degraded', caught: 'Bring-up step 3' }],
+    // as journey.get has them (test-esp32 #149): W-3 in force and the viewer's own, W-2 one a signed gate stands on,
+    // W-1 withdrawn with its reason
+    waivers: [
+      { id: 'W-3', title: 'ERC pin-not-driven on U2 VBAT', reason: 'Driven by the battery through J1, which the check cannot see.', risk: 'degraded', caught: 'On the bench: Bring-up step 3 (unpowered rail check)', severity: 'degraded', riskText: 'U2 could brown out at power-on.', scope: 'this revision only', by: 'Marc Teichtahl', at: ago(5 * 3600_000), target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, closed: false, mayWithdraw: true },
+      { id: 'W-2', title: 'criterion architect.stock', reason: 'The radio module is on order with a delivery date before Layout.', risk: 'degraded', caught: 'At a later stage: Sign-off stock check', severity: 'degraded', riskText: 'A late build if the order slips.', scope: 'this revision only', by: 'Priya Shah', at: ago(16 * 86_400_000), target: { kind: 'criterion', id: 'architect.stock' }, closed: false, mayWithdraw: false, withdrawBlocked: 'The architecture review gate was signed by Marc Teichtahl with this waiver acknowledged, so the signature stands on it. To withdraw it, an admin reopens Architect first (return the current gate and reopen Architect); the architecture review gate is then signed again without it.' },
+      { id: 'W-1', title: 'criterion define.measurable', reason: 'The range test needs the bench.', risk: 'major', caught: 'On the bench: range test', severity: 'safety', riskText: 'Range could fall short.', scope: 'this revision only', by: 'Marc Teichtahl', at: ago(20 * 86_400_000), target: { kind: 'criterion', id: 'define.measurable' }, closed: true, withdrawn: { by: 'Marc Teichtahl', at: ago(19.5 * 86_400_000), reason: 'The range limit is measurable after all: 300 m line of sight.', replacedBy: null }, mayWithdraw: false },
+    ],
     jobs: [
       { id: 'job_r1', title: 'Rendering the board for the gate', state: 'running', where: 'On a graphics card', etaS: 180, progress: 0.55 },
       { id: 'job_q1', title: 'Write the test plan for Prove', state: 'queued', startsWhen: 'starts when the schematic gate is signed' },
@@ -144,6 +152,35 @@ export const JOURNEYS: Record<string, Journey> = {
     jobs: [{ id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45 }],
     recent: [],
   },
+}
+
+// VITE_MOCK_AGENT=setting_up: Flasher was just created in the app and its agent is still being set up. Its intent is
+// submitted, and drafting the requirements is queued until the agent is ready (src/api/agent-queue.ts)
+if (import.meta.env.VITE_MOCK_AGENT === 'setting_up') {
+  const st = stages(BOARD, 0, 0, 4)
+  JOURNEYS['acme/flasher'] = {
+    repo: 'acme/flasher',
+    name: 'Flasher',
+    description: 'A 20 × 20 mm board where a TLC555 flashes a red LED every 2 seconds.',
+    template: 'board',
+    revision: 'Rev A',
+    stages: st,
+    gates: gates(st, false),
+    current: 'define',
+    next: {
+      kind: 'working',
+      owner: 'trace',
+      short: 'drafting is queued until the agent is ready',
+      summary: 'Your intent is submitted. trace drafts the requirements from it once this project\'s agent is set up.',
+      action: { label: 'Watch', to: '/p/acme~flasher/jobs' },
+      jobId: 'queued~acme~flasher~3f2a9c1d0e4b',
+    },
+    drafting: { state: 'waiting', jobId: 'queued~acme~flasher~3f2a9c1d0e4b', jobState: 'queued' },
+    questions: [],
+    waivers: [],
+    jobs: [],
+    recent: [{ id: 'f1', who: 'Marc', text: 'Intent submitted: 11 statements', at: ago(3 * MIN) }],
+  }
 }
 
 export const INBOX: InboxItem[] = [

@@ -67,7 +67,8 @@ Access is checked first, as for every action. `read` = assigned to the project; 
 | `change.accept` | write | `{ repo, number, head_sha, note? }` (`head_sha`: 40 hex, the head the person was shown) | `{ merged: true, sha, stage, next: string, warning? }`: refuses a head that moved since; merges that commit (the repository's allowed method, squash first), removes the hold label, comments the note as a quote, records decision `change.accepted` (a record that fails after the merge is `warning`, logged: the merge stands). While GitHub is still taking the checks in (a 405 not about a review) the merge is tried again for about 20 s, then refused in plain words |
 | `change.ask` | write | `{ repo, number, note }` (1–4000 chars) | `{ job_id }`: holds the branch to the task action's rule, starts a revision job with the same agent on the same branch, comments the note as a quote ("Asked for changes by <name>: …"), records `change.asked` |
 | `change.discard` | write | `{ repo, number, reason }` (1–2000 chars) | `{ closed: true }`: closes it, then comments the reason as a quote (a comment that fails still answers closed, logged), records `change.discarded` |
-| `change.rerun` | write | `{ repo, number }` | `{ checks, runs }`: only when every failed check failed for a reason outside the work (`infra_failed`: GitHub busy or down, the runner lost, read from the check's annotations or its job's log end); re-runs the failed jobs of their workflow runs on the change's head commit. Such a change is recommended "wait", never "ask for changes" |
+| `change.rerun` | write | `{ repo, number }` | `{ checks, runs }`: only when every failed check failed for a reason outside the work (`infra_failed`: GitHub busy or down, the runner lost, read from the check's annotations or its job's log end); re-runs the failed jobs of their workflow runs on the change's head commit. Such a change is recommended "wait", never "ask for changes". A change whose checks cannot start (`stuck`) has its stuck runs cancelled and run again instead, with `summary` |
+| `changes.rerun_stuck` | write | `{ repo }` | `{ changes, cancelled, rerun, later, summary }`: every open change's checks no runner picked up (`stuck`), once an admin fixed the runner: the stuck queued runs are cancelled (freeing the concurrency group they hold) and the newest of each workflow and branch runs again. trace also does it on its own every 30 minutes while they are stuck on a CodeBuild runner (`src/api/stuck-checks.ts`) |
 
 ```ts
 interface ChangeSummary {
@@ -96,12 +97,17 @@ interface ChangeDetail extends ChangeSummary {
   base: { ref: string; sha: string }; head: { ref: string; sha: string }
   infra_failed?: { checks: { id: string; name: string }[]; why: string }  // every failed check failed for a reason
                           // outside the work (GitHub busy or down, the runner lost): "Run the check again" (change.rerun)
+  stuck?: { runs; since; runner: string | null; why: string; connection: boolean; fix: string }  // (ChangeSummary
+                          // too) its workflow runs queued 30 minutes or more with no runner picking them up: why, from
+                          // the CodeBuild runner's newest builds when the API may read them, and what an admin does.
+                          // Verdict blocked, recommended "wait" with those words, never "Checks running"
 }
 ```
 
 The recommendation is worked out from facts, never a model: all checks passed and it can merge → accept, naming the
 checks and the requirements; a check failing → ask, naming it; checks running, unreadable or none yet → wait; a
-conflict → none, "trace will bring it up to date". The specialist saying its own work is not finished → ask, quoting
+conflict → none, "trace will bring it up to date"; checks no runner picks up → wait, saying why and what an admin does
+(the next step goes to an admin with "Run the checks again", test-esp32 log #146). The specialist saying its own work is not finished → ask, quoting
 it (verdict `unfinished`): the title's clauses that say so ("incomplete export, not for approval", "WIP"), else the
 plainest sentence of its summary or the description ("not ready for review", "do not merge"). Passing checks say the
 files are sound, not that the work is done. It is a recommendation, not a blocker: the person may still accept, and the

@@ -47,6 +47,10 @@ import { externalFromEnv } from './actions-services.js'
 import { SharedLimit } from './rate-limit.js'
 import { ServiceVerifier } from './service-auth.js'
 import { parseWorkerRuntimes, remoteJobs } from './workers.js'
+import { codeBuildRunnerBuilds } from './stuck-checks.js'
+import { withAgentQueue } from './agent-queue.js'
+import { bucketStore } from './action-kit.js'
+import { PROJECTS_PREFIX } from '../core/project.js'
 
 const MAX_BODY = 2 * 1024 * 1024
 /** design.handin's files (src/api/actions-handin.ts: 3.5 MB together, as base64): the one larger body. */
@@ -283,7 +287,12 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID, prefix: process.env.TRACE_PREFIX?.trim() || 'trace' }))
   const scratch = defaultScratch()
   const token = (): Promise<string> => githubToken(env.TRACE_GITHUB_SECRET_ARN)
-  const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT, build: env.TRACE_WORKER_BUILD })
+  // a project created in the web app has no worker runtime until the installation update adds it: work asked for until
+  // then is queued in its journey folder and started once it has (src/api/agent-queue.ts)
+  const jobs = withAgentQueue(
+    remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT, build: env.TRACE_WORKER_BUILD }),
+    () => (deps.store ?? bucketStore)(PROJECTS_PREFIX),
+  )
   const deps: ActionDeps = {
     github: async () => new HttpGitHub(await token()),
     cognito: cog,
@@ -326,6 +335,8 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
     githubBudget: new GitHubBudget(),
     // what checks, jobs and tool calls say while they run (docs/progress-and-logs.md): read here, written elsewhere
     ...(process.env.TRACE_RUNS_LOG_GROUP?.trim() ? { runLogs: runLogsFrom(process.env.TRACE_RUNS_LOG_GROUP.trim(), env.AWS_REGION) } : {}),
+    // why a change's checks cannot start: its CodeBuild runner's newest builds (src/api/stuck-checks.ts)
+    runnerBuilds: codeBuildRunnerBuilds(env.AWS_REGION),
     // the login trace's agents open pull requests as, when the runtime is told it; else each repository's variable
     ...(process.env.TRACE_AGENT_LOGIN?.trim() ? { agentLogin: process.env.TRACE_AGENT_LOGIN.trim() } : {}),
   }

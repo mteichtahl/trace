@@ -6,7 +6,7 @@
  * files.url through `changeFileContent`.
  */
 import { PARTS_DB_AFTER, PARTS_DB_BEFORE } from './fixtures-db'
-import type { ChangeDetail, Journey, StageGuide, StageStep } from '@/lib/types'
+import type { ChangeDetail, Journey, StageGuide, StageStep, StuckChecks } from '@/lib/types'
 import type { GateMore } from '@/lib/types-s1'
 import { JOURNEYS, PROJECTS } from './fixtures'
 import { DRAWING_SVG } from './fixtures-files'
@@ -14,6 +14,7 @@ import sch from './files/soil-sensor.kicad_sch?raw'
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
 const MIN = 60_000
+const HOUR = 60 * MIN
 const BASE = 'a91c04b'
 // a full sha, as change.get gives it (change.accept takes 40 hex characters)
 const HEAD = '7f3e21a0c5d2b9e84f61a3c7d0e2b5f9a8c4d1e6'
@@ -48,6 +49,15 @@ soil.stages.find((s) => s.id === 'capture')!.steps = CAPTURE_STEPS
 
 // ------------------------------------------------------------------ the changes
 
+// checks no runner picks up (test-esp32 log #146): queued 20 hours on the project's CodeBuild runner, whose every build
+// failed in DOWNLOAD_SOURCE on the GitHub connection's credential (src/api/stuck-checks.ts stuckView's words)
+const STUCK: StuckChecks = {
+  runs: 2, since: ago(20 * HOUR), runner: 'trace-ci-213dfa1f', connection: true,
+  why: 'the CodeBuild runner cannot get a GitHub runner token, because its GitHub connection lacks administration access',
+  fix: 'An admin re-authorizes the GitHub connection with administration access: in the AWS console, open Developer Tools, Settings, Connections, choose the connection and update it, then on GitHub accept the AWS Connector for GitHub app\'s request for "Administration: read and write". trace then runs the stuck checks again itself, or at once with "Run the checks again".',
+}
+const STUCK_SAYS = `Its checks cannot start: ${STUCK.why}. They have waited 20 hours. ${STUCK.fix}`
+
 const SCH_BEFORE = sch.replace(/\t\(symbol \(lib_id "Device:R"\) \(at 180 100 0\)[\s\S]*?\n\t\)\n/, '')
 const DECISIONS_BEFORE = '# Decisions\n\n- Architecture option B chosen: one LoRa SoC, no separate MCU.\n- Two AA cells replaced by one lithium cell (R-004).\n'
 const DECISIONS_AFTER = `${DECISIONS_BEFORE}- The 3.3 V regulator is the AP2112K-3.3 (600 mA), not the MCP1700:
@@ -63,6 +73,7 @@ const FILES: Record<string, { before: string | Uint8Array | null; after: string 
   'docs/decisions.md': { before: DECISIONS_BEFORE, after: DECISIONS_AFTER, mime: 'text/markdown' },
   'hardware/sensor.kicad_sch': { before: sch, after: sch, mime: 'text/plain' },
   'docs/renders/front.svg': { before: DRAWING_SVG, after: RENDER_AFTER, mime: 'image/svg+xml' },
+  'mechanical/case.py': { before: null, after: '# The sensor board\'s case: two printed parts, the board screwed to its four holes.\nOUTER = (59.4, 44.4, 19.6)  # mm\nWALL = 1.6\nLID_WINDOW = (24.0, 13.0)  # the display, on the lid\'s underside\n\ndef build():\n    return shell(OUTER, WALL), lid(OUTER, WALL, window=LID_WINDOW)\n', mime: 'text/x-python' },
   'docs/design/protocol-specification.md': { before: null, after: '# Protocol specification\n\n## I2C display bus\n\n- Address 0x3C, 400 kHz.\n- 4.7 kΩ pull-ups to 3V3 on SCL and SDA.\n', mime: 'text/markdown' },
 }
 
@@ -238,6 +249,19 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'accept', why: 'All 3 checks passed (Design rule check, build and trace-prs), and it can be merged. It covers R-008.' },
       may_accept: true,
     }),
+    // its checks cannot start: no runner picks them up (test-esp32 log #146). Never "Checks running"; an admin fixes the
+    // runner's connection, then "Run the checks again"
+    summary(42, {
+      title: 'Case for the sensor board', from: 'the Implementation specialist', stage: 'layout', opened_at: ago(20 * HOUR + 5 * MIN), updated_at: ago(20 * HOUR),
+      head: { ref: 'claude/task-case', sha: HEAD }, mergeable: 'blocked', stuck: STUCK,
+      checks: { total: 2, passed: 0, failed: 0, running: 2, skipped: 0, failing: [] }, verdict: 'blocked',
+      summary: ['A two-part printed case, 59.4 × 44.4 × 19.6 mm, with the board screwed to its four holes.', 'The display sits on the lid behind a window, wired to J2.'],
+      files: [{ path: 'mechanical/case.py', status: 'added', additions: 9, deletions: 0, kind: 'text' }],
+      checks_list: [{ name: 'build', state: 'running', summary: 'Waiting for a runner', id: 'job:9501' }, { name: 'trace-prs', state: 'running', summary: 'Waiting for a runner', id: 'job:9502' }],
+      requirements: ['R-008'],
+      recommendation: { verdict: 'wait', why: STUCK_SAYS },
+      may_accept: false, blockers: [`Its checks cannot start: ${STUCK.why}.`],
+    }),
   ],
 }
 
@@ -321,7 +345,38 @@ function checkDetail(c: ChangeDetail, id: string, admin: boolean) {
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
 const open = (repo: string) => (CHANGES[repo] ?? []).filter((c) => c.state === 'open')
-const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by', 'answers', 'working'] as const
+const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by', 'answers', 'working', 'stuck'] as const
+
+/** A change whose stuck checks were cancelled and run again: checking until they pass (as the API, the runner fixed). */
+function runAgain(c: ChangeDetail): void {
+  delete c.stuck
+  c.verdict = 'checking'
+  c.checks_list = c.checks_list.map((k) => ({ ...k, summary: null }))
+  c.blockers = [`${c.checks?.running === 1 ? '1 check is' : `${c.checks?.running ?? 0} checks are`} still running.`]
+  c.recommendation = { verdict: 'wait', why: `${c.blockers[0]} Wait for them to finish.` }
+}
+
+/**
+ * The overview while checks cannot start (test-esp32 log #146, #147): an admin's step, "Run the checks again". Off
+ * unless asked for, so the other screens stay as they are:
+ *
+ *   sessionStorage.setItem('trace.mock.stuck', 'on'); location.reload()
+ */
+export const stuckOn = (): boolean => typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.stuck') === 'on'
+export function stuckStepOf(repo: string, next: Journey['next']): Journey['next'] {
+  const stuck = open(repo).filter((c) => c.stuck)
+  if (!stuckOn() || !stuck.length) return next
+  const s = stuck[0]!.stuck!
+  const names = stuck.map((c) => `#${c.number}`).join(' and ')
+  return {
+    kind: 'task', owner: 'you', short: 'you fix the runner, then run the checks again',
+    summary: `Checks cannot start: ${s.why}. ${s.fix}`,
+    why: `Change ${names} has waited 20 hours for its checks. Nothing checks it until the runner is fixed, so Capture waits.`,
+    action: { label: 'Run the checks again', call: 'changes.rerun_stuck' },
+    reviewer: { summary: `Checks cannot start: ${s.why}. It waits for an admin to fix the runner.` },
+    step: null, after: 'Once the checks run and pass, the changes are ready to review. trace tries them again on its own every 30 minutes meanwhile.',
+  }
+}
 const toSummary = (c: ChangeDetail) => Object.fromEntries(SUMMARY_KEYS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]))
 
 /** After a change is accepted: Capture moves to step 4 and trace starts the stock check. */
@@ -353,6 +408,13 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
   const repo = String(a.repo ?? '')
   if (!JOURNEYS[repo]) return json({ ok: false, error: 'no access' }, 403)
   if (name === 'changes.list') return ok({ repo, changes: open(repo).map(toSummary) })
+  if (name === 'changes.rerun_stuck') {
+    if (partOf(repo) === 'reviewer') return fail('Only contributors can run checks again.')
+    const stuck = open(repo).filter((c) => c.stuck)
+    if (!stuck.length) return fail('No change\'s checks are stuck waiting for a runner now, so there is nothing to run again.')
+    for (const c of stuck) runAgain(c)
+    return later(ok({ repo, changes: stuck.map((c) => c.number), cancelled: stuck.length, rerun: stuck.length, later: 0, summary: `${stuck.length === 1 ? '1 workflow runs' : `${stuck.length} workflows run`} again. If the runner is still broken they wait again, and the change says why.` }))
+  }
   const c = (CHANGES[repo] ?? []).find((x) => x.number === Number(a.number))
   if (!c) return fail('no such change')
   const reviewer = partOf(repo) === 'reviewer'
@@ -403,6 +465,11 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
       return later(ok({ text: 'trace is bringing it up to date with the newest design now. Its checks run again once it has, and it comes back to you.', remade: false, worker: true, conflict: true }))
     case 'change.rerun': {
       if (reviewer) return fail('Only contributors can run a check again.')
+      // checks no runner picked up: cancelled and run again (src/api/stuck-checks.ts)
+      if (!c.infra_failed?.checks.length && c.stuck) {
+        runAgain(c)
+        return later(ok({ checks: [], runs: 1, summary: '1 workflow runs again. If the runner is still broken it waits again, and the change says why.' }))
+      }
       const again = c.infra_failed?.checks ?? []
       if (!again.length) return fail('None of its checks failed for a reason outside the work, so there is nothing to run again here.')
       // as GitHub: the failed jobs run again, so the change is checking until they pass

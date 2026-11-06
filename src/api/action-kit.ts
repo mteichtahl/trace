@@ -60,7 +60,11 @@ export interface JobsApi {
     stackOn?: string
     /** the same request asked again after its job was lost or failed (2 and up): a new session for it (workers.ts taskSession) */
     attempt?: number
-  }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
+  }): Promise<{
+    accepted: boolean; jobId: string; reason?: string | undefined
+    /** kept until the project's agent is set up, and started then (src/api/agent-queue.ts): jobId is its queued handle */
+    queued?: boolean | undefined
+  }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
   /**
    * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker
@@ -153,6 +157,9 @@ export interface ActionDeps {
   runLogs?: () => RunLogsReader | null
   /** waits `ms` (a test's is instant); absent: a timer. change.accept waits on GitHub working out a merge with it */
   sleep?: (ms: number) => Promise<void>
+  /** a CodeBuild runner project's newest builds (src/api/stuck-checks.ts codeBuildRunnerBuilds): why a change's checks
+   * cannot start; absent: trace says only that no runner picks them up */
+  runnerBuilds?: (project: string) => Promise<import('./stuck-checks.js').RunnerBuild[]>
 }
 
 /** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's

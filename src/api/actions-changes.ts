@@ -25,6 +25,10 @@
  *                           busy or down, the runner lost: change.get's infra_failed), by re-running the failed jobs of
  *                           their workflow runs on the change's head commit. Accepting tries the merge again for about
  *                           20 s while GitHub is still taking the checks in (mergeWhenReady)
+ *                           Checks no runner picked up (change.get's stuck) are cancelled and run again instead
+ *   changes.rerun_stuck write { repo } → { changes, cancelled, rerun, later, summary }: every open change's checks no
+ *                           runner picked up (src/api/stuck-checks.ts, test-esp32 log #146), cancelled and run again
+ *                           once an admin fixed the runner; trace also does it on its own every 30 minutes
  *   change.ask      write   { repo, number, note } → { job_id }: comments the note on it as a quote, starts a revision
  *                           job with the same specialist on the same branch (so the same pull request updates), and
  *                           records change.asked (and a rework, sent_back: src/api/process-metrics.ts)
@@ -88,6 +92,7 @@ import { hasTable } from './record-read.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
 import { type RecordChanges, betterTitle, contentBullets, recordChanges } from '../core/change-contents.js'
+import { type RestartResult, type StuckLook, restartStuck, stuckFor, stuckLook } from './stuck-checks.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -248,13 +253,15 @@ export async function openChanges(ctx: Context, repo: string, o: { max?: number 
   const { changes: mine, edits, rule, pulls, rows } = await tracePulls(ctx, repo)
   const stacks = stacksOf(pulls, repo, rule.defaultBranch)
   const max = o.max ?? MAX_STATUS
-  const [status, editStatus, { given, answers }] = await Promise.all([
+  const [status, editStatus, { given, answers }, look] = await Promise.all([
     Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     Promise.all(edits.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     mine.length ? projectReview(ctx, repo, rows) : Promise.resolve({ given: new Set<string>(), answers: new Map<string, PendingAnswer[]>() }),
+    // workflow runs no runner picks up (src/api/stuck-checks.ts): one look for the whole list, kept a minute
+    mine.length ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),
   ])
   const works = mine.map(({ pull, job }, i) => ({
-    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head) }),
+    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head), stuck: stuckFor(look, pull.sha) }),
     criteria: criteriaNamed(jobRequest(job), job.title),
   }))
   const own = edits.map(({ pull, edit }, i) => ({
@@ -280,21 +287,25 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sha = pull.head.sha
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   // everything else is read in parallel; a part GitHub will not give (a token that cannot read checks) is left out
-  const [status, files, commits, runs, write, { given, answers }, discarded] = await Promise.all([
+  const [status, files, commits, runs, write, { given, answers }, discarded, look] = await Promise.all([
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
     cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha, { jobs: true }), DETAIL_STATUS_TTL_MS).catch(() => null), writes(ctx, repo),
     projectReview(ctx, repo, found.rows),
     pull.state === 'closed' ? discardOf(ctx, repo, number) : Promise.resolve(null),
+    pull.state === 'open' ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),
   ])
   const hold = rule.hold
   // where it sits in a stack: its base read now (accepting decides on it), the changes above it from the kept list
   const stack = await stackFor(ctx, repo, pull, rule)
   const pending = answers.get(pull.head.ref)
-  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack, answers: pending })
+  const stuck = pull.state === 'open' ? stuckFor(look, sha) : null
+  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack, answers: pending, stuck })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   if (stack.stacked) facts.stacked = stack.stacked
+  // its checks cannot start: no runner picks them up (test-esp32 log #146)
+  if (stuck) facts.stuck = stuck
   // its job is still at it: not recommended, nor accepted, until it ends (log #68)
   if (jobWorking(job)) facts.working = true
   // an answer to its specialist's question not applied yet: never recommended for accepting (test-esp32 log #131)
@@ -705,8 +716,37 @@ export function revisionRequest(o: { number: number; title: string; branch: stri
 }
 
 /** A line for the runtime's log. */
-const logLine = (ctx: Context, l: Record<string, unknown>): void => {
+export const logLine = (ctx: Context, l: Record<string, unknown>): void => {
   (ctx.deps.log ?? ((x) => { process.stdout.write(`${JSON.stringify(x)}\n`) }))({ at: new Date().toISOString(), ...l })
+}
+
+/**
+ * Cancel and run again the stuck checks on the head commits `only` (null: every stuck run of the repository), from a
+ * fresh look; GitHub's refusals in plain words. The kept answers are forgotten after, so the next look is fresh.
+ */
+export async function rerunStuck(ctx: Context, repo: string, only: ReadonlySet<string> | null, look?: StuckLook | null): Promise<RestartResult> {
+  const gh = await ctx.deps.github()
+  if (typeof gh.request !== 'function') throw new ActionError('This installation cannot run checks again from the app yet: its update brings it.')
+  if (look === undefined) bust(ctx, repo)
+  const seen = look === undefined ? await stuckLook(ctx, repo) : look
+  if (!seen) throw new ActionError('trace could not list this repository\'s queued checks: its GitHub token needs "Actions: read".')
+  try {
+    return await restartStuck({ request: gh.request.bind(gh) }, repo, seen.runs, { only, sleep: ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))) })
+  } catch (e) {
+    if (e instanceof GitHubError && (e.status === 403 || e.status === 404)) throw new ActionError('GitHub refused: trace\'s token may not cancel or run checks again in this repository. An admin can give the token write access to Actions.')
+    throw e
+  } finally {
+    bust(ctx, repo)
+  }
+}
+
+/** What running the stuck checks again did, in plain words. */
+export function restartWords(r: RestartResult): string {
+  if (!r.rerun && !r.later && !r.cancelled) return 'Nothing was stuck any more: no check needed running again.'
+  const again = r.rerun ? `${r.rerun === 1 ? '1 workflow runs' : `${r.rerun} workflows run`} again` : ''
+  const later = r.later ? `${r.later === 1 ? '1 is' : `${r.later} are`} still stopping and ${r.later === 1 ? 'runs' : 'run'} again on trace's next look` : ''
+  const lead = [again, later].filter(Boolean).join('; ') || `${r.cancelled === 1 ? '1 stuck workflow was' : `${r.cancelled} stuck workflows were`} cancelled`
+  return `${lead[0]?.toUpperCase() ?? ''}${lead.slice(1)}. If the runner is still broken they wait again, and the change says why.`
 }
 
 export const CHANGE_ACTIONS = {
@@ -733,6 +773,12 @@ export const CHANGE_ACTIONS = {
     const d = await changeDetail(ctx, repo, number, { fresh: true })
     if (d.state !== 'open') throw new ActionError(d.state === 'merged' ? 'It is already accepted into the design.' : 'It was discarded.')
     const infra = d.infra_failed
+    // checks no runner picked up: cancelled and run again (src/api/stuck-checks.ts restartStuck)
+    if (!infra?.checks.length && d.stuck) {
+      const r = await rerunStuck(ctx, repo, new Set([d.head.sha]))
+      logLine(ctx, { event: 'change.rerun', repo, number, by: label(ctx.principal), stuck: r })
+      return { checks: [] as string[], runs: r.rerun, ...r, summary: restartWords(r) }
+    }
     if (!infra?.checks.length) throw new ActionError('None of its checks failed for a reason outside the work, so there is nothing to run again here.')
     const gh = await ctx.deps.github()
     if (typeof gh.request !== 'function') throw new ActionError('This installation cannot run checks again from the app yet: its update brings it.')
@@ -755,6 +801,23 @@ export const CHANGE_ACTIONS = {
     }
     logLine(ctx, { event: 'change.rerun', repo, number, by: label(ctx.principal), checks: infra.checks.map((c) => c.name), runs: [...runs] })
     return { checks: infra.checks.map((c) => c.name), runs: runs.size }
+  }),
+
+  /**
+   * Run again every check of the project's open changes that no runner picked up (ChangeSummary.stuck; test-esp32 log
+   * #146), once an admin has fixed the runner: the stuck queued runs are cancelled, which frees the concurrency group
+   * they hold, and the newest of each workflow and branch runs again (src/api/stuck-checks.ts restartStuck).
+   */
+  'changes.rerun_stuck': def('write', Repo, async ({ repo }, ctx) => {
+    spend(ctx)
+    bust(ctx, repo)
+    const open = await openChanges(ctx, repo)
+    const heads = new Set(open.flatMap(({ change: c }) => (c.stuck ? [c.number] : [])))
+    if (!heads.size) throw new ActionError('No change\'s checks are stuck waiting for a runner now, so there is nothing to run again.')
+    const { changes } = await tracePulls(ctx, repo)
+    const r = await rerunStuck(ctx, repo, new Set(changes.filter(({ pull }) => heads.has(pull.number)).map(({ pull }) => pull.sha).filter((x): x is string => !!x)))
+    logLine(ctx, { event: 'changes.rerun_stuck', repo, by: label(ctx.principal), ...r })
+    return { repo, changes: [...heads], ...r, summary: restartWords(r) }
   }),
 
   'change.diff': def('read', ChangeArgs.extend({ path: RepoPath }), async ({ repo, number, path }, ctx) => {

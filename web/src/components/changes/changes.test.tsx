@@ -157,7 +157,7 @@ describe('the mock change actions (dev:mock)', () => {
 
   it('lists, reads, diffs, refuses an early accept, and accepting moves Capture on', async () => {
     const list = await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })
-    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready'], [41, 'ready'], [15, 'blocked'], [16, 'blocked'], [17, 'unfinished'], [18, 'checking'], [19, 'ready'], [27, 'ready']])
+    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready'], [41, 'ready'], [15, 'blocked'], [16, 'blocked'], [17, 'unfinished'], [18, 'checking'], [19, 'ready'], [27, 'ready'], [42, 'blocked']])
     // its job is still running: trace says so, and does not recommend accepting it (log #68)
     expect(list.result.changes.find((c) => c.number === 18)?.working).toBe(true)
     // a stacked change names the one it builds on, and that one names it
@@ -176,7 +176,7 @@ describe('the mock change actions (dev:mock)', () => {
     expect(done.result.merged).toBe(true)
     const j = await call<Journey>('journey.get', { repo: 'acme/soil-sensor' })
     expect(j.result.next).toMatchObject({ kind: 'working', step: { index: 4, total: 5 } })
-    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => [c.number, c.verdict])).toEqual([[13, 'checking'], [14, 'ready'], [41, 'ready'], [15, 'ready'], [16, 'blocked'], [17, 'unfinished'], [18, 'checking'], [19, 'ready'], [27, 'ready']])
+    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => [c.number, c.verdict])).toEqual([[13, 'checking'], [14, 'ready'], [41, 'ready'], [15, 'ready'], [16, 'blocked'], [17, 'unfinished'], [18, 'checking'], [19, 'ready'], [27, 'ready'], [42, 'blocked']])
     expect((await call<{ id: string }[]>('inbox', {})).result.some((i) => i.id.includes(':12'))).toBe(false)
   })
 

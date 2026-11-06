@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/api/actions.js'
 import { AGENT_WORDS, jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
@@ -24,6 +24,7 @@ import {
   readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
+import { forgetRetries } from '../../src/api/stuck-checks.js'
 import type { JobRow } from '../../src/core/job-index.js'
 import { type CheckAnnotation, type CheckRunDetail, type CheckRunFull, GitHubError, HttpGitHub, type MergeMethod, type PullDetail, type PullFile, type PullStatus, type PullSummary } from '../../src/api/github.js'
 import { AccessDenied, type Principal, assign } from '../../src/core/access.js'
@@ -896,6 +897,79 @@ describe('a check that did not run properly (test-esp32 run 2, #126, #128, #99)'
     } finally {
       delete deps.sleep
     }
+  })
+})
+
+describe('checks no runner picks up (test-esp32 log #146)', () => {
+  // CodeBuild's message in run 2: every build of the runner failed in DOWNLOAD_SOURCE in about 11 s
+  const REFUSED = 'GitHub rejected the runner credential because it lacks the required permission (administration=write). Re-authorize the CodeConnections connection'
+  const hoursAgo = (h: number): string => new Date(Date.now() - h * 3600_000).toISOString()
+  const RUNS = `/repos/${REPO}/actions/runs`
+  /** change 4's checks queued 20 hours on the CodeBuild runner, whose builds fail on the connection */
+  const stuck = (o: { builds?: boolean } = {}): void => {
+    github.vars.set('TRACE_CODEBUILD_PROJECT', 'trace-ci-213dfa1f')
+    github.answers.set(RUNS, { workflow_runs: [{ id: 91, name: 'trace-prs', workflow_id: 7, head_branch: 'claude/task-wip', head_sha: sha(4), status: 'queued', created_at: hoursAgo(20) }] })
+    github.answers.set(`${RUNS}/91`, { id: 91, status: 'completed' })
+    github.answers.set(`${RUNS}/91/cancel`, null)
+    github.answers.set(`${RUNS}/91/rerun`, null)
+    if (o.builds !== false) deps.runnerBuilds = async () => [{ at: hoursAgo(1), status: 'FAILED', phase: 'DOWNLOAD_SOURCE', message: REFUSED }]
+  }
+  beforeEach(() => { forgetRetries() })
+  afterEach(() => { github.vars.delete('TRACE_CODEBUILD_PROJECT'); delete deps.runnerBuilds })
+
+  it('the rules: never "checking" or "still running" over checks that cannot start', () => {
+    const s = { runs: 1, since: hoursAgo(20), runner: 'trace-ci-1', why: 'the CodeBuild runner cannot get a GitHub runner token, because its GitHub connection lacks administration access', connection: true, fix: 'An admin re-authorizes the GitHub connection.' }
+    const f = facts({ mergeable: 'blocked', checks: checks({ passed: 0, running: 2 }), stuck: s })
+    expect(verdictOf(f)).toBe('blocked')
+    expect(recommendationOf(f)).toEqual({ verdict: 'wait', why: `Its checks cannot start: ${s.why}. It has waited 20 hours. ${s.fix}` })
+    expect(acceptance(f, true).blockers).toEqual([`Its checks cannot start: ${s.why}.`])
+    // a check that failed on the work still comes first
+    expect(verdictOf({ ...f, checks: checks({ failed: 1, failing: ['erc'] }) })).toBe('failing')
+  })
+
+  it('changes.list and change.get say the checks cannot start, why in CodeBuild\'s words, and what an admin does', async () => {
+    stuck()
+    const list = (await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]
+    const four = list.find((c) => c.number === 4)!
+    expect(four.verdict).toBe('blocked')
+    expect(four.stuck).toMatchObject({ runs: 1, runner: 'trace-ci-213dfa1f', connection: true, why: 'the CodeBuild runner cannot get a GitHub runner token, because its GitHub connection lacks administration access' })
+    expect((four.stuck as { fix: string }).fix).toMatch(/re-authorizes the GitHub connection with administration access/)
+    // the others are not stuck: their head commits have no queued run
+    expect(list.filter((c) => c.stuck).map((c) => c.number)).toEqual([4])
+    const d = await run(USER, 'change.get', { repo: REPO, number: 4 })
+    expect(d.recommendation).toEqual({ verdict: 'wait', why: expect.stringMatching(/^Its checks cannot start: the CodeBuild runner cannot get a GitHub runner token.*It has waited 20 hours\. An admin re-authorizes/) })
+    expect(d.blockers).toEqual([expect.stringMatching(/^Its checks cannot start/)])
+    expect(d.verdict).toBe('blocked')
+  })
+
+  it('trace may not read the runner\'s builds: it says no runner picks them up, and where an admin looks', async () => {
+    stuck({ builds: false })
+    const d = await run(USER, 'change.get', { repo: REPO, number: 4 })
+    expect(d.stuck).toMatchObject({ connection: false, why: 'no runner has picked it up in 20 hours' })
+    expect((d.stuck as { fix: string }).fix).toMatch(/trace-ci-213dfa1f, whose builds trace may not read/)
+  })
+
+  it('change.rerun and changes.rerun_stuck cancel the stuck run, freeing its group, and run it again', async () => {
+    stuck()
+    expect(await run(USER, 'change.rerun', { repo: REPO, number: 4 })).toMatchObject({ cancelled: 1, rerun: 1, later: 0, summary: expect.stringMatching(/^1 workflow runs again\./) })
+    expect(github.did).toEqual([`POST ${RUNS}/91/cancel`, `POST ${RUNS}/91/rerun`])
+    github.did.length = 0
+    expect(await run(ADMIN, 'changes.rerun_stuck', { repo: REPO })).toMatchObject({ changes: [4], cancelled: 1, rerun: 1 })
+    expect(github.did).toEqual([`POST ${RUNS}/91/cancel`, `POST ${RUNS}/91/rerun`])
+    await expect(run(REVIEWER, 'changes.rerun_stuck', { repo: REPO })).rejects.toThrow(AccessDenied)
+    // nothing stuck: nothing to run again
+    github.answers.set(RUNS, { workflow_runs: [] })
+    await expect(run(ADMIN, 'changes.rerun_stuck', { repo: REPO })).rejects.toThrow(/nothing to run again/)
+  })
+
+  it('journey.get: trace runs the stuck checks again on its own, at most every 30 minutes', async () => {
+    stuck()
+    await run(USER, 'journey.get', { repo: REPO })
+    expect(github.did).toEqual([`POST ${RUNS}/91/cancel`, `POST ${RUNS}/91/rerun`])
+    expect(logs.some((l) => l.event === 'checks.retried')).toBe(true)
+    github.did.length = 0
+    await run(USER, 'journey.get', { repo: REPO })
+    expect(github.did).toEqual([])
   })
 })
 

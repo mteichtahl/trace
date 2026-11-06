@@ -26,7 +26,11 @@
  *                                    problem belongs to
  *   question.answer         write    answer an agent's question: an option (the recommended one, or another with a
  *                                    reason) or an answer in words
- *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope
+ *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope;
+ *                                    `replaces` takes an earlier one again, withdrawing it (as waiver.withdraw)
+ *   waiver.withdraw         write    withdraw a waiver in force with a reason, kept in the decisions log: its author
+ *                                    or an admin, and not while a signed gate stands on it (reopen that stage first).
+ *                                    What it waived counts again (test-esp32 #149)
  *   stuck.dismiss           write    dismiss a stuck agent's report with a reason in one line: it leaves Home and the
  *                                    inbox, and the agent reads the dismissal and its reason (journey.status)
  *   journey.time            read     where the project's time went (Operations' Process tab): each started stage's
@@ -61,12 +65,12 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
   confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
-import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
+import { logLine, openChanges, openPulls, projectEdits, projectRule, rerunStuck } from './actions-changes.js'
 import { editorName, recordEdit } from './edits.js'
 import { RULES_PATH, proposeRule } from './rule-answers.js'
 import { recommendationOf } from './changes.js'
@@ -81,6 +85,8 @@ import { docsAfterDesign, docsReleaseRequest, recordNow, startScribe, startStage
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
+import { dueRetry, stuckFor, stuckLook } from './stuck-checks.js'
+import { waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
@@ -136,9 +142,10 @@ async function openReviews(ctx: Context, repo: string, project: string, stage: S
   const [pulls, jobs] = await Promise.all([openPulls(ctx, repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
   // no open pull request: nothing to tell apart, and the project's settings are not read for it
   if (!pulls.length) return []
-  const [rule, edits] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo)])
+  // checks no runner picks up: one look per project, kept a minute (src/api/stuck-checks.ts)
+  const [rule, edits, look] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo), stuckLook(ctx, repo).catch(() => null)])
   return [
-    ...reviewItems({ repo, project, stage, pulls, jobs, rule, agentWords: AGENT_WORDS }),
+    ...reviewItems({ repo, project, stage, pulls, jobs, rule, agentWords: AGENT_WORDS, stuck: (sha) => stuckFor(look, sha) }),
     ...editReviewItems({ repo, project, stage, pulls, edits, viewer: { admin: isAdmin(ctx.principal), sub: ctx.principal.sub } }),
   ]
 }
@@ -566,7 +573,7 @@ export const JOURNEY_ACTIONS = {
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
     const [{ result: { record: r0, followups }, version: v0 }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => ({ record: loadJourney(db), followups: loadFollowups(db) })), agentFacts(ctx, repo),
-      listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, error: null }), (e: unknown) => ({ jobs: [], rows: [], error: e instanceof Error ? e.message : String(e) }))])
+      listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, queue: x.queue, error: null }), (e: unknown) => ({ jobs: [], rows: [], queue: undefined, error: e instanceof Error ? e.message : String(e) }))])
     // a requirement changed after the baseline takes the project back to Define before a gate past it can be signed
     // (returnForChange). The record is read only when a gate is the next step, as changedFirst did
     let r = r0
@@ -605,17 +612,30 @@ export const JOURNEY_ACTIONS = {
     // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
     // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
     // could change the step, and its count is kept per default-branch commit and record version
-    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows, { next: view.next, version })
+    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows, { next: view.next, version, ...(jobs.queue ? { queue: jobs.queue } : {}) })
     const drafted = drafting ? draftingStep(view.next, r, drafting, viewer, drafting.why) : view.next
     // a job that ended without finishing (test-esp32 log #45, #46): one that left no change is started again once on
     // its own; otherwise the next step says it stopped and offers Start again, never "trace works on …" over it. The
     // drafting job has its own step (Draft the requirements again)
     const at = Date.now() / 1000
+    const held = await assertNotHeld(repo).then(() => false, () => true)
     const restarted = jobs.error ? [] : await restartLostJobs(ctx, repo, jobs, open.error ? null : new Set(open.list.map((c) => c.change.job_id).filter((x): x is string => x !== null)),
-      { held: await assertNotHeld(repo).then(() => false, () => true), at }).catch(() => [] as string[])
+      { held, at }).catch(() => [] as string[])
     const lost = jobs.error ? [] : openLostJobs(jobs.jobs, jobs.rows, at).filter((j) => !restarted.includes(j.title) && j.id !== drafting?.job?.id)
-    const next = lostJobStep(drafted, lost, viewer, (id) => { const row = jobs.rows.find((x) => x.id === lost.find((j) => j.id === id)?.workerJobId); return Boolean(row && restartable(row)) })
-    const stages = next !== drafted && next.job_id ? stoppedSteps(view.stages) : view.stages
+    const lostNext = lostJobStep(drafted, lost, viewer, (id) => { const row = jobs.rows.find((x) => x.id === lost.find((j) => j.id === id)?.workerJobId); return Boolean(row && restartable(row)) })
+    // checks no runner picks up (test-esp32 log #146): trace cancels and runs them again on its own now and then, which
+    // is also how it notices the runner was fixed (src/api/stuck-checks.ts)
+    const look = open.error || held ? null : await stuckLook(ctx, repo, at).catch(() => null)
+    if (dueRetry(repo, look, at)) {
+      await rerunStuck(ctx, repo, null, look).then(
+        (r) => logLine(ctx, { event: 'checks.retried', repo, by: 'trace', ...r }),
+        (e: unknown) => logLine(ctx, { warning: 'journey.get: the stuck checks could not be run again', repo, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) }),
+      )
+    }
+    // who the step waits on when it would say trace is working and nothing of trace's is (test-esp32 log #146, #147)
+    const waits = waitsOn(lostNext, { changes: open.list.map((x) => x.change), working: jobs.error ? 1 : workingNow(jobs.rows, at), gates: view.gates, viewer, at })
+    const next = waits.step
+    const stages = waitsOnSteps(lostNext !== drafted && lostNext.job_id ? stoppedSteps(view.stages) : view.stages, waits.owner)
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, stages, next: await changedFirst(ctx, repo, r, next),
       ...(restarted.length ? { jobs_restarted: restarted } : {}),
@@ -632,11 +652,12 @@ export const JOURNEY_ACTIONS = {
   'requirements.draft': def('write', Repo, async ({ repo }, ctx) => {
     const [{ result: r, version }, list] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), listJobs(ctx, repo)])
     if (!r) throw new ActionError('This project has not started its journey yet.')
-    const d = await draftingNow(ctx, repo, r, list.rows, { version })
+    const d = await draftingNow(ctx, repo, r, list.rows, { version, queue: list.queue })
     if (!d) throw new ActionError(r.journey.currentStage === 'define' ? 'trace could not read the requirements just now, so it does not start drafting them again. Try again in a minute.' : 'The requirements are drafted already: the project is past Define.')
     if (d.state !== 'stopped') {
       throw new ActionError({
         intent: 'Write and submit the intent in the Intent builder first: trace drafts the requirements from it.',
+        waiting: 'trace drafts the requirements once this project\'s agent is set up: the drafting is queued already.',
         drafting: 'trace is drafting the requirements already.',
         drafted: 'The requirements are drafted: they wait in a change from the Verification specialist. Accept it to bring them into Requirements review.',
         done: 'The requirements are in the record: decide them in Requirements review.',
@@ -853,16 +874,26 @@ export const JOURNEY_ACTIONS = {
     severity: z.enum(SEVERITIES),
     caught_where: z.string().trim().max(300).nullable(),
     scope: z.string().trim().min(1).max(300).default('this revision only'),
+    // the waiver this one takes again: it is withdrawn as this one is recorded
+    replaces: Id.optional(),
   }), async (a, ctx) => {
     const facts = await agentFacts(ctx, a.repo)
     const before = a.target.kind === 'criterion' ? await designBefore(ctx, a.repo) : null
     const out = await journeyWrite(ctx, a.repo, (db) => {
-      const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx), { facts })
-      return { result: { repo: a.repo, waiver: w } }
+      const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, { ...signer(ctx), admin: isAdmin(ctx.principal) }, { facts, replaces: a.replaces })
+      return { result: { repo: a.repo, waiver: w, ...(a.replaces ? { replaced: a.replaces } : {}) } }
     })
     // a criterion waived may be the last of the stage's design work: its documents are written now
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     return docs.started ? { ...out, started: [docs.started] } : out
+  }),
+
+  'waiver.withdraw': def('write', Repo.extend({ waiver: Id, reason: z.string().trim().min(1).max(2000) }), async (a, ctx) => {
+    const facts = await agentFacts(ctx, a.repo)
+    return journeyWrite(ctx, a.repo, (db) => {
+      const w = withdrawWaiver(db, a.waiver, { ...signer(ctx), admin: isAdmin(ctx.principal) }, a.reason, { facts })
+      return { result: { repo: a.repo, waiver: w, summary: `Withdrawn. ${w.target.kind === 'criterion' ? 'The criterion counts again: it is not met until it is met or waived again.' : `The ${w.target.kind} counts again.`}` } }
+    })
   }),
 
   'journey.time': def('read', Repo, async ({ repo }, ctx) => {

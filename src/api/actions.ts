@@ -99,7 +99,7 @@
  * The web app's actions are in their own files, each spread into ACTIONS (src/api/action-kit.ts holds what they share):
  *
  *   actions-projects.ts  project.members, projects.create
- *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, inbox
+ *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, waiver.withdraw, inbox
  *   actions-chats.ts     chats.list, chats.get, chats.append, chats.reply, chats.rename, chats.recall
  *   actions-me.ts        me.get, me.set
  *   actions-push.ts      push.subscribe, push.unsubscribe, push.devices
@@ -113,7 +113,7 @@
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-design.ts    design.decide
  *   actions-changes.ts   changes.list, change.get, change.check, change.diff, change.accept, change.ask, change.discard,
- *                        change.rerun
+ *                        change.rerun, changes.rerun_stuck
  *                        (people's app edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
  *   actions-rules.ts     repo.rules.fix
  *   actions-handin.ts    design.handin (KiCad files handed in: one commit on trace/handin-…, recorded as an app edit)
@@ -132,7 +132,7 @@
  *                        next drift check (docs/scribe.md "Publishing")
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
- *   actions-changes.ts   changes.list, change.get, change.check, change.diff (read); change.accept, change.ask, change.discard, change.rerun (write,
+ *   actions-changes.ts   changes.list, change.get, change.check, change.diff (read); change.accept, change.ask, change.discard, change.rerun, changes.rerun_stuck (write,
  *                        never a connected system's): the pull requests trace's jobs opened, reviewed and accepted
  *                        in the app as changes (docs/guided-flow.md)
  *

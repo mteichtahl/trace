@@ -30,7 +30,7 @@ import type { StageId } from '../core/journey-catalog.js'
 import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { DOC_KINDS, DOCS, docsFor, type DocKind, type SourceKind } from '../docs/catalog.js'
 import { parseDoc } from '../docs/markers.js'
-import { sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
+import { dueSections, sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
 import { designWorkLeft, loadJourney, mergeAgentFacts, type CriterionRow, type JourneyRecord } from '../core/journey.js'
 import { type Context, agentFacts, journeyStore, label, PROJECT_DB_PATH } from './action-kit.js'
 import { tracePulls } from './actions-changes.js'
@@ -173,13 +173,27 @@ export const waitWords = (r: JourneyRecord, left: readonly CriterionRow[]): stri
   `${STAGE_NAMES[r.journey.currentStage]}'s documents are written once its design work lands; still to come: ${left.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`
 
 /**
+ * Why a change starts no Documentation job: the records it changed feed no section due at the current stage, in
+ * words, or null when they feed one (or the caller named no records: a stage opening, a missing document). Pure.
+ */
+export function notDueWords(stage: StageId, records: readonly SourceKind[] | undefined): string | null {
+  if (!records?.length || dueSections(new Set(records), stage).length) return null
+  return `The records that changed (${records.join(', ')}) feed no section due at ${STAGE_NAMES[stage]}, so the documents are not written again for them now: the stage that needs those sections writes them, from everything that changed since.`
+}
+
+/**
  * Start Scribe on the current stage's documents, unless that stage still has design work to land (designWorkLeft):
  * then nothing starts and `waiting` says what it waits for; the push or the person's act that lands the last of it
- * starts Scribe then (docsAfterDesign). `rec`: the record with the agents' facts, when the caller has it.
+ * starts Scribe then (docsAfterDesign). `records`: what the push changed; when none of it feeds a section due at the
+ * stage, nothing starts (notDueWords) unless `anyway` (a document is missing). `rec`: the record with the agents' facts, when the caller has it.
  */
-export async function startStageScribe(ctx: Context, repo: string, why: string, o: { rec?: JourneyRecord | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; waiting?: string }> {
+export async function startStageScribe(ctx: Context, repo: string, why: string, o: { rec?: JourneyRecord | null; records?: readonly SourceKind[]; also?: readonly SourceKind[]; anyway?: boolean } = {}): Promise<{ jobId?: string; started?: string; skipped?: string; jobError?: string; waiting?: string }> {
   const r = o.rec ?? await recordNow(ctx, repo)
   if (!r) return { skipped: 'The project has no journey yet.' }
+  // a change that feeds only later stages' sections is written when they are due, once, not on every push before
+  // (each Documentation job reads the documents and the records afresh: test-esp32 run 2 ran 17 of them before Sign-off)
+  const notDue = o.also?.length || o.anyway ? null : notDueWords(r.journey.currentStage, o.records)
+  if (notDue) return { skipped: notDue }
   const left = designWorkLeft(r)
   if (left.length) return { waiting: waitWords(r, left) }
   return startScribe(ctx, repo, docsRequest(why, { stage: r.journey.currentStage, ...(o.records ? { records: o.records } : {}), ...(o.also ? { also: o.also } : {}) }))
@@ -221,5 +235,6 @@ export async function driftOf(ctx: Context, repo: string, stage: StageId): Promi
     '.',
   ].join('')
   // the stage's design work still to land: the documents wait for it, as they do on a push
-  return { ...out, ...(await startStageScribe(ctx, repo, why, { records: out.records })) }
+  // a document missing, or one with no commit to compare from, is written whatever the records feed
+  return { ...out, ...(await startStageScribe(ctx, repo, why, { records: out.records, anyway: out.missing.length > 0 || unknown })) }
 }

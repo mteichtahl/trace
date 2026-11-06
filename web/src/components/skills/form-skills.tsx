@@ -3,12 +3,14 @@
  *
  * - Waiver: what is waived (with trace's recommendation: waive or fix now), the reason, the risk and its severity,
  *   where it is caught instead, the scope → waiver.add. "Not needed" alone is refused; a safety waiver must name
- *   where it is verified and cannot be accepted for good.
+ *   where it is verified and cannot be accepted for good. Taken again from an earlier waiver (`replaces`, its "Take it
+ *   again"), the form opens filled in from that one, and taking the new one withdraws it (test-esp32 #149).
  * - Change request: what changes and why, the impact trace traced (stages that reopen, gates to re-sign, evidence that
  *   goes stale, cost and time) acknowledged, the scope → a `task` for the agents to raise it for approval at a gate.
  *   A released revision is never edited: a change to it opens the next revision.
  */
 import { ArrowRight } from 'lucide-react'
+import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -22,7 +24,8 @@ import { FocusLayout } from '@/components/focus/focus-layout'
 import { StatusBadge } from '@/components/status-badge'
 import { QueryError } from '@/components/states'
 import { call } from '@/lib/api'
-import type { CriterionStatus } from '@/lib/types'
+import { useJourney } from '@/lib/queries'
+import type { CriterionStatus, Waiver } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
@@ -43,6 +46,30 @@ export interface WaiverDraft extends SkillDraftBase {
   scope: 'revision' | 'condition' | ''
   condition: string
   reasonAgainst?: string
+  /** the waiver this one takes again: withdrawn when this one is taken */
+  replaces?: string
+}
+
+/**
+ * A draft filled in from a waiver taken before ("Take it again"): what it waives, its reason, risk, severity, where
+ * it is caught instead and its scope, as the record has them (src/api/actions-skills.ts writes "On the bench: …" and
+ * "At a later stage: …"; one recorded from an answer keeps the agent's words, read as a later stage). Pure.
+ */
+export function draftFrom(w: Waiver): Partial<WaiverDraft> {
+  const caught = w.caught ?? ''
+  const bench = /^On the bench:\s*/i.exec(caught)
+  const later = /^At a later stage:\s*/i.exec(caught)
+  const nowhere = !caught.trim() || /^Nowhere\b/i.test(caught)
+  const until = /^until\s+(.+)$/i.exec((w.scope ?? '').trim())
+  return {
+    replaces: w.id,
+    ...(w.target ? { what: `${w.target.kind}:${w.target.id}` } : {}),
+    reason: w.reason, risk: w.riskText ?? '',
+    ...(w.severity && ['cosmetic', 'degraded', 'failure', 'safety'].includes(w.severity) ? { severity: w.severity as Severity } : {}),
+    caught: nowhere ? 'nowhere' : bench ? 'bench' : 'later',
+    where: nowhere ? '' : caught.slice((bench ?? later)?.[0].length ?? 0),
+    scope: until ? 'condition' : 'revision', condition: until?.[1] ?? '',
+  }
 }
 
 const VAGUE = /^(not needed|n\/?a|none|no need|unnecessary|not required|later|tbd|-+)\.?$/i
@@ -67,12 +94,26 @@ const SEVERITIES: { id: Severity; label: string; detail: string }[] = [
   { id: 'safety', label: 'Safety', detail: 'Someone or something could be harmed' },
 ]
 
-export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef; about?: string }) {
+export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def: SkillDef; about?: string | undefined; replaces?: string | undefined }) {
   const s = useSkill<WaiverDraft>(repo, def, { done: [], what: about, reason: '', risk: '', caught: '', where: '', scope: '', condition: '' })
   const v = s.view.data
   const d = s.draft.data
   const set = (p: Partial<WaiverDraft>) => s.draft.setData((x) => ({ ...x, ...p }))
-  const target = v?.waivable?.find((w) => w.id === d.what)
+  // taken again: filled in from the waiver once it is read, over any draft kept from before
+  const j = useJourney(repo)
+  const from = replaces ? j.data?.waivers.find((w) => w.id === replaces && !w.closed) : undefined
+  useEffect(() => {
+    if (from && d.replaces !== from.id) s.draft.setData((x) => ({ ...x, ...draftFrom(from) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from?.id])
+  // what it waives is waived now, so the skill does not offer it: it is offered here, first
+  const waivable = [
+    ...(from?.target && !v?.waivable?.some((w) => w.id === `${from.target!.kind}:${from.target!.id}`)
+      ? [{ id: `${from.target.kind}:${from.target.id}`, kind: (from.target.kind === 'finding' || from.target.kind === 'test' ? from.target.kind : 'requirement') as 'requirement' | 'finding' | 'test', title: from.title, why: `Waived now by ${from.id}, which taking this one withdraws.` }]
+      : []),
+    ...(v?.waivable ?? []),
+  ]
+  const target = waivable.find((w) => w.id === d.what)
   const againstRec = target?.recommendation === 'fix'
   const local = { ...waiverChecks(d), reasons: againstRec && (d.reasonAgainst ?? '').trim().length < 3 ? 'not_met' as const : 'met' as const }
   const checks = qualityChecks(def, v, local, s.goTo)
@@ -88,21 +129,27 @@ export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef;
       onClose={s.close}
       outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
-      onSubmit={() => s.submit(() => call('skill.submit', { repo, skill: def.id, draft: d }), 'Waiver taken. It is listed at every later gate until it closes.')}
+      onSubmit={() => s.submit(() => call('skill.submit', { repo, skill: def.id, draft: d }), d.replaces ? `Waiver taken again. ${d.replaces} is withdrawn, and the record keeps both.` : 'Waiver taken. It is listed at every later gate until it closes.')}
       trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >
       <StepHeader def={def} index={s.stepIndex} />
+      {d.replaces && (
+        <p className="mt-4 rounded-lg border bg-muted/40 p-3 text-sm">
+          Taking {d.replaces} again: it is filled in as it was taken. Correct what was wrong; taking this one withdraws {d.replaces}, and the record keeps both.
+        </p>
+      )}
       {s.view.isError && <div className="mt-4"><QueryError error={s.view.error} what="what can be waived" onRetry={() => void s.view.refetch()} /></div>}
       <div className="mt-5 space-y-4">
         {s.step.id === 'what' && (
           <>
             <RadioGroup value={d.what ?? ''} onValueChange={(x) => set({ what: x })} aria-label="What is waived" className="gap-2">
-              {(v?.waivable ?? []).map((w) => (
+              {waivable.map((w) => (
                 <Label key={w.id} className="flex cursor-pointer items-start gap-3 rounded-xl border p-4 font-normal has-[[data-state=checked]]:border-primary">
                   <RadioGroupItem value={w.id} className="mt-0.5" />
                   <span className="min-w-0 flex-1 space-y-1">
                     <span className="flex flex-wrap items-center gap-2"><span className="font-medium">{w.title}</span><span className="text-xs capitalize text-muted-foreground">{w.kind}</span></span>
                     {w.recommendation && <span className="block text-sm"><span className={cn('rounded-sm px-1.5 py-0.5 text-xs', w.recommendation === 'waive' ? 'bg-primary/10 text-primary' : 'bg-muted')}>trace recommends: {w.recommendation === 'waive' ? 'waive' : 'fix it now'}</span> <span className="text-muted-foreground">{w.why}</span></span>}
+                    {!w.recommendation && w.why && <span className="block text-sm text-muted-foreground">{w.why}</span>}
                     {w.evidence && <EvidenceChip evidence={w.evidence} />}
                   </span>
                 </Label>

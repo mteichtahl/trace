@@ -422,7 +422,7 @@ function CreatedView({ created, draft: d, onOpen, onClose }: { created: Created;
         </div>
         {waitsForAgent && <AgentSetupNotice repo={created.repo} className="mt-4" />}
         <p className="mt-3 text-sm text-muted-foreground">{settingUp
-          ? 'You can look around and start writing now. Until the agent is ready, trace can\'t start work; the project says when it is.'
+          ? 'You can start now: open the project and write its intent in the Intent builder. Work you submit or ask trace for while the agent is being set up is queued, and starts by itself once it is ready.'
           : 'You can start now; anything still waiting finishes on its own and says so here and on the project.'}</p>
         <Button size="lg" className="mt-6" onClick={() => { toast(`${d.name} created.`); onOpen() }}>{openLabel(settingUp)}</Button>
       </div>

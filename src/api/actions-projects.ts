@@ -57,7 +57,7 @@ import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPL
 import { forgetNoJourney } from '../core/journey-store.js'
 import { lifecycleOf } from '../core/lifecycle.js'
 import { projects as registered, register } from '../core/onboard.js'
-import { projectSlug } from '../core/project.js'
+import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { FLAT_UPDATE_MAX, type PendingRecord, PendingRecordSchema } from '../installer/pending.js'
 import { GitHubError, type GitHubApi, type RunSummary } from './github.js'
 import { cached } from './github-cache.js'
@@ -65,6 +65,7 @@ import { ActionError, type Context, Repo, def, hashOf, label, storeAt, withJourn
 import { appliesOf } from '../core/app-edits.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
 import { editStore, editorName } from './edits.js'
+import { startQueued } from './agent-queue.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
 
@@ -285,17 +286,33 @@ export function logTail(text: string, n: number = FAILED_LOG_LINES): string {
   return lines.slice(-n).map((l) => l.replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z ?/, '')).join('\n')
 }
 
-/** The update's run on GitHub for a request: the newest run of trace's ci workflow on the self-update's branch started
- * after the request (a minute's slack for clocks). Pure. */
+/**
+ * The update's run on GitHub for a request: of the runs of trace's ci workflow on the self-update's branch started
+ * after the request (a minute's slack for clocks), every one of which takes in the pending projects, the first that
+ * succeeded (it is the one that added the project); else the first still queued or running (the one that will); else
+ * the newest (it failed, or was cancelled). Not simply the newest: a merge to that branch after the update finished
+ * starts another run, still queued, and the notice followed that one, "queued" with nothing started, half an hour after
+ * the update that mattered had finished (test-esp32 log #5). Pure.
+ */
 export function updateRunFor(runs: readonly RunSummary[], branch: string, requestedAt: string | null): RunSummary | null {
   const after = requestedAt ? Date.parse(requestedAt) - 60_000 : -Infinity
-  return [...runs]
+  const mine = [...runs]
     .filter((r) => r.path.endsWith(`/${UPDATE_WORKFLOW}`) && (r.branch ?? '') === branch && Date.parse(r.created_at) >= after)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+  return mine.find((r) => r.status === 'completed' && r.conclusion === 'success')
+    ?? mine.find((r) => r.status !== 'completed')
+    ?? mine.at(-1) ?? null
 }
 
-const runStatus = (r: RunSummary): NonNullable<AgentSetup['update']>['status'] =>
-  r.status !== 'completed' ? (r.status === 'in_progress' ? 'running' : 'queued') : r.conclusion === 'success' ? 'finished' : 'failed'
+/**
+ * The run's state as the notice says it. A run GitHub still calls queued whose jobs have begun is running: the steps
+ * are read apart from the run (updateProgress), and the notice never says "queued" above a step that is done. Pure.
+ */
+export function runStatus(r: RunSummary, steps?: readonly UpdateStep[]): NonNullable<AgentSetup['update']>['status'] {
+  if (r.status === 'completed') return r.conclusion === 'success' ? 'finished' : 'failed'
+  if (r.status === 'in_progress' || steps?.some((s) => s.state !== 'waiting')) return 'running'
+  return 'queued'
+}
 
 /**
  * How a project's agent stands, from what the API knows: whether it has the project's runtime (ready), the pending
@@ -309,6 +326,8 @@ export function agentSetup(o: {
   progress?: { steps: UpdateStep[]; failed_log: string | null } | null
   /** how long this installation's update usually takes (typicalUpdateMs); absent or null: SETUP_MS */
   typicalMs?: number | null
+  /** GitHub could not be asked how the update stands (updateRun): said so, never guessed */
+  unread?: boolean
 }): AgentSetup {
   const now = o.now ?? Date.now()
   const base = { repo: o.repo, requested_at: o.record?.requested_at ?? null, update: null, expected_by: null }
@@ -322,12 +341,18 @@ export function agentSetup(o: {
     return { ...base, ready: false, state: 'failed', next_check_s: STALLED_CHECK_S,
       text: `The installation update could not add this project's agent${o.admin && r.last_error ? ` (last: ${r.last_error})` : ''}. An admin can add it by running the installer.` }
   }
+  const update = o.run ? {
+    status: runStatus(o.run, o.progress?.steps), started_at: o.run.created_at, ...(o.admin ? { url: o.run.url } : {}),
+    // the log of trace's own update is an admin's, like its link: everyone else sees the steps
+    ...(o.progress ? { steps: o.progress.steps, failed_log: o.admin ? o.progress.failed_log : null } : {}),
+  } : null
   if (r.status === 'added') {
     // from when the update marked it added (a record from before added_at: from now, as before)
     const by = (Date.parse(r.added_at ?? '') || now) + ADDED_MS
     const late = now > by
     return {
-      ...base, ready: false, state: 'finishing', expected_by: new Date(by).toISOString(),
+      // the update's run as it ended, its steps done, when it could be read: the notice moves on from it, not back to none
+      ...base, ready: false, state: 'finishing', update, expected_by: new Date(by).toISOString(),
       // once it is late only a person can move it on (the service may need restarting): looked at less often
       next_check_s: late ? STALLED_CHECK_S : ADDED_CHECK_S,
       text: late
@@ -335,11 +360,6 @@ export function agentSetup(o: {
         : 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.',
     }
   }
-  const update = o.run ? {
-    status: runStatus(o.run), started_at: o.run.created_at, ...(o.admin ? { url: o.run.url } : {}),
-    // the log of trace's own update is an admin's, like its link: everyone else sees the steps
-    ...(o.progress ? { steps: o.progress.steps, failed_log: o.admin ? o.progress.failed_log : null } : {}),
-  } : null
   // the update finished well ago and still did not mark this request added: it left the project out (in a flat
   // installation, most likely for its project limit); only the installer, or an admin, adds it now
   // (when it finished: GitHub's updated_at; without it nothing is concluded)
@@ -358,7 +378,10 @@ export function agentSetup(o: {
   const usual = o.typicalMs ?? null
   const expected = from + (usual ?? SETUP_MS)
   const late = now > expected + (usual ? LATE_SLACK_MS : 0)
-  const progress = !update
+  const progress = !update && o.unread
+    // nothing from GitHub: said so, not a guess at "queued" or "asked for" (test-esp32 log #5)
+    ? 'trace can\'t read how the installation update stands on GitHub just now, so it can\'t say how far it has got. It keeps looking; the notice clears by itself once the agent is set up.'
+    : !update
     ? (o.selfUpdate ? `trace has asked for the installation update that adds this project's agent; it usually takes ${usualWords(usual)}.` : 'The agent is added the next time an admin runs the installer.')
     : update.status === 'queued' ? `The installation update is waiting for its turn to start; once it starts it usually takes ${usualWords(usual)}.`
       : update.status === 'running' ? 'The installation update is running: it is adding this project\'s agent to the installation.'
@@ -384,17 +407,19 @@ async function pendingRecord(ctx: Context, repo: string): Promise<PendingRecord 
 }
 
 /** The self-update's update run for this request on GitHub, and how long its updates usually take (typicalUpdateMs);
- * nulls when there is no self-update or GitHub would not say. */
-async function updateRun(ctx: Context, requestedAt: string | null, selfUpdate: string | undefined): Promise<{ run: RunSummary | null; typicalMs: number | null }> {
+ * nulls when there is no self-update, and `unread` too when GitHub would not say. Only the ci workflow's runs on the
+ * self-update's branch are asked for: every run of trace's repository (each pull request's checks, the stack's own
+ * workflow) pushed the update's run out of the newest 30 on a busy day. */
+async function updateRun(ctx: Context, requestedAt: string | null, selfUpdate: string | undefined): Promise<{ run: RunSummary | null; typicalMs: number | null; unread: boolean }> {
   const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
-  if (!m?.[1] || !m[2]) return { run: null, typicalMs: null }
+  if (!m?.[1] || !m[2]) return { run: null, typicalMs: null, unread: false }
   const [repo, branch] = [m[1], m[2]]
   try {
     const gh = await ctx.deps.github()
-    const runs = await cached(ctx.deps.githubCache, repo, 'update-runs', () => gh.workflowRuns(repo, 30), RUN_TTL_MS)
-    return { run: updateRunFor(runs, branch, requestedAt), typicalMs: typicalUpdateMs(runs, branch) }
+    const runs = await cached(ctx.deps.githubCache, repo, `update-runs-${branch}`, () => gh.workflowRuns(repo, 30, { workflow: UPDATE_WORKFLOW, branch }), RUN_TTL_MS)
+    return { run: updateRunFor(runs, branch, requestedAt), typicalMs: typicalUpdateMs(runs, branch), unread: false }
   } catch {
-    return { run: null, typicalMs: null }
+    return { run: null, typicalMs: null, unread: true }
   }
 }
 
@@ -497,10 +522,15 @@ export const PROJECT_ACTIONS = {
     const jobs = await ctx.deps.jobs()
     const hasAgent = jobs.hasAgent ? jobs.hasAgent(repo) : true
     const selfUpdate = process.env.TRACE_SELF_UPDATE
+    // the agent is there: the work asked for while it was being set up starts now (src/api/agent-queue.ts), not only
+    // at the next look at the project's jobs (the new project's finished screen asks for none)
+    if (hasAgent && jobs.hasAgent) await startQueued(jobs, storeAt(ctx, PROJECTS_PREFIX), repo).catch(() => [])
     const record = hasAgent ? null : await pendingRecord(ctx, repo).catch(() => null)
-    const { run, typicalMs } = !hasAgent && record?.status === 'pending' ? await updateRun(ctx, record.requested_at ?? null, selfUpdate) : { run: null, typicalMs: null }
+    // the run is read while the request is pending, and once the update marked it added (its steps then show done)
+    const follow = !hasAgent && (record?.status === 'pending' || record?.status === 'added')
+    const { run, typicalMs, unread } = follow ? await updateRun(ctx, record?.requested_at ?? null, selfUpdate) : { run: null, typicalMs: null, unread: false }
     const progress = run ? await updateProgress(ctx, run, selfUpdate) : null
-    return agentSetup({ repo, hasAgent, record, run, progress, typicalMs, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
+    return agentSetup({ repo, hasAgent, record, run, progress, typicalMs, unread, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
   }),
 
   'projects.create': def('admin', Create, async (a, ctx) => {

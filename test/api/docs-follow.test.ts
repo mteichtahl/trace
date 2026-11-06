@@ -149,7 +149,7 @@ describe('Scribe starting on a push', () => {
   it('starts no second Scribe while one is working on the project', async () => {
     const before = started.length
     running = [{ id: 'job-x', repository: REPO, agent: 'docs', state: 'running', kind: 'task' }]
-    github.commit = { files: ['mechanical/case.py'], parent: 'sha-parent' }
+    github.commit = { files: ['hardware/power.kicad_sch'], parent: 'sha-parent' }
     const r = await run(BACKEND, { repo: REPO })
     expect(r.skipped).toMatch(/already working/)
     expect(started.length).toBe(before)
@@ -173,6 +173,34 @@ describe('Scribe starting on a push', () => {
     expect(s.request).toMatch(/default branch moved to sha-main/)
     expect(s.request).toMatch(/Push to claude\/task-docs-8/)
     github.openList = []
+  })
+
+  // test-esp32 run 2: the thermal specialist's record at Architect (Power and thermal sections are due at Prove) and the
+  // case at Capture each started a Documentation job of their own; the stage that needs those sections writes them
+  it('starts nothing for a push that feeds only sections due at a later stage, and says so', async () => {
+    const before = started.length
+    github.commit = { files: ['mechanical/case.py', 'mechanical/case.json'], parent: 'sha-parent' }
+    const r = await run(BACKEND, { repo: REPO })
+    expect(r).toMatchObject({ records: ['enclosure'], started: null })
+    expect(r.skipped).toBe('The records that changed (enclosure) feed no section due at Capture, so the documents are not written again for them now: the stage that needs those sections writes them, from everything that changed since.')
+    expect(started.length).toBe(before)
+  })
+
+  it('starts nothing for a push whose checks were only run again with the same outcome', async () => {
+    const before = started.length
+    const db = (runs: number): Buffer => {
+      const dir = mkdtempSync(join(scratch, 'reruns-'))
+      mkdirSync(join(dir, '.git'))
+      const d = openProject(dir)
+      for (let i = 0; i < runs; i++) d.prepare("INSERT INTO runs (id, kind, subject, started, status, summary) VALUES (?, 'kicad.erc', 'hw/board.kicad_pro', ?, 'pass', 'ERC: 0 errors, 0 warnings')").run(`erc-${i}`, i + 1)
+      d.close()
+      return readFileSync(join(dir, '.trace', 'project.db'))
+    }
+    github.files.set(`${REPO}:sha-parent:.trace/project.db`, db(1))
+    github.files.set(`${REPO}:sha-main:.trace/project.db`, db(3))
+    github.commit = { files: ['.trace/project.db'], parent: 'sha-parent' }
+    expect(await run(BACKEND, { repo: REPO })).toMatchObject({ records: [], started: null, why: 'the push changed no record a document is written from' })
+    expect(started.length).toBe(before)
   })
 
   it('asks Scribe to compare with the documents\' last commit, and to stop when nothing needs writing', () => {
@@ -264,7 +292,17 @@ describe('the nightly drift check', () => {
     expect(started.length).toBe(before)
   })
 
-  it('starts Scribe when a document the stage needs is missing', async () => {
+  it('starts nothing for records that feed only a later stage\'s sections', async () => {
+    const before = started.length
+    github.compare.set('abc1234def', ['mechanical/case.py'])
+    const r = await drift()
+    expect(r).toMatchObject({ records: ['enclosure'], missing: [], started: null, skipped: expect.stringMatching(/^The records that changed \(enclosure\) feed no section due at Capture/) })
+    expect(started.length).toBe(before)
+
+    github.compare.set('abc1234def', ['docs/design/high-level-design.md'])
+  })
+
+  it('starts Scribe when a document the stage needs is missing, whatever the records feed', async () => {
     github.files.delete(`${REPO}:sha-main:docs/design/low-level-design.md`)
     const r = await drift()
     expect(r.missing).toEqual(['lld'])
