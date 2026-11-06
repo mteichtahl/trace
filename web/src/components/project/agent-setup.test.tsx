@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TaskConfirmCard } from '@/components/chat/cards'
 import { auth } from '@/lib/auth'
 import type { AgentSetup } from '@/lib/types'
-import { AgentSetupNotice, UpdateProgress, agentQueueNote, createdTitle, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
+import { AgentSetupNotice, UpdateProgress, agentQueueNote, createdTitle, lookLine, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
 
 const NOW = Date.parse('2026-11-02T10:00:00Z')
 const setup = (o: Partial<AgentSetup> = {}): AgentSetup => ({
@@ -37,6 +37,22 @@ describe('the words of the notice', () => {
     expect(setupLookEvery(undefined)).toBe(false)
     expect(lookWords('next look in 40 s')).toBe('trace looks again in 40 s.')
     expect(lookWords('looking now')).toBe('trace is looking now.')
+  })
+
+  it('what it says of its own looks is what happened: "looking now" only while it looks (log #5: it said so for half an hour)', () => {
+    const at = NOW - 30 * 60_000
+    const base = { every: 60_000, fetching: false, updatedAt: NOW - 20_000, failedAt: 0, error: null, now: NOW }
+    expect(lookLine(base)).toBe('trace looks again in 40 s.')
+    expect(lookLine({ ...base, fetching: true })).toBe('trace is looking now.')
+    // past its time and nothing looking (a tab the browser held back): when it last looked, not "looking now"
+    const stale = lookLine({ ...base, updatedAt: at })
+    expect(stale).toMatch(/^trace last looked at \d\d:\d\d\.$/)
+    // a look that failed: said, with what is shown and from when, and when it tries again
+    const failed = lookLine({ ...base, updatedAt: at, failedAt: NOW - 10_000, error: 'You are making requests too quickly.' })
+    expect(failed).toMatch(/^trace could not look just now \(You are making requests too quickly\)\. What is shown is from \d\d:\d\d\. It tries again in 50 s\.$/)
+    // a good look after the failed one: the failure is behind it
+    expect(lookLine({ ...base, failedAt: NOW - 50_000, error: 'gone' })).toBe('trace looks again in 40 s.')
+    expect(lookLine({ ...base, every: false })).toBeNull()
   })
 
   it('what waits for the agent: only an answer that says it is not ready', () => {
@@ -103,6 +119,41 @@ describe('the notice', () => {
     } finally {
       focusManager.setFocused(undefined)
     }
+  })
+
+  it('a tab in the background still looks at the API\'s time, and the notice moves on with the update as it happens (log #5)', async () => {
+    const answers = [
+      setup({ text: 'The installation update is waiting for its turn to start.', update: { status: 'queued', started_at: '2026-11-02T09:41:00Z', steps: [{ name: 'Deploy', state: 'waiting' }] }, next_check_s: 1 }),
+      setup({ update: { status: 'running', started_at: '2026-11-02T09:41:00Z', steps: [{ name: 'Deploy', state: 'running' }] }, next_check_s: 1 }),
+      setup({ ready: true, state: 'ready', next_check_s: null }),
+    ]
+    let i = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(answers[Math.min(i++, answers.length - 1)]))
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
+    try {
+      focusManager.setFocused(false)
+      render(<AgentSetupNotice repo="acme/new" />, { wrapper })
+      expect(await screen.findByText('Deploy')).toBeInTheDocument()
+      expect(screen.getByText('Deploy').parentElement).toHaveTextContent('Deploy: waiting')
+      await waitFor(() => expect(screen.getByText('Deploy').parentElement).toHaveTextContent('Deploy: running'), { timeout: 3000 })
+      await waitFor(() => expect(screen.queryByText('trace is setting up this project\'s agent')).toBeNull(), { timeout: 3000 })
+    } finally {
+      focusManager.setFocused(undefined)
+    }
+  })
+
+  it('a look that fails is said, with what is shown and from when; never "looking now" while nothing looks', async () => {
+    let fail = false
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (fail
+      ? new Response(JSON.stringify({ ok: false, error: 'trace is busy; try again in a minute.' }), { status: 503, headers: { 'content-type': 'application/json' } })
+      : answer(setup())))
+    render(<AgentSetupNotice repo="acme/new" />, { wrapper })
+    expect(await screen.findByText(/trace looks again in \d+ s\./)).toBeInTheDocument()
+    fail = true
+    await userEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    expect(await screen.findByText(/^trace could not look just now \(.+\)\. What is shown is from \d\d:\d\d\. It tries again in \d+ s\.$/)).toBeInTheDocument()
+    // what was known stays on screen
+    expect(screen.getByText('trace is setting up this project\'s agent')).toBeInTheDocument()
   })
 
   it('draws nothing for a project whose agent is set up', async () => {

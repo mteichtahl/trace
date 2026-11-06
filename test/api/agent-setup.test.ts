@@ -8,8 +8,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { ADDED_CHECK_S, ADDED_MS, LATE_SLACK_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, TYPICAL_MIN_MS, type RunJob, agentSetup, failedJob, logTail, typicalUpdateMs, updateRunFor, updateSteps } from '../../src/api/actions-projects.js'
+import { ADDED_CHECK_S, ADDED_MS, LATE_SLACK_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, TYPICAL_MIN_MS, type RunJob, agentSetup, failedJob, logTail, runStatus, typicalUpdateMs, updateRunFor, updateSteps } from '../../src/api/actions-projects.js'
 import type { GitHubApi, RunSummary } from '../../src/api/github.js'
+import { queueStart, readQueue } from '../../src/api/agent-queue.js'
 import { parseWorkerRuntimes, remoteJobs } from '../../src/api/workers.js'
 import { AccessDenied, assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -128,6 +129,55 @@ describe('updateRunFor', () => {
     expect(updateRunFor(runs, 'main', REQUESTED)?.id).toBe(4)
     expect(updateRunFor(runs.slice(0, 1), 'main', REQUESTED)).toBeNull()
   })
+
+  it('the update that finished, not a newer run queued behind it by a later merge (log #5: "queued" half an hour after it finished)', () => {
+    // the log's case: the update started by projects.create finished at 19:35; a merge at 20:00 started another run,
+    // waiting its turn with nothing started, and the notice followed that one
+    const finished = run({ id: 41895957997, status: 'completed', conclusion: 'success', created_at: '2026-11-02T09:41:00Z', updated_at: '2026-11-02T09:56:00Z' })
+    const later = run({ id: 41899999999, event: 'push', status: 'queued', created_at: '2026-11-02T10:20:00Z' })
+    expect(updateRunFor([later, finished], 'main', REQUESTED)?.id).toBe(finished.id)
+    expect(agentSetup({ repo: 'acme/new', hasAgent: false, record: rec(), run: updateRunFor([later, finished], 'main', REQUESTED), selfUpdate: true, admin: false, now: Date.parse('2026-11-02T09:58:00Z') }))
+      .toMatchObject({ update: { status: 'finished' }, next_check_s: ADDED_CHECK_S })
+  })
+
+  it('the first one still going while none succeeded; a later one after a failed or cancelled one; else the newest', () => {
+    const going = run({ id: 1, status: 'in_progress', created_at: '2026-11-02T09:41:00Z' })
+    const behind = run({ id: 2, event: 'push', status: 'queued', created_at: '2026-11-02T09:50:00Z' })
+    expect(updateRunFor([behind, going], 'main', REQUESTED)?.id).toBe(1)
+    const failed = { ...going, status: 'completed', conclusion: 'failure' }
+    // every update takes in the pending projects: the one queued after a failed one tries again
+    expect(updateRunFor([behind, failed], 'main', REQUESTED)?.id).toBe(2)
+    const cancelled = { ...behind, status: 'completed', conclusion: 'cancelled' }
+    expect(updateRunFor([cancelled, failed], 'main', REQUESTED)?.id).toBe(2)
+  })
+})
+
+describe('runStatus', () => {
+  it('a run GitHub still lists as queued whose steps have begun is running: never "queued" above a step that is done', () => {
+    const queued = run({ status: 'queued' })
+    expect(runStatus(queued)).toBe('queued')
+    expect(runStatus(queued, [{ name: 'Deploy', state: 'waiting' }])).toBe('queued')
+    expect(runStatus(queued, [{ name: 'Build', state: 'done' }, { name: 'Deploy', state: 'waiting' }])).toBe('running')
+    expect(runStatus(run({ status: 'completed', conclusion: 'success' }), [])).toBe('finished')
+    expect(agentSetup({ repo: 'acme/new', hasAgent: false, record: rec(), run: queued, progress: { steps: [{ name: 'Build', state: 'running' }], failed_log: null }, selfUpdate: true, admin: false, now: NOW }).update?.status).toBe('running')
+  })
+})
+
+describe('when trace cannot tell', () => {
+  const base = { repo: 'acme/new', hasAgent: false, record: rec(), run: null, selfUpdate: true, admin: false, now: NOW }
+  it('GitHub would not say how the update stands: the notice says so, never "asked for" or "queued"', () => {
+    const r = agentSetup({ ...base, unread: true })
+    expect(r).toMatchObject({ state: 'setting_up', update: null, next_check_s: SETUP_CHECK_S })
+    expect(r.text).toMatch(/can't read how the installation update stands on GitHub just now/)
+    expect(r.text).not.toMatch(/asked for|waiting for its turn|queued/)
+    expect(agentSetup(base).text).toMatch(/trace has asked for the installation update/)
+  })
+
+  it('added by the update: its run is still shown, as it ended, so the steps move on to done rather than vanish', () => {
+    const done = run({ status: 'completed', conclusion: 'success', updated_at: '2026-11-02T09:56:00Z' })
+    const r = agentSetup({ ...base, record: rec({ status: 'added', added_at: '2026-11-02T09:57:00Z' }), run: done, progress: { steps: [{ name: 'Deploy', state: 'done' }], failed_log: null } })
+    expect(r).toMatchObject({ state: 'finishing', update: { status: 'finished', steps: [{ name: 'Deploy', state: 'done' }] } })
+  })
 })
 
 describe('typicalUpdateMs', () => {
@@ -214,13 +264,15 @@ describe('project.agent', () => {
   const OUTSIDER = { sub: 'ag-out', email: 'ag-out@example.com', groups: ['trace-users'] }
   const fake = new FakeGitHub(['acme/new', 'acme/old'])
   let runs: () => Promise<RunSummary[]> = async () => []
+  const askedRuns: unknown[] = []
   // the update's runs on GitHub, as each test sets them
-  const github: GitHubApi = Object.assign(Object.create(fake) as FakeGitHub, { workflowRuns: () => runs() })
+  const github: GitHubApi = Object.assign(Object.create(fake) as FakeGitHub, { workflowRuns: (_r: string, _n: number, only?: unknown) => { askedRuns.push(only); return runs() } })
+  const started: string[] = []
   const cognito = new FakeCognito()
   const bucket = mkdtempSync(join(tmpdir(), 'trace-agent-setup-'))
   const deps: ActionDeps = {
     github: async () => github, cognito: () => cognito,
-    jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], hasAgent: (r) => r.toLowerCase() === 'acme/old' }),
+    jobs: async () => ({ repositoryOf: () => null, startJob: async (p) => { started.push(p.request ?? ''); return { accepted: true, jobId: 'j' } }, jobStatus: async () => [], hasAgent: (r) => r.toLowerCase() === 'acme/old' }),
     tools: () => new Registry([]), scratch: mkdtempSync(join(tmpdir(), 'trace-agent-setup-s-')), store: (p) => backendFor(join(bucket, p)),
   }
   const call = async (who: Context['principal'], repo: string): Promise<Record<string, unknown>> => (await perform('project.agent', { repo }, { principal: who, deps })).result as Record<string, unknown>
@@ -244,6 +296,25 @@ describe('project.agent', () => {
 
   it('a project with its runtime: ready', async () => {
     expect(await call(USER, 'acme/old')).toMatchObject({ repo: 'acme/old', ready: true, state: 'ready' })
+  })
+
+  it('ready: the work queued while it was being set up starts now, not at the next look at the project\'s jobs', async () => {
+    const store = backendFor(join(bucket, 'projects'))
+    await queueStart(store, { kind: 'task', repository: 'acme/old', request: 'Draft the intent', requestedBy: 'p@example.com' })
+    expect(await call(USER, 'acme/old')).toMatchObject({ ready: true })
+    expect(started).toEqual(['Draft the intent'])
+    expect((await readQueue(store, 'acme/old')).queued).toEqual([])
+    // started once: the next look starts nothing again
+    await call(USER, 'acme/old')
+    expect(started).toEqual(['Draft the intent'])
+  })
+
+  it('asks GitHub for the ci workflow\'s runs on the self-update\'s branch only: other runs never push the update out of the page', async () => {
+    process.env.TRACE_SELF_UPDATE = 'mteichtahl/trace@main'
+    askedRuns.length = 0
+    runs = async () => []
+    await call(USER, 'acme/new')
+    expect(askedRuns).toEqual([{ workflow: 'ci.yml', branch: 'main' }])
   })
 
   it('a new project: being set up, from its pending record and the update\'s run on GitHub', async () => {
@@ -273,9 +344,11 @@ describe('project.agent', () => {
     expect(withSteps.update).toMatchObject({ steps: [{ name: 'Deploy', state: 'failed' }], failed_log: 'one\ntwo\nError: limit' })
     expect(asked).toEqual([expect.stringMatching(/^GET \/repos\/mteichtahl\/trace\/actions\/runs\/1\/jobs/), 'text /repos/mteichtahl/trace/actions/jobs/77/logs'])
     expect((await call(USER, 'acme/new')).update).toMatchObject({ steps: [{ name: 'Deploy', state: 'failed' }], failed_log: null })
-    // GitHub not answering leaves the estimate from the request
+    // GitHub not answering leaves the estimate from the request, and says it cannot tell
     runs = async () => { throw new Error('rate limited') }
-    expect(await call(USER, 'acme/new')).toMatchObject({ state: 'setting_up', update: null, expected_by: expect.any(String) })
+    const unread = await call(USER, 'acme/new')
+    expect(unread).toMatchObject({ state: 'setting_up', update: null, expected_by: expect.any(String) })
+    expect(unread.text).toMatch(/can't read how the installation update stands/)
   })
 
   it('an installation whose jobs cannot say takes every project as having one', async () => {

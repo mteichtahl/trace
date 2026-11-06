@@ -104,7 +104,9 @@ export interface GitHubApi {
   commits?(repo: string, path: string, ref: string, limit: number): Promise<CommitSummary[]>
   openPulls(repo: string): Promise<PullSummary[]>
   openIssues(repo: string, label: string): Promise<IssueSummary[]>
-  workflowRuns(repo: string, limit: number): Promise<RunSummary[]>
+  /** The newest runs, of every workflow; `only` narrows them to one workflow (its file name) and branch on GitHub's side,
+   * so a busy repository's other runs never push the ones asked for out of the page. */
+  workflowRuns(repo: string, limit: number, only?: { workflow: string; branch?: string }): Promise<RunSummary[]>
   /** Start a workflow_dispatch run of `workflow` (its file name) on `ref`. Optional: absent, nothing is started. */
   dispatchWorkflow?(repo: string, workflow: string, ref: string): Promise<void>
   lastDeploy(repo: string): Promise<DeploySummary | null>
@@ -443,8 +445,10 @@ export class HttpGitHub implements GitHubApi {
       .map((i) => ({ number: i.number, title: i.title, labels: labelNames(i.labels), url: i.html_url, updated_at: i.updated_at }))
   }
 
-  async workflowRuns(repo: string, limit: number): Promise<RunSummary[]> {
-    const r = z.object({ workflow_runs: z.array(Run) }).loose().parse(await this.json('GET', `${this.p(repo)}/actions/runs?per_page=${Math.min(100, limit)}`))
+  async workflowRuns(repo: string, limit: number, only?: { workflow: string; branch?: string }): Promise<RunSummary[]> {
+    const path = only ? `/actions/workflows/${encodeURIComponent(only.workflow)}/runs` : '/actions/runs'
+    const branch = only?.branch ? `&branch=${encodeURIComponent(only.branch)}` : ''
+    const r = z.object({ workflow_runs: z.array(Run) }).loose().parse(await this.json('GET', `${this.p(repo)}${path}?per_page=${Math.min(100, limit)}${branch}`))
     return r.workflow_runs.map((w) => ({
       id: w.id, name: w.name ?? '', path: w.path, event: w.event, status: w.status ?? 'unknown', conclusion: w.conclusion,
       branch: w.head_branch, url: w.html_url, created_at: w.created_at, ...(w.updated_at ? { updated_at: w.updated_at } : {}),

@@ -24,12 +24,30 @@ const FLAT = {
 }
 const NESTED = { layout: 'nested', projects: { max: 60, updateMax: 60 }, has: { knowledgeBase: true, cpuQueue: true, answerEvents: true }, note: 'Each project has its own nested stack: up to 60 projects, each with its knowledge base.' }
 
+/** VITE_MOCK_AGENT=setting_up: how the agent's setting up stands. localStorage `mock.agent` picks the moment to show
+ * (queued, running (the default), finishing, unread: GitHub would not say, look-fails: the app's own look fails after
+ * the first). */
+let agentLooks = 0
+function agentSetting(repo: unknown): Response {
+  let which = 'running'
+  try { which = localStorage.getItem('mock.agent') ?? which } catch { /* no storage: the default */ }
+  const at = (min: number) => new Date(Date.now() + min * 60_000).toISOString()
+  const steps = (...states: string[]) => ['Build trace', 'Sign in to AWS', 'Update the installation', 'Mark the projects added'].map((name, i) => ({ name, state: states[i] ?? 'waiting' }))
+  const base = { repo, ready: false, state: 'setting_up', requested_at: at(-4), expected_by: at(11), next_check_s: 60 }
+  if (which === 'look-fails' && agentLooks++ > 0) return json({ ok: false, error: 'trace is busy; try again in a minute.' }, 503)
+  switch (which) {
+    case 'queued': return ok({ ...base, text: 'The installation update is waiting for its turn to start; once it starts it usually takes about 15 minutes.', update: { status: 'queued', started_at: at(-1), url: 'https://github.com/', steps: steps(), failed_log: null } })
+    case 'finishing': return ok({ ...base, state: 'finishing', text: 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.', update: { status: 'finished', started_at: at(-16), url: 'https://github.com/', steps: steps('done', 'done', 'done', 'done'), failed_log: null }, expected_by: at(8), next_check_s: 20 })
+    case 'unread': return ok({ ...base, text: 'trace can\'t read how the installation update stands on GitHub just now, so it can\'t say how far it has got. It keeps looking; the notice clears by itself once the agent is set up.', update: null })
+    default: return ok({ ...base, text: 'The installation update is running: it is adding this project\'s agent to the installation.', update: { status: 'running', started_at: at(-4), url: 'https://github.com/', steps: steps('done', 'done', 'running'), failed_log: null } })
+  }
+}
+
 export function smallAction(name: string, a: Record<string, unknown>): Response | undefined {
   switch (name) {
     case 'installation.layout': return ok(import.meta.env.VITE_MOCK_LAYOUT === 'nested' ? NESTED : FLAT)
-    case 'project.agent': return ok(import.meta.env.VITE_MOCK_AGENT === 'setting_up'
-      ? { repo: a.repo, ready: false, state: 'setting_up', text: 'The installation update is running: it is adding this project\'s agent to the installation.', requested_at: new Date(Date.now() - 4 * 60_000).toISOString(), update: { status: 'running', started_at: new Date(Date.now() - 4 * 60_000).toISOString(), url: 'https://github.com/', steps: [{ name: 'Build trace', state: 'done' }, { name: 'Sign in to AWS', state: 'done' }, { name: 'Update the installation', state: 'running' }], failed_log: null }, expected_by: new Date(Date.now() + 8 * 60_000).toISOString(), next_check_s: 60 }
-      : { repo: a.repo, ready: true, state: 'ready', text: 'This project\'s agent is set up.', requested_at: null, update: null, expected_by: null, next_check_s: null })
+    case 'project.agent': return import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? agentSetting(a.repo)
+      : ok({ repo: a.repo, ready: true, state: 'ready', text: 'This project\'s agent is set up.', requested_at: null, update: null, expected_by: null, next_check_s: null })
     // a person's edit committed on a branch of trace's own (docs/stay-in-trace.md): the change it opened
     case 'design.handin': {
       const files = (a.files as { path: string }[] | undefined) ?? []

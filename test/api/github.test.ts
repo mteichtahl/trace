@@ -24,6 +24,18 @@ describe('HttpGitHub: what the web app\'s actions add', () => {
     expect(await gh.branchSha('acme/board', 'trace/none')).toBeNull()
   })
 
+  it('workflowRuns: one workflow\'s runs on one branch when asked, so a busy repository\'s other runs never crowd them out', async () => {
+    const one = { id: 7, name: 'ci', path: '.github/workflows/ci.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', html_url: 'https://github.com/x', created_at: '2026-11-02T09:41:00Z' }
+    const { fetch, asked } = fakeFetch({
+      'GET /repos/acme/trace/actions/workflows/ci.yml/runs?per_page=30&branch=main': [200, { workflow_runs: [one] }],
+      'GET /repos/acme/trace/actions/runs?per_page=30': [200, { workflow_runs: [] }],
+    })
+    const gh = new HttpGitHub('t', { fetch })
+    expect((await gh.workflowRuns('acme/trace', 30, { workflow: 'ci.yml', branch: 'main' })).map((r) => r.id)).toEqual([7])
+    expect(await gh.workflowRuns('acme/trace', 30)).toEqual([])
+    expect(asked.map((x) => x.url)).toEqual(['https://api.github.com/repos/acme/trace/actions/workflows/ci.yml/runs?per_page=30&branch=main', 'https://api.github.com/repos/acme/trace/actions/runs?per_page=30'])
+  })
+
   it('tree: the blobs only, recursively, with truncation', async () => {
     const { fetch, asked } = fakeFetch({ 'GET /repos/acme/board/git/trees/main?recursive=1': [200, { truncated: true, tree: [
       { path: 'hw', type: 'tree', sha: 't1' }, { path: 'hw/a.kicad_sch', type: 'blob', sha: 'b1', size: 12 },
