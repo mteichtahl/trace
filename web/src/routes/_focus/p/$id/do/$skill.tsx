@@ -7,12 +7,12 @@
  * (its "Take it again"): the Waiver skill opens filled in from it, and taking the new one withdraws it.
  *
  * While the project's agent is being set up (a new project's arrives with the next installation update), the notice
- * says so under the header, and the skills whose Submit is for the agent (NEEDS_AGENT) keep it disabled with the reason.
+ * says so under the header. Submit is not held for it: the work it starts is queued until the agent is there.
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
-import { AgentSetupNotice, FocusBlocked, FocusNotice, NEEDS_AGENT, agentBlocked, useAgentSetup } from '@/components/project/agent-setup'
+import { AgentSetupNotice, FocusNotice } from '@/components/project/agent-setup'
 import { ChecklistSkill } from '@/components/skills/checklist-skill'
 import { IntentBuilder, QuestionAnswer } from '@/components/skills/conversation-skills'
 import { SKILL_BY_ID, SKILLS } from '@/components/skills/definitions'
@@ -34,8 +34,6 @@ function Skill() {
   const repo = repoOf(id)
   const j = useJourney(repo)
   const def = SKILL_BY_ID[skill]
-  const setup = useAgentSetup(repo)
-  const blocked = def && NEEDS_AGENT.has(def.id) ? agentBlocked(setup.data) : null
   if (j.isError && j.error instanceof ApiError && j.error.noAccess) return <NotShared />
   if (!def)
     return (
@@ -47,9 +45,7 @@ function Skill() {
     )
   return (
     <FocusNotice.Provider value={<AgentSetupNotice repo={repo} />}>
-      <FocusBlocked.Provider value={blocked}>
-        <SkillScreen repo={repo} def={def} about={about} replaces={replaces} />
-      </FocusBlocked.Provider>
+      <SkillScreen repo={repo} def={def} about={about} replaces={replaces} />
     </FocusNotice.Provider>
   )
 }

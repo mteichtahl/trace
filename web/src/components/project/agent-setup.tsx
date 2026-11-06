@@ -13,8 +13,10 @@
  * the API gives them). The run's own page on GitHub is in the admins' More menu, never a link anyone else sees.
  *
  * Shown on every project page (routes/_app/p/$id.tsx), in Focus mode (routes/_focus/p/$id/do/$skill.tsx, through
- * FocusNotice) and in the Ask trace panel. The Intent builder's and Change request's Submit and a chat's "Confirm and
- * start" wait for it (agentBlocked), with the reason.
+ * FocusNotice) and in the Ask trace panel. Nothing waits on a disabled button for it (test-esp32 log #2, #80): the
+ * Intent builder's and Change request's Submit and a chat's "Confirm and start" go ahead, and the API queues the work
+ * they start until the agent is there, then starts it by itself (src/api/agent-queue.ts). agentQueueNote says so
+ * beside a button that starts work.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Check, Circle, Clock, Loader2, TriangleAlert, X } from 'lucide-react'
@@ -38,12 +40,13 @@ export function setupLookEvery(s: AgentSetup | undefined): number | false {
  * stub) is never taken as not set up. Pure. */
 export const notReady = (s: unknown): s is AgentSetup => !!s && typeof s === 'object' && (s as AgentSetup).ready === false
 
-/** Why a button that needs the project's agent waits, or null when it need not. Pure. */
-export function agentBlocked(s: unknown): string | null {
+/** What happens to work started while the project's agent is not set up: it is queued, and when it starts; null once
+ * the agent is there. Never a reason to wait: the API queues it (src/api/agent-queue.ts). Pure. */
+export function agentQueueNote(s: unknown): string | null {
   if (!notReady(s)) return null
   return s.state === 'failed' || s.state === 'missing'
-    ? 'This project has no agent yet, so this cannot start. An admin can add it by running the installer.'
-    : 'trace is still setting up this project\'s agent. This can be sent once it is ready.'
+    ? 'This project has no agent yet: the work is queued, and starts once an admin adds the agent by running the installer.'
+    : 'trace is still setting up this project\'s agent: the work is queued, and starts by itself once the agent is ready.'
 }
 
 /** The id of projects.create's wait for the installation update that brings the project's agent. */
@@ -64,7 +67,8 @@ export function setupWords(s: AgentSetup, now: number): { title: string; body: s
   const title = s.state === 'failed' ? 'This project\'s agent could not be set up yet'
     : s.state === 'missing' ? 'This project has no agent in this installation yet'
       : 'trace is setting up this project\'s agent'
-  const body = `Until it is ready, trace can't start work here, remember what you tell it or run this project's tools. ${s.text}`
+  // what the person can do now first: work they ask for is queued, not refused (test-esp32 log #2, #80)
+  const body = `You can carry on: write and submit the intent, or ask trace for work, and trace queues it and starts it once the agent is ready. Until then it can't run this project's tools or remember what you tell it. ${s.text}`
   const by = s.expected_by ? Date.parse(s.expected_by) : NaN
   const when = s.state === 'failed' || s.state === 'missing' ? null
     : Number.isFinite(by) && by > now ? `Usually ready by about ${time(by)}.`
@@ -153,14 +157,6 @@ export function useAgentSetup(repo: string | undefined, o: { fetch?: boolean } =
 
 /** Where Focus mode puts the notice (FocusLayout draws it under its header): set by the skill's route. */
 export const FocusNotice = createContext<ReactNode>(null)
-/** Why Focus mode's Submit waits for the project's agent (FocusLayout's `blocked` when it is given none): set by the
- * skill's route for the skills whose Submit starts the project's agent (NEEDS_AGENT). */
-export const FocusBlocked = createContext<string | null>(null)
-
-/** The guided skills whose Submit is for the project's agent to act on: the Intent builder's starts the Verification
- * agent drafting the requirements, a Change request's starts the agents raising it. The others record a person's act
- * in the journey record, which needs no agent. */
-export const NEEDS_AGENT: ReadonlySet<string> = new Set(['intent-builder', 'change-request'])
 
 export function AgentSetupNotice({ repo, compact, className }: { repo: string; compact?: boolean; className?: string }) {
   const setup = useAgentSetup(repo)
@@ -172,7 +168,7 @@ export function AgentSetupNotice({ repo, compact, className }: { repo: string; c
   const was = useRef<boolean | null>(null)
   useEffect(() => {
     if (!s || typeof s.ready !== 'boolean') return
-    if (was.current === false && s.ready && !compact) toast('This project\'s agent is ready.', { description: 'trace can save your answers and start work here now.' })
+    if (was.current === false && s.ready && !compact) toast('This project\'s agent is ready.', { description: 'trace starts the work you queued, and works here as usual from now on.' })
     was.current = s.ready
   }, [s, compact])
   if (!notReady(s)) return null

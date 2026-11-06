@@ -49,7 +49,7 @@ function readWaiver(w: Obj): Waiver {
 }
 
 const STAGE_STATES = new Set(['done', 'current', 'queued', 'reopened', 'skipped'])
-const DRAFTING = new Set(['intent', 'drafting', 'stopped', 'drafted', 'done'])
+const DRAFTING = new Set(['intent', 'waiting', 'drafting', 'stopped', 'drafted', 'done'])
 const RESIGN = new Set(['agree', 'kept', 'redo', 'signed'])
 
 /**

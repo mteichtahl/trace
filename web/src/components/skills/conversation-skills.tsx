@@ -202,8 +202,10 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
       submitLabel={def.submit}
       onSubmit={() => s.submit(async () => {
         // Submit starts the Verification agent drafting the candidate requirements (skill.submit); say whether it did
-        const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string }
+        const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string; queued?: boolean }
         if (r.jobError) toast.warning('trace could not start drafting the requirements.', { description: `${r.jobError} Ask trace to draft them from the intent.` })
+        // a new project whose agent is still being set up: the drafting is queued and starts by itself (log #2, #80)
+        else if (r.queued) toast('Your intent is submitted. Drafting the requirements is queued.', { description: 'It starts by itself once this project\'s agent is ready; you need not submit again.' })
         else toast('trace is drafting the candidate requirements for Requirements review.')
       }, 'Intent submitted.')}
       onClose={s.close}

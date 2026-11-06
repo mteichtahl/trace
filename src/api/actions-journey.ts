@@ -570,7 +570,7 @@ export const JOURNEY_ACTIONS = {
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
     const [{ result: { record: r0, followups }, version: v0 }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => ({ record: loadJourney(db), followups: loadFollowups(db) })), agentFacts(ctx, repo),
-      listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, error: null }), (e: unknown) => ({ jobs: [], rows: [], error: e instanceof Error ? e.message : String(e) }))])
+      listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, queue: x.queue, error: null }), (e: unknown) => ({ jobs: [], rows: [], queue: undefined, error: e instanceof Error ? e.message : String(e) }))])
     // a requirement changed after the baseline takes the project back to Define before a gate past it can be signed
     // (returnForChange). The record is read only when a gate is the next step, as changedFirst did
     let r = r0
@@ -609,7 +609,7 @@ export const JOURNEY_ACTIONS = {
     // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
     // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
     // could change the step, and its count is kept per default-branch commit and record version
-    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows, { next: view.next, version })
+    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows, { next: view.next, version, ...(jobs.queue ? { queue: jobs.queue } : {}) })
     const drafted = drafting ? draftingStep(view.next, r, drafting, viewer, drafting.why) : view.next
     // a job that ended without finishing (test-esp32 log #45, #46): one that left no change is started again once on
     // its own; otherwise the next step says it stopped and offers Start again, never "trace works on …" over it. The
@@ -636,11 +636,12 @@ export const JOURNEY_ACTIONS = {
   'requirements.draft': def('write', Repo, async ({ repo }, ctx) => {
     const [{ result: r, version }, list] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), listJobs(ctx, repo)])
     if (!r) throw new ActionError('This project has not started its journey yet.')
-    const d = await draftingNow(ctx, repo, r, list.rows, { version })
+    const d = await draftingNow(ctx, repo, r, list.rows, { version, queue: list.queue })
     if (!d) throw new ActionError(r.journey.currentStage === 'define' ? 'trace could not read the requirements just now, so it does not start drafting them again. Try again in a minute.' : 'The requirements are drafted already: the project is past Define.')
     if (d.state !== 'stopped') {
       throw new ActionError({
         intent: 'Write and submit the intent in the Intent builder first: trace drafts the requirements from it.',
+        waiting: 'trace drafts the requirements once this project\'s agent is set up: the drafting is queued already.',
         drafting: 'trace is drafting the requirements already.',
         drafted: 'The requirements are drafted: they wait in a change from the Verification specialist. Accept it to bring them into Requirements review.',
         done: 'The requirements are in the record: decide them in Requirements review.',

@@ -132,6 +132,8 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       return ok({ skill: a.skill, ...v, ...(question ? { question } : {}), ...(d ? { draft: d.data, step: d.step, saved: d.saved } : {}) })
     }
     case 'skill.submit': {
+      // VITE_MOCK_AGENT=setting_up: the Intent builder's drafting is queued until the project's agent is set up
+      if (import.meta.env.VITE_MOCK_AGENT === 'setting_up' && a.skill === 'intent-builder') return later(ok({ ok: true, id: `rec_${Math.random().toString(16).slice(2, 6)}`, queued: true, jobId: `queued~${repo.replace('/', '~')}~3f2a9c1d0e4b` }))
       // a waiver taken again withdraws the one it replaces
       const draft = (a.draft ?? {}) as { replaces?: string }
       const j = JOURNEYS[repo] as JourneyMore | undefined
