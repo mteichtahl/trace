@@ -32,7 +32,7 @@ import { useMediaQuery } from '@/hooks/use-media-query'
 import { call } from '@/lib/api'
 import { useCall } from '@/lib/queries'
 import type { CriterionStatus, Question } from '@/lib/types'
-import type { IntentDraft, IntentStatement } from '@/lib/types-s1'
+import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
@@ -58,7 +58,7 @@ const STATE_WORD: Record<IntentStatement['state'], { status: 'met' | 'yours' | '
 // ------------------------------------------------------------------ intent builder
 
 /** A person's decision on one statement, kept in the draft until Submit records it (actions-skills pendingDecisions). */
-export interface IntentDecision { statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string }
+export interface IntentDecision { statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string; interface?: Partial<Record<InterfaceField, string>> }
 interface IntentLocal extends SkillDraftBase { topic?: number; decisions?: IntentDecision[] }
 
 /** The draft with one statement's decision replaced, or removed (null). Pure. */
@@ -69,28 +69,83 @@ export function withIntentDecision<D extends { decisions?: IntentDecision[] }>(d
 
 const DECIDED_WORD: Record<IntentDecision['choice'], string> = { accept: 'Accepting', edit: 'Rewording', reject: 'Rejecting' }
 
+const FIELDS: { id: InterfaceField; label: string; hint: string }[] = [
+  { id: 'type', label: 'Type', hint: 'USB device, I2C, antenna' },
+  { id: 'connector', label: 'Connector', hint: 'USB-C receptacle, 4-pin header' },
+  { id: 'protocol', label: 'Protocol', hint: 'USB 2.0 full speed' },
+  { id: 'rate', label: 'Rate', hint: '12 Mbit/s, 400 kHz' },
+  { id: 'direction', label: 'Direction', hint: 'in, out or both' },
+]
+
+/**
+ * The fields of an interface a person changed, trimmed: what Save sends beside the words. The fields left as shown are
+ * not sent, so trace reads them from the new words (a reworded rate is not held back by the old one). Pure.
+ */
+export function changedFields(shown: Partial<Record<InterfaceField, string>>, typed: Partial<Record<InterfaceField, string>>): Partial<Record<InterfaceField, string>> | undefined {
+  const out: Partial<Record<InterfaceField, string>> = {}
+  for (const f of FIELDS) { const v = typed[f.id]?.trim(); if (v && v !== (shown[f.id] ?? '').trim()) out[f.id] = v }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** An interface statement's five fields, as the check reads them: the empty ones named. */
+function InterfaceFields({ st }: { st: IntentStatement }) {
+  if (!st.interface) return null
+  return (
+    <p className="text-xs text-muted-foreground">
+      {FIELDS.map((f, i) => (
+        <span key={f.id}>
+          {i > 0 && ' · '}
+          {f.label}: {st.interface?.[f.id] ? <span className="text-foreground">{st.interface[f.id]}</span> : <span className="font-medium text-warning">not given</span>}
+        </span>
+      ))}
+    </p>
+  )
+}
+
 /**
  * One statement in the Draft intent panel, with the person's decision on it: Accept as worded, Edit (in their own
- * words) or Reject (with a line why). The decision goes into the draft; the quality bar (skill.get, the draft laid over
- * the record) moves with it, and Submit intent records it. Statements left undecided are accepted at Submit.
+ * words) or Reject (with a line why). Editing an interface statement shows its five fields beside the words (test-esp32
+ * #20): the ones the person changes are kept as typed, the others are read from the new words. The decision goes into
+ * the draft; the quality bar (skill.get, the draft laid over the record) moves with it, and Submit intent records it.
+ * Statements left undecided are accepted at Submit.
  */
 function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; decision?: IntentDecision; onDecide: (d: Omit<IntentDecision, 'statement'> | null) => void }) {
   const [mode, setMode] = useState<'edit' | 'reject' | null>(null)
   const [words, setWords] = useState('')
+  const [fields, setFields] = useState<Partial<Record<InterfaceField, string>>>({})
   const ok = words.trim().length >= 3
-  const done = () => { setMode(null); setWords('') }
+  const done = () => { setMode(null); setWords(''); setFields({}) }
+  const save = () => {
+    const changed = st.interface ? changedFields(st.interface, fields) : undefined
+    onDecide(mode === 'edit' ? { choice: 'edit', text: words.trim(), ...(changed ? { interface: changed } : {}) } : { choice: 'reject', reason: words.trim() })
+    done()
+  }
   return (
     <li className="space-y-1.5 text-sm">
       <div className="flex items-start justify-between gap-3">
         <span>{decision?.choice === 'edit' && decision.text ? decision.text : st.text}</span>
         <StatusBadge status={STATE_WORD[st.state].status} label={st.flag ?? STATE_WORD[st.state].label} className="shrink-0" />
       </div>
+      {mode !== 'edit' && <InterfaceFields st={st} />}
       {mode ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="space-y-2">
           <Label className="sr-only" htmlFor={`intent-${st.id}`}>{mode === 'edit' ? `Statement ${st.id} in your words` : `Why ${st.id} is rejected`}</Label>
-          <Input id={`intent-${st.id}`} className="h-8 min-w-0 flex-1" autoFocus placeholder={mode === 'edit' ? 'The statement in your words' : 'Why it is rejected'} value={words} onChange={(e) => setWords(e.target.value)} />
-          <Button size="sm" variant="outline" disabled={!ok} onClick={() => { onDecide(mode === 'edit' ? { choice: 'edit', text: words.trim() } : { choice: 'reject', reason: words.trim() }); done() }}>{mode === 'edit' ? 'Save' : 'Reject'}</Button>
-          <Button size="sm" variant="ghost" onClick={done}>Cancel</Button>
+          <Input id={`intent-${st.id}`} className="h-8 min-w-0" autoFocus placeholder={mode === 'edit' ? 'The statement in your words' : 'Why it is rejected'} value={words} onChange={(e) => setWords(e.target.value)} />
+          {mode === 'edit' && st.interface && (
+            <fieldset className="grid gap-2 rounded-md border p-2">
+              <legend className="px-1 text-xs text-muted-foreground">The interface. Change a field to set it; the ones you leave are read from your words.</legend>
+              {FIELDS.map((f) => (
+                <div key={f.id} className="flex min-w-0 items-center gap-2">
+                  <Label htmlFor={`intent-${st.id}-${f.id}`} className="w-20 shrink-0 text-xs">{f.label}</Label>
+                  <Input id={`intent-${st.id}-${f.id}`} className="h-8 min-w-0 flex-1" placeholder={f.hint} value={fields[f.id] ?? ''} onChange={(e) => setFields((x) => ({ ...x, [f.id]: e.target.value }))} />
+                </div>
+              ))}
+            </fieldset>
+          )}
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" disabled={!ok} onClick={save}>{mode === 'edit' ? 'Save' : 'Reject'}</Button>
+            <Button size="sm" variant="ghost" onClick={done}>Cancel</Button>
+          </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-1 text-xs">
@@ -100,7 +155,7 @@ function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; d
           ) : (
             <>
               <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Accept ${st.id}`} onClick={() => onDecide({ choice: 'accept' })}>Accept</Button>
-              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Edit ${st.id}`} onClick={() => { setMode('edit'); setWords(st.text) }}>Edit</Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Edit ${st.id}`} onClick={() => { setMode('edit'); setWords(st.text); setFields({ ...st.interface }) }}>Edit</Button>
               <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Reject ${st.id}`} onClick={() => setMode('reject')}>Reject</Button>
             </>
           )}

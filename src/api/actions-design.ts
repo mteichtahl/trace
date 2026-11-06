@@ -6,7 +6,9 @@
  *
  *   design.decide  write  { decision } one of:
  *                    intent          { statement, choice: accept | edit | reject, text? (edit), reason? (reject; on
- *                                    accept: why it holds beside a statement it was flagged as conflicting with) }
+ *                                    accept: why it holds beside a statement it was flagged as conflicting with),
+ *                                    interface? { type, connector, protocol, rate, direction } (an interface statement's
+ *                                    fields the person set; on edit, the others are read from the new words) }
  *                    uncovered       { statement, reason }: no requirement will cover it (Requirements review, step 6)
  *                    requirement     { requirement, choice: accept | strike, reason (strike) }
  *                    criteria        { criteria: [{ id, name, weight }] }: fixed before any score is read
@@ -23,15 +25,15 @@
 import { z } from 'zod'
 import { CHANGE_STAGE, type StageId, applyChange, changeReason, changeWords, decide, loadJourney } from '../core/journey.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
-import { readDesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, intentView, pinPlanPrint } from '../tools/design/record.js'
+import { InterfaceSchema, readDesignRows } from '../tools/design/db.js'
+import { type RequirementWords, architectureView, decidedFields, intentView, pinPlanPrint } from '../tools/design/record.js'
 import { ActionError, type Context, Repo, def, hashOf, label, openProjectDb, plainly, withProjectDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(64)
 const Reason = z.string().trim().min(3).max(2000)
 
 export const Decision = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('intent'), statement: Id, choice: z.enum(['accept', 'edit', 'reject']), text: z.string().trim().min(3).max(2000).optional(), reason: Reason.optional() }).strict(),
+  z.object({ kind: z.literal('intent'), statement: Id, choice: z.enum(['accept', 'edit', 'reject']), text: z.string().trim().min(3).max(2000).optional(), reason: Reason.optional(), interface: InterfaceSchema.optional() }).strict(),
   z.object({ kind: z.literal('uncovered'), statement: Id, reason: Reason }).strict(),
   z.object({ kind: z.literal('requirement'), requirement: Id, choice: z.enum(['accept', 'strike']), reason: Reason.optional() }).strict(),
   z.object({ kind: z.literal('criteria'), criteria: z.array(z.object({ id: Id, name: z.string().trim().min(1).max(80), weight: z.number().min(0).max(10), description: z.string().max(500).optional() }).strict()).min(1).max(20) }).strict(),
@@ -69,9 +71,14 @@ export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRo
       if (d.choice === 'edit' && !d.text) throw new ActionError('Give the statement in your own words.')
       if (d.choice === 'reject' && !d.reason) throw new ActionError('Say in a line why this statement is rejected.')
       const choice = d.choice === 'accept' ? 'accepted' : d.choice === 'edit' ? 'edited' : 'rejected'
+      // an interface's five fields follow the person's words: reworded, they are read from the new words (the fields
+      // the person set beside them first), so "Interfaces fully specified" reads the statement as it now stands and a
+      // flag is fixed without a job (test-esp32 #20)
+      const fields = s.topic === 'interfaces' && s.kind === 'statement' && d.choice !== 'reject' && (d.choice === 'edit' || d.interface)
+        ? decidedFields(s.interface, d.choice === 'edit' ? d.text ?? null : null, d.interface) : null
       return {
         // the words seen are kept: an agent's later change of them reopens the decision
-        kind: 'intent', target: s.id, choice, detail: { text: s.text, ...(d.text ? { edited: d.text } : {}), ...(d.reason ? { reason: d.reason } : {}) },
+        kind: 'intent', target: s.id, choice, detail: { text: s.text, ...(d.text ? { edited: d.text } : {}), ...(d.reason ? { reason: d.reason } : {}), ...(fields ? { interface: fields } : {}) },
         summary: d.choice === 'accept' ? `Intent ${s.id} was accepted as worded: ${s.text}` : d.choice === 'edit' ? `Intent ${s.id} was reworded: ${d.text}` : `Intent ${s.id} was rejected: ${d.reason}`,
       }
     }

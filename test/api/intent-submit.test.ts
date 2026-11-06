@@ -84,6 +84,33 @@ describe('Intent builder draft panel', () => {
     expect(state('INT-env')).toBe('draft')
     await run(USER, 'skill.draft', { repo: REPO, skill: 'intent-builder', step: 0, data: null })
   })
+
+  type View = { intent: { statements: { id: string; flag?: string; interface?: Record<string, string>; missing?: string[] }[] }; checks: { id: string; status: string; detail?: string }[] }
+  const view = async (decisions: unknown[]): Promise<View> => {
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'intent-builder', step: 3, data: { decisions } })
+    try { return await run(USER, 'skill.get', { repo: REPO, skill: 'intent-builder' }) as View } finally { await run(USER, 'skill.draft', { repo: REPO, skill: 'intent-builder', step: 0, data: null }) }
+  }
+
+  it('says which field each interface lacks, and shows the fields beside the words (test-esp32 #20)', async () => {
+    const v = await view([])
+    expect(v.checks.find((c) => c.id === 'interfaces')).toMatchObject({ status: 'not_met', detail: '1 interface not fully given: INT-old lacks protocol, rate and direction.' })
+    expect(v.intent.statements.find((s) => s.id === 'INT-old')).toMatchObject({ flag: 'Missing protocol, rate, direction', interface: { type: 'USB-C sink', connector: 'USB-C receptacle' }, missing: ['protocol', 'rate', 'direction'] })
+  })
+
+  it('an edit that gives every value in its words meets the check, with no job (test-esp32 #20)', async () => {
+    const v = await view([{ statement: 'INT-old', choice: 'edit', text: 'Charges from USB-C chargers through a USB-C receptacle: USB 2.0 full speed, 12 Mbit/s, input only.' }])
+    expect(v.checks.find((c) => c.id === 'interfaces')?.status).toBe('met')
+    expect(v.intent.statements.find((s) => s.id === 'INT-old')).toMatchObject({ interface: { type: 'USB-C sink', connector: 'USB-C receptacle', protocol: 'USB 2.0 full speed', rate: '12 Mbit/s', direction: 'in' }, missing: [] })
+  })
+
+  it('an edit with the fields set beside the words meets it too; the fields set win over the words', async () => {
+    const v = await view([{ statement: 'INT-old', choice: 'edit', text: 'Works with USB-C chargers, power only.', interface: { protocol: 'none (sink, 5.1 kΩ on CC1 and CC2)', rate: 'not applicable', direction: 'in' } }])
+    expect(v.checks.find((c) => c.id === 'interfaces')?.status).toBe('met')
+    expect(v.intent.statements.find((s) => s.id === 'INT-old')?.interface).toMatchObject({ protocol: 'none (sink, 5.1 kΩ on CC1 and CC2)', rate: 'not applicable', direction: 'in' })
+    // a reworded statement that still leaves one out names it
+    const w = await view([{ statement: 'INT-old', choice: 'edit', text: 'Works with USB-C chargers at 5 V.' }])
+    expect(w.checks.find((c) => c.id === 'interfaces')?.detail).toBe('1 interface not fully given: INT-old lacks protocol, rate and direction.')
+  })
 })
 
 type Next = { kind: string; summary: string; button: string; ref: { kind: string; id: string } | null; job_id?: string; after: string | null }

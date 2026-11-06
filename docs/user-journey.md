@@ -429,7 +429,10 @@ Quality bar, all checked before the intent can be submitted:
 - Every topic is answered or explicitly marked "don't care", or "unknown, decide by" a named stage.
 - Every quantity has a number and a unit; ranges have both ends.
 - No vague words stand alone: "fast", "small", "low power", "robust" and similar are flagged until a number replaces them.
-- Every interface is fully specified (type, connector, protocol, rate, direction).
+- Every interface is fully specified (type, connector, protocol, rate, direction). The draft panel shows the five fields
+  under each interface statement and names the ones not given. Editing an interface statement shows the fields beside
+  the words: a field the person changes is kept as typed, and the others are read again from the new words, so fixing
+  a missing field never needs an agent's job.
 - No internal conflicts: the power budget fits the source, the size fits the connectors, the cost fits the quantity.
 - Each statement can become a testable requirement; those that cannot are flagged for rewording.
 - Open questions are listed with an owner.
