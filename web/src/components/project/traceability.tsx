@@ -16,7 +16,7 @@ import { FlowCanvas, FlowView, HANDLE, type Lit, chainOf, litClass, litEdgeStyle
 import { StatusBadge } from '@/components/status-badge'
 import type { CoverageRow, TraceView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
-import { VERDICT } from './shared'
+import { VERDICT, verdictLabel } from './shared'
 
 const ROW = 70
 const BOX = 58
@@ -143,6 +143,8 @@ export function traceElements(l: TraceLayout, links: readonly TraceLink[], selec
   }
   for (const r of l.reqs) {
     const v = VERDICT[r.row.verdict]
+    // what was set aside is said beside the verdict, never hidden behind a bare "Verified" (verify verdict.ts)
+    const label = verdictLabel(r.row)
     const test = r.row.tests[0]
     const rk = `req:${r.row.id}`
     const ek = `ev:${r.row.id}`
@@ -159,13 +161,16 @@ export function traceElements(l: TraceLayout, links: readonly TraceLink[], selec
       },
     })
     nodes.push({
-      id: ek, type: 'box', position: { x: COL.ev.x, y: r.y }, selected: ek === selected, ariaLabel: `Evidence for ${r.row.id}: ${v.label}`,
+      id: ek, type: 'box', position: { x: COL.ev.x, y: r.y }, selected: ek === selected, ariaLabel: `Evidence for ${r.row.id}: ${label}`,
       data: {
-        label: v.label, failing: r.failing, dashed: false, lit: lit(ek), side: 'left', width: COL.ev.w,
+        label, failing: r.failing, dashed: false, lit: lit(ek), side: 'left', width: COL.ev.w,
         body: (
           <>
             <StatusBadge status={v.status} label={v.label} plain />
-            <span className="block truncate font-mono text-[11px] text-muted-foreground">{test ? `${test.id}${test.last_run ? ` · ${test.last_run}` : ''}` : 'no test planned'}</span>
+            {/* a verified requirement's set-aside tests on the line under it, where the test would be: said, not clipped */}
+            {label !== v.label
+              ? <span className="block truncate text-[11px] text-waived" title={label}>{r.row.note}</span>
+              : <span className="block truncate font-mono text-[11px] text-muted-foreground">{test ? `${test.id}${test.last_run ? ` · ${test.last_run}` : ''}` : 'no test planned'}</span>}
           </>
         ),
       },

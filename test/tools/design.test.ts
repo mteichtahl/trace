@@ -13,7 +13,7 @@ import '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../../src/tools/design/decisions.js'
 import { DesignDb, readDesignRows } from '../../src/tools/design/db.js'
-import { architectureView, decidedFields, intentDraft, intentView, interfaceFromWords, linksView, missingFields, parseNets, pinCheck, pinPlanPrint } from '../../src/tools/design/record.js'
+import { architectureView, decidedFields, intentDraft, intentView, interfaceFromWords, linksView, missingFields, ownSignatures, parseNets, pinCheck, pinPlanPrint } from '../../src/tools/design/record.js'
 import { drawingArtifacts, sheetOfSvg, sheetPlaces, svgSizeMm } from '../../src/tools/kicad/export.js'
 import { VerifyDb } from '../../src/tools/verify/db.js'
 import { allTools } from '../../src/tools/index.js'
@@ -110,6 +110,36 @@ describe('people\'s decisions over the proposals', () => {
     expect(intentView(rows, both).find((x) => x.id === 'I-b')?.flags).toContain('conflict')
     const reasoned = [both[0]!, { ...both[1]!, detail: { text: 'Reads every 10 seconds.', reason: 'Only for the first hour after install.' } }]
     expect(intentView(rows, reasoned).find((x) => x.id === 'I-b')?.flags).not.toContain('conflict')
+  })
+
+  it('a gate a person signed after an agent last wrote the words accepts them (test-esp32 #209)', () => {
+    const rows = d.rows()
+    const a = rows.intent.find((x) => x.id === 'I-a')!
+    const accepted: DesignDecision[] = [{ id: '1', kind: 'intent', target: 'I-a', choice: 'accepted', detail: { text: 'Fits a 40 × 30 mm board.' }, by: 'p', byHash: 'h', at: a.updated - 100, supersededAt: null }]
+    // accepted, then an agent changed the words (the budget raised through a change): proposed again
+    expect(intentView(rows, accepted).find((x) => x.id === 'I-a')).toMatchObject({ state: 'proposed', changed_since: true })
+    // a signature from before the change accepts nothing
+    expect(intentView(rows, accepted, [{ gate: 'Define', by: 'marc', at: a.updated - 10 }]).find((x) => x.id === 'I-a')?.state).toBe('proposed')
+    // the first gate signed over the new words accepts them, and says which
+    const signed = intentView(rows, accepted, [{ gate: 'Layout', by: 'marc', at: a.updated + 200 }, { gate: 'Define', by: 'marc', at: a.updated + 100 }])
+    expect(signed.find((x) => x.id === 'I-a')).toMatchObject({ state: 'accepted', changed_since: false, decided: { by: 'marc', gate: 'Define', at: new Date((a.updated + 100) * 1000).toISOString() } })
+    // a line an agent added that no person decided on (the setup access point): accepted by the gate signed after it
+    expect(intentView(rows, [], [{ gate: 'Layout', by: 'marc', at: Math.max(...rows.intent.map((x) => x.updated)) + 1 }]).filter((x) => x.kind === 'statement').every((x) => x.state === 'accepted')).toBe(true)
+    // a person's rejection stands over any signature
+    const rejected: DesignDecision[] = [{ ...accepted[0]!, choice: 'rejected', at: a.updated + 1 }]
+    expect(intentView(rows, rejected, [{ gate: 'Layout', by: 'marc', at: a.updated + 200 }]).find((x) => x.id === 'I-a')?.state).toBe('rejected')
+  })
+
+  it('a signature carried into a new revision is not a person signing (ownSignatures)', () => {
+    const r = {
+      gates: [{ id: 'define.gate', name: 'Requirements baseline' }],
+      signatures: [
+        { gate: 'define.gate', by: 'marc', at: 10, notes: null },
+        { gate: 'define.gate', by: 'marc', at: 20, notes: 'Carried from revision A: the change starts at Layout.' },
+      ],
+    }
+    expect(ownSignatures(r)).toEqual([{ gate: 'Requirements baseline', by: 'marc', at: 10 }])
+    expect(ownSignatures(null)).toEqual([])
   })
 })
 

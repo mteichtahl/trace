@@ -9,8 +9,9 @@
  *   partial        some tests passed, others are planned or blocked
  *   untested       tests exist but none has run (or all are blocked)
  *   no_test        no test item links to it
- *   waived         every test linked to it is waived
- * Rejected and obsolete requirements are counted, not listed.
+ *   waived         every test linked to it is waived (or set aside by a person's waiver), or a waiver stands on it
+ * The rule is verdict.ts's, shared with the record's trace: a verified requirement says what was set aside beside it
+ * (`set_aside`, `note`: "TST-031 waived to Fabricate"). Rejected and obsolete requirements are counted, not listed.
  *
  * The evidence is each test item's latest result: its run ids. Functional coverage is the sum of the hits those
  * runs recorded (coverage_hits), matched to coverage points by name or /regex/. Line, toggle and branch coverage are
@@ -20,8 +21,9 @@ import { Work } from '../../core/store.js'
 import { matcher, type CoveragePoint, type Requirement, type TestItem, type VerifyDb } from './db.js'
 import { mergeCoverage, parseCoverageDat, summarizeCoverage, type CovPoint } from './parse.js'
 import { releaseMarkdown, releaseOpenItems, type ReleaseFacts } from './release.js'
+import { type SetAside, type Verdict, requirementVerdict, setAsideWords } from './verdict.js'
 
-export type Verdict = 'verified' | 'coverage_gap' | 'failing' | 'partial' | 'untested' | 'no_test' | 'waived'
+export type { Verdict } from './verdict.js'
 
 export interface PointState extends Pick<CoveragePoint, 'id' | 'kind' | 'match' | 'goal' | 'requirements'> {
   hits: number
@@ -38,6 +40,9 @@ export interface ReqRow {
   verdict: Verdict
   tests: { id: string; method: TestItem['method']; status: TestItem['status']; last_run: string | null }[]
   points: { id: string; hits: number; goal: number; met: boolean }[]
+  /** what was set aside (tests waived, a waiver on the requirement), and in words; only when something was */
+  set_aside?: SetAside[]
+  note?: string
 }
 
 export interface Matrix {
@@ -79,6 +84,7 @@ export function buildMatrix(v: VerifyDb, opts: { runs?: string[] | undefined; co
   const reqs = v.requirements()
   const live = reqs.filter((r) => r.status !== 'rejected' && r.status !== 'obsolete')
   const tests = v.tests()
+  const waivers = v.waivers()
   const evidence = opts.runs ?? evidenceRuns(v, tests)
   const hits = v.hits(evidence)
   const pts = v.points()
@@ -100,18 +106,13 @@ export function buildMatrix(v: VerifyDb, opts: { runs?: string[] | undefined; co
   const rows: ReqRow[] = live.map((r) => {
     const ts = tests.filter((t) => t.requirements.includes(r.id))
     const ps = points.filter((p) => p.requirements.includes(r.id))
-    const active = ts.filter((t) => t.status !== 'waived')
-    let verdict: Verdict
-    if (!ts.length) verdict = 'no_test'
-    else if (!active.length) verdict = 'waived'
-    else if (active.some((t) => t.status === 'fail' || t.status === 'error')) verdict = 'failing'
-    else if (active.every((t) => t.status === 'pass')) verdict = ps.every((p) => p.met) ? 'verified' : 'coverage_gap'
-    else if (active.some((t) => t.status === 'pass')) verdict = 'partial'
-    else verdict = 'untested'
+    const { verdict, set_aside } = requirementVerdict(r.id, ts, waivers, ps)
+    const note = setAsideWords(set_aside)
     return {
       id: r.id, kind: r.kind, text: r.text, acceptance: r.acceptance, status: r.status, verdict,
       tests: ts.map((t) => ({ id: t.id, method: t.method, status: t.status, last_run: t.last_run })),
       points: ps.map((p) => ({ id: p.id, hits: p.hits, goal: p.goal, met: p.met })),
+      ...(set_aside.length ? { set_aside } : {}), ...(note ? { note } : {}),
     }
   })
   const verdicts: Verdict[] = ['verified', 'coverage_gap', 'failing', 'partial', 'untested', 'no_test', 'waived']
@@ -165,7 +166,7 @@ export function reportMarkdown(m: Matrix, tests: readonly TestItem[], meta: { ti
   if (m.points.length) out.push(`- Coverage points: ${m.points.filter((p) => p.met).length} of ${m.points.length} met`)
   out.push('', '## Requirements', '', '| Requirement | Kind | Verdict | Tests | Coverage | Text |', '|---|---|---|---|---|---|')
   for (const r of m.requirements) {
-    out.push(`| ${r.id} | ${r.kind} | ${r.verdict} | ${r.tests.map((t) => `${t.id} ${t.status}`).join(', ') || '—'} | ${r.points.map((p) => `${p.id} ${p.hits}/${p.goal}`).join(', ') || '—'} | ${esc(clip(r.text, 140))} |`)
+    out.push(`| ${r.id} | ${r.kind} | ${r.verdict}${r.note ? ` (${esc(r.note)})` : ''} | ${r.tests.map((t) => `${t.id} ${t.status}`).join(', ') || '—'} | ${r.points.map((p) => `${p.id} ${p.hits}/${p.goal}`).join(', ') || '—'} | ${esc(clip(r.text, 140))} |`)
   }
   out.push('', '## Tests', '', '| Test | Method | Status | Requirements | Last run | How |', '|---|---|---|---|---|---|')
   for (const t of tests) {

@@ -103,6 +103,20 @@ describe('the drawing', () => {
     expect(screen.getByText('R-2 text')).toBeTruthy()
     expect(screen.getByText('no test planned')).toBeTruthy()
   })
+  it('says what was set aside beside a verified verdict, never a bare "Verified" (test-esp32 #209)', () => {
+    const waived = [{ ...row('R-1', 'verified'), note: 'TST-031 waived to Fabricate' }, row('R-2', 'verified')]
+    const l = layoutTrace(waived, trace)
+    const { nodes } = traceElements(l, traceLinks(l), null)
+    const label = (id: string) => (nodes.find((n) => n.id === id)!.data as { label: string }).label
+    expect(label('ev:R-1')).toBe('Verified · TST-031 waived to Fabricate')
+    expect(label('ev:R-2')).toBe('Verified')
+    expect(nodes.find((n) => n.id === 'ev:R-1')!.ariaLabel).toBe('Evidence for R-1: Verified · TST-031 waived to Fabricate')
+  })
+  it('an intent line a person accepted (or signed a gate over) is not marked proposed', () => {
+    const t: TraceView = { ...trace, intent: [{ id: 'I-1', topic: 'Constraints', text: 'at most 9 USD a board', state: 'accepted', decided: { by: 'marc', at: '2026-11-05T09:00:00Z', gate: 'Sign-off' } }, { id: 'I-2', topic: 'Interfaces', text: 'a setup access point', state: 'proposed' }] }
+    const l = layoutTrace(rows, t)
+    expect(l.intents.map((i) => [i.id, i.proposed])).toEqual([['I-1', false], ['I-2', true]])
+  })
 })
 
 describe('block diagram', () => {

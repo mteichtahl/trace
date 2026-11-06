@@ -231,7 +231,8 @@ export const COVERAGE: CoverageResult = {
     R('R-004', 'Runs from one 3.7 V lithium cell, 2,000 mAh', 'electrical', 'Input 3.0 to 4.2 V', 'verified', ['TST-004']),
     R('R-006', 'Reaches the gateway at 2 km line of sight', 'functional', '≥ 2 km at SF10, 14 dBm, 10 % packet loss', 'failing', ['TST-H06'], 'fail'),
     R('R-008', 'Charges and configures over USB-C', 'functional', 'USB 2.0 full speed; 500 mA charge', 'untested', ['TST-H08']),
-    R('R-011', 'Battery life at least 2 years at one reading every 15 minutes', 'electrical', '≥ 2 years at 25 °C', 'verified', ['TST-011']),
+    // verified on its passing test, its field test waived to a later stage: the verdict says so (verify verdict.ts)
+    { ...R('R-011', 'Battery life at least 2 years at one reading every 15 minutes', 'electrical', '≥ 2 years at 25 °C', 'verified', ['TST-011']), note: 'TST-H11 waived to Fabricate' },
     R('R-014', 'Output capacitor at least 2.2 µF on the 3V3 rail', 'electrical', 'C ≥ 2.2 µF after derating', 'waived', ['TST-014']),
     R('R-017', 'Meets CISPR 32 class B radiated emissions', 'emc', 'Below the class B limit with 6 dB margin (estimate)', 'untested'),
   ],
