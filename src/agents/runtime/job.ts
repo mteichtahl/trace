@@ -67,7 +67,7 @@ import { type TraceConfig, load } from '../../core/config.js'
 import { loadConfig } from '../../harness/index.js'
 import type { Context, Core, GitHub } from '../../harness/types.js'
 import { type WorkItem, WorkItemSchema, pick } from '../../harness/worker.js'
-import { type JobContext, JobPaused, type JobRunner } from './jobs.js'
+import { type JobContext, JobPaused, type JobRunner, pausable } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { toolSteps } from './tool-steps.js'
@@ -125,6 +125,8 @@ export interface ClaudeOptions {
   hooks?: { PreToolUse: { hooks: PauseHook[] }[] }
   /** An Agent SDK session to continue (a resumed task). */
   resume?: string
+  /** US$ the run may spend on the model (the SDK's estimate) before it stops with error_max_budget_usd. */
+  maxBudgetUsd?: number
 }
 /** A PreToolUse hook (the SDK's HookCallback, as much of it as is used): `continue: false` stops Claude there. */
 export type PauseHook = (input: unknown, toolUseId: string | undefined, o: { signal: AbortSignal }) => Promise<{ continue?: boolean; stopReason?: string }>
@@ -443,7 +445,16 @@ export function modelUsesOf(r: z.infer<typeof ResultMessage>): ModelUse[] {
  * `paused`: it stopped at a safe point because a person asked (the pause hook ran); `session`: its Agent SDK session
  * id (from the init or result message), what a resumed task continues.
  */
-export interface ClaudeOutcome { ok: boolean; text: string; turns: number; paused?: boolean; session?: string | undefined }
+export interface ClaudeOutcome {
+  ok: boolean; text: string; turns: number; paused?: boolean; session?: string | undefined
+  /** It stopped at its own limit, not because the work failed: its spend (maxBudgetUsd) or its turns (maxTurns). */
+  limit?: RunLimit | undefined
+}
+/** The limit a run stopped at: which, the limit itself, and what the run spent (the SDK's estimate, US$). */
+export interface RunLimit { kind: 'spend' | 'turns'; limit: number; spent: number | null }
+
+/** The result subtypes that mean a run stopped at its own limit, with its work so far intact. */
+const LIMITS: Record<string, RunLimit['kind']> = { error_max_budget_usd: 'spend', error_max_turns: 'turns' }
 
 const SessionOf = z.object({ session_id: z.string().regex(/^[0-9a-f-]{8,64}$/) }).loose()
 
@@ -470,6 +481,8 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   /** The system prompt's addition (systemAppend); absent: the catalog's defaults with these notes. */
   system?: Composed
   maxTurns?: number
+  /** US$ the run may spend before it stops at a safe point (absent or 0: no limit). */
+  maxUsd?: number | undefined
   tools?: { builtins: string[]; allowed: string[] }
 }): Promise<ClaudeOutcome> {
   const abort = new AbortController()
@@ -500,6 +513,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     ...(o.tools ? { tools: [...o.tools.builtins] } : {}),
     mcpServers: { trace: { type: 'stdio', command: 'node', args: [...tel.nodeArgs, d.cli, 'mcp'], ...(Object.keys(mcpEnv).length ? { env: mcpEnv } : {}) } },
     maxTurns: o.maxTurns ?? o.cfg.worker.max_turns,
+    ...(o.maxUsd ? { maxBudgetUsd: o.maxUsd } : {}),
     abortController: abort,
     env: { ...d.env, ...o.extraEnv, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
     settingSources: [],
@@ -540,10 +554,18 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   if (!last) return { ok: false, text: 'Claude ended without a result', turns: 0 }
   const ok = last.subtype === 'success' && !last.is_error
   const text = ok ? (last.result ?? '') : [`Claude stopped (${last.subtype})`, ...(last.errors ?? []), last.is_error ? last.result ?? '' : ''].filter(Boolean).join(': ')
-  return { ok, text, turns: last.num_turns ?? 0, session }
+  const kind = ok ? undefined : LIMITS[last.subtype]
+  const limit: RunLimit | undefined = kind ? { kind, limit: kind === 'spend' ? o.maxUsd ?? 0 : o.maxTurns ?? o.cfg.worker.max_turns, spent: last.total_cost_usd ?? null } : undefined
+  return { ok, text, turns: last.num_turns ?? 0, session, ...(limit ? { limit } : {}) }
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** A run's limit in words, as what paused it: "its spend limit of US$5 a job", "its limit of 60 turns". Pure. */
+export const limitWords = (l: RunLimit): string => (l.kind === 'spend' ? `its spend limit of US$${usd(l.limit)} a job` : `its limit of ${l.limit} turns`)
+/** What the run spent, when the SDK said: " (it spent about US$5.02)". Pure. */
+const spentWords = (l: RunLimit): string => (l.spent !== null && l.spent > 0 ? ` (it spent about US$${usd(l.spent)})` : '')
+const usd = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(2))
 
 /** A job's prompt overrides: never fails the job (a layer that cannot be read is left out and logged). */
 async function jobLayers(d: RunnerDeps, dir: string, log: (l: string) => void): Promise<Layers> {
@@ -863,7 +885,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         ...(mem.context ? provenanceOf(['memory.block']) : [])]
       logPrompts(used, log)
       ctx.prompts?.(record(used))
-      log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
+      log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns${settings.max_usd ? `, US$${settings.max_usd}` : ''}, ${tools.length} tools)`)
       const out = await runClaude(d, {
         prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system, jobId: ctx.jobId,
         extraEnv: {
@@ -873,7 +895,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         // the hand-off token (or the hand-off this job answers): the MCP server's environment only
         mcpEnv: { ...waits.env, ...handoffEnvOf },
         onMessage: (m) => mem.observe(m), agent: r.kind,
-        model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
+        model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns, maxUsd: settings.max_usd,
         tools: { builtins: [...SPECIALIST_BUILTINS], allowed: allowedToolsOf(s, { hardware, delegate }) },
         pause: p.kind === 'task' ? ctx.pauseSignal : undefined, resume: continueSession,
       })
@@ -882,6 +904,20 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         await endMemory(mem, ctx, log, false, `paused: ${kept}`)
         mem = NO_MEMORY
         throw new JobPaused(kept)
+      }
+      // stopped at its own spend or turn limit: the work so far is kept on its branch and a person decides whether it
+      // carries on (Resume: another job's worth), rather than the job failing and its work being done again from the
+      // start (test-esp32 #72, #100: a stuck docs job ran on, then was redone)
+      if (out.limit) {
+        const by = limitWords(out.limit)
+        const resumable = pausable(p)
+        const kept = await keepPaused(d, { g, dir, branch, defaultBranch: base.defaultBranch, jobId: ctx.jobId, session: out.session, by: `Stopped at ${by}`, resumable })
+        await endMemory(mem, ctx, log, false, `stopped at ${by}: ${kept}`)
+        mem = NO_MEMORY
+        const said = `The ${s.title} specialist stopped at ${by}${spentWords(out.limit)}, before it finished.`
+        if (resumable) throw new JobPaused(`${said} ${kept} Resume it to carry on, or leave it.`, by)
+        // a work item or a hand-off cannot be paused: it ends, saying where its work is
+        throw new Error(`${said} ${kept} Start it again to carry on from there.`)
       }
       const summary = redact(out.text)
       await endMemory(mem, ctx, log, out.ok, summary)
@@ -983,12 +1019,15 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     const used = [...provenanceOf(['delegate.brief', 'delegate.request'], layers), ...prompt.provenance, ...system.provenance, ...(mem.context ? provenanceOf(['memory.block']) : [])]
     logPrompts(used, log)
     ctx.prompts?.(record(used))
-    log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns)`)
+    // the worker is held to its specialist's spend limit: a brief that runs past it comes back to the specialist,
+    // which says so in its report, rather than spending on with no one asked
+    const maxUsd = parent.cfg.agents[parent.kind].max_usd
+    log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns${maxUsd ? `, US$${maxUsd}` : ''})`)
     const waits = openWaitRelay(d, ctx.jobId)
     const out = await runClaude(d, {
       prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system, jobId: ctx.jobId,
       extraEnv: { ...mem.env, ...journeyAgentEnv(WORKER, 'the trace worker', ctx.jobId) }, mcpEnv: waits.env, onMessage: (m) => mem.observe(m), agent: WORKER,
-      pause: ctx.pauseSignal,
+      pause: ctx.pauseSignal, maxUsd,
     }).finally(() => waits.close())
     // paused with its specialist: what it changed stays in the checkout, which the specialist commits as it pauses
     if (out.paused) throw new JobPaused('paused with its specialist: its changes are in the checkout')
@@ -997,6 +1036,7 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     mem = NO_MEMORY
     const commits = await d.exec('git', ['log', '--format=%h %s', '-n', '20', `${stackedOn?.ref ?? `origin/${parent.defaultBranch}`}..HEAD`], { cwd: parent.dir })
       .then((r) => r.stdout.trim()).catch(() => '')
+    if (out.limit) throw new Error(`The worker stopped at ${limitWords(out.limit)}${spentWords(out.limit)}, before it finished the brief. What it changed is in the checkout${commits ? `, with these commits:\n${commits}` : ''}. Say so in your report rather than delegating the same brief again.`)
     if (!out.ok) throw new Error(summary)
     return [`branch ${branch}, done in ${out.turns} turns`, ...(commits ? [`commits:\n${commits}`] : []), summary.slice(0, 6000)].join('\n')
   } catch (e) {
@@ -1040,7 +1080,9 @@ export async function keepRecord(o: { g: GitOpts; branch: string; defaultBranch:
  * pushed on its branch (never the default branch), and its transcript saved for Resume. Answers what was kept, in
  * words. A push or save that fails is said, never thrown: the job is paused either way.
  */
-export async function keepPaused(d: Pick<RunnerDeps, 'paused'>, o: { g: GitOpts; dir: string; branch: string; defaultBranch: string; jobId: string; session: string | undefined; by: string }): Promise<string> {
+export async function keepPaused(d: Pick<RunnerDeps, 'paused'>, o: { g: GitOpts; dir: string; branch: string; defaultBranch: string; jobId: string; session: string | undefined; by: string; resumable?: boolean }): Promise<string> {
+  // a job that cannot be resumed (a work item, a hand-off) keeps only its branch, for the job that carries it on
+  const resumable = o.resumable ?? true
   // the git commands must run even though the job is stopping: not on its signal
   const git = gitIn({ ...o.g, signal: undefined })
   const said: string[] = []
@@ -1062,6 +1104,7 @@ ${o.by}. The job carries on from this commit when it is resumed.`])
       said.push(`its work could not be pushed (${errText(e).slice(0, 200)}): Resume starts from what ${o.branch} has`)
     }
   }
+  if (!resumable) return `Its work so far: ${said.join('; ')}.`
   let kept = false
   if (o.session && d.paused) kept = await d.paused.save(o.jobId, o.session, o.dir).catch(() => false)
   said.push(kept ? 'its conversation is kept, so Resume continues it' : 'its conversation was not kept, so Resume starts a new one that is told what was done')

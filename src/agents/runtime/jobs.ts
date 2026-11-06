@@ -76,9 +76,14 @@ export interface JobContext {
 /** Does one job; resolves with a one-line summary, rejects with the reason it failed. */
 export type JobRunner = (payload: JobPayload, ctx: JobContext) => Promise<string>
 
-/** A runner that stopped at a safe point because a person paused it: the job ends `paused`, with this as its summary. */
+/**
+ * A runner that stopped at a safe point because a person paused it, or because the job reached its own spend or turn
+ * limit (`by` then says which, as a person's name would: "its spend limit of US$5 a job"): the job ends `paused`, with
+ * this as its summary, and Resume carries it on.
+ */
 export class JobPaused extends Error {
   override name = 'JobPaused'
+  constructor(message: string, readonly by?: string) { super(message) }
 }
 
 /** The queue a job waits in (createJobs `admit`): resolves when it may start; `queued(why)` says why it waits. */
@@ -303,6 +308,8 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
           if (e instanceof JobPaused && !abort.signal.aborted) {
             info.state = 'paused'
             info.summary = e.message
+            // stopped by its own limit, not a person: the index and the app say what paused it
+            if (e.by && !info.pause) info.pause = { by: e.by, at: new Date(now()).toISOString() }
           } else {
             info.state = abort.signal.aborted ? 'aborted' : 'failed'
             info.error = e instanceof Error ? e.message : String(e)

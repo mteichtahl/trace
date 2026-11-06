@@ -437,10 +437,18 @@ describe('job runner', () => {
   })
 
   it('fails when Claude stops early', async () => {
-    const h = harness({}, [{ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 42, errors: [] }])
+    const h = harness({}, [{ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 4, errors: ['the model refused'] }])
     try {
-      await expect(createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)).rejects.toThrow(/error_max_turns/)
-      expect(String(h.f.called('issues.createComment')[0]!.args.body)).toMatch(/error_max_turns/)
+      await expect(createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)).rejects.toThrow(/Claude stopped \(error_during_execution\): the model refused/)
+      expect(String(h.f.called('issues.createComment')[0]!.args.body)).toMatch(/error_during_execution/)
+    } finally { h.cleanup() }
+  })
+
+  it('a work item that reaches its turn limit ends saying so and where its work is (it cannot be paused)', async () => {
+    const h = harness({}, [{ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 120, errors: [] }])
+    try {
+      await expect(createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)).rejects.toThrow(/specialist stopped at its limit of 120 turns, before it finished\. Its work so far: .*Start it again to carry on from there\.$/)
+      expect(String(h.f.called('issues.createComment')[0]!.args.body)).toMatch(/its limit of 120 turns/)
     } finally { h.cleanup() }
   })
 

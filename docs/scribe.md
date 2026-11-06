@@ -59,7 +59,11 @@ Two rules keep it trustworthy:
    - **a push to the default branch** (every merged change, a person's edit in the app, a released record), when the
      commit changed a record a document is written from: the hooks function asks `hook.docs`, which reads the commit's
      files and compares its project database with its parent's table by table. A commit of only the documents, or of
-     only the runs Scribe makes for them, starts nothing, so Scribe's own change never starts Scribe again;
+     only the runs Scribe makes for them, starts nothing, so Scribe's own change never starts Scribe again. A check run
+     again with the same outcome (its status and summary, leaving out the run ids it cites) is not a changed record, and
+     a commit whose records feed only sections due at a later stage starts nothing either: that stage writes them, from
+     everything that changed since. In test-esp32 run 2 the same ERC ran in five jobs and the same case fit four times,
+     and each new run marked its sections again;
    - **a stage's design work landed**: a stage's documents are written from its design, so they wait for it. While a
      criterion of the current stage (other than the documents criterion and the release report's review after it) is
      not met or waived, a push, a gate signed and the nightly drift check start nothing and say what the documents
@@ -115,6 +119,12 @@ changed to another. Working out which sections a change touched asks no model at
 files and database tables a change made to the records each section is written from (`src/docs/stale.ts`), so the same
 change always marks the same sections, a person can see why, and it costs nothing. (The plan had Haiku doing this; a
 fixed mapping does it better.)
+
+Each Scribe job has its own limits: 60 turns (`agents.docs.max_turns`; run 2's took 8 to 41) and US$5 of model use
+(`agents.docs.max_usd`, the Agent SDK's estimate). A job that reaches either pauses with its work committed on its
+branch and its conversation kept, and says so; Resume carries it on with another job's worth, and leaving it costs
+nothing more. Every specialist has the same two limits (`agents.<kind>.max_turns`, `agents.<kind>.max_usd`; 0 means no
+spend limit), and a worker it delegates to is held to its spend limit.
 
 ## Project logo
 

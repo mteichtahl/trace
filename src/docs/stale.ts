@@ -9,7 +9,8 @@
  */
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import { DOC_KINDS, DOCS, type DocKind, type SourceKind } from './catalog.js'
+import type { StageId } from '../core/journey-catalog.js'
+import { DOC_KINDS, DOCS, docsFor, reached, type DocKind, type SourceKind } from './catalog.js'
 
 /** The project database's tables and the records they hold. A table not named here marks nothing. */
 export const TABLE_SOURCES: Readonly<Record<string, readonly SourceKind[]>> = {
@@ -62,18 +63,44 @@ export function sourcesOfDatabases(before: DatabaseSync | null, after: DatabaseS
   for (const [t, kinds] of Object.entries(TABLE_SOURCES)) {
     if (tableHash(before, t) !== tableHash(after, t)) kinds.forEach((k) => out.add(k))
   }
-  const runKinds = (db: DatabaseSync | null): Map<string, number> => {
-    const m = new Map<string, number>()
-    if (!db || !has(db, 'runs')) return m
-    for (const r of db.prepare("SELECT kind, count(*) AS n FROM runs WHERE status IN ('pass','fail') GROUP BY kind").all() as { kind: string; n: number }[]) m.set(r.kind, r.n)
-    return m
-  }
-  const a = runKinds(before)
-  for (const [kind, n] of runKinds(after)) {
-    if ((a.get(kind) ?? 0) === n) continue
+  const a = latestOutcomes(before)
+  for (const [key, outcome] of latestOutcomes(after)) {
+    if (a.get(key) === outcome) continue
+    const kind = key.slice(0, key.indexOf('\0'))
     for (const [re, kinds] of RUN_SOURCES) if (re.test(kind)) kinds.forEach((k) => out.add(k))
   }
   return out
+}
+
+/**
+ * Each check's latest outcome, by its kind and what it checked: its status and summary, without the ids of runs and
+ * rows the summary cites. What the documents report is the outcome, so a check run again with the same outcome marks
+ * nothing: test-esp32 run 2 ran the same ERC ("0 errors, 0 warnings") in five jobs, the same case fit four times and the
+ * verify plan twice, and each new run marked its sections, so every such change started the Documentation agent again
+ * to write what was already written. A new check, or one whose outcome changed, marks them as before.
+ */
+function latestOutcomes(db: DatabaseSync | null): Map<string, string> {
+  const m = new Map<string, string>()
+  if (!db || !has(db, 'runs')) return m
+  const rows = db.prepare("SELECT kind, subject, status, summary FROM runs WHERE status IN ('pass','fail') ORDER BY started, id").all() as { kind: string; subject: string | null; status: string; summary: string | null }[]
+  for (const r of rows) m.set(`${r.kind}\0${r.subject ?? ''}`, `${r.status}\0${(r.summary ?? '').replace(CITED_ID, '#')}`)
+  return m
+}
+/** A run's or a record row's id as summaries cite them (16 or 32 hex digits): new on every run, whatever it found. */
+const CITED_ID = /\b(?:[0-9a-f]{32}|[0-9a-f]{16})\b/g
+
+/**
+ * The sections due by `stage` (of the documents it has) that a change to `sources` marks: what the Documentation agent
+ * would write now. None means the change feeds only sections due at a later stage, which are written when that stage
+ * opens (it compares with the commit the documents were last written at, so nothing is missed). Pure.
+ */
+export function dueSections(sources: ReadonlySet<SourceKind>, stage: StageId): { kind: DocKind; sections: StaleSection[] }[] {
+  return docsFor(stage, true).map((d) => ({
+    kind: d.kind,
+    sections: d.sections.filter((s) => reached(stage, s.due))
+      .map((s) => ({ id: s.id, title: s.title, because: s.sources.filter((x) => sources.has(x)) }))
+      .filter((s) => s.because.length > 0),
+  })).filter((d) => d.sections.length > 0)
 }
 
 export interface StaleSection { id: string; title: string; because: SourceKind[] }
