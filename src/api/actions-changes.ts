@@ -91,7 +91,7 @@ import { backToDefine, changedRequirements, pastDefine } from './pending-changes
 import { hasTable } from './record-read.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
-import { type RecordChanges, betterTitle, contentBullets, recordChanges } from '../core/change-contents.js'
+import { type RecordChanges, betterTitle, contentBullets, contentPhrase, plumbingTitle, recordChanges, recordRequirementIds } from '../core/change-contents.js'
 import { type RestartResult, type StuckLook, restartStuck, stuckFor, stuckLook } from './stuck-checks.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
@@ -260,8 +260,10 @@ export async function openChanges(ctx: Context, repo: string, o: { max?: number 
     // workflow runs no runner picks up (src/api/stuck-checks.ts): one look for the whole list, kept a minute
     mine.length ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),
   ])
+  // a change titled by a record or a merge commit is named by what it holds, as its review page names it (log #154)
+  const titles = await Promise.all(mine.map(({ pull, job }) => listTitle(ctx, gh, repo, pull, job, rows, stacks.get(pull.number)?.stacked?.base ?? null)))
   const works = mine.map(({ pull, job }, i) => ({
-    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head), stuck: stuckFor(look, pull.sha) }),
+    change: { ...changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head), stuck: stuckFor(look, pull.sha) }), title: titles[i] ?? pull.title },
     criteria: criteriaNamed(jobRequest(job), job.title),
   }))
   const own = edits.map(({ pull, edit }, i) => ({
@@ -325,7 +327,6 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
       logLine(ctx, { warning: 'change.get: the project\'s requirements could not be read', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
       return { ids: [] as string[], unknown: [] as string[] }
     })
-  const requirements = named.ids
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   // an accepted requirement its database edits: said before it is accepted (src/api/requirement-edits.ts)
   // and the intent statements and requirements it adds or changes, said in its summary (log #133)
@@ -336,14 +337,19 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     })
     : null
   const edits = read?.edits ?? null
+  // the requirements its record adds or changes are ones it names too: 22 added were "none named" (log #27)
+  const requirements = [...new Set([...named.ids, ...recordRequirementIds(read?.record ?? null)])]
+  const content = { paths: files.map((f) => f.path), record: read?.record ?? null }
   return {
     ...sum,
-    // named by the work in it, not by the record it started as (log #144)
-    title: betterTitle(sum.title, commits),
+    // named by the work in it, not by the record it started as or a merge commit; a record by what it holds (log
+    // #144, #154, #14)
+    title: betterTitle(sum.title, commits, { holds: contentPhrase(content), kind: job.agent }),
     verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
-    // what it holds first: design files, and what it adds to the intent and the requirements (log #144, #133)
-    summary: [...contentBullets({ paths: files.map((f) => f.path), record: read?.record ?? null }), ...summaryBullets({ jobSummary: job.summary, body: pull.body, commits })].slice(0, 12),
+    // what it holds first: its files, and what its record adds, table by table (log #144, #133, #59, #37); then what
+    // every job on its branch reported (log #18)
+    summary: [...contentBullets(content), ...summaryBullets({ jobSummary: job.summary, earlier: earlierSummaries(found.rows, job, pull.head.ref), body: pull.body, commits })].slice(0, 12),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
     ...(named.unknown.length ? { requirements_unknown: named.unknown } : {}),
@@ -392,13 +398,45 @@ async function failureText(ctx: Context, gh: GitHubApi, repo: string, id: string
 }
 
 /**
+ * The summaries of the other jobs that worked on `branch` before `job` (oldest first): a change two jobs made is said
+ * by both (test-esp32 log #18). A delegated worker's job is its specialist's, so it is left out.
+ */
+export function earlierSummaries(rows: readonly JobRow[], job: JobRow, branch: string): string[] {
+  const at = (j: JobRow): number => j.endedAt ?? j.updatedAt
+  return rows.filter((j) => j.branch === branch && j.id !== job.id && !j.parentJob && j.summary && at(j) <= at(job))
+    .sort((a, b) => at(a) - at(b)).map((j) => j.summary as string)
+}
+
+/** How long a change's title in the list is kept: its head commit's contents never change. */
+const LIST_TITLE_TTL_MS = 10 * 60_000
+
+/**
+ * A change's title for the list: its own, unless it says nothing of the work (a specialist's record or a merge
+ * commit, log #154, #14); then as its review page names it (betterTitle), from its commits and, when they name no
+ * work, from what its record holds. Read only for such a change, and kept by its head commit; its own title when
+ * GitHub will not say.
+ */
+async function listTitle(ctx: Context, raw: GitHubApi, repo: string, pull: PullSummary, job: JobRow, rows: readonly JobRow[], base: string | null): Promise<string> {
+  if (!plumbingTitle(pull.title) || !pull.sha || typeof raw.pullCommits !== 'function') return pull.title
+  const gh = raw as GitHubApi & Required<Pick<GitHubApi, 'pullCommits'>>
+  const sha = pull.sha
+  return cached(ctx.deps.githubCache, repo, `list-title:${pull.number}:${sha}`, async () => {
+    const commits = await cached(ctx.deps.githubCache, repo, `commits:${pull.number}:${sha}`, () => gh.pullCommits(repo, pull.number))
+    const t = betterTitle(pull.title, commits, { kind: job.agent })
+    if (!plumbingTitle(t)) return t
+    const read = await cached(ctx.deps.githubCache, repo, `record-edits:${pull.number}:${sha}`, () => recordEditsOf(ctx, gh, repo, { head: { sha, ref: pull.head } }, rows, base)).catch(() => null)
+    return betterTitle(pull.title, commits, { kind: job.agent, holds: contentPhrase({ paths: [], record: read?.record ?? null }) })
+  }, LIST_TITLE_TTL_MS).catch(() => pull.title)
+}
+
+/**
  * What `pull`'s database edits. `edits`: the accepted requirements it changes, against the design as it stands (the
  * default branch's database, with people's decisions from the journey record), and what on its branch asked for that
  * (null when it edits none). `record`: the intent statements and requirements it adds or changes, against the change
  * it is stacked on when it is (its own review shows its own edits only), else the design. Null when it carries no
  * database.
  */
-async function recordEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullDetail, jobs: readonly JobRow[], base: string | null): Promise<{ edits: RequirementEditsView | null; record: RecordChanges } | null> {
+async function recordEditsOf(ctx: Context, gh: GitHubApi, repo: string, pull: { head: { sha: string; ref: string } }, jobs: readonly JobRow[], base: string | null): Promise<{ edits: RequirementEditsView | null; record: RecordChanges } | null> {
   const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, pull.head.sha))
   // a stacked change is compared with the change it builds on; that copy unreadable, with the design
   const under = base ? tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, base).catch(() => null)) : null
