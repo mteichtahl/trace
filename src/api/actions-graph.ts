@@ -61,7 +61,7 @@ import { filesRead, staleRuns } from '../ontology/lineage.js'
 import { artifactJson, latestCaseBuild } from '../ontology/mech.js'
 import { ActionError, type Context, Repo, def, memoryInclude, projectMemory, withRecordDb } from './action-kit.js'
 import { TOPIC_NAMES } from '../tools/design/db.js'
-import { architectureView, intentView, linksView } from '../tools/design/record.js'
+import { architectureView, intentView, linksView, ownSignatures } from '../tools/design/record.js'
 import { designOf, requirementEvidence } from './record-read.js'
 
 /** The app's vocabulary (web/src/lib/graph.ts): the node kinds are the ontology's (trace:graphKind, generated). */
@@ -212,7 +212,7 @@ export function projectGraph(db: DatabaseSync, repo?: string, extras: GraphExtra
   const design = designOf(db)
   const evidence = new Map([...nodes.values()].filter((x) => x.kind === 'requirement').map((x) => [x.id, x.status]))
   const derived = linksView(design.rows)
-  for (const st of intentView(design.rows, design.decisions).filter((x) => x.state !== 'rejected' && x.kind !== 'question')) {
+  for (const st of intentView(design.rows, design.decisions, ownSignatures(r)).filter((x) => x.state !== 'rejected' && x.kind !== 'question')) {
     const reqs = derived.filter((l) => l.intent === st.id).map((l) => evidence.get(`requirement:${l.requirement}`))
     const status: NodeStatus = reqs.includes('failing') ? 'failing' : reqs.length && reqs.every((x) => x === 'verified' || x === 'waived') ? 'verified' : 'untested'
     node({ id: `intent:${st.id}`, kind: 'intent', label: short(st.words, 60), title: short(st.words, 120), summary: `${TOPIC_NAMES[st.topic]} · ${st.state === 'accepted' || st.state === 'edited' ? 'accepted' : 'proposed'}${st.source ? ` · from ${st.source.kind === 'person' ? 'the person' : st.source.kind}` : ''}`, status, facts: { Topic: TOPIC_NAMES[st.topic], State: st.state }, ...at('/requirements') })

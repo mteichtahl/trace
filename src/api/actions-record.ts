@@ -3,9 +3,11 @@
  * record holds today, with everything it does not hold yet said plainly (`notes`) rather than made up.
  *
  *   requirements.trace  read    each requirement with its evidence status (verified | failing | untested | waived:
- *                               test items and results, and the journey's waivers), its tests and the intent lines it
- *                               is derived from; the intent statements (src/tools/design: agents propose, people
- *                               accept, edit or reject; rejected ones are left out) with their state, flags, source
+ *                               test items and results, and the journey's waivers, by the verification report's own
+ *                               rule, src/tools/verify/verdict.ts: a verified one says what was set aside, `note`),
+ *                               its tests and the intent lines it is derived from; the intent statements
+ *                               (src/tools/design: agents propose, people accept, edit or reject, or sign a gate over
+ *                               the words; rejected ones are left out) with their state, flags, source
  *                               and whether a requirement covers them; `links` (requirement → intent). `intent_note`
  *                               only while no statement is recorded
  *   design.get          read    the KiCad files of the default branch: one sheet per schematic file with the findings
@@ -27,7 +29,7 @@ import { type Context, Repo, def, withRecordDb } from './action-kit.js'
 import { caseStaleness, caseView } from './case-read.js'
 import { standing } from '../tools/design/decisions.js'
 import { TOPIC_NAMES } from '../tools/design/db.js'
-import { type ArchitectureView, architectureView, intentView, linksView, pinCheck, pinPlanPrint } from '../tools/design/record.js'
+import { type ArchitectureView, architectureView, intentView, linksView, ownSignatures, pinCheck, pinPlanPrint } from '../tools/design/record.js'
 import { type Finding, checkFindings, designOf, latestDrawings, latestNetlist, latestRun, placeOn, requirementEvidence, runImages, runResult, sheetFileOf } from './record-read.js'
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -65,7 +67,7 @@ export const RECORD_ACTIONS = {
     const requirements = requirementEvidence(db, r)
     const count = (e: string): number => requirements.filter((x) => x.evidence === e).length
     const d = designOf(db)
-    const view = intentView(d.rows, d.decisions)
+    const view = intentView(d.rows, d.decisions, ownSignatures(r))
     const live = new Set(requirements.map((q) => q.id))
     const links = linksView(d.rows).filter((l) => live.has(l.requirement))
     const intent = view.filter((s) => s.state !== 'rejected' && s.kind !== 'question').map((s) => ({

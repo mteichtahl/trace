@@ -3,9 +3,10 @@
  * decisions (src/tools/design/decisions.ts, in the journey record) laid over them, and the checks the guided skills'
  * quality bars and the screens read from it. Pure functions over rows, tested on their own.
  *
- *   intentView        each live statement with its state: accepted (a person accepted these words), edited (a
- *                     person's own words), proposed (an agent's, not yet decided), rejected; and the flags the Intent
- *                     builder shows: needs a number, vague word, conflict, not testable
+ *   intentView        each live statement with its state: accepted (a person accepted these words, or signed a gate
+ *                     after an agent last wrote them), edited (a person's own words), proposed (an agent's, not yet
+ *                     decided), rejected; and the flags the Intent builder shows: needs a number, vague word,
+ *                     conflict, not testable
  *   linksView         each requirement's derived_from links to live statements
  *   architectureView  the options with their blocks, connections, trace's scores and recommendation; the criteria
  *                     (fixed by a person, or trace's proposal); the chosen option (a person's decision) and why
@@ -30,8 +31,8 @@ export interface IntentView extends IntentStatementRow {
   /** the words that stand: the person's when edited */
   words: string
   state: IntentState
-  /** who decided and when (ISO), when a person did */
-  decided: { by: string; at: string; reason?: string | undefined } | null
+  /** who decided and when (ISO), when a person did; `gate`: by signing that gate over these words */
+  decided: { by: string; at: string; reason?: string | undefined; gate?: string | undefined } | null
   /** a person accepted it, then an agent changed the words: it needs deciding again */
   changed_since: boolean
   flags: IntentFlag[]
@@ -137,8 +138,29 @@ export function decidedFields(was: IntentInterface | null, words: string | null,
   return { ...out, ...givenFields(given) }
 }
 
-/** Live statements (not withdrawn by their agent), with people's decisions over them. Rejected ones are kept, marked. */
-export function intentView(rows: DesignRows, decisions: readonly DesignDecision[]): IntentView[] {
+/** A person's gate signature, as intentView reads it: the gate's name, who, when (seconds). */
+export interface GateSign { gate: string; by: string; at: number }
+
+/**
+ * The gate signatures that are a person's own (a signature carried into a new revision is a copy, dated when it was
+ * copied, not a person signing what the record held then), for intentView.
+ */
+export function ownSignatures(r: { signatures: readonly { gate: string; by: string; at: number; notes?: string | null | undefined }[]; gates: readonly { id: string; name: string }[] } | null): GateSign[] {
+  if (!r) return []
+  const name = new Map(r.gates.map((g) => [g.id, g.name]))
+  return r.signatures.filter((s) => !/^Carried from revision /.test(s.notes ?? '')).map((s) => ({ gate: name.get(s.gate) ?? s.gate, by: s.by, at: s.at }))
+}
+
+/**
+ * Live statements (not withdrawn by their agent), with people's decisions over them. Rejected ones are kept, marked.
+ *
+ * An agent's line that no person decided on, or whose words an agent changed after a person accepted them, is
+ * proposed, until a person decides on it, or signs a gate after the words were last written (`signed`): the gate is
+ * signed over the record that holds them (test-esp32 log #209: a budget raised through a reviewed change, and a setup
+ * access point added by an accepted docs change, stayed "proposed" though every gate since was signed over them). The
+ * first such signature is the decision shown.
+ */
+export function intentView(rows: DesignRows, decisions: readonly DesignDecision[], signed: readonly GateSign[] = []): IntentView[] {
   const dec = standing(decisions, 'intent')
   const unc = standing(decisions, 'intent.uncovered')
   const live = rows.intent.filter((s) => s.status !== 'withdrawn')
@@ -147,15 +169,19 @@ export function intentView(rows: DesignRows, decisions: readonly DesignDecision[
     const seen = typeof d?.detail.text === 'string' ? d.detail.text : null
     const edited = d?.choice === 'edited' && typeof d.detail.edited === 'string' ? d.detail.edited : null
     // an accepted statement whose words an agent changed afterwards is proposed again
-    const changed = d?.choice === 'accepted' && seen !== null && seen !== s.text
-    const state: IntentState = d?.choice === 'rejected' ? 'rejected' : edited !== null ? 'edited' : d?.choice === 'accepted' && !changed ? 'accepted' : 'proposed'
+    const wasChanged = d?.choice === 'accepted' && seen !== null && seen !== s.text
+    const decidedState: IntentState = d?.choice === 'rejected' ? 'rejected' : edited !== null ? 'edited' : d?.choice === 'accepted' && !wasChanged ? 'accepted' : 'proposed'
+    // a gate a person signed after an agent last wrote the words (and after any decision of theirs) accepts them
+    const sign = decidedState === 'proposed' ? [...signed].sort((a, b) => a.at - b.at).find((g) => g.at >= s.updated && (!d || g.at >= d.at)) : undefined
+    const state: IntentState = sign ? 'accepted' : decidedState
+    const changed = wasChanged && !sign
     // the person's fields of an interface (set beside an edit, or filled from their new words) stand over the agent's
     // while their decision does
-    const fields = (state === 'edited' || state === 'accepted') && d?.detail.interface && typeof d.detail.interface === 'object' ? { ...givenFields(s.interface), ...givenFields(d.detail.interface) } : s.interface
+    const fields = (decidedState === 'edited' || decidedState === 'accepted') && d?.detail.interface && typeof d.detail.interface === 'object' ? { ...givenFields(s.interface), ...givenFields(d.detail.interface) } : s.interface
     const u = unc.get(s.id)
     return {
       ...s, interface: fields, words: edited ?? s.text, state, changed_since: changed,
-      decided: d ? { by: d.by, at: iso(d.at), ...(typeof d.detail.reason === 'string' ? { reason: d.detail.reason } : {}) } : null,
+      decided: sign ? { by: sign.by, at: iso(sign.at), gate: sign.gate } : d ? { by: d.by, at: iso(d.at), ...(typeof d.detail.reason === 'string' ? { reason: d.detail.reason } : {}) } : null,
       uncovered: u && u.choice === 'left_out' ? String(u.detail.reason ?? '') : null, flags: [] as IntentFlag[],
     }
   })
