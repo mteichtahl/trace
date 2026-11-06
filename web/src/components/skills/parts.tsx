@@ -41,8 +41,10 @@ export function NoChecker({ def }: { def: SkillDef }) {
 /** The draft's confirmations of checks no tool can make yet (skill-checks.ts `yours`): confirmed[check id]. */
 export interface Confirmable { data: { confirmed?: Record<string, boolean> }; setData: (fn: (d: { confirmed?: Record<string, boolean> }) => { confirmed?: Record<string, boolean> }) => void }
 
-export function Unavailable({ checks, def, draft }: { checks?: { id: string; unavailable?: string; confirmable?: boolean; confirmed?: boolean }[]; def: SkillDef; draft?: Confirmable }) {
-  const open = (checks ?? []).filter((c) => c.unavailable || c.confirmed)
+export function Unavailable({ checks, def, draft, step }: { checks?: { id: string; unavailable?: string; confirmable?: boolean; confirmed?: boolean }[]; def: SkillDef; draft?: Confirmable; step?: string }) {
+  // on a step, only the checks of that step (and those of no step): a box about the parts list is not on every step
+  const here = (id: string) => { const at = def.checks.find((x) => x.id === id)?.step; return !step || !at || at === step }
+  const open = (checks ?? []).filter((c) => (c.unavailable || c.confirmed) && here(c.id))
   if (!open.length) return null
   const waiting = open.filter((c) => !c.confirmed && !(draft && c.confirmable))
   const yours = draft ? open.filter((c) => c.confirmable || c.confirmed) : []

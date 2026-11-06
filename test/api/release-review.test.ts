@@ -107,6 +107,14 @@ describe('Release review: each step from the record', () => {
     await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'release-review', draft: { choice: { option: 'return:layout' } } })).rejects.toThrow(/Say in the note what has to change/)
   })
 
+  it('choosing against the recommendation takes the note as its reason, in the bar', async () => {
+    expect((await view()).recommendation.recommended).toBe('release')
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'release-review', step: 5, data: { choice: { option: 'return:signoff' } } })
+    expect(check(await view(), 'reasons')).toMatchObject({ status: 'not_met', detail: expect.stringMatching(/^trace recommends release .*say in the note why you chose otherwise\.$/) })
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'release-review', step: 5, data: { choice: { option: 'return:signoff' }, note: 'The USB pair needs a look first.' } })
+    expect(check(await view(), 'reasons')?.status).toBe('met')
+  })
+
   it('a return with a note returns the release gate and reopens the stage, without the rest of the bar', async () => {
     const out = await run(USER, 'skill.submit', { repo: REPO, skill: 'release-review', draft: { choice: { option: 'return:layout' }, note: 'Move /SCK away from the board edge.' } }) as { started: string[] }
     expect(out.started.join(' ')).toMatch(/Layout is reopened/)

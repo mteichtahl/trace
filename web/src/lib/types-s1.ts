@@ -199,6 +199,31 @@ export interface SkillView {
   /** Incoming inspection: the boards recorded, and the parts the fab does not place */
   boards?: BoardView[]
   handPlaced?: string[]
+  /** Release review: what each step shows, from the record (src/api/release-review.ts) */
+  release?: ReleaseView
+}
+
+/** Release review's steps from the record (src/api/release-review.ts ReleaseView). */
+export interface ReleaseView {
+  emc: {
+    precheck: { run: string; at: string; status: string; summary: string | null; counts: { error: number; warn: number; info: number }; findings: { severity: 'error' | 'warn' | 'info'; rule: string; text: string; where: string | null }[]; more: number } | null
+    estimates: { run: string; kind: string; status: string; summary: string | null; at: string }[]
+    criterion: { id: string; text: string; status: 'met' | 'not_met' | 'waived' } | null
+    waivers: { id: string; target: string; reason: string; risk: string; severity: string; by: string }[]
+  }
+  parts: {
+    run: string; at: string; status: string; summary: string | null
+    boards: number | null; build_quantity: number | null; currency: string | null; total: number | null; per_board: number | null; for_build: number | null
+    line_count: number; counts: Record<string, number>; blocking: number
+    lines: { key: string; line: number; mpn: string | null; refs: string | null; status: string; stock: number | null; need: number; unit_price: number | null; sellers: string[] | null; lifecycle: string | null; single: boolean | null; inactive: boolean | null }[]
+    flagged: string[]; unknown: number
+  } | null
+  fab: {
+    drc: { run: string | null; at: string | null; errors: number; findings: number; waived: number } | null
+    board: { size: string | null; layers: string[] | null } | null
+    hand_placed: string[] | null
+  }
+  changes: { revision: string; previous: string | null; started: { summary: string; by: string | null; at: string } | null; items: { kind: string; summary: string; by: string | null; at: string }[] }
 }
 
 // ------------------------------------------------------------------ requirements and traceability
