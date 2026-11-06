@@ -77,7 +77,13 @@ export const JOURNEYS: Record<string, Journey> = {
     questions: [
       { id: 'q1', to: 'Priya', text: 'Question to Priya: which antenna connector, u.FL or SMA?', askedAt: ago(2 * DAY), blocks: 'nothing yet; Layout needs it' },
     ],
-    waivers: [{ id: 'W-3', title: 'ERC pin-not-driven on U2 VBAT', reason: 'Driven by the battery through J1, which the check cannot see.', risk: 'degraded', caught: 'Bring-up step 3' }],
+    // as journey.get has them (test-esp32 #149): W-3 in force and the viewer's own, W-2 one a signed gate stands on,
+    // W-1 withdrawn with its reason
+    waivers: [
+      { id: 'W-3', title: 'ERC pin-not-driven on U2 VBAT', reason: 'Driven by the battery through J1, which the check cannot see.', risk: 'degraded', caught: 'On the bench: Bring-up step 3 (unpowered rail check)', severity: 'degraded', riskText: 'U2 could brown out at power-on.', scope: 'this revision only', by: 'Marc Teichtahl', at: ago(5 * 3600_000), target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, closed: false, mayWithdraw: true },
+      { id: 'W-2', title: 'criterion architect.stock', reason: 'The radio module is on order with a delivery date before Layout.', risk: 'degraded', caught: 'At a later stage: Sign-off stock check', severity: 'degraded', riskText: 'A late build if the order slips.', scope: 'this revision only', by: 'Priya Shah', at: ago(16 * 86_400_000), target: { kind: 'criterion', id: 'architect.stock' }, closed: false, mayWithdraw: false, withdrawBlocked: 'The architecture review gate was signed by Marc Teichtahl with this waiver acknowledged, so the signature stands on it. To withdraw it, an admin reopens Architect first (return the current gate and reopen Architect); the architecture review gate is then signed again without it.' },
+      { id: 'W-1', title: 'criterion define.measurable', reason: 'The range test needs the bench.', risk: 'major', caught: 'On the bench: range test', severity: 'safety', riskText: 'Range could fall short.', scope: 'this revision only', by: 'Marc Teichtahl', at: ago(20 * 86_400_000), target: { kind: 'criterion', id: 'define.measurable' }, closed: true, withdrawn: { by: 'Marc Teichtahl', at: ago(19.5 * 86_400_000), reason: 'The range limit is measurable after all: 300 m line of sight.', replacedBy: null }, mayWithdraw: false },
+    ],
     jobs: [
       { id: 'job_r1', title: 'Rendering the board for the gate', state: 'running', where: 'On a graphics card', etaS: 180, progress: 0.55 },
       { id: 'job_q1', title: 'Write the test plan for Prove', state: 'queued', startsWhen: 'starts when the schematic gate is signed' },

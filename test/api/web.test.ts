@@ -133,6 +133,7 @@ describe('access to the new actions', () => {
   const repoActions: [string, Record<string, unknown>][] = [
     ['project.members', {}], ['journey.get', {}], ['journey.criterion.open', { criterion: 'define.accepted' }], ['gate.return', { gate: 'define', reason: 'something to change' }],
     ['question.answer', { question: 'x', option: 'a' }], ['waiver.add', { target: { kind: 'criterion', id: 'define.accepted' }, reason: 'r', risk: 'r', severity: 'cosmetic', caught_where: null }],
+    ['waiver.withdraw', { waiver: 'abcdefgh', reason: 'taken by mistake' }],
     ['chats.list', {}], ['chats.get', { thread: 'abcdefgh' }], ['chats.append', { messages: [{ text: 'hi' }] }], ['chats.rename', { thread: 'abcdefgh', title: 't' }], ['chats.recall', {}],
     ['graph.neighbourhood', { focus: 'requirement:REQ-001' }], ['files.list', {}], ['files.url', { path: 'README.md' }],
   ]
@@ -155,6 +156,7 @@ describe('access to the new actions', () => {
     for (const [action, args] of [
       ['gate.return', { gate: 'define', reason: 'something to change' }], ['question.answer', { question: 'x', option: 'a' }],
       ['waiver.add', { target: { kind: 'criterion', id: 'define.accepted' }, reason: 'rrrrrrrrrrr', risk: 'rrrrrr', severity: 'cosmetic', caught_where: null }],
+      ['waiver.withdraw', { waiver: 'abcdefgh', reason: 'taken by mistake' }],
     ] as const) {
       expect((await call(reviewer, { action, repo: 'acme/web', ...args })).status, action).toBe(403)
     }
@@ -232,6 +234,18 @@ describe('the journey through the API', () => {
     expect(w.waiver.scope).toBe('this revision only')
     await expect(run(USER, 'waiver.add', { repo: 'acme/web', target: { kind: 'criterion', id: 'architect.mapped' }, reason: 'not needed', risk: 'x', severity: 'safety', caught_where: null })).rejects.toThrow(/not needed/)
     expect(await run(USER, 'gate.return', { repo: 'acme/web', gate: 'architect', reason: 'Two requirements map to no block.' })).toMatchObject({ gate: { returned: { reason: 'Two requirements map to no block.' } } })
+  })
+
+  // test-esp32 #149: a waiver taken by mistake could not be corrected or withdrawn; the API had only waiver.add
+  it('waiver.withdraw and waiver.add replaces: its author or an admin, with a reason kept in the record', async () => {
+    const take = (severity: string, extra: Record<string, unknown> = {}) => run(USER, 'waiver.add', { repo: 'acme/web', target: { kind: 'criterion', id: 'architect.mapped' }, reason: 'Two blocks are mapped by hand this revision.', risk: 'A block left unmapped.', severity, caught_where: 'Sign-off', ...extra }) as Promise<{ waiver: { id: string } }>
+    const w = (await take('safety')).waiver
+    const again = (await take('failure', { replaces: w.id })).waiver
+    const j = await run(USER, 'journey.get', { repo: 'acme/web' }) as { waivers: { id: string; closed: boolean; may_withdraw: boolean; withdrawn: { replaced_by: string | null } | null }[]; decisions: { kind: string }[] }
+    expect(j.waivers.find((x) => x.id === w.id)).toMatchObject({ closed: true, withdrawn: { replaced_by: again.id } })
+    expect(j.waivers.find((x) => x.id === again.id)).toMatchObject({ closed: false, may_withdraw: true })
+    await expect(run(GUEST, 'waiver.withdraw', { repo: 'acme/web', waiver: again.id, reason: 'Not mine to keep.' })).rejects.toThrow()
+    expect(await run(ADMIN, 'waiver.withdraw', { repo: 'acme/web', waiver: again.id, reason: 'The mapping is done now.' })).toMatchObject({ waiver: { closed: true, withdrawn: { by: ADMIN.email, reason: 'The mapping is done now.' } } })
   })
 })
 

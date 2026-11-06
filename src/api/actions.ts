@@ -99,7 +99,7 @@
  * The web app's actions are in their own files, each spread into ACTIONS (src/api/action-kit.ts holds what they share):
  *
  *   actions-projects.ts  project.members, projects.create
- *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, inbox
+ *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, waiver.withdraw, inbox
  *   actions-chats.ts     chats.list, chats.get, chats.append, chats.reply, chats.rename, chats.recall
  *   actions-me.ts        me.get, me.set
  *   actions-push.ts      push.subscribe, push.unsubscribe, push.devices

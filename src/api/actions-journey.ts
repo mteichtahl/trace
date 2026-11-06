@@ -26,7 +26,11 @@
  *                                    problem belongs to
  *   question.answer         write    answer an agent's question: an option (the recommended one, or another with a
  *                                    reason) or an answer in words
- *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope
+ *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope;
+ *                                    `replaces` takes an earlier one again, withdrawing it (as waiver.withdraw)
+ *   waiver.withdraw         write    withdraw a waiver in force with a reason, kept in the decisions log: its author
+ *                                    or an admin, and not while a signed gate stands on it (reopen that stage first).
+ *                                    What it waived counts again (test-esp32 #149)
  *   stuck.dismiss           write    dismiss a stuck agent's report with a reason in one line: it leaves Home and the
  *                                    inbox, and the agent reads the dismissal and its reason (journey.status)
  *   journey.time            read     where the project's time went (Operations' Process tab): each started stage's
@@ -61,7 +65,7 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
   confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
@@ -830,16 +834,26 @@ export const JOURNEY_ACTIONS = {
     severity: z.enum(SEVERITIES),
     caught_where: z.string().trim().max(300).nullable(),
     scope: z.string().trim().min(1).max(300).default('this revision only'),
+    // the waiver this one takes again: it is withdrawn as this one is recorded
+    replaces: Id.optional(),
   }), async (a, ctx) => {
     const facts = await agentFacts(ctx, a.repo)
     const before = a.target.kind === 'criterion' ? await designBefore(ctx, a.repo) : null
     const out = await journeyWrite(ctx, a.repo, (db) => {
-      const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx), { facts })
-      return { result: { repo: a.repo, waiver: w } }
+      const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, { ...signer(ctx), admin: isAdmin(ctx.principal) }, { facts, replaces: a.replaces })
+      return { result: { repo: a.repo, waiver: w, ...(a.replaces ? { replaced: a.replaces } : {}) } }
     })
     // a criterion waived may be the last of the stage's design work: its documents are written now
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     return docs.started ? { ...out, started: [docs.started] } : out
+  }),
+
+  'waiver.withdraw': def('write', Repo.extend({ waiver: Id, reason: z.string().trim().min(1).max(2000) }), async (a, ctx) => {
+    const facts = await agentFacts(ctx, a.repo)
+    return journeyWrite(ctx, a.repo, (db) => {
+      const w = withdrawWaiver(db, a.waiver, { ...signer(ctx), admin: isAdmin(ctx.principal) }, a.reason, { facts })
+      return { result: { repo: a.repo, waiver: w, summary: `Withdrawn. ${w.target.kind === 'criterion' ? 'The criterion counts again: it is not met until it is met or waived again.' : `The ${w.target.kind} counts again.`}` } }
+    })
   }),
 
   'journey.time': def('read', Repo, async ({ repo }, ctx) => {

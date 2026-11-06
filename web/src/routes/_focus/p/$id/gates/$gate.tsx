@@ -38,6 +38,7 @@ import { CriterionFindings } from '@/components/criterion-findings'
 import { type Blocker, isOpened, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
 import { reauthenticate } from '@/components/skills/reauth'
 import { StatusBadge } from '@/components/status-badge'
+import { WaiverActions } from '@/components/waiver-actions'
 import { EmptyState, ErrorState, Loading, NotShared, OfflineBanner, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { ApiError, projectId, projectName, repoOf } from '@/lib/api'
@@ -333,6 +334,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                           <p><span className="text-muted-foreground">Reason: </span>{w.reason}</p>
                           <p className="flex items-center gap-1.5"><span className="text-muted-foreground">Risk: </span><StatusBadge status={w.risk === 'major' ? 'failing' : 'warning'} label={cap(w.risk)} /></p>
                           <p><span className="text-muted-foreground">Caught: </span>{w.caught}</p>
+                          <WaiverActions repo={repo} waiver={w} className="pt-1" />
                         </div>
                       </div>
                       <Label className="mt-3 flex cursor-pointer items-center gap-2 border-t pt-3 font-normal">

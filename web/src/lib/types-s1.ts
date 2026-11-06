@@ -34,8 +34,12 @@ export interface DecisionEntry {
   choice?: string
   recommended?: boolean
   reason?: string
-  state?: 'open' | 'approved' | 'rejected' | 'signed' | 'returned' | 'answered' | 'active' | 'closed'
+  state?: 'open' | 'approved' | 'rejected' | 'signed' | 'returned' | 'answered' | 'active' | 'closed' | 'withdrawn'
   to?: string
+  /** what the decision is about, by id (the log's `ref`: a gate, a question, a waiver) */
+  ref?: string
+  /** a waiver taken: the waiver as it stands now, for its Withdraw and Take it again */
+  waiver?: import('./types').Waiver
   /** the record keeps no time for it (a waiver in force): the timeline lists it apart rather than as today */
   undated?: boolean
 }

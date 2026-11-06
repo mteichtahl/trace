@@ -128,7 +128,8 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `gate.sign` / `gate.return` | admin / write | sign (every criterion met or waived, evidence opened, waivers acknowledged) or return with a reason; a signature that cuts a release also copies the record into the repository |
 | `journey.snapshot` | admin | copy the journey record into the repository's `.trace/project.db` on a `trace/release-…` branch and log the commit |
 | `question.answer` | write | answer an agent's question (the recommended option or another with a reason). When the job that asked has ended, its specialist starts again on that job's branch with the answer (`jobId`, or `jobError` when it could not start); a job still queued, running or paused reads the answer itself |
-| `waiver.add` | write | a waiver with reason, risk, severity, where it is caught instead |
+| `waiver.add` | write | a waiver with reason, risk, severity, where it is caught instead; `replaces` takes an earlier one again and withdraws it |
+| `waiver.withdraw` | write | `{ waiver, reason }`: withdraw a waiver in force, its author or an admin; the reason is kept in the decisions log. Refused while a signed gate stands on it (reopen that stage first) |
 | `stuck.dismiss` | write | `{ job, reason }`: dismiss a stuck agent's report (`job`: the agent's job id, or the stuck item's own id) with a reason in one line; it leaves the views and the inbox, the decisions log keeps it, and the agent reads it in `journey.status` |
 | `inbox` | signed-in | the four kinds that earn a notification across the person's projects, oldest and most blocking first |
 | `chats.list` / `chats.get` / `chats.append` / `chats.rename` / `chats.recall` | read | threads per project (visible to everyone on it), messages (each marked `yours`), the person's own sent messages newest first. `chats.append` keeps the caller's own words only (role user, by them); at most 500 threads per person per project |

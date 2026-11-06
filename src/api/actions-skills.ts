@@ -34,6 +34,7 @@ import {
   STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
+import { isAdmin } from '../core/access.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
 import { type Lasts, askedBy, carryOn, designBefore, viewerOf, waivedWords } from './actions-journey.js'
 import { docsAfterDesign } from './docs-follow.js'
@@ -523,7 +524,9 @@ export const SKILL_ACTIONS = {
         const d = a.draft
         const sev = SEVERITIES.includes(d.severity as never) ? d.severity as (typeof SEVERITIES)[number] : (() => { throw new ActionError('Give the severity.') })()
         const caught = d.caught === 'nowhere' ? null : `${d.caught === 'bench' ? 'On the bench' : 'At a later stage'}: ${String(d.where ?? '').trim()}`
-        const w = addWaiver(db, { target: waiverTarget(d), reason: String(d.reason), risk: String(d.risk), severity: sev, caught_where: caught, scope: d.scope === 'condition' ? `until ${String(d.condition).trim()}` : 'this revision only' }, by, { facts: i.facts })
+        // taken again from an earlier waiver (its "Take it again"): recording this one withdraws that one
+        const replaces = typeof d.replaces === 'string' && d.replaces ? d.replaces : undefined
+        const w = addWaiver(db, { target: waiverTarget(d), reason: String(d.reason), risk: String(d.risk), severity: sev, caught_where: caught, scope: d.scope === 'condition' ? `until ${String(d.condition).trim()}` : 'this revision only' }, { ...by, admin: isAdmin(ctx.principal) }, { facts: i.facts, replaces })
         ref = w.id
       } else if (a.skill === 'question-answer') {
         if (!i.question) throw new ActionError('There is no open question to answer.')
