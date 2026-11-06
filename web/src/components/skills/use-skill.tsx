@@ -46,11 +46,12 @@ export function focusSteps(def: SkillDef, current: number, done: string[]): Focu
   return def.steps.map((s, i) => ({ id: s.id, title: s.title, state: i === current ? 'current' : done.includes(s.id) || i < current ? 'done' : 'todo' }))
 }
 
-export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, initial: D) {
+/** `question`: the question Question answer opens (its link names it), else the API's choice. */
+export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, initial: D, o: { question?: string | undefined } = {}) {
   const router = useRouter()
   const navigate = useNavigate()
   const j = useJourney(repo)
-  const view = useAction('skill.get', { repo, skill: def.id })
+  const view = useAction('skill.get', { repo, skill: def.id, ...(o.question ? { question: o.question } : {}) })
   const draft = useSkillDraft<D>(repo, def.id, { name: def.name, steps: def.steps.length }, initial)
   const stage = j.data?.stages.find((s) => s.state === 'current' || s.state === 'reopened')
   const context = [j.data?.name ?? projectName(repo), j.data?.revision, def.stage === 'Any' || def.stage === 'Every gate' ? stage?.name : def.stage].filter(Boolean).join(' · ')

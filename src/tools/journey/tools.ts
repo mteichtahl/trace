@@ -47,7 +47,7 @@ import {
   AgentFactError, AgentFactsStore, AgentOptionSchema, type Asker, askAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts, projectsBackend,
   projectsFromEnv, resolveStuck,
 } from '../../core/agent-facts.js'
-import { type AgentFacts, EvidenceSchema, type JourneyRecord, JourneyError, journeyView, loadJourney, mergeAgentFacts } from '../../core/journey.js'
+import { type AgentFacts, EvidenceSchema, type JourneyRecord, JourneyError, journeyView, loadJourney, mergeAgentFacts, outOfDate } from '../../core/journey.js'
 import { JourneyStore, JourneyStoreError } from '../../core/journey-store.js'
 import { ToolError, defineTool } from '../../core/registry.js'
 import { Work, findRoot, projectPath } from '../../core/store.js'
@@ -157,7 +157,7 @@ export const status = defineTool({
     if (a.question) {
       const q = merged.questions.find((x) => x.id === a.question)
       if (!q) throw new ToolError(`journey: no question ${a.question} in this project`)
-      return { question: answerOf(q, r) }
+      return { question: answerOf(q, merged) }
     }
     const v = journeyView(r, { hash: '', label: s.asker.label, admin: false, part: null }, undefined, f)
     const stage = v.current_stage
@@ -168,8 +168,8 @@ export const status = defineTool({
         id: g.id, title: g.title, state: g.state, met: g.met, total: g.total,
         criteria: g.criteria.map((c) => ({ id: c.id, owner: c.owner, status: c.status, text: c.text, evidence: c.evidence, checked_at: c.checked_at })),
       })),
-      questions: merged.questions.filter((q) => q.kind === 'question' && (q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400)).map((q) => answerOf(q, r)),
-      stuck: merged.questions.filter((q) => q.kind === 'stuck' && (q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400)).map((q) => answerOf(q, r)),
+      questions: merged.questions.filter((q) => q.kind === 'question' && (q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400)).map((q) => answerOf(q, merged)),
+      stuck: merged.questions.filter((q) => q.kind === 'stuck' && (q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400)).map((q) => answerOf(q, merged)),
       later_stages: v.stages.filter((x) => x.state === 'queued').map((x) => x.id),
       handoffs,
     }
@@ -178,9 +178,13 @@ export const status = defineTool({
 
 interface Answer { answer: string | null; option: string | null; reason: string | null; by: string | null; at: string }
 interface Dismissed { reason: string; by: string; at: string }
-const answerOf = (q: JourneyRecord['questions'][number], r?: JourneyRecord): { id: string; kind: string; asked_by: string; text: string; blocks: string | null; job_id: string | null; asked_at: string; answered: Answer | null; dismissed?: Dismissed } => {
+const answerOf = (q: JourneyRecord['questions'][number], r?: JourneyRecord): { id: string; kind: string; asked_by: string; text: string; blocks: string | null; job_id: string | null; asked_at: string; answered: Answer | null; dismissed?: Dismissed; out_of_date?: string } => {
   const d = q.kind === 'stuck' ? r?.dismissals?.find((x) => x.stuckId === q.id) : undefined
+  // what it asked about has moved on (the criterion met or waived since): the agent reads the record again rather
+  // than waiting on it (test-esp32 #108)
+  const stale = r ? outOfDate(q, r) : null
   return {
+    ...(stale ? { out_of_date: stale } : {}),
     id: q.id, kind: q.kind, asked_by: q.askedBy, text: q.text, blocks: q.blocks, job_id: q.jobId, asked_at: new Date(q.askedAt * 1000).toISOString(),
     answered: q.answeredAt !== null ? { answer: q.answer, option: q.optionId, reason: q.answerReason, by: q.answeredBy, at: new Date(q.answeredAt * 1000).toISOString() } : null,
     // a person dismissed this stuck report: the agent stops waiting on it and acts on the reason
@@ -197,7 +201,7 @@ export const JOURNEY_WRITE_FILTER = { source: ['aws.s3'], 'detail-type': ['Objec
 
 export const ask = defineTool({
   name: 'journey.ask',
-  description: 'Ask a person on the project a question you cannot answer from the record, the knowledge base or the datasheets, so it reaches them on Home, in the inbox and in chat (not only in an issue). Name what it blocks; offer 2 to 6 options with exactly one recommended and a reason for every option; cite what you already read. An option that waives findings or criteria carries waives (each by id, with the risk and severity): the person choosing it records the waiver. Ask one person by their Cognito sub when you know it, else the contributors (default) or the admins. Asking again what an open question asks (or naming it by id) returns that question instead of a second one. Returns the question id; with wait_minutes, waits for the answer and returns it (or when trace will look next).',
+  description: 'Ask a person on the project a question you cannot answer from the record, the knowledge base or the datasheets, so it reaches them on Home, in the inbox and in chat (not only in an issue). Name what it blocks; offer 2 to 6 options with exactly one recommended and a reason for every option; cite what you already read. An option that waives findings or criteria carries waives (each by id, with the risk and severity): the person choosing it records the waiver. Ask one person by their Cognito sub when you know it, else the contributors (default) or the admins. Asking again what an open question asks (naming it by id, or about a criterion an open question is about, whoever asked it) returns that question instead of a second one: wait on its answer. Returns the question id; with wait_minutes, waits for the answer and returns it (or when trace will look next).',
   input: z.object({
     text: z.string().min(10).max(2000).describe('the question, in one or two plain sentences'),
     blocks: z.string().max(500).optional().describe('what it blocks, in words ("sizing the regulator"); leave out when it blocks nothing'),
@@ -212,14 +216,18 @@ export const ask = defineTool({
     const s = journeyScope()
     checkEvidence(a.sources)
     const r = await record(s)
-    const { result: { id, repeat } } = await s.facts.update((db) => {
+    const { result: { id, repeat, askedBy, criteria } } = await s.facts.update((db) => {
       const out = askAgentQuestion(db, s.asker, { text: a.text, blocks: a.blocks, options: a.options, sources: a.sources, askedOfSub: a.sub ?? null, askedPart: a.ask }, r)
       return { result: out, changed: !out.repeat }
     })
     // asked again what a person already answered: a rework (src/core/process-time.ts asksAgain)
     if (!repeat && asksAgain(r, a.blocks)) { try { recordProcessMetric('trace.project.rework', 1, { cause: 'asked_again' }, s.repository) } catch { /* never fails the ask */ } }
-    const asked = { question_id: id, for: a.sub ? 'one person' : `the ${a.ask}`, ...(repeat ? { already_asked: true } : {}) }
-    const said = repeat ? `Not asked again: question ${id} already asks this and is still open.` : 'Asked.'
+    const asked = { question_id: id, for: a.sub ? 'one person' : `the ${a.ask}`, ...(repeat ? { already_asked: true, ...(askedBy ? { asked_by: askedBy } : {}), ...(criteria?.length ? { about: criteria } : {}) } : {}) }
+    // folded into another agent's open question on the same criterion (test-esp32 #158): that answer is this one's too
+    const about = criteria?.length ? ` about ${criteria.join(', ')}` : ''
+    const said = !repeat ? 'Asked.'
+      : askedBy && askedBy !== s.asker.label ? `Not asked again: ${askedBy} already asks${about} in question ${id}, still open. Wait on its answer rather than asking the person a second time, and act on it when it comes.`
+        : `Not asked again: question ${id} already asks this${about} and is still open.`
     if (!a.wait_minutes) return { ...asked, answered: null, next: `${said} Read the answer later with journey.status { question: "${id}" }, or ask again with wait_minutes.` }
     const out = await waitForAnswer(s, id, a.wait_minutes * 60_000, { events: eventsOf(process.env, s.repository) })
     return { ...asked, ...out }

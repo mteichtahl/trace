@@ -59,6 +59,7 @@ import { z } from 'zod'
 import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
+import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
 import { waiverCriterion, waiverTargetWords } from './waiver-words.js'
@@ -738,8 +739,14 @@ export interface QuestionView {
   answered: { answer: string; option_id: string | null; reason: string | null; by: string | null; at: string } | null
   /** a stuck agent's recommendation, in its words (agent facts) */
   recommendation?: string | undefined
+  /** a stuck agent's report in plain words, when `text` (kept, for "Show detail") names its internals: ids, a stack
+   * frame, tool names (test-esp32 #35) */
+  summary?: string | undefined
   /** answered just now with an option that waives: the waivers recorded in the person's name */
   waivers?: string[] | undefined
+  /** what it asks about has changed since it was asked (the criterion it is about is met, the change it waits on is
+   * no longer open): why, in words. The question stays, for the agent to withdraw or ask again */
+  out_of_date?: string | undefined
 }
 export interface WaiverView {
   id: string; stage: StageId; gate: string | null; target: { kind: string; id: string }; reason: string; risk: string; severity: Severity
@@ -1215,14 +1222,85 @@ export const questionIsFor = (q: QuestionRow, v: Viewer): boolean => questionFor
 const questionForWhom = (q: QuestionRow, v: Viewer): QuestionView['for'] =>
   q.askedOfSub || q.askedOf ? (questionFor(q, v) ? 'you' : 'person') : q.askedPart === 'admins' ? 'admins' : 'contributors'
 
-function questionView(q: QuestionRow, v: Viewer): QuestionView {
+/**
+ * The criteria a question is about: the ones it names (in its words or what it blocks: "signoff.emc is not met") and
+ * the ones an option waives. Ids are the project's own criteria, so a word that only looks like one is not counted.
+ */
+export function criteriaOf(r: Pick<JourneyRecord, 'criteria'>, q: { text: string; blocks: string | null; options: readonly OptionRow[] }): string[] {
+  const words = `${q.text} ${q.blocks ?? ''}`
+  const named = r.criteria.map((c) => c.id).filter((id) => new RegExp(`(?<![\\w.])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`).test(words))
+  const waived = q.options.flatMap((o) => o.waives?.targets ?? []).filter((t) => t.kind === 'criterion').map((t) => t.id)
+  return [...new Set([...named, ...waived])]
+}
+
+/**
+ * The changes a question waits on: a "#6" it names as a change ("change #6", "pull request #6", "PR #6") or as one
+ * merged or open ("#6 is not merged", "until #6 is accepted"). A bare "#3" (a pin, a step) is not one.
+ */
+const CHANGE_NAMED = /\b(?:changes?|pull requests?|PRs?)\s+#(\d{1,6})\b|(?<![\w&])#(\d{1,6})\s+(?:is\s+|was\s+|has\s+|gets\s+)?(?:not\s+|still\s+|yet\s+|been\s+)*(?:merged|unmerged|open|accepted|in review)\b/gi
+const changesOf = (q: Pick<QuestionRow, 'text' | 'blocks'>): number[] =>
+  [...new Set([...`${q.text} ${q.blocks ?? ''}`.matchAll(CHANGE_NAMED)].map((m) => Number(m[1] ?? m[2])))]
+
+/**
+ * Why an open question is out of date, or null (test-esp32 #108: "#6 is not merged" was still asked 40 minutes after #6
+ * merged): every criterion it is about is met or waived now, or, with `open` (the numbers of the changes open now; leave
+ * it out when they are not known), every change it names is no longer open. Answered questions are never out of date.
+ */
+export function outOfDate(q: QuestionRow, r: JourneyRecord, open?: readonly number[] | null): string | null {
+  if (q.answeredAt !== null) return null
+  const about = criteriaOf(r, q)
+  if (about.length) {
+    const waived = waiverFor(r)
+    // met or waived since it was asked: one asked about a criterion already met is a question about something else
+    const state = about.map((id) => {
+      const c = r.criteria.find((x) => x.id === id)
+      if (c?.status === 'met' && (c.checkedAt ?? 0) >= q.askedAt) return 'met'
+      const w = waived.get(id)
+      return w && w.at >= q.askedAt ? 'waived' : null
+    })
+    if (state.every((x) => x !== null)) {
+      const how = state.every((x) => x === 'met') ? 'met' : state.every((x) => x === 'waived') ? 'waived' : 'met or waived'
+      return `${about.join(', ')} ${about.length === 1 ? 'is' : 'are'} ${how} now, so this may no longer need an answer.`
+    }
+  }
+  const named = changesOf(q)
+  if (open && named.length && named.every((n) => !open.includes(n))) {
+    const list = named.map((n) => `#${n}`).join(', ')
+    return `${named.length === 1 ? `Change ${list} is` : `Changes ${list} are`} no longer open (accepted or discarded since this was asked), so this may no longer need an answer.`
+  }
+  return null
+}
+
+/** The view's questions marked out of date against the changes open now (journey.get, which knows them). */
+export function markOutOfDate(view: JourneyView, r: JourneyRecord, open: readonly number[]): JourneyView {
+  const rows = new Map(r.questions.map((q) => [q.id, q]))
+  return {
+    ...view,
+    questions: view.questions.map((v) => {
+      const q = rows.get(v.id)
+      const why = q ? outOfDate(q, r, open) : null
+      return why ? { ...v, out_of_date: why } : v
+    }),
+  }
+}
+
+function questionView(q: QuestionRow, v: Viewer, r?: JourneyRecord): QuestionView {
+  const stale = r ? outOfDate(q, r) : null
   return {
     id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: questionForWhom(q, v),
     stage: q.stage, text: q.text, blocks: q.blocks, options: q.options, recommended: q.options.find((o) => o.recommended) ?? null,
     sources: q.sources, job_id: q.jobId, asked_at: isoN(q.askedAt),
     answered: q.answeredAt !== null ? { answer: q.answer ?? '', option_id: q.optionId, reason: q.answerReason, by: q.answeredBy, at: isoN(q.answeredAt) } : null,
     ...(q.recommendation ? { recommendation: q.recommendation } : {}),
+    ...(stale ? { out_of_date: stale } : {}),
+    ...(q.kind === 'stuck' ? plainOf(q) : {}),
   }
+}
+
+/** A stuck agent's report in plain words for its card, when its own words name its internals (test-esp32 #35). */
+const plainOf = (q: Pick<QuestionRow, 'text'>): { summary?: string } => {
+  const p = plainSummary(q.text)
+  return p.same ? {} : { summary: p.summary }
 }
 
 /** Open questions and stuck agents that block work, oldest first. */
@@ -1367,22 +1445,24 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
       why: 'A failure reopens the earliest stage it touches, and work starts again from there.', recommendation: null, button: 'See what failed', stage: stageId, ref: { kind: 'stage', id: stageId },
     }
   }
-  // A question blocks work.
-  const q = blocking[0]
+  // A question blocks work (one out of date is passed over: what it asked about has moved on, test-esp32 #108)
+  const q = blocking.find((x) => !outOfDate(x, r))
   if (q) {
     const rec = q.options.find((o) => o.recommended)
     const forYou = questionFor(q, viewer)
     const verb = q.kind === 'stuck' ? `${q.askedBy} is stuck` : `${q.askedBy} asks`
+    // a stuck report in plain words: its own (ids, stack frames, tool names) stays behind the question's detail
+    const words = q.kind === 'stuck' ? plainSummary(q.text).summary : q.text
     if (forYou) {
       return {
-        kind: 'answer', belongs_to: 'you', yours: true, summary: `${verb}: ${q.text}`, why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.',
+        kind: 'answer', belongs_to: 'you', yours: true, summary: `${verb}: ${words}`, why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.',
         recommendation: rec ? `trace recommends ${rec.label}${rec.why ? `: ${rec.why}` : ''}` : q.recommendation ? `${q.askedBy} recommends: ${q.recommendation}` : null,
         button: rec ? `Use ${rec.label}` : 'Answer', stage: q.stage, ref: { kind: 'question', id: q.id },
       }
     }
     return {
       kind: 'waiting_person', belongs_to: q.askedOf || q.askedOfSub ? 'person' : q.askedPart === 'admins' ? 'admins' : 'contributors', yours: false,
-      summary: `Waiting for ${q.askedOf || q.askedOfSub ? 'a person on the project' : q.askedPart === 'admins' ? 'an admin' : 'a contributor'} to answer: ${q.text} Asked ${ago(q.askedAt, at)}.`,
+      summary: `Waiting for ${q.askedOf || q.askedOfSub ? 'a person on the project' : q.askedPart === 'admins' ? 'an admin' : 'a contributor'} to answer: ${words} Asked ${ago(q.askedAt, at)}.`,
       why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.', recommendation: null,
       button: viewer.admin ? 'Answer it for them' : 'Read the question', stage: q.stage, ref: { kind: 'question', id: q.id },
     }
@@ -1475,7 +1555,7 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
     template: r.journey.template, template_name: TEMPLATE_NAMES[r.journey.template], revision: r.journey.revision, current_stage: r.journey.currentStage,
     later: r.journey.later, start: r.journey.start, name: r.journey.name, description: r.journey.description, icon: r.journey.icon, build: r.journey.build,
     stages, gates, next,
-    questions: r.questions.map((q) => questionView(q, viewer)),
+    questions: r.questions.map((q) => questionView(q, viewer, r)),
     waivers: r.waivers.map((w) => waiverView(r, w, viewer, opened)),
     decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: d.summary, by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
@@ -2267,7 +2347,7 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
     const rec = q.options.find((o) => o.recommended)
     out.push({
       id: `question:${q.id}`, kind: q.kind === 'stuck' ? 'stuck' : 'question', repo, project, stage: q.stage ?? stage,
-      summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ` : `${q.askedBy} asks: `}${q.text}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
+      summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ${plainSummary(q.text).summary}` : `${q.askedBy} asks: ${q.text}`}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
       since: isoN(q.askedAt), waited: ago(q.askedAt, at), blocking: q.kind === 'stuck' || Boolean(q.blocks?.trim()), action: q.kind === 'stuck' ? 'See options' : 'Answer',
       // no one-tap answer for an option that needs a detail from the person: they give it in Question answer
       ref: { kind: 'question', id: q.id }, ...(rec && !rec.needs ? { recommended: { id: rec.id, label: rec.label } } : {}),

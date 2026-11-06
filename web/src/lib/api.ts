@@ -147,7 +147,7 @@ export interface Actions {
   'prompts.history': { args: { id: string; scope: 'installation' | 'project'; repo?: string }; result: { id: string; scope: string; repo?: string; history: import('./admin-types').PromptHistoryEntry[] } }
   // gates, guided skills, new project and project tabs (src/api/actions-record.ts, actions-skills.ts, actions-jobs.ts)
   /** a skill's state for this person: steps, the quality bar from the record, the draft, and what the skill reads */
-  'skill.get': { args: Repo & { skill: string }; result: import('./types-s1').SkillView }
+  'skill.get': { args: Repo & { skill: string; question?: string }; result: import('./types-s1').SkillView }
   /** keep (data) or discard (null) this person's draft of a skill, in the journey store */
   'skill.draft': { args: Repo & { skill: string; step: number; data: Record<string, unknown> | null }; result: { kept: boolean; saved: string | null } }
   /** this person's drafts on the project, newest first */
