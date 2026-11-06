@@ -12,7 +12,11 @@
  *                                  meets the last of them (hook.docs), or the person's act that does (a guided
  *                                  review submitted, a question answered, a criterion signed off). A stage opening
  *                                  starts nothing while it has design work to do (gate.sign): started then, Scribe
- *                                  wrote "pending" in every section the stage was about (test-esp32 #58, #98, #120)
+ *                                  wrote "pending" in every section the stage was about (test-esp32 #58, #98, #120).
+ *                                  The design as accepted: a check on a change not accepted yet does not count
+ *                                  (acceptedNow), a change carrying the stage's work still open holds them
+ *                                  (stageChangesOpen), and the push that accepts the last of it starts them whatever
+ *                                  it changed itself (docsOwed)
  *   a revision cut                 (gate.sign's release, journey.snapshot): the documents brought up to date and
  *                                  printed as the revision's release copies (docsReleaseRequest, src/docs/printed.ts)
  *   the nightly drift check        (hook.drift, the hooks function's schedule at DRIFT_HOUR_UTC): anything that
@@ -31,10 +35,11 @@ import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { DOC_KINDS, DOCS, docsFor, type DocKind, type SourceKind } from '../docs/catalog.js'
 import { parseDoc } from '../docs/markers.js'
 import { dueSections, sourcesOfDatabases, sourcesOfPaths } from '../docs/stale.js'
-import { designWorkLeft, loadJourney, mergeAgentFacts, type CriterionRow, type JourneyRecord } from '../core/journey.js'
+import { designWorkLeft, loadJourney, mergeAgentFacts, withStaleEvidence, type CriterionRow, type JourneyRecord } from '../core/journey.js'
 import { type Context, agentFacts, journeyStore, label, PROJECT_DB_PATH } from './action-kit.js'
-import { tracePulls } from './actions-changes.js'
-import { creditedAgent } from './changes.js'
+import { jobRows, tracePulls } from './actions-changes.js'
+import { creditedAgent, criteriaNamed, jobRequest } from './changes.js'
+import { evidenceStaleness } from './evidence-freshness.js'
 
 /** What Scribe is asked. `why`: what happened, in a person's words. Pure. */
 export function docsRequest(why: string, o: { stage?: StageId | null; records?: readonly SourceKind[]; also?: readonly SourceKind[] } = {}): string {
@@ -168,9 +173,82 @@ export async function recordNow(ctx: Context, repo: string): Promise<JourneyReco
   return rec.result && facts ? mergeAgentFacts(rec.result, facts) : rec.result
 }
 
+/**
+ * The record as the accepted design stands (src/api/evidence-freshness.ts): a criterion an agent checked on a change
+ * that is not accepted yet, or on evidence gone out of date, reads as not met. The documents are written from the
+ * default branch, so they wait for what it holds: started on an agent's check of its own branch, Scribe wrote
+ * "pending" and "no requirement is verified yet" over the record it was about (test-esp32 #58, #98). Unreadable: as it is.
+ */
+export async function acceptedNow(ctx: Context, repo: string, r: JourneyRecord): Promise<JourneyRecord> {
+  const stale = await evidenceStaleness(ctx, repo, r).catch(() => undefined)
+  return stale ? withStaleEvidence(r, stale) : r
+}
+
+/** The criteria of the current stage's design work (its unsigned gates', but the documents' own): what the documents wait for. */
+const stageWork = (r: JourneyRecord): Set<string> => {
+  const left = designWorkLeft({ ...r, criteria: r.criteria.map((c) => ({ ...c, status: 'not_met' as const })), waivers: [] })
+  return new Set(left.map((c) => c.id))
+}
+
+/**
+ * trace's open changes that carry the current stage's design work (their job named one of its criteria), other than
+ * Scribe's own: the documents are written once they are accepted, from the design as it then stands. None when they
+ * cannot be listed (the documents are not held back on a guess).
+ */
+export async function stageChangesOpen(ctx: Context, repo: string, r: JourneyRecord): Promise<{ number: number; title: string }[]> {
+  const work = stageWork(r)
+  if (!work.size) return []
+  try {
+    const { changes } = await tracePulls(ctx, repo)
+    return changes
+      .filter(({ job }) => creditedAgent(job) !== 'docs' && job.agent !== 'docs' && criteriaNamed(jobRequest(job), job.title).some((c) => work.has(c)))
+      .map(({ pull }) => ({ number: pull.number, title: pull.title }))
+  } catch {
+    return []
+  }
+}
+
+/** Why the documents wait for open changes, in words. Pure. */
+export const openWords = (r: JourneyRecord, open: readonly { number: number; title: string }[]): string =>
+  `${STAGE_NAMES[r.journey.currentStage]}'s documents are written once its design is accepted; still open: ${open.slice(0, 3).map((c) => `change #${c.number} ("${c.title}")`).join(', ')}${open.length > 3 ? ` and ${open.length - 3} more` : ''}.`
+
+const secs = (t: number | null | undefined): number | null => (typeof t === 'number' ? (t > 1e12 ? t / 1000 : t) : null)
+
+/**
+ * When the current stage's design work last landed: the newest check, sign-off or waiver of its criteria (the record
+ * with the agents' facts). Null when none of it has a time. Pure.
+ */
+export function designDoneAt(r: JourneyRecord): number | null {
+  const work = stageWork(r)
+  const times = [
+    ...r.criteria.filter((c) => work.has(c.id) && c.status === 'met').map((c) => secs(c.checkedAt)),
+    ...r.waivers.filter((w) => w.closedAt === null && w.targetKind === 'criterion' && work.has(w.target)).map((w) => secs(w.at)),
+  ].filter((t): t is number => t !== null)
+  return times.length ? Math.max(...times) : null
+}
+
+/**
+ * Whether the stage's documents are owed: its design work is all in the accepted design, no change of it is still
+ * open, and no Documentation job has started since the last of it landed. The documents waited for that work (an
+ * open change, a check on a branch), so the push that accepts the last of it starts them, whatever records that push
+ * itself changed: a thermal record accepted at Architect feeds no section due there, yet it was what they waited for.
+ */
+export async function docsOwed(ctx: Context, repo: string, r: JourneyRecord): Promise<boolean> {
+  if (r.journey.currentStage === 'define') return false
+  const seen = await acceptedNow(ctx, repo, r)
+  if (designWorkLeft(seen).length) return false
+  const done = designDoneAt(seen)
+  if (done === null) return false
+  const rows = await jobRows(ctx, repo).catch(() => null)
+  if (!rows) return false
+  const last = Math.max(0, ...rows.filter((j) => creditedAgent(j) === 'docs' || j.agent === 'docs').map((j) => secs(j.startedAt) ?? secs(j.queuedAt) ?? 0))
+  if (last >= done) return false
+  return !(await stageChangesOpen(ctx, repo, r)).length
+}
+
 /** Why the documents wait, in words: the design work of the stage still to land. */
 export const waitWords = (r: JourneyRecord, left: readonly CriterionRow[]): string =>
-  `${STAGE_NAMES[r.journey.currentStage]}'s documents are written once its design work lands; still to come: ${left.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`
+  `${STAGE_NAMES[r.journey.currentStage]}'s documents are written once its design work lands; still to come: ${left.map((c) => `${c.text.replace(/\.$/, '').toLowerCase()}${c.staleBecause ? ' (checked, but not in the accepted design yet)' : ''}`).join('; ')}.`
 
 /**
  * Why a change starts no Documentation job: the records it changed feed no section due at the current stage, in
@@ -192,11 +270,20 @@ export async function startStageScribe(ctx: Context, repo: string, why: string, 
   if (!r) return { skipped: 'The project has no journey yet.' }
   // a change that feeds only later stages' sections is written when they are due, once, not on every push before
   // (each Documentation job reads the documents and the records afresh: test-esp32 run 2 ran 17 of them before Sign-off)
+  // unless the documents waited for what this push landed (docsOwed): then they are written now, the stage's
+  // decisions with them
+  let also = o.also
   const notDue = o.also?.length || o.anyway ? null : notDueWords(r.journey.currentStage, o.records)
-  if (notDue) return { skipped: notDue }
-  const left = designWorkLeft(r)
+  if (notDue) {
+    if (!(await docsOwed(ctx, repo, r))) return { skipped: notDue }
+    also = ['journey']
+  }
+  // the design as accepted: a check on a change still open is not yet the design the documents describe
+  const left = designWorkLeft(await acceptedNow(ctx, repo, r))
   if (left.length) return { waiting: waitWords(r, left) }
-  return startScribe(ctx, repo, docsRequest(why, { stage: r.journey.currentStage, ...(o.records ? { records: o.records } : {}), ...(o.also ? { also: o.also } : {}) }))
+  const open = await stageChangesOpen(ctx, repo, r)
+  if (open.length) return { waiting: openWords(r, open) }
+  return startScribe(ctx, repo, docsRequest(why, { stage: r.journey.currentStage, ...(o.records ? { records: o.records } : {}), ...(also ? { also } : {}) }))
 }
 
 /**

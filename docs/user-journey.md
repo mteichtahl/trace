@@ -157,7 +157,7 @@ A released revision is never edited. A change after release always opens the nex
 
 A gate checks the design as it will stand, so no stage is reviewed or signed while its work is still moving (src/core/journey.ts `pendingBlockers`, `withPending`; src/api/pending-changes.ts `pendingOf`, `stillWorking`). The current stage's gate is locked while:
 
-- **a change is open** for that stage or an earlier one: a change trace made, or a person's own edit (a change whose stage is not known holds it too; one from a later stage does not). Accept or discard it first.
+- **a change is open** for that stage or an earlier one: a change trace made, or a person's own edit (a change whose stage is not known holds it too; one from a later stage does not). Accept or discard it first. A change with no design content does not hold it: one that carries only the project's record (a finished job's runs) or only the documents (src/core/change-contents.ts `changeContent`, read from its files). What the gate is signed on cannot change with it: evidence a criterion cites from it counts only once it is accepted, and a requirement its record edits still takes the project back to Define when it is accepted. The documents still hold Sign-off, which checks them, and the gates into Fabricate wait for every change (test-esp32 #101, #116).
 - **an agent is still working** on the project: a job queued, running or paused (the weekly look for work and a specialist's own sub-jobs aside). Let it finish, or stop it.
 - **trace cannot look** (GitHub or the job list not answering): it stays locked rather than guessing.
 

@@ -106,6 +106,20 @@ export function designAreas(paths: readonly string[]): { area: DesignArea; files
   return AREAS.filter((a) => by.has(a)).map((area) => ({ area, files: by.get(area) as string[] }))
 }
 
+/**
+ * What a change carries, from its files: only the project's record ('record': a finished job's runs, as keepRecord
+ * commits them), only the documents with or without the record ('docs'), or anything else ('design'). None: 'design',
+ * since nothing says otherwise. The first two hold no design content, so they do not hold a gate (src/core/journey.ts
+ * pendingBlockers): in the test run a thermal job's record, a re-run's record and a documents update each locked the
+ * next gate for accept-and-wait (test-esp32 #101, #116).
+ */
+export type ChangeContent = 'record' | 'docs' | 'design'
+export function changeContent(paths: readonly string[]): ChangeContent {
+  if (!paths.length) return 'design'
+  if (paths.every((p) => p === '.trace/project.db')) return 'record'
+  return paths.every((p) => p === '.trace/project.db' || p.startsWith('docs/design/')) ? 'docs' : 'design'
+}
+
 const areaOf = (p: string): DesignArea | null => {
   const top = p.split('/')[0] as DesignArea
   return AREAS.includes(top) ? top : /\.kicad_(sch|pcb|sym|mod|pro)$/i.test(p) ? 'hardware' : null

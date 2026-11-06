@@ -18,7 +18,7 @@ import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/
 import { AGENT_WORDS, jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { answeredRequest } from '../../src/api/actions-journey.js'
-import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
+import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, openChanges, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
   readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
@@ -1221,6 +1221,32 @@ describe('journey.get with changes open', () => {
     const define = (j.stages as { id: string; steps: { id: string }[] }[]).find((s) => s.id === 'define')
     expect(define?.steps.some((s) => s.id.startsWith('change:'))).toBe(false)
     expect(j.changes_unavailable).toMatch(/unreachable/)
+  })
+})
+
+// test-esp32 #101, #116: a thermal job's record, a re-run's record and a documents update each locked the next gate
+describe('the open changes with no design content', () => {
+  it('are told apart by their files: a specialist\'s record, the documents; looked at only for a change that may be one', async () => {
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-thermal', { kind: 'task', agent: 'thermal', title: 'Thermal model of the case', state: 'succeeded', branch: 'claude/task-thermal', endedAt: now - 50 }, now)
+      putJob(d, 'job-docs', { kind: 'task', agent: 'docs', title: 'Journey for the re-sign', state: 'succeeded', branch: 'claude/task-docs', endedAt: now - 40 }, now)
+      putJob(d, 'job-grew', { kind: 'task', agent: 'impl', title: 'Record that grew', state: 'succeeded', branch: 'claude/task-grew', endedAt: now - 30 }, now)
+      return { result: null }
+    })
+    const files = (n: number, paths: string[]): void => { github.pulls.get(n)!.files = paths.map((path) => ({ path, status: 'modified', additions: 1, deletions: 0, patch: null, previous: null })) }
+    github.add(7, 'claude/task-thermal', { title: 'trace: the thermal specialist\'s record (job-thermal)' })
+    files(7, ['.trace/project.db'])
+    github.add(8, 'claude/task-docs', { title: 'Docs: Journey for the Capture re-sign' })
+    files(8, ['docs/design/high-level-design.md', '.trace/project.db'])
+    // titled as a record, but its commits added the case: design
+    github.add(9, 'claude/task-grew', { title: 'trace: the impl specialist\'s record (job-grew) (+2 more)' })
+    files(9, ['.trace/project.db', 'mechanical/case.py'])
+    const open = await openChanges(ctx(USER), REPO)
+    const content = Object.fromEntries(open.map((o) => [o.change.number, o.content ?? null]))
+    expect(content).toMatchObject({ 1: null, 2: null, 4: null, 7: 'record', 8: 'docs', 9: null })
+    // a change titled by its work and not the Documentation specialist's: its files are not asked for
+    expect(github.reads.get('files 2')).toBeUndefined()
   })
 })
 

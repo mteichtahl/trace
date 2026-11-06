@@ -206,3 +206,40 @@ describe('a requirement change after release', () => {
     expect(journeyView(rec(), ADMIN).next.ref).toEqual({ kind: 'skill', id: 'requirements-review' })
   })
 })
+
+// test-esp32 #101, #116: after a gate was signed or accepted, a thermal job's record, a re-run's record and a documents
+// update each locked the next gate for accept-and-wait, though none carried design
+describe('a change with no design content', () => {
+  const RECORD: PendingChanges = { changes: [{ number: 14, title: 'trace: the impl specialist\'s record (job-9)', ready: true, stage: 'capture', content: 'record' }], requirements: [] }
+  const DOCS: PendingChanges = { changes: [{ number: 15, title: 'Docs: Journey for the Capture re-sign', ready: true, stage: null, content: 'docs' }], requirements: [] }
+  const DESIGN: PendingChanges = { changes: [{ number: 16, title: 'Draw the schematic', ready: true, stage: 'capture' }], requirements: [] }
+
+  it('does not hold a gate: a job\'s record, or the documents', () => {
+    start()
+    sign('define', 'architect')
+    meetAll('capture'); openAll('capture')
+    expect(pendingBlockers(rec(), 'capture', RECORD)).toEqual([])
+    expect(pendingBlockers(rec(), 'capture', DOCS)).toEqual([])
+    expect(pendingBlockers(rec(), 'capture', { changes: [...RECORD.changes, ...DOCS.changes], requirements: [] })).toEqual([])
+    expect(signGate(db, 'capture', signer, { pending: { changes: [...RECORD.changes, ...DOCS.changes], requirements: [] } })).toMatchObject({ advanced_to: 'prove' })
+  })
+
+  it('a change with design still holds it, and the view shows the gate open beside a content-free one', () => {
+    start()
+    sign('define', 'architect')
+    meetAll('capture'); openAll('capture')
+    expect(pendingBlockers(rec(), 'capture', DESIGN)).toEqual([expect.stringMatching(/^Accept or discard 1 open change first \("Draw the schematic"\)/)])
+    const v = withPending(rec(), journeyView(rec(), ADMIN), ADMIN, RECORD)
+    expect(v.gates.find((g) => g.id === 'capture')).toMatchObject({ may_sign: true })
+    expect(v.next).toMatchObject({ kind: 'gate', ref: { kind: 'gate', id: 'capture' } })
+  })
+
+  it('the documents still hold the gate that checks them, and the gates into Fabricate wait for everything', () => {
+    start()
+    sign('define', 'architect', 'capture', 'prove', 'layout')
+    meetAll('signoff'); openAll('signoff')
+    // Sign-off checks the documents and passes into Fabricate: nothing open goes past it
+    expect(pendingBlockers(rec(), 'signoff', DOCS)).toEqual([expect.stringMatching(/open change from trace first/)])
+    expect(pendingBlockers(rec(), 'signoff', RECORD)).toEqual([expect.stringMatching(/open change from trace first/)])
+  })
+})

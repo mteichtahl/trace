@@ -834,8 +834,12 @@ const stageWaivers = (r: JourneyRecord, stage: StageId): WaiverRow[] => r.waiver
  *   unknown       why trace could not look (GitHub unreachable): Fabricate stays locked rather than guessing
  */
 export interface PendingChanges {
-  /** `stage`: the stage the change belongs to (null or absent: not known, so it holds every gate) */
-  changes: readonly { number: number; title: string; ready?: boolean; stage?: StageId | null | undefined }[]
+  /**
+   * `stage`: the stage the change belongs to (null or absent: not known, so it holds every gate). `content`: what it
+   * carries when that is no design (src/core/change-contents.ts changeContent): only the project's record, or only
+   * the documents; absent: design, or not looked at
+   */
+  changes: readonly { number: number; title: string; ready?: boolean; stage?: StageId | null | undefined; content?: 'record' | 'docs' | null | undefined }[]
   requirements: readonly string[]
   /** the agents' jobs still queued, running or paused on the project (absent: not looked at) */
   work?: readonly { id: string; title: string; state: string }[] | undefined
@@ -871,7 +875,15 @@ const quoted = (xs: readonly { title: string }[]): string => xs.slice(0, 3).map(
 const holding = (r: Pick<JourneyRecord, 'stages' | 'gates'>, id: string, pending: PendingChanges): PendingChanges['changes'] => {
   const gate = r.gates.find((g) => g.id === id)
   const at = gate ? ordOf(r, gate.stage) : -1
-  return pending.changes.filter((c) => !c.stage || at < 0 || ordOf(r, c.stage) <= at)
+  // a change with no design content (a finished job's record, a documents update) does not hold a gate: what the gate
+  // is signed on cannot change with it. Evidence a criterion cites from it still counts only once it is accepted
+  // (withStaleEvidence), and a requirement its record edits still takes the project back to Define when accepted. The
+  // documents hold the gate that checks them (Sign-off's documents criterion), and the gates into Fabricate wait for
+  // everything (test-esp32 #101, #116)
+  const strict = gate ? guardsFabricate(r, gate.id) : true
+  const docsChecked = Boolean(gate && GATES.find((g) => g.id === gate.id)?.criteria.some((d) => d.key === 'docs'))
+  const holds = (c: PendingChanges['changes'][number]): boolean => strict || !c.content || (c.content === 'docs' && docsChecked)
+  return pending.changes.filter((c) => (!c.stage || at < 0 || ordOf(r, c.stage) <= at) && holds(c))
 }
 
 /**
