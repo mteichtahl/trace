@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AGAIN_MS, afterWrite, applyWrite, writeInvalidations } from './after-write'
+import { AGAIN_MS, ANSWERED_STEP, afterWrite, applyWrite, stepAnswers, writeInvalidations } from './after-write'
 import type { InboxItem, Journey } from './types'
 
 vi.mock('./http', async (orig) => ({ ...(await orig<typeof import('./http')>()), request: vi.fn() }))
@@ -68,6 +68,26 @@ describe('applied to the screens at once', () => {
     expect(qc.getQueryData<InboxItem[]>(inboxKey)!.map((x) => x.id)).toEqual(['i2'])
     // another project's journey is not touched
     expect(qc.getQueryData<Journey>(['journey.get', 'c/d', { repo: 'c/d' }])!.questions).toHaveLength(2)
+  })
+
+  it('an answered question stops being the next step at once, as Waiting on people says 0 (#199)', () => {
+    const qc = seeded()
+    const use = { kind: 'task', owner: 'you', summary: 'Which rail?', action: { label: 'Use 3.3 V', to: '/p/a~b/do/question-answer?question=aq1&option=o1' }, ref: { kind: 'question', id: 'aq1' } } as Journey['next']
+    qc.setQueryData(journeyKey, { ...journey(), next: use })
+    applyWrite(qc, 'question.answer', { repo: R, question: 'aq1', option: 'o1' })
+    expect(qc.getQueryData<Journey>(journeyKey)!.next).toEqual(ANSWERED_STEP)
+    // answering another question leaves the next step alone
+    qc.setQueryData(journeyKey, { ...journey(), next: use })
+    applyWrite(qc, 'question.answer', { repo: R, question: 'aq2', option: 'o1' })
+    expect(qc.getQueryData<Journey>(journeyKey)!.next).toEqual(use)
+  })
+
+  it('a step is about the question by its ref or by the question its button opens', () => {
+    expect(stepAnswers({ ref: { kind: 'question', id: 'aq1' } }, 'aq1')).toBe(true)
+    expect(stepAnswers({ action: { label: 'Answer', to: '/p/a~b/do/question-answer?question=aq1' } }, 'aq1')).toBe(true)
+    expect(stepAnswers({ action: { label: 'Answer', to: '/p/a~b/do/question-answer?question=aq10' } }, 'aq1')).toBe(false)
+    expect(stepAnswers({ ref: { kind: 'change', id: 'aq1' } }, 'aq1')).toBe(false)
+    expect(stepAnswers(undefined, 'aq1')).toBe(false)
   })
 
   it('an accepted change leaves the inbox and the change list', () => {
