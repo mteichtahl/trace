@@ -47,6 +47,7 @@ import { externalFromEnv } from './actions-services.js'
 import { SharedLimit } from './rate-limit.js'
 import { ServiceVerifier } from './service-auth.js'
 import { parseWorkerRuntimes, remoteJobs } from './workers.js'
+import { codeBuildRunnerBuilds } from './stuck-checks.js'
 import { withAgentQueue } from './agent-queue.js'
 import { bucketStore } from './action-kit.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
@@ -334,6 +335,8 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
     githubBudget: new GitHubBudget(),
     // what checks, jobs and tool calls say while they run (docs/progress-and-logs.md): read here, written elsewhere
     ...(process.env.TRACE_RUNS_LOG_GROUP?.trim() ? { runLogs: runLogsFrom(process.env.TRACE_RUNS_LOG_GROUP.trim(), env.AWS_REGION) } : {}),
+    // why a change's checks cannot start: its CodeBuild runner's newest builds (src/api/stuck-checks.ts)
+    runnerBuilds: codeBuildRunnerBuilds(env.AWS_REGION),
     // the login trace's agents open pull requests as, when the runtime is told it; else each repository's variable
     ...(process.env.TRACE_AGENT_LOGIN?.trim() ? { agentLogin: process.env.TRACE_AGENT_LOGIN.trim() } : {}),
   }

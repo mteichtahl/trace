@@ -70,7 +70,7 @@ import {
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
-import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
+import { logLine, openChanges, openPulls, projectEdits, projectRule, rerunStuck } from './actions-changes.js'
 import { editorName, recordEdit } from './edits.js'
 import { RULES_PATH, proposeRule } from './rule-answers.js'
 import { recommendationOf } from './changes.js'
@@ -85,6 +85,8 @@ import { docsAfterDesign, docsReleaseRequest, recordNow, startScribe, startStage
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
+import { dueRetry, stuckFor, stuckLook } from './stuck-checks.js'
+import { waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
@@ -140,9 +142,10 @@ async function openReviews(ctx: Context, repo: string, project: string, stage: S
   const [pulls, jobs] = await Promise.all([openPulls(ctx, repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
   // no open pull request: nothing to tell apart, and the project's settings are not read for it
   if (!pulls.length) return []
-  const [rule, edits] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo)])
+  // checks no runner picks up: one look per project, kept a minute (src/api/stuck-checks.ts)
+  const [rule, edits, look] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo), stuckLook(ctx, repo).catch(() => null)])
   return [
-    ...reviewItems({ repo, project, stage, pulls, jobs, rule, agentWords: AGENT_WORDS }),
+    ...reviewItems({ repo, project, stage, pulls, jobs, rule, agentWords: AGENT_WORDS, stuck: (sha) => stuckFor(look, sha) }),
     ...editReviewItems({ repo, project, stage, pulls, edits, viewer: { admin: isAdmin(ctx.principal), sub: ctx.principal.sub } }),
   ]
 }
@@ -615,11 +618,24 @@ export const JOURNEY_ACTIONS = {
     // its own; otherwise the next step says it stopped and offers Start again, never "trace works on …" over it. The
     // drafting job has its own step (Draft the requirements again)
     const at = Date.now() / 1000
+    const held = await assertNotHeld(repo).then(() => false, () => true)
     const restarted = jobs.error ? [] : await restartLostJobs(ctx, repo, jobs, open.error ? null : new Set(open.list.map((c) => c.change.job_id).filter((x): x is string => x !== null)),
-      { held: await assertNotHeld(repo).then(() => false, () => true), at }).catch(() => [] as string[])
+      { held, at }).catch(() => [] as string[])
     const lost = jobs.error ? [] : openLostJobs(jobs.jobs, jobs.rows, at).filter((j) => !restarted.includes(j.title) && j.id !== drafting?.job?.id)
-    const next = lostJobStep(drafted, lost, viewer, (id) => { const row = jobs.rows.find((x) => x.id === lost.find((j) => j.id === id)?.workerJobId); return Boolean(row && restartable(row)) })
-    const stages = next !== drafted && next.job_id ? stoppedSteps(view.stages) : view.stages
+    const lostNext = lostJobStep(drafted, lost, viewer, (id) => { const row = jobs.rows.find((x) => x.id === lost.find((j) => j.id === id)?.workerJobId); return Boolean(row && restartable(row)) })
+    // checks no runner picks up (test-esp32 log #146): trace cancels and runs them again on its own now and then, which
+    // is also how it notices the runner was fixed (src/api/stuck-checks.ts)
+    const look = open.error || held ? null : await stuckLook(ctx, repo, at).catch(() => null)
+    if (dueRetry(repo, look, at)) {
+      await rerunStuck(ctx, repo, null, look).then(
+        (r) => logLine(ctx, { event: 'checks.retried', repo, by: 'trace', ...r }),
+        (e: unknown) => logLine(ctx, { warning: 'journey.get: the stuck checks could not be run again', repo, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) }),
+      )
+    }
+    // who the step waits on when it would say trace is working and nothing of trace's is (test-esp32 log #146, #147)
+    const waits = waitsOn(lostNext, { changes: open.list.map((x) => x.change), working: jobs.error ? 1 : workingNow(jobs.rows, at), gates: view.gates, viewer, at })
+    const next = waits.step
+    const stages = waitsOnSteps(lostNext !== drafted && lostNext.job_id ? stoppedSteps(view.stages) : view.stages, waits.owner)
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, stages, next: await changedFirst(ctx, repo, r, next),
       ...(restarted.length ? { jobs_restarted: restarted } : {}),

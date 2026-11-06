@@ -218,7 +218,11 @@ export interface Actions {
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true; jobs?: string[] } }
-  'change.rerun': { args: Repo & { number: number }; result: { checks: string[]; runs: number } }
+  /** checks that did not run properly run again; checks no runner picked up (stuck) are cancelled and run again, with
+   * what happened in `summary` */
+  'change.rerun': { args: Repo & { number: number }; result: { checks: string[]; runs: number; summary?: string } }
+  /** every open change's checks no runner picked up, cancelled and run again once an admin fixed the runner */
+  'changes.rerun_stuck': { args: Repo; result: { repo: string; changes: number[]; cancelled: number; rerun: number; later: number; summary: string } }
   /** a change in conflict brought up to date now (src/api/conflicts.ts): an edit made in trace is made again, anything
    * else goes to trace's worker with its earlier attempts set aside. `text`: what happens next, in plain words */
   'change.resolve': { args: Repo & { number: number }; result: { text: string; remade: boolean; worker: boolean; conflict: boolean } }

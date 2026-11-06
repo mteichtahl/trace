@@ -157,6 +157,9 @@ export interface ActionDeps {
   runLogs?: () => RunLogsReader | null
   /** waits `ms` (a test's is instant); absent: a timer. change.accept waits on GitHub working out a merge with it */
   sleep?: (ms: number) => Promise<void>
+  /** a CodeBuild runner project's newest builds (src/api/stuck-checks.ts codeBuildRunnerBuilds): why a change's checks
+   * cannot start; absent: trace says only that no runner picks them up */
+  runnerBuilds?: (project: string) => Promise<import('./stuck-checks.js').RunnerBuild[]>
 }
 
 /** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's

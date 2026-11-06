@@ -301,7 +301,16 @@ export interface ChangeSummary {
   built_on_by?: ChangeLink[]
   /** the job behind it is still working: it is not ready to review yet, whatever its checks say */
   working?: boolean
+  /** its checks cannot start: no runner picks them up (src/api/stuck-checks.ts, test-esp32 log #146). Absent: an older API, or not stuck */
+  stuck?: StuckChecks
 }
+
+/**
+ * A change's checks that no runner picks up: how many workflows, since when, the CodeBuild runner they wait for (null:
+ * GitHub's own), why in plain words ("the CodeBuild runner cannot …"), whether the GitHub connection is the cause, and
+ * what an admin does.
+ */
+export interface StuckChecks { runs: number; since: string; runner: string | null; why: string; connection: boolean; fix: string }
 
 /** An answer a change still waits on (ChangeSummary.answers). */
 export interface PendingAnswer { question: string; text: string; stopped?: string }

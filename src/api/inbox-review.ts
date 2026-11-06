@@ -14,6 +14,7 @@ import type { JobRow } from '../core/job-index.js'
 import { type InboxItem, type StageId, ago } from '../core/journey.js'
 import { type TraceRule, creditedAgent, editOf, editsByBranch, jobsByBranch, traceJob } from './changes.js'
 import type { PullSummary } from './github.js'
+import type { StuckChecks } from './stuck-checks.js'
 
 /** The app's id of a project in its paths: owner~name (web/src/lib/api.ts projectId). */
 export const projectPathId = (repo: string): string => repo.replace('/', '~')
@@ -22,6 +23,9 @@ export const projectPathId = (repo: string): string => repo.replace('/', '~')
 export function reviewItems(o: {
   repo: string; project: string; stage: StageId; pulls: readonly PullSummary[]; jobs: readonly JobRow[]; rule: TraceRule
   agentWords: Readonly<Record<string, string>>; at?: number
+  /** a change's checks that cannot start, by its head commit (src/api/stuck-checks.ts stuckFor): said instead of
+   * "its work counts once you accept it", which no one can do while they wait (test-esp32 log #146) */
+  stuck?: ((sha: string | undefined) => StuckChecks | null) | undefined
 }): InboxItem[] {
   const byBranch = jobsByBranch(o.jobs, o.rule)
   const out: InboxItem[] = []
@@ -31,10 +35,13 @@ export function reviewItems(o: {
     const a = creditedAgent(j)
     const who = a ? `The ${o.agentWords[a] ?? a} agent` : 'A trace job'
     const t = j.endedAt ?? (Date.parse(p.updated_at) / 1000 || j.updatedAt)
+    const stuck = o.stuck?.(p.sha) ?? null
     out.push({
       id: `review:${p.number}`, kind: 'review', repo: o.repo, project: o.project, stage: o.stage,
-      summary: `${o.project}: ${who} made a change, "${p.title}"${p.draft ? ' (a draft)' : ''}. Its work counts once you accept it.`,
-      since: new Date(t * 1000).toISOString(), waited: ago(t, o.at), blocking: false, action: 'Review the change',
+      summary: stuck
+        ? `${o.project}: the checks of "${p.title}" cannot start: ${stuck.why}. ${stuck.fix}`
+        : `${o.project}: ${who} made a change, "${p.title}"${p.draft ? ' (a draft)' : ''}. Its work counts once you accept it.`,
+      since: new Date(t * 1000).toISOString(), waited: ago(t, o.at), blocking: false, action: stuck ? 'See why' : 'Review the change',
       ref: { kind: 'pull', id: String(p.number), url: p.url, to: `/p/${projectPathId(o.repo)}/changes/${p.number}` },
     })
   }
