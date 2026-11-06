@@ -24,6 +24,7 @@ import { progressAction } from './progress'
 import { rendersAction } from './renders'
 import { docsAction } from './docs'
 import { REOPEN_REPO, reopenOn, reopened } from './reopen'
+import { ownedAction, ownedStagesOf, ownedStepOf } from './owned'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -37,6 +38,7 @@ const tokens = () => ({ accessToken: 'mock-access', idToken: 'mock-id', expiresI
 
 function action(name: string, a: Record<string, unknown>): Response {
   const repo = a.repo as string
+  const own = ownedAction(name); if (own) return own
   const ch = changesAction(name, a, (r, n) => { inbox = inbox.filter((i) => !(i.change?.repo === r && i.change.number === n)) }); if (ch) return ch
   const dep = deploysAction(name, a); if (dep) return dep
   const hl = healthAction(name, a); if (hl) return hl
@@ -62,7 +64,9 @@ function action(name: string, a: Record<string, unknown>): Response {
       // the reopen after a change of requirements, when asked for (mock/reopen.ts)
       const shown = repo === REOPEN_REPO && reopenOn() ? reopened(j) : j
       // a lost job holds up the next step until it is started again or dismissed (mock/jobs.ts)
-      return ok({ ...shown, stages: stoppedStepsOf(repo, shown.stages), next: stuckStepOf(repo, lostStepOf(repo, shown.next)), jobs: jobsOf(repo), handoffs: handoffsOf(repo) })
+      // trace's criterion with nothing working on it (mock/owned.ts)
+      const mine = repo === 'acme/soil-sensor'
+      return ok({ ...shown, stages: stoppedStepsOf(repo, mine ? ownedStagesOf(shown.stages) : shown.stages), next: stuckStepOf(repo, lostStepOf(repo, mine ? ownedStepOf(shown.next) : shown.next)), jobs: jobsOf(repo), handoffs: handoffsOf(repo) })
     }
     case 'project.update': {
       // the mock journeys are already in the app's shape (lib/readers.ts passes them through), so patch that shape

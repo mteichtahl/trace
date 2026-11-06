@@ -48,6 +48,7 @@ const BY_ACTION: Partial<Record<ActionName, (r: string, a: Args) => QueryKey[]>>
   'skill.submit': (r) => [...project(r), ...changes(r)],
   'design.decide': project,
   'requirements.draft': project,
+  'journey.start_work': project,
   'order.record': project,
   'order.update': project,
   'board.record': project,

@@ -314,6 +314,64 @@ describe('pcb.length_match', () => {
   })
 })
 
+/**
+ * test-esp32 #159: a USB pair as the test board routed it. Each net runs from the MCU (U1) to both rows of a USB-C
+ * connector (J1 A6/B6, A7/B7). D+ reaches B6 through two vias and the back layer; D- stays on the front and reaches B7
+ * by a branch. Summing every track (and adding D+'s barrels) made the two nets 37.07 and 37 mm, "matched", while the
+ * runs a signal travels are 27.07 (D+ to B6, barrels included) and 24 mm (D- to B7): 3.07 mm apart.
+ */
+function usbFixture(): string {
+  const nets = ['USB_DP', 'USB_DN']
+  const fps: Fp[] = [
+    { ref: 'U1', value: 'MCU', x: 9, y: 10.5, cy: 1.5, sheet: '/', pads: [{ num: '1', x: 1, y: -0.5, net: 'USB_DP' }, { num: '2', x: 1, y: 0.5, net: 'USB_DN' }] },
+    { ref: 'J1', value: 'USB-C', x: 31, y: 12.5, cy: 3, sheet: '/', pads: [{ num: 'A6', x: -1, y: -2.5, net: 'USB_DP' }, { num: 'A7', x: -1, y: -1.5, net: 'USB_DN' }, { num: 'B6', x: -1, y: 1.5, net: 'USB_DP' }, { num: 'B7', x: -1, y: 2.5, net: 'USB_DN' }] },
+  ]
+  const on = (layer: string, x1: number, y1: number, x2: number, y2: number, net: string): string => `\t(segment (start ${x1} ${y1}) (end ${x2} ${y2}) (width 0.2) (layer "${layer}") (net "${net}") (uuid "${uid()}"))`
+  const via = (x: number, y: number, net: string): string => `\t(via (at ${x} ${y}) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "${net}") (uuid "${uid()}"))`
+  const extra = [
+    // D+: U1.1 (10,10) to A6 (30,10) on the front, 20 mm; from a via at (20,10) down the back to (20,14), up a via and
+    // along the front to B6 (30,14): 10 + 4 + 10 = 24 mm of track and two barrels of 1.535 mm
+    on('F.Cu', 10, 10, 20, 10, 'USB_DP'), on('F.Cu', 20, 10, 30, 10, 'USB_DP'), via(20, 10, 'USB_DP'),
+    on('B.Cu', 20, 10, 20, 14, 'USB_DP'), via(20, 14, 'USB_DP'), on('F.Cu', 20, 14, 30, 14, 'USB_DP'),
+    // D-: U1.2 (10,11) to A7 (30,11), 20 mm; a branch from (17,11) to B7 (30,15): 4 + 13 = 17 mm
+    on('F.Cu', 10, 11, 30, 11, 'USB_DN'), on('F.Cu', 17, 11, 17, 15, 'USB_DN'), on('F.Cu', 17, 15, 30, 15, 'USB_DN'),
+  ].join('\n')
+  const pcb = join(dir, 'usb.kicad_pcb')
+  writeFileSync(pcb, boardText(fps, extra, nets))
+  return pcb
+}
+
+describe('one length for a net (test-esp32 #159)', () => {
+  it('pcb.length_match measures pad to pad on both layers, barrels included, and fails the pair as routed', async () => {
+    const r = await call('pcb.length_match', { project: usbFixture(), pairs: [{ p: 'USB_DP', n: 'USB_DN', max_skew_mm: 1 }], auto_pairs: false })
+    const pair = (r.pairs as Dict[])[0] as Dict
+    expect(pair.p_mm).toBeCloseTo(27.07, 3)
+    expect(pair.n_mm).toBeCloseTo(24, 3)
+    expect(pair.skew_mm).toBeCloseTo(3.07, 3)
+    expect(pair).toMatchObject({ p_path: 'U1.1 to J1.B6', n_path: 'U1.2 to J1.B7', status: 'fail' })
+    expect(r.passed).toBe(false)
+    expect(r.length_definition).toMatch(/^pad to pad/)
+    // without barrels: the tracks alone, 24 against 24
+    const bare = await call('pcb.length_match', { project: join(dir, 'usb.kicad_pcb'), pairs: [{ p: 'USB_DP', n: 'USB_DN', max_skew_mm: 1 }], auto_pairs: false, include_vias: false })
+    expect((bare.pairs as Dict[])[0]).toMatchObject({ p_mm: 24, n_mm: 24, status: 'pass' })
+  })
+
+  it('kicad.net_length and emc.precheck report the same lengths as the length check', async () => {
+    const pcb = usbFixture()
+    const nl = await call('kicad.net_length', { project: pcb, nets: ['USB_DP', 'USB_DN'] })
+    const [dp, dn] = nl.nets as Dict[]
+    expect(dp).toMatchObject({ from: 'U1.1', to: 'J1.B6', trace_mm: 24, vias: 2, by_layer_mm: { 'F.Cu': 20, 'B.Cu': 4 }, copper_mm: 34 })
+    expect(dp?.length_mm).toBeCloseTo(27.07, 3)
+    expect(dp?.via_barrel_mm).toBeCloseTo(3.07, 3)
+    expect(dn).toMatchObject({ from: 'U1.2', to: 'J1.B7', length_mm: 24, trace_mm: 24, vias: 0, copper_mm: 37 })
+    const edge = { freq_hz: 12e6, rise_s: 4e-9, amplitude_v: 3.3 }
+    const emc = await call('emc.precheck', { board: pcb, rules: ['edge_spectrum'], edges: [{ net: 'USB_DP', ...edge }, { net: 'USB_DN', ...edge }] })
+    const [sp, sn] = emc.edge_spectrum as Dict[]
+    expect(sp).toMatchObject({ net: 'USB_DP', length_mm: 27.07, path: 'U1.1 to J1.B6', trace_mm: 24, via_barrel_mm: 3.07, vias: 2 })
+    expect(sn).toMatchObject({ net: 'USB_DN', length_mm: 24, path: 'U1.2 to J1.B7' })
+  })
+})
+
 describe('pcb.floorplan', () => {
   it('groups by sheet, with boxes, overlaps and inter-block nets', async () => {
     const r = await call('pcb.floorplan', { project: fixture() })

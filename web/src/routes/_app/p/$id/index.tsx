@@ -31,6 +31,7 @@ import { RunLine, runControls, splitRuns } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
 import { RerunStuck } from '@/components/rerun-stuck'
+import { StartWork } from '@/components/start-work'
 import { LostJobActions, useLostJob } from '@/components/lost-job'
 import { useNow } from '@/components/use-now'
 import { Section } from '@/components/shell/app-shell'
@@ -218,7 +219,9 @@ function Overview() {
       resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
       callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" />
         // checks no runner picked up: run them again once the runner is fixed (test-esp32 log #146)
-        : d.next.action?.call === 'changes.rerun_stuck' && projects.data !== undefined && write ? <RerunStuck repo={repo} size="lg" /> : lostNext}
+        : d.next.action?.call === 'changes.rerun_stuck' && projects.data !== undefined && write ? <RerunStuck repo={repo} size="lg" />
+        // trace's criterion that nothing works on: start its work (test-esp32 log #161)
+        : d.next.action?.call === 'journey.start_work' && projects.data !== undefined && write ? <StartWork repo={repo} size="lg" /> : lostNext}
     />
   )
 
