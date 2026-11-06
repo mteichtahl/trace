@@ -46,16 +46,16 @@ const ruleAnswers = [
 const NESTED = { layout: 'nested', projects: { max: 60, updateMax: 60 }, has: { knowledgeBase: true, cpuQueue: true, answerEvents: true }, note: 'Each project has its own nested stack: up to 60 projects, each with its knowledge base.' }
 
 /** VITE_MOCK_AGENT=setting_up: how the agent's setting up stands. localStorage `mock.agent` picks the moment to show
- * (queued, running (the default), finishing, unread: GitHub would not say, look-fails: the app's own look fails after
- * the first). */
-let agentLooks = 0
+ * (queued, running (the default), finishing, unread: GitHub would not say, look-fails: the app's own looks fail after
+ * its first few seconds). */
+const mockLoaded = Date.now()
 function agentSetting(repo: unknown): Response {
   let which = 'running'
   try { which = localStorage.getItem('mock.agent') ?? which } catch { /* no storage: the default */ }
   const at = (min: number) => new Date(Date.now() + min * 60_000).toISOString()
   const steps = (...states: string[]) => ['Build trace', 'Sign in to AWS', 'Update the installation', 'Mark the projects added'].map((name, i) => ({ name, state: states[i] ?? 'waiting' }))
   const base = { repo, ready: false, state: 'setting_up', requested_at: at(-4), expected_by: at(11), next_check_s: 60 }
-  if (which === 'look-fails' && agentLooks++ > 0) return json({ ok: false, error: 'trace is busy; try again in a minute.' }, 503)
+  if (which === 'look-fails' && Date.now() - mockLoaded > 3000) return json({ ok: false, error: 'trace is busy; try again in a minute.' }, 503)
   switch (which) {
     case 'queued': return ok({ ...base, text: 'The installation update is waiting for its turn to start; once it starts it usually takes about 15 minutes.', update: { status: 'queued', started_at: at(-1), url: 'https://github.com/', steps: steps(), failed_log: null } })
     case 'finishing': return ok({ ...base, state: 'finishing', text: 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.', update: { status: 'finished', started_at: at(-16), url: 'https://github.com/', steps: steps('done', 'done', 'done', 'done'), failed_log: null }, expected_by: at(8), next_check_s: 20 })

@@ -79,7 +79,8 @@ export function lookLine(o: { every: number | false; fetching: boolean; updatedA
   const since = o.updatedAt ? ` What is shown is from ${time(o.updatedAt)}.` : ''
   // the newest look decides: a look that failed after the last good one
   if (o.error && o.failedAt >= o.updatedAt) {
-    const next = nextLookWords(o.failedAt, o.every, o.now)
+    // the screen's clock ticks each second: never "61 s" for a look just made
+    const next = nextLookWords(o.failedAt, o.every, Math.max(o.now, o.failedAt))
     const why = o.error.replace(/\s+/g, ' ').trim().replace(/\.$/, '').slice(0, 160)
     return `trace could not look just now (${why}).${since}${next === 'looking now' ? '' : ` It ${next.replace(/^next look/, 'tries again')}.`}`
   }
