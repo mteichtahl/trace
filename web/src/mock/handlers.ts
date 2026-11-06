@@ -7,6 +7,7 @@ import type { ChatMessage, InboxItem } from '@/lib/types'
 import { knowledgeAction } from './knowledge'
 import { INBOX, JOURNEYS, ME, ME_DOC, MEMBERS, PROJECTS, RECALL, THREADS, THREAD_MESSAGES, WAITS } from './fixtures'
 import { setPath } from '@/lib/prefs'
+import { stepAnswers } from '@/lib/after-write'
 import { adminHandle } from './admin'
 import { servicesAction } from './services'
 import { s1Action } from './s1'
@@ -82,11 +83,20 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'project.members': return ok(MEMBERS[repo] ?? MEMBERS['acme/soil-sensor'])
     case 'tools.waits': return ok({ repo, version: 1, waits: WAITS[repo] ?? [] })
     case 'tools.check_now': case 'job.check_now': return new Promise<Response>((r) => setTimeout(() => r(ok({ ok: true })), 900)) as unknown as Response
-    case 'question.answer': inbox = inbox.filter((i) => i.questionId !== a.question); return ok({
-      ok: true, summary: 'Answered. The agent carries on.',
-      // a rule for the project goes into .trace/rules.md through a change (src/api/rule-answers.ts)
-      ...(a.lasts === 'rule' ? { rule: { state: 'proposed', change: 41, words: 'The rule goes into the project\'s rules (.trace/rules.md) in change #41: it applies once an admin accepts it, and every agent follows it from then on.' } } : {}),
-    })
+    case 'question.answer': {
+      inbox = inbox.filter((i) => i.questionId !== a.question)
+      // the answered question leaves the journey, and the step it was: trace carries on with the agent's work
+      const j = JOURNEYS[repo]
+      if (j) {
+        j.questions = j.questions.filter((x) => x.id !== a.question)
+        if (stepAnswers(j.next, String(a.question))) j.next = { kind: 'working', owner: 'trace', summary: 'trace carries on with your answer.', short: 'trace carries on' }
+      }
+      return ok({
+        ok: true, summary: 'Answered. The agent carries on.',
+        // a rule for the project goes into .trace/rules.md through a change (src/api/rule-answers.ts)
+        ...(a.lasts === 'rule' ? { rule: { state: 'proposed', change: 41, words: 'The rule goes into the project\'s rules (.trace/rules.md) in change #41: it applies once an admin accepts it, and every agent follows it from then on.' } } : {}),
+      })
+    }
     case 'me.get': return ok(me)
     case 'me.set': me = setPath(me, String(a.key), a.value); return ok({ ok: true })
     case 'push.subscribe': return ok({ subscribed: true, devices: 1 })

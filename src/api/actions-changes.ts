@@ -82,7 +82,7 @@ import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
 import { editStore } from './edits.js'
 import { applyEditsSoon } from './apply-edits.js'
 import { resolveConflicts, resolveWords } from './conflicts.js'
-import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
+import { GitHubError, checksOf, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { recordRework, recordWait } from './process-metrics.js'
 import { jobLogEnd, repoJob } from './actions-health.js'
@@ -308,7 +308,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sha = pull.head.sha
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   // everything else is read in parallel; a part GitHub will not give (a token that cannot read checks) is left out
-  const [status, files, commits, runs, write, { given, answers }, discarded, look] = await Promise.all([
+  const [read0, files, commits, runs, write, { given, answers }, discarded, look] = await Promise.all([
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
@@ -317,6 +317,10 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     pull.state === 'closed' ? discardOf(ctx, repo, number) : Promise.resolve(null),
     pull.state === 'open' ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),
   ])
+  // one count of its checks everywhere (test-esp32 #201): the checks listed on its page, each workflow read as its jobs,
+  // are what the heading, the Overview's card (both from this answer) and the recommendation count, not GitHub's
+  // status, which counts a workflow as one check
+  const status = read0 && runs?.length ? { ...read0, checks: checksOf(runs) } : read0
   const hold = rule.hold
   // where it sits in a stack: its base read now (accepting decides on it), the changes above it from the kept list
   const stack = await stackFor(ctx, repo, pull, rule)

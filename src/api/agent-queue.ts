@@ -28,6 +28,7 @@
 import { createHash } from 'node:crypto'
 import { type Backend, Conflict } from '../core/central.js'
 import { JOURNEY_FOLDER } from '../core/journey-store.js'
+import { jobHeadline } from '../core/plain-words.js'
 import { projectSlug } from '../core/project.js'
 import type { JobView, JobsApi } from './action-kit.js'
 
@@ -66,8 +67,8 @@ export interface QueueFile { queued: QueuedStart[]; started: StartedStart[] }
 
 const EMPTY: QueueFile = { queued: [], started: [] }
 
-/** The request in one line (the job index's title). Pure. */
-export const titleOf = (request: string): string => request.replace(/\s+/g, ' ').trim().slice(0, 200)
+/** The job's title, as the job index gives it (its headline, else the request's first plain sentence). Pure. */
+export const titleOf = (request: string, headline?: string): string => jobHeadline({ request, headline })
 
 /** The id of a queued start: the same request (agent, branch, words, attempt) is the same id. Pure. */
 export function queuedId(p: StartPayload): string {
@@ -127,7 +128,7 @@ export async function queueStart(store: Backend, p: StartPayload, now = new Date
   return change(store, p.repository, (f) => {
     const there = f.queued.find((q) => q.id === id)
     if (there) return { file: null, result: there }
-    const q: QueuedStart = { id, payload: p, queued_at: now.toISOString(), title: titleOf(p.request) }
+    const q: QueuedStart = { id, payload: p, queued_at: now.toISOString(), title: titleOf(p.request, p.headline) }
     return { file: { ...f, queued: [...f.queued, q] }, result: q }
   })
 }

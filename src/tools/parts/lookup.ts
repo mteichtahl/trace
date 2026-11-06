@@ -223,6 +223,11 @@ export interface BomLine {
   line_total: number | null
   currency: string | null
   lifecycle: string | null
+  /** the sellers that list this exact part with stock (for single-source parts), across the providers that answered;
+   * null where the line names no part */
+  sources: string[] | null
+  /** the providers that answered for this line: one alone cannot tell a single-source part from the rest */
+  asked: ProviderName[]
   note: string
 }
 
@@ -259,11 +264,11 @@ export async function bomCheck(rows: BomRow[], boards: number, o: LookupOptions)
     const need = r.qty * boards
     const base = { line: i + 1, mpn: r.mpn ?? null, lcsc: r.lcsc ?? null, refs: r.refs ?? null, qty_per_board: r.qty, need }
     if (!id) {
-      lines.push({ ...base, status: 'not-found', flags: ['no-part-number'], offer: null, buy: null, unit_price: null, line_total: null, currency: null, lifecycle: null, note: 'no MPN or LCSC code on this line' })
+      lines.push({ ...base, status: 'not-found', flags: ['no-part-number'], offer: null, buy: null, unit_price: null, line_total: null, currency: null, lifecycle: null, sources: null, asked: [], note: 'no MPN or LCSC code on this line' })
       continue
     }
     if (need === 0) {
-      lines.push({ ...base, status: 'ok', flags: ['not-fitted'], offer: null, buy: 0, unit_price: null, line_total: 0, currency: o.currency, lifecycle: null, note: 'quantity 0: not fitted' })
+      lines.push({ ...base, status: 'ok', flags: ['not-fitted'], offer: null, buy: 0, unit_price: null, line_total: 0, currency: o.currency, lifecycle: null, sources: null, asked: [], note: 'quantity 0: not fitted' })
       continue
     }
     const res = await lookup(id, o)
@@ -275,11 +280,14 @@ export async function bomCheck(rows: BomRow[], boards: number, o: LookupOptions)
     const candidates = exact.length ? exact : []
     const flags: string[] = []
     const lifecycle = res.part.lifecycle
+    // who sells this very part with stock: every listing of the part number (or the pinned code), not only the pinned one
+    const asked = res.providers.filter((n) => n.ok).map((n) => n.provider)
+    const sources = [...new Set(res.offers.filter((x) => (want && mpnLoose(x.mpn) === want) || (r.lcsc && x.provider_part === r.lcsc)).filter((x) => (x.stock ?? 0) > 0).map((x) => x.seller))].sort()
     if (lifecycle && EOL.test(lifecycle)) flags.push('end-of-life')
     if (!candidates.length) {
       const errored = res.providers.length > 0 && res.providers.every((n) => !n.ok)
       const variants = res.offers.length ? `; ${res.offers.length} listing(s) for packaging or grade variants (${[...new Set(res.offers.map((x) => x.mpn))].slice(0, 3).join(', ')}) need a person to confirm` : ''
-      lines.push({ ...base, status: errored ? 'error' : 'not-found', flags: [...flags, errored ? 'no-provider-answered' : 'not-found'], offer: null, buy: null, unit_price: null, line_total: null, currency: null, lifecycle, note: errored ? `no provider answered (${res.providers.map((n) => `${n.provider}: ${n.note ?? 'error'}`).join('; ')})` : `${id} not found${variants}` })
+      lines.push({ ...base, status: errored ? 'error' : 'not-found', flags: [...flags, errored ? 'no-provider-answered' : 'not-found'], offer: null, buy: null, unit_price: null, line_total: null, currency: null, lifecycle, sources, asked, note: errored ? `no provider answered (${res.providers.map((n) => `${n.provider}: ${n.note ?? 'error'}`).join('; ')})` : `${id} not found${variants}` })
       continue
     }
     const best = bestOffer(candidates, need, o.currency) as NonNullable<ReturnType<typeof bestOffer>>
@@ -297,7 +305,7 @@ export async function bomCheck(rows: BomRow[], boards: number, o: LookupOptions)
       offer: { provider: best.offer.provider, seller: best.offer.seller, provider_part: best.offer.provider_part, stock, url: best.offer.url },
       buy: best.buy, unit_price: unit ? unit.price : null,
       line_total: unit && sameCurrency ? round(unit.price * best.buy) : null,
-      currency: unit ? unit.currency : null, lifecycle, note,
+      currency: unit ? unit.currency : null, lifecycle, sources, asked, note,
     })
   }
   const counts: Record<LineStatus, number> = { ok: 0, low: 0, short: 0, out: 0, 'not-found': 0, error: 0 }

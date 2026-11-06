@@ -30,12 +30,13 @@
  *                         it set is still not met the draft is kept instead (`draft_kept`), so the skill's page says
  *                         what is left and the person carries on (test-esp32 #89)
  */
+import type { DatabaseSync } from 'node:sqlite'
 import { filesRead } from '../ontology/lineage.js'
 import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
   type AgentFacts, type Evidence, type JourneyRecord, type OptionWaiver, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
-  STAGE_IDS, applyChange, changeReason, changeWords, outOfDate, questionIsFor, reviewWaitsOn, setCriterion,
+  STAGE_IDS, applyChange, changeReason, changeWords, outOfDate, questionIsFor, returnGate, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { isAdmin } from '../core/access.js'
@@ -96,6 +97,7 @@ function skillBench(skill: string, i: CheckInput) {
 }
 import { type CheckInput, type CheckResult, checkSkill, questionsFirst, questionsOn } from './skill-checks.js'
 import { changeImpact } from './change-impact.js'
+import { type ReleaseRecord, decisionOf, noteOf, releaseRecommendation, releaseView } from './release-review.js'
 
 /** The skills whose Submit records design decisions. */
 const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
@@ -120,7 +122,14 @@ const currentGate = (r: JourneyRecord | null): string | null => {
  */
 interface ReviewBefore { requirements: CheckInput['requirements']; decisions: DesignDecision[] }
 
-async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>, o: { question?: string | undefined } = {}): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[]; reviewBefore: ReviewBefore | null }> {
+/** The newest verify.report run that finished with its report.md, or null. */
+export function releaseReportRun(db: DatabaseSync): { id: string } | null {
+  if (!hasTable(db, 'runs') || !hasTable(db, 'artifacts')) return null
+  const r = db.prepare("SELECT r.id FROM runs r JOIN artifacts a ON a.run_id = r.id AND a.name = 'report.md' WHERE r.kind = 'verify.report' AND r.status IN ('pass','fail') ORDER BY r.started DESC LIMIT 1").get() as { id: string } | undefined
+  return r ? { id: String(r.id) } : null
+}
+
+async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>, o: { question?: string | undefined } = {}): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[]; reviewBefore: ReviewBefore | null; releaseReport: { id: string } | null }> {
   const viewer: Viewer = await viewerOf(ctx.principal, repo)
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
@@ -177,8 +186,20 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     const fab = latestRun(db, 'kicad.fab')
     const fabResult = fab ? runResult(db, fab.id) : null
     const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
+    // Release review: what its steps show (release-review.ts)
+    const release: ReleaseRecord | null = skill === 'release-review' ? (() => {
+      const pre = latestRun(db, 'emc.precheck')
+      const findings = pre ? artifactJson(db, pre.id, 'findings.json') : null
+      const parts = latestRun(db, 'parts.bom_check')
+      return {
+        precheck: pre ? { id: pre.id, status: pre.status, summary: pre.summary, started: pre.started, findings: Array.isArray(findings) ? findings : null } : null,
+        estimates: ['emc.run', 'emc.si'].flatMap((k) => { const x = latestRun(db, k); return x ? [{ id: x.id, kind: k, status: x.status, summary: x.summary, started: x.started }] : [] }),
+        parts: parts ? { id: parts.id, status: parts.status, summary: parts.summary, started: parts.started, result: runResult(db, parts.id) } : null,
+        drcRun: drc.run ? { id: drc.run.id, started: drc.run.started } : null,
+      }
+    })() : null
     return {
-      boards: loadBoards(db), handPlaced, ids: unionIds(idsFromRuns(db), bench.ids), readings: unionReadings(loadReadings(db), bench.readings),
+      boards: loadBoards(db), handPlaced, release, ids: unionIds(idsFromRuns(db), bench.ids), readings: unionReadings(loadReadings(db), bench.readings),
       r, viewer, requirements: live, struck,
       erc: erc.findings ? { findings: erc.findings, errors: erc.report.errors } : null,
       drc: drc.findings ? { findings: drc.findings, errors: drc.report.errors } : null,
@@ -189,6 +210,8 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
       design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles, ...(skill === 'architecture-choice' ? { stockLines: stockLines(db) } : {}),
       draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors, reviewBefore,
+      // the release report Release review approves: the newest verify.report run that finished
+      releaseReport: skill === 'release-review' ? releaseReportRun(db) : null,
     }
   })
   // Case design's fit: the build's recorded inputs against the default branch's files now
@@ -498,6 +521,11 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       return impact ? { impact } : {}
     }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}
+    case 'release-review': {
+      const v = releaseView(i.r, i.release ?? null, { drc: i.drc, board: i.board, handPlaced: i.handPlaced ?? null })
+      const rec = releaseRecommendation(i.r, v, i.requirements)
+      return { release: v, ...(rec ? { recommendation: rec } : {}) }
+    }
     case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
     case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }
     default: return {}
@@ -556,7 +584,9 @@ export const SKILL_ACTIONS = {
     const sk = skillDef(a.skill)!
     const i = await inputFor(ctx, a.repo, a.skill, a.draft)
     const checks = checkSkill(a.skill, i) ?? []
-    const missing = checks.filter((c) => c.status === 'not_met')
+    // Release review returned to a stage: the return needs only its decision and note, not the bar a release needs
+    const returning = a.skill === 'release-review' ? (() => { const d = decisionOf(a.draft); return d?.choice === 'return' ? d.stage : null })() : null
+    const missing = checks.filter((c) => c.status === 'not_met' && (!returning || c.id === 'decision'))
     if (i.pendingErrors.length) throw new ActionError(`${sk.name} cannot be submitted yet: ${i.pendingErrors.join(' ')}`)
     if (missing.length) {
       const words = missing.map((c) => `${sk.checks.find((x) => x.id === c.id)?.text ?? c.id}${c.unavailable ? ` (cannot be checked yet: needs ${c.unavailable})` : c.detail ? ` (${c.detail})` : ''}`)
@@ -635,12 +665,21 @@ export const SKILL_ACTIONS = {
       // criteria, met by its agents' journey.check facts, so the raw record alone always read them as unmet
       const own = loadJourney(db)
       const rec = own ? mergeAgentFacts(own, i.facts) : own
-      if (a.skill === 'release-review' && rec?.criteria.some((c) => c.id === 'signoff.report')) {
+      // returned: the release gate is returned with the person's note, and the stage the concern belongs to reopened
+      if (returning) {
+        const gate = rec?.criteria.find((c) => c.id === 'signoff.report')?.gate ?? rec?.gates.find((g) => g.stage === rec.journey.currentStage)?.id
+        if (!gate) throw new ActionError('There is no release gate in this stage to return.')
+        returnGate(db, gate, { hash: by.hash, label: by.label }, { reason: noteOf(a.draft), reopen: returning })
+      }
+      if (a.skill === 'release-review' && !returning && rec?.criteria.some((c) => c.id === 'signoff.report')) {
         const waits = reviewWaitsOn(rec, 'signoff.report')
         if (waits.length) throw new ActionError(`The release report can't be approved yet: ${waits.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}. trace is still working on ${waits.length === 1 ? 'it' : 'them'}.`)
+        // the report reviewed is the Verification agent's verify.report run (its report.md): no file of it is written
+        // to the repository, so a file ref named one that is not there (test-esp32 #207)
+        if (!i.releaseReport) throw new ActionError('There is no release report to approve yet: the Verification agent writes it (verify.report) once coverage, interference and the parts list are done.')
         move('signoff.report', true, [
           { kind: 'skill', ref: 'release-review', label: `Release review, submitted by ${by.label}` },
-          { kind: 'file', ref: 'docs/release-report.md', label: 'the release report' },
+          { kind: 'run', ref: i.releaseReport.id, label: `the release report (report.md of run ${i.releaseReport.id.slice(0, 8)})` },
         ])
       }
       if (a.skill === 'waiver') {
@@ -665,7 +704,7 @@ export const SKILL_ACTIONS = {
       const id = decide(db, {
         kind: 'skill.submitted', stage: loadJourney(db)?.journey.currentStage ?? null, ref: ref ?? a.skill, by: by.label,
         summary: `${sk.name} was submitted with every check of its quality bar met or waived${jobId ? '; the agents raise the change' : ''}.`,
-        detail: { skill: a.skill, checks: checks.map((c) => ({ id: c.id, status: c.status })), ...(jobId ? { job: jobId } : {}) },
+        detail: { skill: a.skill, checks: checks.map((c) => ({ id: c.id, status: c.status })), ...(jobId ? { job: jobId } : {}), ...(a.skill === 'release-review' ? { decision: returning ? `return:${returning}` : 'release', ...(noteOf(a.draft) ? { note: noteOf(a.draft) } : {}) } : {}) },
       })
       // a criterion it set is still not met: the draft is kept, so the person carries on from it on the skill's page
       // (what was decided is recorded; deciding it again on the next Submit records it again, superseding)
@@ -712,6 +751,7 @@ export const SKILL_ACTIONS = {
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     if (docs.started) started = [...started, docs.started]
     if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
+    if (returning) started = [...started, returning === i.r?.journey.currentStage ? `The release gate was returned with your note; ${STAGE_NAMES[returning]} stays open.` : `The release gate was returned with your note, and ${STAGE_NAMES[returning]} is reopened; every gate from there is signed again.`]
     return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(queued ? { queued } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), ...(rule.rule ? { rule: rule.rule } : {}), ...(rule.rule_error ? { rule_error: rule.rule_error } : {}), started, ...(out.recorded ? { recorded: out.recorded } : {}), criteria: out.criteria, ...(out.kept ? { draft_kept: true } : {}), ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),
 }

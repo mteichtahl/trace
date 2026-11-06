@@ -67,6 +67,8 @@ describe('emc spectrum closed forms (hand-computed)', () => {
     const i1 = harmonic({ amplitude: 3.3, freq: 50e6, rise: 1e-9 }, 1) / 50
     expect(h1.dm_dbuv_m).toBeCloseTo(dBuV(dmField(50e6, 100e-6, i1, 3, true) / Math.SQRT2), 2)
     expect(typeof r.pass).toBe('boolean')
+    // recorded, so the release report lists it among the interference estimates
+    expect(typeof r.run_id).toBe('string')
   })
 })
 
