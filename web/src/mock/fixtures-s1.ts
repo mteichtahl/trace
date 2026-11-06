@@ -570,7 +570,7 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
         ],
         flagged: ['ESP32-C3-MINI-1-N4', 'AP2112K-3.3TRG1'], unknown: 1,
       },
-      fab: { drc: { run: 'run_d1f0c2b8', at: ago(5 * HOUR), errors: 0, findings: 3, waived: 3 }, board: { size: '50 × 35 mm', layers: ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'] }, hand_placed: ['J1'] },
+      fab: { drc: { run: 'run_d1f0c2b8', at: ago(5 * HOUR), errors: 0, findings: 3, waived: 3 }, board: { size: '50 × 30 mm', layers: ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'] }, hand_placed: ['J1'] },
       changes: { revision: 'A', previous: null, started: null, items: [] },
     },
   },

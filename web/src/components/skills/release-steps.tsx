@@ -31,7 +31,7 @@ export function releaseChecks(v: ReleaseView | undefined, d: ReleaseDraft & { ch
 
 const money = (n: number | null, c: string | null): string => (n === null ? 'not known' : `${c ?? ''} ${n.toFixed(2)}`.trim())
 const day = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
-const run = (id: string, label = `run ${id.slice(0, 8)}`) => <EvidenceChip evidence={{ kind: 'run', id, label }} />
+const run = (id: string, label = `run ${id.replace(/^run_/, '').slice(0, 8)}`) => <EvidenceChip evidence={{ kind: 'run', id, label }} />
 
 export function ReleaseStep({ step, view, draft, setDraft, loading }: { step: string; view?: ReleaseView; draft: ReleaseDraft; setDraft: (fn: (d: ReleaseDraft) => ReleaseDraft) => void; loading: boolean }) {
   if (step === 'decide') {
