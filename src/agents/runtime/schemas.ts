@@ -103,6 +103,12 @@ export const TaskPayload = z.object({
   kind: z.literal('task'),
   repository: RepositorySchema,
   request: z.string().min(1).max(20_000),
+  /**
+   * The job's title for a person, set by whoever starts it when its request is a prompt that does not lead with one
+   * ("Sign-off: redo what the requirement change reaches"). Absent: the request's first plain sentence
+   * (src/core/plain-words.ts jobHeadline). Never the prompt cut short (test-esp32 #196).
+   */
+  headline: z.string().min(1).max(200).optional(),
   requestedBy: z.string().min(1).max(200),
   /** The person's Cognito sub (immutable): their person memory is keyed on it; requestedBy (an email) is for reading. */
   requestedBySub: z.string().min(1).max(200).optional(),

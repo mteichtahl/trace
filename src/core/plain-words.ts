@@ -90,3 +90,27 @@ export function plainTitle(request: string, max = 100): string {
   const first = sentences(request).find((s) => !internal(s)) ?? sentences(request)[0] ?? request
   return atWord(stripped(first), max).replace(/\.$/, '')
 }
+
+/**
+ * A job's title, the one place it is made (test-esp32 #25, #164, #189, #196: a start path that gave no title showed its
+ * prompt cut mid-word, "… only par"): the headline it was started with ("Sign-off: redo what the requirement change
+ * reaches"), else its request's first plain sentence (plainTitle). Never the raw prompt. Pure.
+ */
+export function jobHeadline(p: { request: string; headline?: string | null | undefined }): string {
+  const given = p.headline?.replace(/\s+/g, ' ').trim()
+  return given ? atWord(given, 100) : plainTitle(p.request)
+}
+
+/**
+ * The title a job row is shown with, for rows written before titles were headlines: the headline in its payload, else
+ * its title made plain the same way (a title that was the prompt's first 200 characters loses its cut word). Pure.
+ */
+export function shownJobTitle(j: { title: string; payload?: string | null | undefined }): string {
+  if (j.payload) {
+    try {
+      const p = JSON.parse(j.payload) as { headline?: unknown }
+      if (typeof p.headline === 'string' && p.headline.trim()) return jobHeadline({ request: '', headline: p.headline })
+    } catch { /* not JSON: its title */ }
+  }
+  return plainTitle(j.title) || j.title
+}
