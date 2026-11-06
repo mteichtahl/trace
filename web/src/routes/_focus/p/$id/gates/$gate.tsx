@@ -637,10 +637,14 @@ export function GateRecord({ journey: j, gate: g }: { journey: Journey; gate: Ga
           ) : (
             <ul className="mt-2 divide-y rounded-lg border">
               {g.criteria.map((c) => (
-                <li key={c.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm">
+                <li key={c.id} className="flex items-start gap-3 px-4 py-2.5 text-sm">
                   <StatusBadge status={c.status === 'not_met' ? 'not_met' : c.status === 'waived' ? 'waived' : 'met'} />
-                  <span className="min-w-0 flex-1">{c.text}</span>
-                  {c.evidence && <EvidenceChip evidence={{ ...c.evidence, to: c.evidence.kind === 'run' && c.evidence.id ? `/p/${projectId(j.repo)}/runs/${c.evidence.id}` : c.evidence.to }} />}
+                  {/* the criterion keeps a readable width and its evidence chip wraps under it, shrinking to the row:
+                      a long chip ("kicad_drc: 0 errors, 0 unconnected, …") took the width and left one word a line */}
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="min-w-[min(14rem,100%)] flex-1">{c.text}</span>
+                    {c.evidence && <EvidenceChip className="min-w-0" evidence={{ ...c.evidence, to: c.evidence.kind === 'run' && c.evidence.id ? `/p/${projectId(j.repo)}/runs/${c.evidence.id}` : c.evidence.to }} />}
+                  </div>
                 </li>
               ))}
             </ul>

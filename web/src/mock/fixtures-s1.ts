@@ -49,6 +49,8 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
       crit('ar1', 'At least two options compared on fixed criteria', 'record', 'record', 'Options A, B and C scored on 6 criteria, weights fixed before scoring.', true),
       crit('ar2', 'Every requirement maps to a block', 'record', 'record', '24 of 24 requirements map to a block in option B.', true),
       crit('ar3', 'Every key part in stock for 10 boards', 'run_3c19', 'run', 'All 5 key parts in stock at LCSC.', true),
+      // a long chip beside its criterion (test-esp32 #195: the criterion wrapped one word a line)
+      { ...crit('ar4', 'The design rule check is clean, or each finding is waived', 'run_3d02', 'run', 'DRC on push 2b9e04: 0 errors, 2 warnings.', true), evidence: { kind: 'run', label: 'kicad_drc: 0 errors, 0 unconnected, 0 parity, 2 warnings', id: 'run_3d02', summary: 'DRC on push 2b9e04: 0 errors, 2 warnings.' } },
     ],
     record: { acknowledged: [] },
   },
