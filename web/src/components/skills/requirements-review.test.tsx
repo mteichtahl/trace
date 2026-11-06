@@ -4,7 +4,8 @@
  *     shows Undo, not its Accept again
  *   - an intent line no requirement covers is resolved only with a reason, on every step it shows: no bare Resolve
  *   - a requirement changed since a person decided it shows what changed, before and after
- *   - the "no two requirements contradict" tick counts in the bar at once, and Submit waits while the draft is saved
+ *   - the "no two requirements contradict" tick counts in the bar at once, and a Submit pressed while the draft is
+ *     saved waits for the save, then submits
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
@@ -138,22 +139,24 @@ describe('Requirements review, the whole screen', () => {
     expect(screen.getAllByRole('button', { name: /^Decide/ })).toHaveLength(3)
   })
 
-  it('the tick counts at once; Submit waits while the draft is saved, then submits the ticked draft', async () => {
+  it('the tick counts at once; Submit pressed while the draft is saved waits for it, then submits the ticked draft', async () => {
     wrap(<SteppedSkill repo={REPO} def={def} />)
     const tick = await screen.findByRole('checkbox', { name: /no two requirements contradict/ })
-    const submit = screen.getAllByRole('button', { name: 'Submit' })[0]!
-    expect(submit).toBeDisabled()
+    const submit = () => screen.getAllByRole('button', { name: 'Submit' })[0]!
+    expect(submit()).toHaveAttribute('aria-disabled', 'true')
     await userEvent.click(tick)
     // counted at once: every check met, though the record has not seen the tick yet
     expect(screen.getAllByText('6 of 6 met').length).toBeGreaterThan(0)
-    // but the tick is still being saved: Submit waits for it
-    expect(screen.getAllByRole('button', { name: 'Submit' })[0]).toBeDisabled()
+    expect(submit()).not.toHaveAttribute('aria-disabled')
+    // but the tick is still being saved: Submit pressed now waits for it
     expect(screen.getAllByText('Saving your draft…').length).toBeGreaterThan(0)
+    await userEvent.click(submit())
+    expect(screen.getAllByText('Saving your draft, then submitting…').length).toBeGreaterThan(0)
     await waitFor(() => expect(saves).toHaveLength(1), { timeout: 2000 })
     expect(saves[0]!.data).toMatchObject({ no_conflicts: true })
-    expect(screen.getAllByRole('button', { name: 'Submit' })[0]).toBeDisabled()
+    expect(mockCall.mock.calls.some(([a]) => a === 'skill.submit')).toBe(false)
     act(() => saves[0]!.resolve())
-    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Submit' })[0]).toBeEnabled())
+    await waitFor(() => expect(mockCall.mock.calls.find(([a]) => a === 'skill.submit')?.[1]).toMatchObject({ draft: { no_conflicts: true } }))
   })
 
   it('saves go one after another, so an older one never lands last', async () => {

@@ -28,7 +28,7 @@ import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
-import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
+import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
 import { InspectionPanel } from './inspection-panel'
 import { BenchReadings } from '@/components/project/build-record'
 
@@ -50,7 +50,7 @@ export function ChecklistSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const out = (bench?.readouts ?? []).filter((r) => readoutState(r) === 'out')
   const list = (bench?.checklist ?? []).filter((c) => (s.step.powered ? true : !c.powered))
   const isTicked = (id: string) => s.draft.data.ticked.includes(id) || !!bench?.checklist.find((c) => c.id === id)?.done
-  const checks = qualityChecks(def, v, out.length ? { limits: 'not_met' } : {}, s.goTo)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(out.length ? { limits: 'not_met' as const } : {}) }, s.goTo)
 
   const stop = async () => {
     setStopped(true)

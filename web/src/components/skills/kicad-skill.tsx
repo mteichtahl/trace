@@ -25,7 +25,7 @@ import { type SkillDef, pictureOf } from './definitions'
 import { FindingsList } from './findings'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
-import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
+import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
 
 interface Draft extends SkillDraftBase {
   /** confirmed reasons per change id */
@@ -50,6 +50,7 @@ export function KicadSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const explained = changesExplained(changes, s.draft.data.reasons)
   const changeCheck = def.id === 'placement-adjust' ? 'moves' : 'changes'
   const checks = qualityChecks(def, v, {
+    ...draftChecks(v, s.draft.data),
     [changeCheck]: changes.length === 0 || explained ? 'met' : 'not_met',
     ...(s.draft.data.choice && s.draft.data.choice.option !== v?.recommendation?.recommended && !s.draft.data.choice.reason ? { reasons: 'not_met' as const } : {}),
   }, s.goTo)

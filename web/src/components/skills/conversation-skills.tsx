@@ -38,7 +38,7 @@ import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
 import { IntentOpening, openingWords, useSkillThread } from './intent-chat'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
-import { type SkillDraftBase, focusSteps, qualityChecks, useSkill } from './use-skill'
+import { type SkillDraftBase, draftChecks, focusSteps, qualityChecks, useSkill } from './use-skill'
 
 // ------------------------------------------------------------------ the agent's shared state
 
@@ -222,7 +222,7 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const topic = intent?.topic ?? s.stepIndex
   const answered = intent?.answered ?? s.draft.data.done
   const steps = focusSteps(def, topic, answered)
-  const checks = qualityChecks(def, v, {})
+  const checks = qualityChecks(def, v, draftChecks(v, s.draft.data))
   const left = checks.filter((c) => c.status === 'not_met').length
   const t = def.steps[topic] ?? def.steps[0]!
   const decisions = s.draft.data.decisions ?? []
@@ -450,7 +450,7 @@ export function QuestionAnswer({ repo, def, question, option }: { repo: string; 
   const needsMap = Object.fromEntries(options.flatMap((o) => (o.needs ? [[o.id, o.needs]] : [])))
   const needs = chosen ? needsMap[d.option!] : undefined
   const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit, options: options.map((o) => o.id), needs: needsMap, ...(q ? { question: q.id } : {}) })
-  const checks: QualityCheck[] = qualityChecks(def, v, local, s.goTo)
+  const checks: QualityCheck[] = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...local }, s.goTo)
 
   // the answer's own fields: beside the work on wide screens, and in the page itself below that, so a phone never has to
   // find them behind a button
