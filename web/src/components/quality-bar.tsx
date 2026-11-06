@@ -187,7 +187,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
           <div className="flex flex-col gap-2 px-4 pb-6">
             {blocked && <p className="text-sm text-muted-foreground">{blocked}</p>}
             {checks.map((c) => (
-              <Item key={c.id} c={c} />
+              <Item key={c.id} c={c} wrap />
             ))}
           </div>
         </DrawerContent>

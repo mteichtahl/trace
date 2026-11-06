@@ -113,6 +113,11 @@ describe('where a submitted skill returns to', () => {
     expect(returnTo(REPO)).toBe('/p/acme~soil-sensor')
     rememberPage('/p/acme~soil-sensor-two/design')
     expect(returnTo(REPO)).toBe('/p/acme~soil-sensor')
+    // the skill's own page, seen by the shell as it hands over, is never where it returns to
+    rememberPage('/p/acme~soil-sensor/build')
+    rememberPage('/p/acme~soil-sensor/do/release-review')
+    rememberPage('/p/acme~soil-sensor/gates/G2')
+    expect(returnTo(REPO)).toBe('/p/acme~soil-sensor/build')
   })
 
   function Screen() {
