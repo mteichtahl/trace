@@ -237,16 +237,35 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'ask', why: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it. Nothing asked for that: no answer said it changes a requirement, and no change request did. Ask for changes so it leaves the requirement as agreed. If the new wording is right, you can still accept it, then agree it in Requirements review and sign the gates again.' },
       may_accept: true,
     }),
-    // a change that cites requirements the project does not have (test-esp32 log #47, #105): its resistors R1 to R7
-    // read as "covers R1-R7"; said once, and the recommendation covers only the real one
+    // a change that cites a requirement the project does not have, in the project's own form (R-012): said once, and the
+    // recommendation covers only the real one. Its resistors R1 to R7 are never said to be requirements (test-esp32 log
+    // #47, #105, #152)
     summary(27, {
       title: 'Sensor board placed and routed (48 x 30 mm, 2 layers)', from: 'the Implementation specialist', stage: 'layout', opened_at: ago(6 * MIN), updated_at: ago(4 * MIN),
       checks: { total: 3, passed: 3, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
       summary: ['Placed every part and routed the board on two layers, 48 × 30 mm.', 'The design rule check passes with no violations.'],
       files: [{ path: 'docs/renders/front.svg', status: 'modified', additions: 2, deletions: 2, kind: 'image' }],
       checks_list: [{ name: 'Design rule check', state: 'passed', summary: 'No violations' }, { name: 'build', state: 'passed', summary: 'Built.' }, { name: 'trace-prs', state: 'passed', summary: null }],
-      requirements: ['R-008'], requirements_unknown: ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'],
+      requirements: ['R-008'], requirements_unknown: ['R-012'],
       recommendation: { verdict: 'accept', why: 'All 3 checks passed (Design rule check, build and trace-prs), and it can be merged. It covers R-008.' },
+      may_accept: true,
+    }),
+    // a change that holds only the verify specialist's record, brought up to date by a merge: named and summarised by
+    // what its record adds, never by the merge or its job's id (test-esp32 log #14, #59, #154)
+    summary(53, {
+      title: 'The verification specialist\'s record: 39 tests and 17 test results', from: 'the Verification specialist', stage: 'prove', opened_at: ago(3 * MIN), updated_at: ago(1 * MIN),
+      head: { ref: 'claude/handoff-hobe8233b1531243', sha: HEAD },
+      checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
+      summary: [
+        'Adds 39 tests (22 planned, 17 passed)',
+        'Adds 17 test results (17 passed)',
+        'Adds 4 coverage points',
+        'Checked the USB-C pull-down resistors, the UART crossover and the 3.3 V supply budget (442 mA of 600 mA) against their datasheet pages.',
+      ],
+      files: [{ path: '.trace/project.db', status: 'modified', additions: 0, deletions: 0, kind: 'binary' }],
+      checks_list: [{ name: 'build', state: 'passed', summary: 'Built.' }, { name: 'trace-prs', state: 'passed', summary: null }],
+      requirements: ['R-004', 'R-008'],
+      recommendation: { verdict: 'accept', why: 'Both checks passed (build and trace-prs), and it can be merged. It covers R-004 and R-008.' },
       may_accept: true,
     }),
     // its checks cannot start: no runner picks them up (test-esp32 log #146). Never "Checks running"; an admin fixes the
