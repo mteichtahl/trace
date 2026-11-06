@@ -66,7 +66,9 @@ describe('Submit', () => {
   ]
   const bar = (ui: ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>)
 
-  it('pressed with checks left: says which, and submits nothing', async () => {
+  for (const wide of [true, false]) it(`pressed with checks left ${wide ? 'on a wide screen' : 'on a phone'}: says which, and submits nothing`, async () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation((query: string) =>
+      ({ matches: wide, media: query, onchange: null, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false }) as MediaQueryList)
     const onSubmit = vi.fn()
     bar(<QualityBar checks={checks} onSubmit={onSubmit} />)
     expect(screen.queryByRole('alert')).toBeNull()
@@ -77,6 +79,7 @@ describe('Submit', () => {
     expect(alert).toHaveTextContent('Cost stated')
     expect(alert).toHaveTextContent('Parts acknowledged')
     expect(onSubmit).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
   })
 
   it('pressed while held for the agent: says why', async () => {

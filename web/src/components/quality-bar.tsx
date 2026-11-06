@@ -174,6 +174,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
             ) : !ready && (
               <span className="block text-xs font-normal text-muted-foreground">{todo.length} left before you can submit · <span className="text-primary">See which</span></span>
             )}
+            {ready && queued && <span className="block text-xs font-normal text-muted-foreground">Saving your draft, then submitting…</span>}
           </button>
           {button}
         </div>
