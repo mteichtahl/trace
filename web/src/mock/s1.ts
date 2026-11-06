@@ -126,7 +126,9 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'cost.get':
       return repo === 'acme/soil-sensor' ? ok(COST) : fail('cost.get: no record yet')
     case 'skill.get': {
-      const v = SKILL_VIEWS[String(a.skill)] ?? {}
+      // the panel controller has not started its intent: the Intent builder opens on its first topic (test-esp32 #8)
+      const fresh = repo === 'acme/panel-controller' && a.skill === 'intent-builder' ? { summary: '0 of 7 checks met.', recommendation: undefined, checks: [], intent: { topic: 0, answered: [], statements: [], questions: [] } } : {}
+      const v = { ...SKILL_VIEWS[String(a.skill)], ...fresh }
       const question = String(a.skill) === 'question-answer' ? QUESTIONS[repo] : undefined
       const d = drafts[`${repo}|${String(a.skill)}`]
       return ok({ skill: a.skill, ...v, ...(question ? { question } : {}), ...(d ? { draft: d.data, step: d.step, saved: d.saved } : {}) })

@@ -25,7 +25,6 @@ import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-car
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import type { QualityCheck } from '@/components/quality-bar'
-import { Rich } from '@/components/rich'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
@@ -35,6 +34,7 @@ import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
+import { IntentOpening, openingWords, useSkillThread } from './intent-chat'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
 import { type SkillDraftBase, focusSteps, qualityChecks, useSkill } from './use-skill'
 
@@ -167,6 +167,7 @@ function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; d
 
 export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const s = useSkill<IntentLocal>(repo, def, { done: [] })
+  const kept = useSkillThread(repo, def.id)
   const { agent } = useAgent({ agentId: FOCUS_AGENT_ID, updates: [UseAgentUpdate.OnStateChanged] })
   const live = intentFromState(agent.state)
   const intent = live ?? s.view.data?.intent
@@ -273,18 +274,24 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
         <span className="font-semibold">{t.title}</span>
         <span className="text-sm text-muted-foreground">Topic {topic + 1} of {def.steps.length}</span>
       </div>
-      <EmbeddedChat
-        repo={repo}
-        title={`Intent builder · ${t.title}`}
-        placeholder="Answer, or ask trace a question…"
-        intro={
-          <div className="mx-auto max-w-[680px] space-y-4 text-sm">
-            <p><Rich text={v?.summary ?? `Let's write the intent, one topic at a time. First, **${t.title.toLowerCase()}**: ${t.detail.charAt(0).toLowerCase()}${t.detail.slice(1)}`} /></p>
-            {v?.recommendation && <DecisionCard decision={v.recommendation} onChoose={() => undefined} />}
-            {s.view.isError && <QueryError error={s.view.error} what="the intent draft" onRetry={() => void s.view.refetch()} />}
-          </div>
-        }
-      />
+      {/* trace opens the conversation with the topic's question, and the conversation is kept (intent-chat.tsx) */}
+      {kept.loaded ? (
+        <EmbeddedChat
+          repo={repo}
+          threadId={kept.thread}
+          onThread={kept.keep}
+          pinIntro
+          title={`Intent builder · ${t.title}`}
+          placeholder="Answer, or ask trace a question…"
+          intro={
+            <div className="space-y-4">
+              <IntentOpening words={openingWords(def, topic, answered)} />
+              {v?.recommendation && <DecisionCard decision={v.recommendation} onChoose={() => undefined} />}
+              {s.view.isError && <QueryError error={s.view.error} what="the intent draft" onRetry={() => void s.view.refetch()} />}
+            </div>
+          }
+        />
+      ) : <p className="px-6 py-4 text-sm text-muted-foreground">Opening the conversation…</p>}
       <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} draft={s.draft as unknown as Confirmable} /></div>
     </FocusLayout>
   )

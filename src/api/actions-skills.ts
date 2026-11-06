@@ -46,7 +46,7 @@ import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 
 /** What Intent builder's Submit says when the project's agent is still being set up (src/api/agent-queue.ts). */
 export const QUEUED_DRAFTING = 'This project\'s agent is still being set up, so the drafting is queued: the Verification agent drafts the candidate requirements for Requirements review by itself once the agent is ready. You need not submit again.'
-import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
+import { type DesignDecision, loadDesignDecisions, recordDesignDecision, standing } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
 import { type DecisionInput, Decision, changesStage, prepare } from './actions-design.js'
@@ -111,7 +111,15 @@ const currentGate = (r: JourneyRecord | null): string | null => {
 }
 
 /** Everything the checks read, from the record database (repository + live journey), for this person and skill. */
-async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[] }> {
+/**
+ * Requirements review's rows as the record holds them before the person's draft is laid over it: the review lists
+ * every requirement not yet accepted in the record, so one the draft accepts or strikes stays on screen with its
+ * decision (and Undo) rather than dropping out of the list once the draft is saved (test-esp32 #28); and the decision a
+ * person made before an agent changed the requirement, so the review shows what changed (test-esp32 #63).
+ */
+interface ReviewBefore { requirements: CheckInput['requirements']; decisions: DesignDecision[] }
+
+async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[]; reviewBefore: ReviewBefore | null }> {
   const viewer: Viewer = await viewerOf(ctx.principal, repo)
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
@@ -129,6 +137,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     // what Submit would record. One a decision cannot be (it names nothing, or lacks its reason) is left out, and the
     // check it feeds stays not met
     const pendingErrors: string[] = []
+    const reviewBefore = skill === 'requirements-review' ? { requirements: requirementEvidence(db, r), decisions: loadDesignDecisions(db) } : null
     for (const d of draft ? (() => { const x = designOf(db); return pendingDecisions(skill, draft, x.rows, x.decisions, { acceptRest: false }) })() : []) {
       try {
         const des = designOf(db)
@@ -175,7 +184,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       caseOptions: optRow && optJson ? { id: String(optRow.id), options: optJson } : null,
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
       design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles,
-      draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors,
+      draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors, reviewBefore,
     }
   })
   // Case design's fit: the build's recorded inputs against the default branch's files now
@@ -351,7 +360,23 @@ export function optionWaiverWords(w: OptionWaiver): string {
 }
 
 /** What a skill's screen reads beyond the bar. */
-function extras(skill: string, i: CheckInput): Record<string, unknown> {
+/**
+ * What changed in a requirement since a person last decided it: its words and its acceptance criterion as the
+ * decision was made on them (the decision keeps both: actions-design.ts), against the row now. Nothing when the
+ * decision kept neither, or both are as they were. Pure.
+ */
+export function changedSince(d: DesignDecision | undefined, now: RequirementWords): { choice: 'accepted' | 'struck'; by: string; at: string; changes: { field: 'words' | 'criterion'; before: string | null; after: string | null }[] } | null {
+  if (!d || typeof d.detail.text !== 'string') return null
+  const changes: { field: 'words' | 'criterion'; before: string | null; after: string | null }[] = []
+  if (d.detail.text !== now.text) changes.push({ field: 'words', before: d.detail.text, after: now.text })
+  if ('acceptance' in d.detail) {
+    const was = typeof d.detail.acceptance === 'string' ? d.detail.acceptance : null
+    if (was !== now.acceptance) changes.push({ field: 'criterion', before: was, after: now.acceptance })
+  }
+  return changes.length ? { choice: d.choice === 'struck' ? 'struck' : 'accepted', by: d.by, at: new Date(d.at * 1000).toISOString(), changes } : null
+}
+
+function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | null }): Record<string, unknown> {
   switch (skill) {
     case 'question-answer': {
       const q = i.question
@@ -392,8 +417,14 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       const links = linksView(i.design.rows)
       return {
         items: [
-          ...i.requirements.filter((q) => q.status !== 'accepted').map((q) => ({ id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => v.find((x) => x.id === l.intent)?.words ?? l.intent).join('; ') || q.source || 'no source given'}.`, status: 'open' as const })),
-          ...v.filter((x) => x.state !== 'rejected' && x.kind === 'statement' && x.uncovered === null && !links.some((l) => l.intent === x.id)).map((x) => ({ id: `intent:${x.id}`, title: `Not covered: ${x.words}`, detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' as const })),
+          // the rows the record has not accepted, the draft's decisions on them shown beside each on screen; with each
+          // its acceptance criterion and, for one an agent changed after a person decided it, what changed
+          ...(i.reviewBefore?.requirements ?? i.requirements).filter((q) => q.status !== 'accepted').map((q) => {
+            const was = changedSince(i.reviewBefore ? standing(i.reviewBefore.decisions, 'requirement').get(q.id) : undefined, q)
+            return { id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => v.find((x) => x.id === l.intent)?.words ?? l.intent).join('; ') || q.source || 'no source given'}.`, status: 'open' as const, criterion: q.acceptance, ...(was ? { was } : {}) }
+          }),
+          // as the record has it, so a line the draft leaves out stays listed with its reason (and Undo)
+          ...(i.reviewBefore ? intentView(i.design.rows, i.reviewBefore.decisions) : v).filter((x) => x.state !== 'rejected' && x.kind === 'statement' && x.uncovered === null && !links.some((l) => l.intent === x.id)).map((x) => ({ id: `intent:${x.id}`, title: `Not covered: ${x.words}`, detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' as const })),
         ],
       }
     }

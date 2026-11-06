@@ -40,8 +40,9 @@ const isProject = (repo: string): boolean => /^[^/]+\/[^/]+$/.test(repo) && !rep
 
 /**
  * A skill's draft: starts from the saved one (once it loads) or `initial`, saves 800 ms after each change. Returns
- * the data, a setter, the step, a step setter, when it was last saved, `discard` (after a successful submit), `hold`
- * (no save while a submission is on its way) and `keep` (save now: a refused submission keeps the draft).
+ * the data, a setter, the step, a step setter, when it was last saved, whether a save is waiting or on its way
+ * (`saving`: Submit waits for it), `discard` (after a successful submit), `hold` (no save while a submission is on its
+ * way) and `keep` (save now: a refused submission keeps the draft).
  */
 export function useSkillDraft<T>(repo: string, skill: string, meta: { name: string; steps: number }, initial: T) {
   const project = isProject(repo)
@@ -77,27 +78,41 @@ export function useSkillDraft<T>(repo: string, skill: string, meta: { name: stri
   const latest = useRef({ data, step })
   latest.current = { data, step }
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // saves go one after another, in the order they were made: two on their way at once could land out of order, and
+  // the older one would then be the draft the record keeps and the quality bar is checked on (a tick pressed just
+  // before Continue came back unticked, test-esp32 #64)
+  const queue = useRef<Promise<unknown>>(Promise.resolve())
+  const flying = useRef(0)
+  // a save waiting (the 800 ms after a change) or on its way: Submit waits for it, so it checks the draft on screen
+  const [saving, setSaving] = useState(false)
+  const busy = useCallback(() => setSaving(timer.current !== undefined || flying.current > 0), [])
   const save = useCallback((value: { step: number; data: T } | null) => {
     if (project) {
-      void call('skill.draft', { repo, skill, step: value?.step ?? 0, data: value ? (value.data as Record<string, unknown>) : null })
+      flying.current++
+      busy()
+      const send = () => call('skill.draft', { repo, skill, step: value?.step ?? 0, data: value ? (value.data as Record<string, unknown>) : null })
+      queue.current = queue.current.then(send, send)
         .then(() => {
           void qc.invalidateQueries({ queryKey: ['skill.drafts', repo] })
           // the quality bar is computed with the draft laid over the record: read it again with this draft
           void qc.invalidateQueries({ queryKey: ['skill.get', repo] })
         })
         .catch(() => undefined)
+        .finally(() => { flying.current--; busy() })
     } else {
       setMe.mutate({ key, value: value ? { name: meta.name, steps: meta.steps, step: value.step, savedAt: Date.now(), data: value.data } satisfies Draft<T> : null })
     }
-  }, [project, repo, skill, key, meta.name, meta.steps, setMe, qc])
+  }, [project, repo, skill, key, meta.name, meta.steps, setMe, qc, busy])
   const schedule = useCallback(() => {
     dirty.current = true
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
+      timer.current = undefined
       save({ step: latest.current.step, data: latest.current.data })
       setSavedAt(Date.now())
     }, 800)
-  }, [save])
+    busy()
+  }, [save, busy])
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
 
   const setData = useCallback((f: T | ((d: T) => T)) => {
@@ -110,6 +125,7 @@ export function useSkillDraft<T>(repo: string, skill: string, meta: { name: stri
   }, [schedule])
   const discard = useCallback(() => {
     if (timer.current) clearTimeout(timer.current)
+    timer.current = undefined
     save(null)
   }, [save])
   // Submit: no save may land after the submission (it would bring back a draft Submit discarded: "your draft is
@@ -117,12 +133,13 @@ export function useSkillDraft<T>(repo: string, skill: string, meta: { name: stri
   const hold = useCallback(() => {
     if (timer.current) clearTimeout(timer.current)
     timer.current = undefined
-  }, [])
+    busy()
+  }, [busy])
   const keep = useCallback(() => {
     hold()
     save({ step: latest.current.step, data: latest.current.data })
     setSavedAt(Date.now())
   }, [hold, save])
 
-  return { data, setData, step, setStep, savedAt, discard, hold, keep, loaded: loadedNow }
+  return { data, setData, step, setStep, savedAt, saving, discard, hold, keep, loaded: loadedNow }
 }

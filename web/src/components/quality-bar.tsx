@@ -3,7 +3,9 @@
  * the checker, "4 of 6 met" on the left and Submit on the right. Submit stays disabled until every check is met or
  * waived; hovering it lists exactly what is missing, and each missing item jumps to where it is fixed. On a phone it
  * is a sticky footer "4 of 6 met · Submit" whose count opens the list. `blocked` keeps Submit disabled whatever the checks
- * say, with its reason beside it (the project's agent is not set up yet, so nothing could be saved).
+ * say, with its reason beside it (the project's agent is not set up yet, so nothing could be saved). `saving` holds
+ * Submit while the person's last change is still being saved: the bar is checked on the saved draft, so a tick pressed
+ * just before Submit would otherwise be checked as not there yet (test-esp32 #64).
  */
 import { Check, Circle, CircleMinus, Loader2 } from 'lucide-react'
 import { useState } from 'react'
@@ -27,6 +29,8 @@ export interface QualityBarProps {
   submitLabel?: string
   /** why Submit waits whatever the checks say, or null */
   blocked?: string | null
+  /** the draft's last change is still being saved: Submit waits for it */
+  saving?: boolean
   className?: string
 }
 
@@ -52,7 +56,7 @@ function Item({ c }: { c: QualityCheck }) {
   )
 }
 
-export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, className }: QualityBarProps) {
+export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, saving = false, className }: QualityBarProps) {
   const [busy, setBusy] = useState(false)
   const [list, setList] = useState(false)
   const met = checks.filter((c) => c.status !== 'not_met').length
@@ -67,8 +71,8 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
     }
   }
   const button = (
-    <Button onClick={() => void submit()} disabled={!ready || busy} aria-describedby="quality-missing">
-      {busy && <Loader2 className="animate-spin" />}
+    <Button onClick={() => void submit()} disabled={!ready || busy || saving} aria-describedby="quality-missing">
+      {(busy || (ready && saving)) && <Loader2 className="animate-spin" />}
       {submitLabel}
     </Button>
   )
@@ -107,6 +111,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
               </TooltipContent>
             </Tooltip>
           )}
+          {ready && saving && <span id="quality-missing" className="text-xs text-muted-foreground">Saving your draft…</span>}
           {!ready && (
             <span id="quality-missing" className="max-w-xs text-right text-xs text-muted-foreground">
               {blocked ? `Waits for the project's agent${todo.length ? ` · ${todo.length} check${todo.length > 1 ? 's' : ''} left` : ''}` : `${todo.length} check${todo.length > 1 ? 's' : ''} left`}

@@ -37,6 +37,9 @@ export interface CheckResult {
   confirmable?: boolean
   /** met because the person confirmed it (confirmable) */
   confirmed?: boolean
+  /** nothing in the record holds it back: the draft's field of this name, true, meets it. The skill's screen counts
+   * the person's tick at once, without waiting for the draft to be saved and the bar checked again (test-esp32 #64) */
+  by_draft?: string
 }
 
 /** Everything a check may read. Absent pieces were not in the record. */
@@ -242,9 +245,12 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     // numbers against each other, so that last part is the person's: they confirm it in Resolve conflicts
     // (draft.no_conflicts), as the skill asks which one gives when two cannot both hold (docs/user-journey.md)
     const confirmed = i.draft?.no_conflicts === true
-    return confirmed
-      ? met('conflicts', 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other (their numbers are not compared by a tool).')
-      : notMet('conflicts', 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.')
+    return {
+      ...(confirmed
+        ? met('conflicts', 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other (their numbers are not compared by a tool).')
+        : notMet('conflicts', 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.')),
+      by_draft: 'no_conflicts',
+    }
   },
   'requirements-review/sources': (i) => {
     const none = i.requirements.filter((q) => !q.source)

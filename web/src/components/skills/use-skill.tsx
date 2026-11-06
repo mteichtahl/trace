@@ -28,6 +28,16 @@ export interface SkillDraftBase {
   done: string[]
 }
 
+/**
+ * The checks the person's own tick decides (the checker's `by_draft`: nothing in the record holds them back), from the
+ * draft on screen. The record's verdict follows only once the draft is saved and the bar checked again, seconds
+ * later; the tick counts at once (test-esp32 #64). Pure.
+ */
+export function draftChecks(view: Pick<SkillView, 'checks'> | undefined, draft: object): Record<string, CriterionStatus> {
+  const d = draft as Record<string, unknown>
+  return Object.fromEntries((view?.checks ?? []).filter((c) => c.by_draft && !c.unavailable).map((c) => [c.id, d[c.by_draft!] === true ? 'met' : 'not_met']))
+}
+
 /** The quality bar: the checker's verdict per check, overridden by what the screen computes; unknown is Not met. */
 export function qualityChecks(def: SkillDef, view: Pick<SkillView, 'checks'> | undefined, local: Record<string, CriterionStatus> = {}, jump?: (step: string) => void): QualityCheck[] {
   const from = new Map((view?.checks ?? []).map((c) => [c.id, c]))
@@ -36,7 +46,8 @@ export function qualityChecks(def: SkillDef, view: Pick<SkillView, 'checks'> | u
     // record cannot check it yet (unavailable): then it stays not met, as Submit would be refused
     const api = from.get(c.id)
     const status: CriterionStatus = api?.unavailable ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
-    const detail = api?.unavailable ? `cannot be checked yet: needs ${api.unavailable}` : api?.detail
+    // the record's words are about its own verdict: where the screen's differs, they no longer fit
+    const detail = api?.unavailable ? `cannot be checked yet: needs ${api.unavailable}` : local[c.id] && api && local[c.id] !== api.status ? undefined : api?.detail
     return { id: c.id, text: status === 'not_met' && detail ? `${c.text} (${detail})` : c.text, status, onJump: c.step && jump ? () => jump(c.step!) : undefined }
   })
 }
