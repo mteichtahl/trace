@@ -256,7 +256,7 @@ export interface NextStep {
 
 export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
 /** 'work': a specialist's change; otherwise an edit a person made in the app (docs/stay-in-trace.md) */
-export type ChangeKind = 'work' | 'setting' | 'prompt' | 'release' | 'join' | 'workflows' | 'handin'
+export type ChangeKind = 'work' | 'setting' | 'prompt' | 'release' | 'join' | 'workflows' | 'handin' | 'rule'
 export type ChangeFileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
 
 /** A pull request a trace job opened, or an edit a person made in the app, as people read it: a change. */
@@ -751,7 +751,7 @@ export interface SpeechMark { time: number; type: 'word' | 'sentence'; start: nu
 // ------------------------------------------------------------------ live events
 
 export type LiveEvent =
-  | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'projects' | 'agent'; at: string }
+  | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'projects' | 'agent' | 'jobs'; at: string }
   | { type: 'job.updated'; repo: string; jobId: string; state: string; at: string }
   | { type: 'notification'; id: string; kind: InboxKind; repo: string; summary: string; at: string }
   /** a run's log grew (docs/progress-and-logs.md, decision C): a count, never the text */

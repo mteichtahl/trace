@@ -71,7 +71,8 @@ import {
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
 import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
-import { recordEdit } from './edits.js'
+import { editorName, recordEdit } from './edits.js'
+import { RULES_PATH, proposeRule } from './rule-answers.js'
 import { recommendationOf } from './changes.js'
 import { REQUIREMENT_CHANGE_SAID } from './requirement-edits.js'
 import { AGENT_WORDS, jobIndex, listJobs, lostJobStep, openLostJobs, projectHandoffs, restartLostJobs, restartable, stoppedSteps } from './actions-jobs.js'
@@ -181,12 +182,28 @@ export function answeredRequest(a: {
       ? [`Your job ran on ${a.branch}, which holds ${owner}, so this work is a change of its own: you are on a new branch that starts from ${a.branch}. Change what the answer changes, check it as before, commit with subjects that say what the work is, and push this branch: it opens as its own change, stacked on that one. Never push to ${a.branch}.`]
       : [`Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`]),
     ...(a.lasts === 'requirement' ? [`${REQUIREMENT_CHANGE_SAID} Have the change proposed for a person to accept in Requirements review: the requirement, its new wording and measurable criterion, and why (the Verification specialist owns the requirements: journey.handoff to it unless you are it, then verify.requirements, left proposed). Until it is accepted, treat the requirement as it stands, and say in your report that the change waits on review.`] : []),
-    ...(a.lasts === 'rule' ? ['They made this a rule for the project: remember it (memory.remember) so later jobs apply it without asking again.'] : []),
+    // the rule itself goes into .trace/rules.md through trace's own change (src/api/rule-answers.ts, log #109)
+    ...(a.lasts === 'rule' ? [`They made this a rule for the project: apply it in this job, and remember it (memory.remember) so later jobs apply it without asking again. trace adds it to the project's rules (${RULES_PATH}) through a change of its own, and every agent reads it from the default branch once that is accepted: do not edit ${RULES_PATH} yourself.`] : []),
     // a rule or a one-off is not a requirement change: an edit of an accepted requirement reopens Define and every
     // gate after it (test-esp32 log #112), and the change's review page recommends sending it back
     ...(a.lasts === 'rule' || a.lasts === 'once' ? [`They did not say it changes a requirement: leave every requirement's words, acceptance criterion and status as they are (no verify.requirements edit). If the answer cannot be carried out without changing one, ask (journey.ask) instead.`] : []),
     'Do not redo what the answer does not touch. If the answer cannot be done as given, ask again (journey.ask) with what you found.',
   ].join('\n')
+}
+
+/**
+ * An answer made a rule for the project, added to .trace/rules.md through a change of trace's own
+ * (src/api/rule-answers.ts). Never fails the answer: it stands whatever happens here, and Settings offers to add a rule
+ * that is not in the rules yet.
+ */
+export async function ruleFromAnswer(ctx: Context, repo: string, question: string): Promise<{ rule?: { state: string; change: number | null; branch?: string; words: string }; rule_error?: string; started?: string[] }> {
+  try {
+    const r = await proposeRule(ctx, repo, question, await editorName(ctx))
+    return { rule: { state: r.state, change: r.change, ...(r.branch ? { branch: r.branch } : {}), words: r.words }, started: [r.words] }
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e)
+    return { rule_error: why, started: [`The rule could not be added to the project's rules yet (${why.replace(/\.$/, '')}). Add it from Settings, under Project rules.`] }
+  }
 }
 
 /** What an agent asked, by the id it is answered under: its question, or its stuck report, which is answered as a
@@ -810,12 +827,18 @@ export const JOURNEY_ACTIONS = {
     // that job, on the asking job's branch, so the answer is acted on now; the answer stands whatever happens here
     // an answer that approves the last of the stage's design work (the board renders): its documents are written now
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
+    // an answer made a rule for the project goes into .trace/rules.md, where every agent reads its rules (log #109)
+    const rule = a.lasts === 'rule' ? await ruleFromAnswer(ctx, a.repo, a.question) : {}
+    const ruled = { ...(rule.rule ? { rule: rule.rule } : {}), ...(rule.rule_error ? { rule_error: rule.rule_error } : {}) }
     const asked = askedBy(facts, a.question)
-    if (!asked?.jobId) return docs.started ? { ...answered, started: [docs.started] } : answered
+    if (!asked?.jobId) {
+      const started = [...(docs.started ? [docs.started] : []), ...(rule.started ?? [])]
+      return { ...answered, ...ruled, ...(started.length ? { started } : {}) }
+    }
     const carried: { started?: string[]; jobError?: string } = await carryOn(ctx, a.repo, asked, answered.question, a.lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
-    const started = [...(carried.started ?? []), ...(docs.started ? [docs.started] : [])]
+    const started = [...(carried.started ?? []), ...(docs.started ? [docs.started] : []), ...(rule.started ?? [])]
     const said = (carried as { summary?: string }).summary
-    return { ...answered, ...carried, ...(said ? { summary: said.replace(/^Answered\./, `Answered.${waivedWords(answered.question)}`) } : {}), ...(started.length ? { started } : {}) }
+    return { ...answered, ...carried, ...ruled, ...(said ? { summary: said.replace(/^Answered\./, `Answered.${waivedWords(answered.question)}`) } : {}), ...(started.length ? { started } : {}) }
   }),
 
   'stuck.dismiss': def('write', Repo.extend({ job: Id, reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {

@@ -29,6 +29,7 @@ import { mergeMethod, projectRule } from './actions-changes.js'
 import { editFacts, verdictOf } from './changes.js'
 import { editStore } from './edits.js'
 import { applyRenders } from './apply-renders.js'
+import { RULES_PATH, withRule } from './rule-answers.js'
 import type { GitHubApi, PullStatus } from './github.js'
 
 /** changes.list looks at most this often per repository and container (the hooks are the usual way). */
@@ -142,6 +143,20 @@ export async function redo(ctx: Context, gh: GitHubApi, repo: string, e: AppEdit
   if (!gh.resetBranch) throw new ActionError('This installation cannot bring a change up to date.')
   const { branch: base, sha } = await gh.defaultBranch(repo)
   if (e.branch === base) throw new ActionError('refusing to write the default branch')
+  // a project rule writes the rules file, not the database: the same entry added to the newest rules file
+  if (e.redo.op === 'rule') {
+    const now = await gh.rawFile(repo, RULES_PATH, base)
+    const next = withRule(now ? new TextDecoder().decode(now) : null, e.redo.rule)
+    if (next === null) throw new ActionError('The rule is already in the project\'s rules: discard this change.')
+    const blob = now ? await gh.fileSha(repo, RULES_PATH, base) : null
+    await gh.resetBranch(repo, e.branch, sha)
+    const { commit } = await gh.putFile(repo, {
+      path: RULES_PATH, branch: e.branch, content: new TextEncoder().encode(next), sha: blob,
+      message: `${e.title} (made again on ${sha.slice(0, 7)})\n\nMade in trace by ${e.by}; brought up to date by trace.`,
+    })
+    await editStore(ctx).put({ ...e, commit })
+    return commit
+  }
   const blob = await gh.fileSha(repo, PROJECT_DB_PATH, base)
   const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, base))
   try {
@@ -179,6 +194,10 @@ async function applyRedo(ctx: Context, repo: string, r: RedoSpec, root: string, 
       } finally {
         d.close()
       }
+      return
     }
+    case 'rule':
+      // made again in redo, on the rules file: nothing in the database
+      return
   }
 }

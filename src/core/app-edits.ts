@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { type Backend, Conflict } from './central.js'
 import { projectSlug } from './project.js'
 
-export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin', 'logo'] as const
+export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin', 'logo', 'rule'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 
 /** The folder under a project's own prefix (projects/<slug>/journey/edits): inside the journey's, one of PEOPLE_RECORDS. */
@@ -29,6 +29,11 @@ export const RedoSpec = z.discriminatedUnion('op', [
   // the prompt store's write (src/prompts/store.ts PromptWrite), kept as it was given
   z.object({ op: z.literal('prompt'), write: z.record(z.string(), z.unknown()) }),
   z.object({ op: z.literal('release'), why: z.string() }),
+  // a question answered as a rule for the project, added to .trace/rules.md (src/api/rule-answers.ts RuleAnswer):
+  // made again by adding the same entry to the newest rules file, so two rules answered in a row never conflict
+  z.object({ op: z.literal('rule'), rule: z.object({
+    question: z.string(), asked: z.string(), askedBy: z.string(), rule: z.string(), reason: z.string().nullable(), decidedBy: z.string(), on: z.string(),
+  }) }),
 ])
 export type RedoSpec = z.infer<typeof RedoSpec>
 
@@ -86,7 +91,7 @@ export function editStray(files: readonly { path: string; previous?: string | nu
 /** The app's words for an edit's kind: "a setting change", "a hand-in". */
 export const EDIT_WORDS: Readonly<Record<EditKind, string>> = {
   setting: 'a setting change', prompt: 'a prompt change', release: 'a release copy', join: 'joining trace',
-  workflows: 'a workflow update', handin: 'a hand-in', logo: 'a logo change',
+  workflows: 'a workflow update', handin: 'a hand-in', logo: 'a logo change', rule: 'a project rule',
 }
 
 /** The edits of the projects, in the central bucket's projects prefix (storeAt(ctx, PROJECTS_PREFIX)). */
