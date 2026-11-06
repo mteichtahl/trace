@@ -24,6 +24,7 @@ import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
+import { OutOfDateNote } from '@/components/question-notes'
 import type { QualityCheck } from '@/components/quality-bar'
 import { Rich } from '@/components/rich'
 import { StatusBadge } from '@/components/status-badge'
@@ -346,8 +347,9 @@ export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: 
   }
 }
 
-export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
-  const s = useSkill<AnswerDraft>(repo, def, { done: [], answer: '', value: '', source: '', lasts: '' })
+/** `question`: the one to answer (its "Answer it" link names it: test-esp32 #107); without it, the oldest open one. */
+export function QuestionAnswer({ repo, def, question }: { repo: string; def: SkillDef; question?: string | undefined }) {
+  const s = useSkill<AnswerDraft>(repo, def, { done: [], answer: '', value: '', source: '', lasts: '' }, { question })
   const v = s.view.data
   const q = v?.question
   const d = s.draft.data
@@ -441,6 +443,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
       {!q && !s.view.isLoading && <EmptyState className="mt-4">No question is waiting on you here. Questions appear on Home and in Next when an agent asks one.</EmptyState>}
       {q && (
         <div className="mt-4 space-y-4">
+          {q.outOfDate && <OutOfDateNote why={q.outOfDate} />}
           <div className="rounded-xl border p-5 text-sm">
             <p className="text-lg font-medium">{q.text}</p>
             {q.context && <p className="mt-2">{q.context}</p>}

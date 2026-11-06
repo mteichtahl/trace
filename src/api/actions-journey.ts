@@ -69,7 +69,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
-  confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
+  confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -689,7 +689,10 @@ export const JOURNEY_ACTIONS = {
     })))
     // a stage is reviewed and signed only once its work is settled: its gate is locked while a change of it (or an
     // earlier stage) is open or an agent is still working, and the gates into Fabricate while anything is changing
-    const view = withPending(r, changed, viewer, pendingOf(open.list, open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null), [], jobs.rows))
+    // a question waiting on a change that is no longer open is out of date (test-esp32 #108); only when the open
+    // changes are known, never guessed
+    const marked = open.error ? changed : markOutOfDate(changed, merged, open.list.map((x) => x.change.number))
+    const view = withPending(r, marked, viewer, pendingOf(open.list, open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null), [], jobs.rows))
     // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
     // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
     // could change the step, and its count is kept per default-branch commit and record version

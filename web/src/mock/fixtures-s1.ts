@@ -563,6 +563,34 @@ QUESTIONS['acme/panel-controller'] = {
   searched: [{ kind: 'run', label: 'run_fit7' }],
 }
 
+/**
+ * The other open questions of a project, by id, as skill.get answers one its "Answer it" link names (test-esp32 #107:
+ * both links opened the oldest). The OLED one is current; the docs one is out of date (#108: it waits on a change that
+ * merged since).
+ */
+export const QUESTIONS_BY_ID: Record<string, NonNullable<SkillView['question']>> = {
+  'aq0e1ed2c4a7b9f31': {
+    id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * MIN), blocks: 'the schematic',
+    context: 'Asked by the Implementation specialist.',
+    recommended: { id: 'gnd', label: 'GND-VCC-SCL-SDA' },
+    options: [
+      { id: 'gnd', label: 'GND-VCC-SCL-SDA', detail: 'The order of the common 0.96 inch SSD1306 modules sold for this project\'s parts list.' },
+      { id: 'vcc', label: 'VCC-GND-SCL-SDA', detail: 'Right for the modules that put the supply first; check the silk screen on the one bought.' },
+    ],
+    sources: [{ kind: 'file', label: 'hardware/main.kicad_sch' }],
+  },
+  'aq5d2b9c0f1e3a774': {
+    id: 'aq5d2b9c0f1e3a774', to: 'you', text: 'The design document waits on the schematic: #6 is not merged. Write it from the branch now, or wait for #6?', askedAt: ago(42 * MIN), blocks: 'the design document',
+    context: 'Asked by the Documentation specialist.',
+    outOfDate: 'Change #6 is no longer open (accepted or discarded since this was asked), so this may no longer need an answer.',
+    recommended: { id: 'wait', label: 'Wait for #6' },
+    options: [
+      { id: 'wait', label: 'Wait for #6', detail: 'The document is written once, from the accepted schematic.' },
+      { id: 'branch', label: 'Write it from the branch now', detail: 'Sooner, but written again if the review changes the schematic.' },
+    ],
+  },
+}
+
 export const WAIVERS_EXTRA: Waiver[] = []
 
 export const EXISTING_USERS = [

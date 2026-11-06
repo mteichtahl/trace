@@ -65,6 +65,8 @@ import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 import { assertNotHeld } from './held.js'
+import { draftingJobs } from './drafting.js'
+import { plainTitle } from '../core/plain-words.js'
 import { type QueueFile, WAITS_FOR_AGENT, queuedHandle, readQueue, startQueued } from './agent-queue.js'
 
 export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'] as const
@@ -80,6 +82,14 @@ export const AGENT_IDS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', '
 const DAY_S = 86_400
 
 export type ViewState = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'aborted' | 'lost'
+
+/** What a job is for, in a line, where its title is a prompt (the requirements drafting's is several sentences). */
+export const DRAFTING_HEADLINE = 'Drafting the requirements from your intent'
+export function headlineOf(j: Pick<JobRow, 'kind' | 'title' | 'parentJob' | 'payload'>): { headline?: string } {
+  if (draftingJobs([j as JobRow]).length) return { headline: DRAFTING_HEADLINE }
+  const line = plainTitle(j.title)
+  return line && line !== j.title.replace(/\.$/, '') ? { headline: line } : {}
+}
 
 /** One job as the app reads it. */
 export interface IndexedJob extends JobView {
@@ -98,6 +108,9 @@ export interface IndexedJob extends JobView {
    * declared lost if it stays silent. A screen that has not looked since tells a silent job from a running one by these
    */
   heard: { at: string; overdueAt: string; lostAt: string } | null
+  /** the card's one line, when the title is the agent's prompt (test-esp32 #25: cut off mid-word, "use the a"): its
+   * first plain sentence, or what the job is for. The title itself stays, for Watch and the job's page */
+  headline?: string | undefined
   /** a hand-off job: the hand-off it answers and who asked (its title says so too: "Asked by the … specialist: …") */
   handoff: { id: string; from: string | null; fromName: string | null } | null
   /**
@@ -202,6 +215,7 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       heard: state === 'running' ? (({ heardAt, overdueAt, lostAt }) => ({ at: iso(heardAt) as string, overdueAt: iso(overdueAt) as string, lostAt: iso(lostAt) as string }))(heardOf(j)) : null,
       handoff: j.handoff ? handoffOf(j) : null, settled,
       controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first, settled: settled !== null }, o),
+      ...headlineOf(j),
     })
   }
   const rank: Record<ViewState, number> = { running: 0, paused: 1, queued: 2, lost: 3, failed: 4, aborted: 5, succeeded: 6 }
@@ -314,6 +328,7 @@ export function queuedJobViews(repo: string, q: QueueFile, o: { at: number; sub:
     workerJobId: id, kind: 'task', repository: projectSlug(repo), agent, agentName: agent ? AGENT_WORDS[agent] ?? agent : null, title, number: null,
     startedBy: by, yours: bySub !== null && bySub === o.sub, held: false, queuedAt, typicalS: null, where: null, branch: null,
     parentJob: null, resumeOf: null, resumedBy: null, summary: null, pausedBy: null, pausedAt: null, heard: null, handoff: null, settled: null,
+    ...headlineOf({ kind: 'task', title, parentJob: null, payload: null }),
   })
   const waiting = q.queued.map((s, i): IndexedJob => ({
     ...base(s.id, s.title, s.payload.agent ?? null, s.payload.requestedBy, s.payload.requestedBySub ?? null, s.queued_at),

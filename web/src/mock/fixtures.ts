@@ -78,6 +78,15 @@ export const JOURNEYS: Record<string, Journey> = {
     },
     questions: [
       { id: 'q1', to: 'Priya', text: 'Question to Priya: which antenna connector, u.FL or SMA?', askedAt: ago(2 * DAY), blocks: 'nothing yet; Layout needs it' },
+      // each "Answer it" opens its own question (test-esp32 #107); one out of date says why (#108); a stuck report reads
+      // in plain words, the agent's own behind Show detail (#35)
+      { id: 'aq5d2b9c0f1e3a774', to: 'you', text: 'The design document waits on the schematic: #6 is not merged. Write it from the branch now, or wait for #6?', askedAt: ago(42 * 60_000), blocks: 'the design document', outOfDate: 'Change #6 is no longer open (accepted or discarded since this was asked), so this may no longer need an answer.' },
+      { id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * 60_000), blocks: 'the schematic' },
+      {
+        id: 'st3c9e0d1b2a4f56', to: 'the contributors', stuck: true, askedAt: ago(15 * 60_000),
+        text: 'trace could not make the PDF of the design document because its diagram tool failed. The written document is committed.',
+        detail: 'trace could not make the PDF of the design document because its diagram tool failed.\ndocs_publish failed on diagram 1 in run 3f2a9c1d-0e4b (job-mw2lhy11-952f6819):\n    at TCP.<anonymous> (node:net:347:12)\ndocs_check passed. The written document is committed.',
+      },
     ],
     // as journey.get has them (test-esp32 #149): W-3 in force and the viewer's own, W-2 one a signed gate stands on,
     // W-1 withdrawn with its reason
@@ -88,6 +97,8 @@ export const JOURNEYS: Record<string, Journey> = {
     ],
     jobs: [
       { id: 'job_r1', title: 'Rendering the board for the gate', state: 'running', where: 'On a graphics card', etaS: 180, progress: 0.55 },
+      // its title is a plain line, its prompt behind Watch (test-esp32 #25: the prompt, cut off mid-word, was the card)
+      { id: 'job_d1', title: 'Re-checking the parts list after the regulator swap', request: 'Re-checking the parts list after the regulator swap. Run bom.check { quantity: 10 } and verify.requirements list, then', state: 'running', where: 'In the cloud' },
       { id: 'job_q1', title: 'Write the test plan for Prove', state: 'queued', startsWhen: 'starts when the schematic gate is signed' },
       { id: 'job_q2', title: 'Run SPICE corners on the LDO', state: 'queued', startsWhen: 'starts when the test plan is written' },
     ],
@@ -117,7 +128,8 @@ export const JOURNEYS: Record<string, Journey> = {
       owner: 'you',
       short: 'you answer one question',
       summary: 'The Analog specialist needs the motor\'s stall current to size the current-sense resistor. **It recommends 4.2 A**, from the motor datasheet, page 3.',
-      action: { label: 'Answer', to: '/p/acme~motor-driver/do/question-answer' },
+      // the question itself, by id, as journey.get's reader links it (test-esp32 #107)
+      action: { label: 'Answer', to: '/p/acme~motor-driver/do/question-answer?question=q-stall' },
     },
     questions: [],
     waivers: [],
