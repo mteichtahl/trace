@@ -528,6 +528,52 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
       recommendation: { recommended: 'approve', options: [{ id: 'approve', label: 'Approve for this revision' }, { id: 'defer', label: 'Defer to Rev B' }, { id: 'reject', label: 'Reject' }], why: 'Rev A is not released yet, so the change is cheapest now.', givesUp: 'About 3 days on the schedule.' },
     },
   },
+  'release-review': {
+    summary: 'Rev A at Sign-off. The EMC precheck found one return-path error, waived for the lab scan; every parts list line is in stock. Read each area, acknowledge it, then decide.',
+    checks: [
+      { id: 'areas', status: 'not_met', detail: 'Acknowledge each area on its step.' }, { id: 'untested', status: 'met' },
+      { id: 'single', status: 'not_met', detail: 'Acknowledge ESP32-C3-MINI-1-N4 and AP2112K-3.3TRG1 on the parts list.' },
+      { id: 'cost', status: 'met', detail: '10 boards at USD 4.72 each.' }, { id: 'decision', status: 'not_met', detail: 'Choose: release, or return to a stage.' },
+    ],
+    recommendation: {
+      question: 'Release, or return to the stage the concern belongs to?', recommended: 'release',
+      options: [
+        { id: 'release', label: 'Release', detail: 'Approve the release report; the release gate is signed next.' },
+        { id: 'return:signoff', label: 'Return to Sign-off', detail: 'Keep the stage open, with what has to change.' },
+        { id: 'return:layout', label: 'Return to Layout', detail: 'Reopen Layout; the gates from there are signed again.' },
+        { id: 'return:capture', label: 'Return to Capture', detail: 'Reopen Capture; the gates from there are signed again.' },
+      ],
+      why: 'Every requirement is verified or waived, and nothing in the report stands in the way.',
+    },
+    release: {
+      emc: {
+        precheck: {
+          run: 'run_e3c1a9f2', at: ago(2 * HOUR), status: 'fail', summary: '1 errors, 2 warnings, 4 notes', counts: { error: 1, warn: 2, info: 4 }, more: 0,
+          findings: [
+            { severity: 'error', rule: 'return_path', text: '/USB_D+ crosses a split in the ground plane on In1.Cu', where: '/USB_D+' },
+            { severity: 'warn', rule: 'edge_proximity', text: '/SCK runs 0.8 mm from the board edge (guideline 1 mm)', where: '/SCK' },
+            { severity: 'warn', rule: 'edge_spectrum', text: '/SCK 8 MHz harmonics: 4.1 dB margin to CISPR 32 class B at 120 MHz', where: '/SCK' },
+          ],
+        },
+        estimates: [],
+        criterion: { id: 'signoff.emc', text: 'Interference prechecks pass or are waived.', status: 'waived' },
+        waivers: [{ id: 'W-7', target: 'signoff.emc', reason: 'The radiated scan is booked with the lab for the first boards.', risk: 'A re-spin if the USB harmonics fail.', severity: 'degraded', by: 'Marc Teichtahl' }],
+      },
+      parts: {
+        run: 'run_b07d44e1', at: ago(3 * HOUR), status: 'pass', summary: '14 lines for 10 boards: every line in stock; 47.16 USD',
+        boards: 10, build_quantity: 10, currency: 'USD', total: 47.16, per_board: 4.72, for_build: 47.16, line_count: 4, counts: { ok: 4 }, blocking: 0,
+        lines: [
+          { key: 'ESP32-C3-MINI-1-N4', line: 1, mpn: 'ESP32-C3-MINI-1-N4', refs: 'U1', status: 'ok', stock: 2140, need: 10, unit_price: 2.71, sellers: ['LCSC/JLCPCB'], lifecycle: 'Active', single: true, inactive: false },
+          { key: 'AP2112K-3.3TRG1', line: 2, mpn: 'AP2112K-3.3TRG1', refs: 'U2', status: 'ok', stock: 48210, need: 10, unit_price: 0.12, sellers: ['LCSC/JLCPCB', 'Mouser'], lifecycle: 'NRND', single: false, inactive: true },
+          { key: 'GRM155R71C104KA88D', line: 3, mpn: 'GRM155R71C104KA88D', refs: 'C1, C2, C3, C4', status: 'ok', stock: 912000, need: 40, unit_price: 0.003, sellers: ['LCSC/JLCPCB', 'Mouser'], lifecycle: 'Active', single: false, inactive: false },
+          { key: 'USB4105-GF-A', line: 4, mpn: 'USB4105-GF-A', refs: 'J1', status: 'ok', stock: 15800, need: 10, unit_price: 0.48, sellers: null, lifecycle: null, single: null, inactive: null },
+        ],
+        flagged: ['ESP32-C3-MINI-1-N4', 'AP2112K-3.3TRG1'], unknown: 1,
+      },
+      fab: { drc: { run: 'run_d1f0c2b8', at: ago(5 * HOUR), errors: 0, findings: 3, waived: 3 }, board: { size: '50 × 35 mm', layers: ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'] }, hand_placed: ['J1'] },
+      changes: { revision: 'A', previous: null, started: null, items: [] },
+    },
+  },
 }
 
 export const QUESTIONS: Record<string, SkillView['question']> = {
