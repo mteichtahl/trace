@@ -26,8 +26,9 @@ const USER = { sub: 'l-user', email: 'l-user@example.com', groups: ['trace-users
 const REVIEWER = { sub: 'l-rev', email: 'l-rev@example.com', groups: ['trace-users'] }
 const REPO = 'acme/lost'
 const AUTO = 'acme/lost-auto'
+const MERGED = 'acme/lost-merged'
 const S = (repo: string, n: string): string => `trace-api-${projectHash(repo)}-${n.repeat(24).slice(0, 24)}`
-const github = new FakeGitHub([REPO, AUTO])
+const github = new FakeGitHub([REPO, AUTO, MERGED])
 const scratch = mkdtempSync(join(tmpdir(), 'trace-lost-jobs-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-lost-jobs-bucket-'))
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
@@ -35,7 +36,7 @@ afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucke
 const started: Record<string, unknown>[] = []
 let accept = true
 const jobsApi: JobsApi = {
-  repositoryOf: (id) => { const h = parseHandle(id); return h?.hash === projectHash(REPO) ? REPO : h?.hash === projectHash(AUTO) ? AUTO : null },
+  repositoryOf: (id) => { const h = parseHandle(id); return h?.hash === projectHash(REPO) ? REPO : h?.hash === projectHash(AUTO) ? AUTO : h?.hash === projectHash(MERGED) ? MERGED : null },
   startJob: async (p) => { started.push(p); return accept ? { accepted: true, jobId: `${S(p.repository, 'f')}.job-again-${started.length}` } : { accepted: false, jobId: '', reason: 'the runtime is busy' } },
   jobStatus: async () => [],
 }
@@ -50,7 +51,7 @@ const decisions = async (repo: string) => (await journeyStore(ctx(USER), repo).r
 const payload = (repo: string, request: string) => JSON.stringify({ kind: 'task', repository: repo, request, requestedBy: USER.email, requestedBySub: USER.sub, agent: 'impl' })
 
 beforeAll(async () => {
-  for (const repo of [REPO, AUTO]) {
+  for (const repo of [REPO, AUTO, MERGED]) {
     await assign(ADMIN, USER, repo, { class: 'user' })
     await assign(ADMIN, REVIEWER, repo, { part: 'reviewer', class: 'user' })
     const dir = mkdtempSync(join(scratch, 'seed-'))
@@ -73,6 +74,14 @@ beforeAll(async () => {
   })
   await jobIndex(ctx(ADMIN), AUTO).update((d) => {
     putJob(d, 'job-route', { kind: 'task', agent: 'impl', title: 'Route the board', state: 'running', session: S(AUTO, 'c'), startedAt: silent - 60, beatAt: silent, branch: 'claude/task-route', payload: payload(AUTO, 'Route the board') }, silent)
+    return { result: null }
+  })
+  // #202: the Documentation specialist's job opened its change and went quiet; its request was not recorded (owned work),
+  // so before the merge it can only be dismissed
+  await jobIndex(ctx(ADMIN), MERGED).update((d) => {
+    putJob(d, 'job-guide', { kind: 'task', agent: 'docs', title: 'Write the sign-off documents', state: 'running', session: S(MERGED, 'd'), startedAt: silent - 60, beatAt: silent, branch: 'claude/docs-sign-off' }, silent)
+    putJob(d, 'job-open', { kind: 'task', agent: 'docs', title: 'Write the release notes', state: 'running', session: S(MERGED, 'e'), startedAt: silent - 60, beatAt: silent, branch: 'claude/docs-release-notes' }, silent)
+    putJob(d, 'job-old', { kind: 'task', agent: 'docs', title: 'Write the assembly notes', state: 'running', session: S(MERGED, '9'), startedAt: silent - 60, beatAt: silent, branch: 'claude/docs-assembly' }, silent)
     return { result: null }
   })
 })
@@ -146,6 +155,61 @@ describe('trace starts a lost job again on its own', () => {
     // a second look starts nothing more
     await run(USER, 'journey.get', { repo: AUTO })
     expect(started.length).toBe(before + 1)
+  })
+})
+
+describe('a lost job whose change was merged is finished (#186, #202)', () => {
+  const asked = (branch: string): number => github.calls.filter((c) => c === `mergedPullFor ${MERGED} ${branch}`).length
+  const silentAt = Date.now() / 1000 - STALE_AFTER_S - 120
+
+  it('before the merge: lost, on the card and the next step, with Dismiss', async () => {
+    expect(await listed(MERGED, 'job-guide')).toMatchObject({ state: 'lost', settled: null, controls: ['dismiss'] })
+    const j = await run(USER, 'journey.get', { repo: MERGED })
+    expect(j.next as NextStep).toMatchObject({ button: 'Dismiss it', ref: { kind: 'action', id: 'job.dismiss' } })
+  })
+
+  it('once its pull request merged: succeeded, settled as merged, no controls, not the next step', async () => {
+    github.mergedList.set(`${MERGED}:claude/docs-sign-off`, { number: 35, mergedAt: new Date((silentAt + 30) * 1000).toISOString() })
+    // a pull request from the branch merged before the job started is an earlier job's: this one stays lost
+    github.mergedList.set(`${MERGED}:claude/docs-assembly`, { number: 12, mergedAt: new Date((silentAt - 3600) * 1000).toISOString() })
+    // a branch whose pull request is still open is not asked about
+    github.openList = [{ number: 36, title: 'Release notes', head: 'claude/docs-release-notes', headRepo: MERGED, draft: false, labels: [], url: 'https://github.com/acme/lost-merged/pull/36', updated_at: new Date().toISOString() }]
+    const before = asked('claude/docs-release-notes')
+    try {
+      const guide = await listed(MERGED, 'job-guide')
+      expect(guide).toMatchObject({ state: 'succeeded', error: null, step: null, controls: [], settled: { how: 'merged', by: 'trace', number: 35 } })
+      expect(guide?.summary).toMatch(/#35\) was accepted into the design/)
+      expect(await listed(MERGED, 'job-old')).toMatchObject({ state: 'lost', settled: null })
+      expect(await listed(MERGED, 'job-open')).toMatchObject({ state: 'lost', settled: null })
+      expect(asked('claude/docs-release-notes')).toBe(before)
+      // a job.control on it is refused in words: there is nothing to dismiss or start again
+      expect(await run(USER, 'job.control', { id: `${S(MERGED, 'd')}.job-guide`, op: 'dismiss' })).toMatchObject({ ok: false })
+      // the next step is no longer about it (so the step it worked on does not read stopped for it: stoppedSteps follows the next step)
+      const j = await run(USER, 'journey.get', { repo: MERGED })
+      expect((j.next as NextStep & { job_id?: string }).job_id).not.toBe(`${S(MERGED, 'd')}.job-guide`)
+      // the other two are still lost, so dismiss them: then nothing is left to stop a step
+      for (const [s, id] of [['e', 'job-open'], ['9', 'job-old']] as const) expect(await run(USER, 'job.control', { id: `${S(MERGED, s)}.${id}`, op: 'dismiss' })).toMatchObject({ ok: true })
+      const after = await run(USER, 'journey.get', { repo: MERGED })
+      expect((after.next as NextStep).ref?.kind).not.toBe('action')
+      expect((after.next as NextStep).summary).not.toMatch(/ended without finishing/)
+      // trace never starts a merged job again on its own
+      expect(after.jobs_restarted).toBeUndefined()
+      // once known merged, it is not asked again
+      const n = asked('claude/docs-sign-off')
+      await listed(MERGED, 'job-guide')
+      expect(asked('claude/docs-sign-off')).toBe(n)
+    } finally {
+      github.openList = []
+    }
+  })
+
+  it('settledOf: dismissed and started again come first; merged settles one nobody decided about', () => {
+    const merged = { number: 35, mergedAt: '2026-11-05T10:00:00.000Z' }
+    expect(settledOf({ resumedBy: null }, undefined, 1, merged)).toEqual({ how: 'merged', by: 'trace', at: merged.mergedAt, reason: null, number: 35 })
+    expect(settledOf({ resumedBy: null }, undefined, 1, null)).toBeNull()
+    const dismissed = { job: 'b', held: false, order: null, discarded: false, dismissed: true, reason: null, restartedBy: null, restartedAt: null, by: 'n@example.com', at: 1000 }
+    expect(settledOf({ resumedBy: null }, dismissed, 1000, merged)).toMatchObject({ how: 'dismissed' })
+    expect(settledOf({ resumedBy: 'job-new' }, undefined, 1, merged)).toMatchObject({ how: 'restarted' })
   })
 })
 

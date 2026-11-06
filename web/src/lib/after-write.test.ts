@@ -1,7 +1,8 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AGAIN_MS, ANSWERED_STEP, afterWrite, applyWrite, stepAnswers, writeInvalidations } from './after-write'
-import type { InboxItem, Journey } from './types'
+import { AGAIN_MS, ANSWERED_STEP, afterWrite, applyWrite, settleLostJob, stepAnswers, writeInvalidations } from './after-write'
+import type { InboxItem, Journey, RunSummary } from './types'
+import { splitRuns } from '@/components/run-line'
 
 vi.mock('./http', async (orig) => ({ ...(await orig<typeof import('./http')>()), request: vi.fn() }))
 vi.mock('./auth', () => ({ token: () => 't', refresh: async () => false }))
@@ -144,5 +145,25 @@ describe('call tells the listener of every ok answer', () => {
     vi.mocked(request).mockResolvedValueOnce({ ok: true, result: { repo: R, summary: 'Answered.' } })
     await call('question.answer', { repo: R, question: 'aq2', option: 'o1' })
     expect(heard).toEqual(['question.answer'])
+  })
+})
+
+describe('a lost job dismissed or started again leaves the Overview at once (#202)', () => {
+  const lost = (id: string): RunSummary => ({ id, title: id, state: 'lost', startedAt: new Date(Date.now() - 3600_000).toISOString(), controls: ['restart', 'dismiss'] })
+
+  it('marks it settled with no controls in the journey and the job list, so its card and buttons go before the refetch', () => {
+    const qc = seeded()
+    qc.setQueryData(journeyKey, { ...journey(), jobs: [lost('h.j1'), lost('h.j2')] })
+    qc.setQueryData(['jobs.list', R, { repo: R }], { jobs: [lost('h.j1')] })
+    expect(splitRuns(qc.getQueryData<Journey>(journeyKey)!.jobs, Date.now()).ended.map((r) => r.id)).toEqual(['h.j1', 'h.j2'])
+    settleLostJob(qc, R, 'h.j1', 'dismiss', '2026-11-06T00:00:00.000Z')
+    const jobs = qc.getQueryData<Journey>(journeyKey)!.jobs
+    expect(jobs.find((r) => r.id === 'h.j1')).toMatchObject({ settled: { how: 'dismissed', by: 'you', at: '2026-11-06T00:00:00.000Z' }, controls: [] })
+    expect(splitRuns(jobs, Date.now()).ended.map((r) => r.id)).toEqual(['h.j2'])
+    expect(qc.getQueryData<{ jobs: RunSummary[] }>(['jobs.list', R, { repo: R }])!.jobs[0]).toMatchObject({ settled: { how: 'dismissed' } })
+    settleLostJob(qc, R, 'h.j2', 'restart')
+    expect(qc.getQueryData<Journey>(journeyKey)!.jobs.find((r) => r.id === 'h.j2')?.settled?.how).toBe('restarted')
+    // another project's journey is left alone
+    expect(qc.getQueryData<Journey>(['journey.get', 'c/d', { repo: 'c/d' }])!.jobs).toEqual([])
   })
 })

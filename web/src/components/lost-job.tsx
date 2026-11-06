@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { call } from '@/lib/api'
+import { settleLostJob } from '@/lib/after-write'
 import type { RunSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -29,6 +30,8 @@ export function useLostJob(repo: string) {
   return async (jobId: string, op: 'restart' | 'dismiss', reason?: string | null): Promise<string> => {
     const r = await call('job.control', { id: jobId, op, repo, ...(reason ? { reason } : {}) })
     if (!r.ok) throw new Error(r.reason ?? 'It could not be done.')
+    // its card goes now, not when the journey's next answer comes (#202)
+    settleLostJob(qc, repo, jobId, op)
     for (const k of [['journey.get', repo], ['jobs.list', repo]]) void qc.invalidateQueries({ queryKey: k })
     return r.kept ?? ''
   }

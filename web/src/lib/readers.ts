@@ -425,7 +425,7 @@ export function readJob(j: Obj): RunSummary {
     ...(str(j.pausedBy) ? { pausedBy: String(j.pausedBy) } : {}), ...(str(j.branch) ? { branch: String(j.branch) } : {}),
     ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.error) ? { error: String(j.error) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
     ...(isObj(j.handoff) && str(j.handoff.id) ? { handoff: { id: String(j.handoff.id), ...(str(j.handoff.from) ? { from: String(j.handoff.from) } : {}), ...(str(j.handoff.fromName) ? { fromName: String(j.handoff.fromName) } : {}) } } : {}),
-    ...(isObj(j.settled) && (j.settled.how === 'dismissed' || j.settled.how === 'restarted') ? { settled: { how: j.settled.how, by: String(j.settled.by ?? ''), at: String(j.settled.at ?? ''), ...(str(j.settled.reason) ? { reason: String(j.settled.reason) } : {}) } } : {}),
+    ...(isObj(j.settled) && (j.settled.how === 'dismissed' || j.settled.how === 'restarted' || j.settled.how === 'merged') ? { settled: { how: j.settled.how, by: String(j.settled.by ?? ''), at: String(j.settled.at ?? ''), ...(str(j.settled.reason) ? { reason: String(j.settled.reason) } : {}), ...(typeof j.settled.number === 'number' ? { number: j.settled.number } : {}) } } : {}),
     ...(isObj(j.heard) && str(j.heard.at) && str(j.heard.overdueAt) && str(j.heard.lostAt) ? { heard: { at: String(j.heard.at), overdueAt: String(j.heard.overdueAt), lostAt: String(j.heard.lostAt) } } : {}),
   }
 }

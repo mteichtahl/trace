@@ -16,7 +16,7 @@
  */
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import type { ActionName } from './api'
-import type { Gate, InboxItem, Journey, NextStep } from './types'
+import type { Gate, InboxItem, Journey, NextStep, ProjectJobs, RunSummary } from './types'
 
 /** How long after an act the screens look once more. */
 export const AGAIN_MS = 4_000
@@ -145,6 +145,23 @@ export function applyWrite(qc: Pick<QueryClient, 'setQueriesData'>, action: stri
       : g))
     journey((j) => ({ ...j, gates: gates(j.gates) }))
   }
+}
+
+/**
+ * A lost job a person just dismissed or started again (job.control's ok answer), settled on the screens that list it:
+ * its job views in the journey and the job list are marked settled with no controls, so its "Ended without finishing"
+ * card and the next step's buttons go at once (#202: the card stayed for about a minute, until the journey's next
+ * answer, which looks at GitHub and the checks, came back). The refetch that follows brings the next step. Pure on the
+ * client's cache.
+ */
+export function settleLostJob(qc: Pick<QueryClient, 'setQueriesData'>, repo: string, id: string, op: 'restart' | 'dismiss', at: string = new Date().toISOString()): void {
+  const how = op === 'dismiss' ? 'dismissed' as const : 'restarted' as const
+  const settle = <T extends { jobs?: unknown }>(d: T | undefined): T | undefined => {
+    if (!d || !Array.isArray(d.jobs) || !(d.jobs as RunSummary[]).some((r) => r.id === id && !r.settled)) return d
+    return { ...d, jobs: (d.jobs as RunSummary[]).map((r) => (r.id === id && !r.settled ? { ...r, settled: { how, by: 'you', at }, controls: [] } : r)) }
+  }
+  qc.setQueriesData<Journey>({ queryKey: ['journey.get', repo] }, settle)
+  qc.setQueriesData<ProjectJobs>({ queryKey: ['jobs.list', repo] }, settle)
 }
 
 /**
