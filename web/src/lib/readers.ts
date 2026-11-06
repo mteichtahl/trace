@@ -31,13 +31,18 @@ export function readEvidence(e: Obj, repo: string): EvidenceRef {
   return { kind, label: str(e.label) ?? ref, id: ref, ...(kind === 'run' && ref ? { to: `/p/${pid(repo)}/runs/${ref}` } : {}) }
 }
 
-/** The API's severity (cosmetic | degraded | failure | safety) as the app's risk word. */
-const riskOf = (severity: unknown): Waiver['risk'] => (severity === 'cosmetic' ? 'minor' : severity === 'degraded' ? 'degraded' : 'major')
+/** "the finding of …" → "The finding of …": a title starts a line */
+const sentence = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+const RATINGS = new Set<Waiver['risk']>(['cosmetic', 'degraded', 'failure', 'safety'])
+/** The rating the person chose (cosmetic | degraded | failure | safety), as they chose it (test-esp32 #157). */
+const riskOf = (severity: unknown): Waiver['risk'] => (RATINGS.has(severity as Waiver['risk']) ? (severity as Waiver['risk']) : 'degraded')
 
 function readWaiver(w: Obj): Waiver {
   const target = isObj(w.target) ? w.target : {}
   return {
-    id: String(w.id), title: `${str(target.kind) ?? 'item'} ${str(target.id) ?? ''}`.trim(), reason: String(w.reason ?? ''),
+    // what it is on, in words (test-esp32 #155); the raw kind and id only from an API before it said
+    id: String(w.id), title: sentence(str(w.about) ?? `${str(target.kind) ?? 'item'} ${str(target.id) ?? ''}`.trim()), reason: String(w.reason ?? ''),
+    ...(w.criterion === null || str(w.criterion) ? { criterion: str(w.criterion) ?? null } : {}),
     risk: riskOf(w.severity), caught: str(w.caught_where) ?? 'Nowhere: accepted for good', acknowledged: Boolean(w.acknowledged),
     severity: str(w.severity), riskText: str(w.risk), scope: str(w.scope),
     ...(str(w.by) ? { by: String(w.by) } : {}), ...(str(w.at) ? { at: String(w.at) } : {}),

@@ -20,7 +20,15 @@ export const ROUTE_LOG = ['Loading hardware/soil-sensor.kicad_pcb', 'Net classes
 
 // ------------------------------------------------------------------ gates
 
-const W3: Waiver = { id: 'W-3', title: 'Electrical rule check: VBAT pin not driven on U2.', reason: "Driven by the battery through J1, which the check can't see.", risk: 'degraded', caught: 'Bring-up step 3 (unpowered rail check).', by: 'Marc Teichtahl', target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, mayWithdraw: true }
+// the mock's criteria have short ids (c1, c2), so each waiver says which one it counts for, as journey.get does
+const W3: Waiver = { id: 'W-3', title: 'Electrical rule check: VBAT pin not driven on U2.', reason: "Driven by the battery through J1, which the check can't see.", risk: 'degraded', caught: 'Bring-up step 3 (unpowered rail check).', by: 'Marc Teichtahl', target: { kind: 'finding', id: 'erc:U2.VBAT:pin_not_driven' }, criterion: 'c1', mayWithdraw: true }
+// one of each rating, on different criteria and one on a requirement (the stage's only), so the gate page shows each
+// criterion counting its own waivers and each rating in the form's words (test-esp32 #156, #157)
+const W_SCHEMATIC: Waiver[] = [
+  { id: 'W-21', title: 'The electrical rule check\'s lib symbol issues finding on J3', reason: 'The vendor\'s symbol draws pin 1 as passive; the footprint and the net are right.', risk: 'cosmetic', riskText: 'None on the board; the schematic reads oddly.', caught: 'Nowhere: accepted for good', by: 'Marc Teichtahl', target: { kind: 'finding', id: 'erc:lib_symbol_issues:J3' }, criterion: 'c1', mayWithdraw: true },
+  { id: 'W-22', title: 'The finding of “No conflicts with datasheets” on part U3', reason: 'The regulator runs at 6 V only during the 2 ms USB plug-in surge; the datasheet allows 6.5 V for 10 ms.', risk: 'failure', riskText: 'U3 could fail if the surge lasts longer than the datasheet allows.', caught: 'On the bench: Bring-up step 2 (plug-in surge on a scope)', by: 'Priya Shah', target: { kind: 'finding', id: 'c2@urn:trace:acme:acme%2Fsoil-sensor:part:U3' }, criterion: 'c2', mayWithdraw: true },
+  { id: 'W-23', title: 'Requirement REQ-BAT-004', reason: 'The battery charger is not fitted on revision A; the board runs from the bench supply.', risk: 'safety', riskText: 'A lithium cell fitted by mistake would charge with no protection.', caught: 'At a later stage: Sign-off, before the charger is fitted', by: 'Marc Teichtahl', target: { kind: 'requirement', id: 'REQ-BAT-004' }, criterion: null, mayWithdraw: true },
+]
 
 const crit = (id: string, text: string, label: string, kind: 'run' | 'record', summary: string, opened = false, status: Criterion['status'] = 'met'): Criterion => ({
   id, text, status, opened, evidence: { kind, label, id: kind === 'run' ? label : id, summary },
@@ -46,7 +54,7 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
     recommendation: {
       sign: false,
       summary: '**Not ready to sign yet.** 4 of 6 criteria are met: the power sheet waits for a person to review it, and the stock check for 10 boards runs after that.',
-      evidence: [{ kind: 'run', label: 'run_51c0', summary: 'ERC on push 7f3e21: 0 errors, 1 warning (waived as W-3).' }],
+      evidence: [{ kind: 'run', label: 'run_51c0', id: 'run_51c0', to: '/p/acme~soil-sensor/runs/run_51c0', summary: 'ERC on push 7f3e21: 0 errors, 1 warning (waived as W-3).' }],
     },
     forecast: '**Next: Prove.** Forecast 2 days of agent time, about US$11 of cloud use.',
     criteria: [
@@ -73,7 +81,7 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
       // an admin added this to the Board template (Admin › Project templates): a person signs it off in the gate
       { id: 'capture.safety', text: 'The battery safety review is done.', status: 'not_met', added: true },
     ],
-    waivers: [W3],
+    waivers: [W3, ...W_SCHEMATIC],
   },
   order: {
     spend: { total: 184, currency: 'USD', changed: 'Two prices changed since sign-off (+US$3.10). Both parts are still in stock.' },

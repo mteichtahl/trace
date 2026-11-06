@@ -61,6 +61,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 import { BUILD_TABLES } from './build-tables.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
+import { waiverCriterion, waiverTargetWords } from './waiver-words.js'
 import { TemplateDoc, addedCriteria, catalogTemplate, docGuide, docStages, templateProblems } from './templates.js'
 
 // ------------------------------------------------------------------ templates (src/core/journey-catalog.ts)
@@ -635,6 +636,35 @@ export interface Viewer {
 /** Is `who` (a recorded hash) this viewer? */
 export const isViewer = (v: Pick<Viewer, 'hash' | 'also'>, who: string | null): boolean => who !== null && (who === v.hash || (v.also?.includes(who) ?? false))
 
+/**
+ * The criteria and waivers `viewer` has opened for the signing at hand: an open counts only if it came after the gate
+ * was last signed or returned, and (a criterion's) after it was last checked. Opening the evidence for one signing
+ * does not carry over to the next, nor to evidence that changed since (test-esp32 #70: re-signing a reopened stage
+ * showed "Opened" from the first signing although a requirement's limit had changed).
+ */
+export function openedBy(r: JourneyRecord, viewer: Pick<Viewer, 'hash' | 'also'>): Set<string> {
+  const lastSigned = new Map<string, number>()
+  for (const s of r.signatures) lastSigned.set(s.gate, Math.max(lastSigned.get(s.gate) ?? 0, s.at))
+  const since = (gate: string | null): number => {
+    const g = gate ? r.gates.find((x) => x.id === gate) : undefined
+    return Math.max(gate ? (lastSigned.get(gate) ?? 0) : 0, g?.returnedAt ?? 0)
+  }
+  const criteria = new Map(r.criteria.map((c) => [c.id, c]))
+  const waivers = new Map(r.waivers.map((w) => [w.id, w]))
+  // a waiver's stage's gates: one signed since it was opened is a new signing
+  const stageSince = (stage: StageId): number => Math.max(0, ...r.gates.filter((g) => g.stage === stage).map((g) => since(g.id)))
+  const out = new Set<string>()
+  for (const o of r.opens) {
+    if (!isViewer(viewer, o.who)) continue
+    const c = criteria.get(o.item)
+    if (c && o.at < Math.max(since(c.gate), c.checkedAt ?? 0)) continue
+    const w = o.item.startsWith('waiver:') ? waivers.get(o.item.slice(7)) : undefined
+    if (w && o.at < Math.max(stageSince(w.stage), w.at)) continue
+    out.add(o.item)
+  }
+  return out
+}
+
 export type StageState = 'done' | 'current' | 'queued' | 'reopened'
 export type CriterionState = 'met' | 'not_met' | 'waived'
 export type GateState = 'signed' | 'ready' | 'open' | 'queued'
@@ -713,6 +743,8 @@ export interface QuestionView {
 }
 export interface WaiverView {
   id: string; stage: StageId; gate: string | null; target: { kind: string; id: string }; reason: string; risk: string; severity: Severity
+  /** what it is on, in words (src/core/waiver-words.ts), and the gate criterion it counts for (null: the stage's only) */
+  about: string; criterion: string | null
   caught_where: string | null; scope: string; by: string; at: string; acknowledged: { by: string | null; at: string } | null; closed: boolean; opened_by_you: boolean
   /** withdrawn by its author or an admin (withdrawWaiver): who, when, why, and the waiver taken again in its place */
   withdrawn: { by: string | null; at: string; reason: string; replaced_by: string | null } | null
@@ -1052,7 +1084,7 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
   const earlier = r.gates.filter((g) => g.stage === gate.stage && g.ord < gate.ord && !liveSignature(r, g.id))
   for (const g of earlier) out.push(`Sign ${gateTitle(g)} first.`)
   const waived = waiverFor(r)
-  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const opened = openedBy(r, viewer)
   const criteria = r.criteria.filter((c) => c.gate === id)
   const notMet = criteria.filter((c) => c.status !== 'met' && !waived.has(c.id))
   if (notMet.length) out.push(`${plural(notMet.length, 'criterion is', 'criteria are')} not met or waived: ${notMet.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`)
@@ -1068,7 +1100,7 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
 
 function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): CriterionView[] {
   const waived = waiverFor(r)
-  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const opened = openedBy(r, viewer)
   const added = addedCriteria(r.definition?.doc ?? null)
   return r.criteria.filter((c) => c.gate === gate).map((c) => {
     const w = waived.get(c.id)
@@ -1438,7 +1470,7 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
       steps: s.id === r.journey.currentStage ? markSteps(stageSteps(r, s.id, viewer), next.ref) : stageSteps(r, s.id, viewer),
     }
   })
-  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const opened = openedBy(r, viewer)
   return {
     template: r.journey.template, template_name: TEMPLATE_NAMES[r.journey.template], revision: r.journey.revision, current_stage: r.journey.currentStage,
     later: r.journey.later, start: r.journey.start, name: r.journey.name, description: r.journey.description, icon: r.journey.icon, build: r.journey.build,
@@ -1942,12 +1974,16 @@ function waiverView(r: JourneyRecord, w: WaiverRow, viewer: Viewer, opened: Read
   const blocked = w.closedAt === null ? withdrawProblem(r, w, viewer) : null
   return {
     id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: w.reason, risk: w.risk, severity: w.severity,
+    about: targetWords(r, w.targetKind, w.target), criterion: waiverCriterion({ kind: w.targetKind, id: w.target }),
     caught_where: w.caughtWhere, scope: w.scope, by: w.by, at: isoN(w.at), acknowledged: w.acknowledgedAt !== null ? { by: w.acknowledgedBy, at: isoN(w.acknowledgedAt) } : null,
     closed: w.closedAt !== null, opened_by_you: opened.has(`waiver:${w.id}`),
     withdrawn: out ? { by: out.by, at: isoN(out.at), reason: out.reason, replaced_by: out.replacedBy } : null,
     may_withdraw: w.closedAt === null && blocked === null, withdraw_blocked: blocked,
   }
 }
+
+/** What a waiver on `kind` `id` is on, in words, with the record's criteria named by their text. */
+const targetWords = (r: JourneyRecord, kind: string, id: string): string => waiverTargetWords({ kind, id }, (c) => r.criteria.find((x) => x.id === c)?.text)
 
 /** A waiver's withdrawal, from the decisions log (the record keeps it there, with its reason), or null. */
 function withdrawalOf(r: JourneyRecord, id: string): { by: string | null; at: number; reason: string; replacedBy: string | null } | null {
@@ -1980,12 +2016,12 @@ export function withdrawProblem(r: JourneyRecord, w: WaiverRow, viewer: Pick<Vie
 }
 
 /** Close waiver `w` and log why, in the caller's transaction. */
-function closeWaiver(db: DatabaseSync, w: WaiverRow, reason: string, by: Signer, replacedBy: string | null): void {
+function closeWaiver(db: DatabaseSync, r: JourneyRecord, w: WaiverRow, reason: string, by: Signer, replacedBy: string | null): void {
   const t = now()
   db.prepare('UPDATE waivers SET closed_at=?, updated=? WHERE id=?').run(t, t, w.id)
   decide(db, {
     kind: 'waiver.withdrawn', stage: w.stage, ref: w.id, by: by.label,
-    summary: `The waiver on ${w.targetKind} ${w.target} was ${replacedBy ? 'taken again' : 'withdrawn'} by ${by.label}: ${reason}`,
+    summary: `The waiver on ${targetWords(r, w.targetKind, w.target)} was ${replacedBy ? 'taken again' : 'withdrawn'} by ${by.label}: ${reason}`,
     detail: { reason, replaced_by: replacedBy, target: { kind: w.targetKind, id: w.target } },
   })
 }
@@ -2003,7 +2039,7 @@ export function withdrawWaiver(db: DatabaseSync, id: string, by: Signer & { admi
   if (problem) throw new JourneyError(problem)
   const why = reason.trim()
   if (why.length < 5 || VAGUE.test(why)) throw new JourneyError('Say in a sentence why the waiver is withdrawn; it is kept in the record.')
-  transaction(db, () => closeWaiver(db, w, why, by, null))
+  transaction(db, () => closeWaiver(db, r, w, why, by, null))
   const after = need(db)
   const viewer: Viewer = { hash: by.hash, label: by.label, also: by.also, admin: by.admin, part: 'contributor' }
   return waiverView(after, after.waivers.find((x) => x.id === id) as WaiverRow, viewer, new Set())
@@ -2023,7 +2059,7 @@ export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer & { admin
     // the new one is checked as if the old one were gone already: it may waive the same thing
     const rest = old ? { ...r, waivers: r.waivers.map((x) => (x.id === old.id ? { ...x, closedAt: now() } : x)) } : r
     const added = insertWaiver(db, rest, w, by)
-    if (old) closeWaiver(db, old, `taken again as waiver ${added}`, by, added)
+    if (old) closeWaiver(db, r, old, `taken again as waiver ${added}`, by, added)
     return added
   })
   const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: by.admin ?? false, part: 'contributor' })
@@ -2066,7 +2102,7 @@ function insertWaiver(db: DatabaseSync, r: JourneyRecord, w: WaiverInput, by: Si
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, stage, gate, w.target.kind, w.target.id, reason, w.risk.trim(), w.severity, w.caught_where?.trim() || null, w.scope.trim(), by.label, t, t)
   decide(db, {
     kind: 'waiver.added', stage, ref: id, by: by.label,
-    summary: `A waiver was taken on ${w.target.kind} ${w.target.id} (rated ${w.severity}): ${reason}${o.question ? ` (in answer to question ${o.question})` : ''}`,
+    summary: `A waiver was taken on ${targetWords(r, w.target.kind, w.target.id)} (rated ${w.severity}): ${reason}${o.question ? ` (in answer to question ${o.question})` : ''}`,
     ...(o.question ? { detail: { question: o.question } } : {}),
   })
   return id
