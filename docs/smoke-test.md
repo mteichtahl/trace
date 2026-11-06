@@ -60,6 +60,13 @@ gets a new password and authenticator. Turn it off with the installer answer `ru
 goes before the deploy, then the user and its secret. Uninstalling removes all three. Choose the project with
 `runners.smokeProject` (default: the sample project, else the first).
 
+A live project is real, so it may truly have nothing yet for a check: no open change, no run before its baseline is
+signed, no block diagram before Architect, nothing that needs the smoke user, trace idle. Such a check then asserts the
+screen's own empty state instead (a screen showing neither its data nor its empty state still fails), and notes what it
+could not exercise as a `not exercised` annotation in `results.json`; a check with nothing left to do is skipped with
+that reason. The mock always has the data, so there every step must run. The smoke user is a Reviewer, so a change's
+review page shows it why it cannot decide rather than Accept, and the Cost tab tells it the page is not shared with it.
+
 Live runs skip the admin screens (the smoke user is not an admin; set `TRACE_SMOKE_ADMIN=1` in the secret for an admin
 account). trace's repository is public, so a live run keeps no traces, screenshots or HTML report: the job uploads
 `results.json` only, for 7 days. Its log is public like any CI log, so a failed check's message can quote a few words
@@ -85,3 +92,5 @@ system turn on the external API and MCP checks. A later installer run keeps them
 | 2026-11-04 | Ask trace, desktop and phone | A message sent soon after the panel opened vanished: the panel reopened the last conversation from a lookup started on open, and when that answered late (a loaded machine) it switched away from the new conversation the message had just made; a message sent while a stored conversation was still loading was overwritten when it landed. Intermittent in CI | fixed: the panel shows the conversation only once it knows which one, never switches away from one started meanwhile, and holds sending (not typing) until a conversation has loaded; the check starts a conversation of its own and waits for the panel to be ready rather than for the network to go quiet |
 | 2026-11-04 | 3D board, desktop | Building the board in 3D took over 30 s with software rendering on a loaded test machine | check allows 90 s |
 | 2026-11-05 | 3D board, desktop | With the Case tab's check added, two 3D boards rendered at once on a runner without a GPU, and the Turn over click timed out (each passes alone) | the 3D checks run one at a time (`board3d.smoke.ts`, the `3d` project) |
+| 2026-11-05 | Live: Knowledge › Graph | The empty graph offered the mock's ids (R-006, R-002, P-sx1262, run_8e14) as places to start; none is in a real project, so starting from one drew nothing. The live check failed on every run | fixed: it offers the project's own requirements, failing ones first |
+| 2026-11-05 | Live: every run since the sign-in fix | 15 checks failed on the live smoke project, though its screens were right: they expected the mock's data (open changes, runs, a block diagram, gate records, R- requirement ids, more than one thing for Next, trace working, a Contributor's Accept button, an admin's Cost tab) and the web push check matched the top bar's Notifications bell too | fixed: each check follows the project's real state (see Live runs) |

@@ -61,7 +61,8 @@ test('knowledge: search and the graph @phone', async ({ app, page }) => {
   await expect(page.locator('#main')).toContainText(/result|regulator/i)
   await app.open('/knowledge/graph')
   await expect(page.getByRole('textbox', { name: 'Start from' })).toBeVisible()
-  await page.locator('#main').getByRole('button', { name: /^R-\d+/ }).first().click()
+  // the empty graph suggests the project's own requirements (REQ-1a2b3c live, R-006 in the mock): start from the first
+  await page.getByRole('group', { name: 'Places to start' }).getByRole('button').first().click()
   // a phone opens the graph as a list: switch it to the drawing
   const graph = page.getByRole('radio', { name: 'Graph' }).or(page.getByRole('button', { name: 'Graph', exact: true })).filter({ visible: true }).first()
   if (await graph.isVisible().catch(() => false)) await graph.click()
