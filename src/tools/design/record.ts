@@ -326,6 +326,27 @@ export function architectureView(rows: DesignRows, decisions: readonly DesignDec
   }
 }
 
+/**
+ * The option that scores higher than `option` on the criteria, when one does (the highest), with both weighted totals:
+ * choosing an option that scores lower than another needs a reason of the person's own, as choosing against the
+ * recommendation does, since the recommendation may itself not be the top score (test-esp32 #96: A taken over C, 42.5
+ * against 44.0, with no reason asked). `scores` are the person's own, laid over the view's. Null when nothing scores
+ * higher, or nothing is scored.
+ */
+export function outscoredBy(a: Pick<ArchitectureView, 'options' | 'criteria' | 'scores'>, option: string, scores: readonly { option: string; criterion: string; score: number }[] = []): { option: OptionView; total: number; mine: number } | null {
+  if (!a.criteria.length) return null
+  const scoreOf = (o: string, c: string): number | undefined => scores.find((s) => s.option === o && s.criterion === c)?.score ?? a.scores.find((s) => s.option === o && s.criterion === c)?.score
+  const scored = (o: string): boolean => a.criteria.some((c) => scoreOf(o, c.id) !== undefined)
+  const total = (o: string): number => Math.round(a.criteria.reduce((n, c) => n + (scoreOf(o, c.id) ?? 0) * c.weight, 0) * 100) / 100
+  if (!a.options.some((o) => o.id === option)) return null
+  const mine = total(option)
+  const best = a.options.filter((o) => o.id !== option && scored(o.id)).map((o) => ({ option: o, total: total(o.id) })).sort((x, y) => y.total - x.total)[0]
+  return best && best.total > mine ? { ...best, mine } : null
+}
+
+/** "Option C scores higher (44 against 42.5)": why a reason is asked for. */
+export const outscoredWords = (o: { option: { id: string }; total: number; mine: number }): string => `Option ${o.option.id} scores higher (${o.total} against ${o.mine})`
+
 // ------------------------------------------------------------------ the pin plan against the schematic
 
 /** nets.tsv (kicad.netlist's artifact) read back: net → its pins as "<ref>.<pin>". */

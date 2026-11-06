@@ -25,8 +25,9 @@ import { signBlockers } from '../core/journey.js'
 import { type SkillCheckDef, skillDef } from '../core/skills.js'
 import { type DesignDecision, standing } from '../tools/design/decisions.js'
 import { type DesignRows, TOPIC_NAMES, INTENT_TOPICS } from '../tools/design/db.js'
-import { type PinFinding, architectureView, intentView, linksView, missingFields, pinCheck } from '../tools/design/record.js'
+import { type PinFinding, architectureView, intentView, linksView, missingFields, outscoredBy, outscoredWords, pinCheck } from '../tools/design/record.js'
 import type { Finding, TraceRequirement } from './record-read.js'
+import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
@@ -82,6 +83,8 @@ export interface CheckInput {
   boards?: BoardRow[]
   /** the parts the fab does not place (the latest kicad.fab run's hand_placed), null when no run says */
   handPlaced?: string[] | null
+  /** every parts check line in the record (Architecture choice's key parts: src/tools/design/key-parts.ts) */
+  stockLines?: StockLine[]
   /** each instrument's newest identity answer (hil.idn), from the run record and the bench's live copy */
   ids?: InstrumentId[]
   /** the bring-up readings (bringup_readings), from the run record and the bench's live copy */
@@ -132,6 +135,22 @@ function reasons(input: CheckInput): CheckResult {
   if (typeof against === 'string' && !against.trim() && input.draft?.against === true) return notMet('reasons', 'Say in a line why you chose against the recommendation.')
   if (choice && choice.recommended === false && str(choice.reason).length < 3) return notMet('reasons', 'Say in a line why you chose against the recommendation.')
   return met('reasons')
+}
+
+/**
+ * Architecture choice's reasons: the shared rule, and an option another one outscores (the recommendation included)
+ * carries the person's own reason as well (test-esp32 #96). The draft's choice is { option, reason }.
+ */
+function architectureReasons(input: CheckInput): CheckResult {
+  const shared = reasons(input)
+  if (shared.status !== 'met' || !input.design) return shared
+  const choice = input.draft?.choice as { option?: unknown; reason?: unknown } | undefined
+  if (!choice || typeof choice.option !== 'string') return shared
+  const a = architectureView(input.design.rows, input.design.decisions)
+  const own = str(choice.reason).length >= 3 || str(input.draft?.why).length >= 3
+  if (a.recommended && choice.option !== a.recommended && !own) return notMet('reasons', `Option ${a.recommended} is trace's recommendation: say in a line why you chose ${choice.option} instead.`)
+  const higher = outscoredBy(a, choice.option)
+  return higher && !own ? notMet('reasons', `${outscoredWords(higher)}: say in a line why you chose ${choice.option}.`) : shared
 }
 
 type Checker = (input: CheckInput) => CheckResult
@@ -561,7 +580,7 @@ export function checkSkill(skill: string, input: CheckInput): CheckResult[] | nu
   if (!def) return null
   const confirmed = input.draft?.confirmed && typeof input.draft.confirmed === 'object' ? input.draft.confirmed as Record<string, unknown> : {}
   return def.checks.map((c: SkillCheckDef) => {
-    const r = c.id === 'reasons' ? reasons(input) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
+    const r = c.id === 'reasons' ? (skill === 'architecture-choice' ? architectureReasons(input) : reasons(input)) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
     // what no tool can check yet, the person checked themselves: met, and said to be theirs
     return r.confirmable && r.unavailable && confirmed[c.id] === true
       ? { id: r.id, status: 'met', confirmed: true, detail: `You confirmed it: trace cannot check it from the record yet (it needs ${r.unavailable}).` }

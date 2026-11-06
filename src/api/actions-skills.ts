@@ -35,7 +35,7 @@ import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
   type AgentFacts, type Evidence, type JourneyRecord, type OptionWaiver, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
-  STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
+  STAGE_IDS, applyChange, changeReason, changeWords, outOfDate, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { isAdmin } from '../core/access.js'
@@ -48,10 +48,11 @@ import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 export const QUEUED_DRAFTING = 'This project\'s agent is still being set up, so the drafting is queued: the Verification agent drafts the candidate requirements for Requirements review by itself once the agent is ready. You need not submit again.'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision, standing } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
+import { type RequirementWords, architectureView, intentDraft, intentView, linksView, outscoredBy, outscoredWords, pinCheck } from '../tools/design/record.js'
 import { type DecisionInput, Decision, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
-import { checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, struckRequirements } from './record-read.js'
+import { checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
+import { keyPartsView } from '../tools/design/key-parts.js'
 import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuantity, loadIds, loadReadings, unionIds, unionReadings } from '../core/bench.js'
 import { loadBoards } from '../core/boards.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
@@ -119,7 +120,7 @@ const currentGate = (r: JourneyRecord | null): string | null => {
  */
 interface ReviewBefore { requirements: CheckInput['requirements']; decisions: DesignDecision[] }
 
-async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[]; reviewBefore: ReviewBefore | null }> {
+async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>, o: { question?: string | undefined } = {}): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[]; reviewBefore: ReviewBefore | null }> {
   const viewer: Viewer = await viewerOf(ctx.principal, repo)
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
@@ -169,7 +170,10 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     const tests = hasTable(db, 'test_items') ? (db.prepare('SELECT id, method, status FROM test_items').all() as Record<string, unknown>[]).map((t) => ({ id: String(t.id), method: String(t.method), status: String(t.status) })) : []
     // an agent's question first: a stuck report is dismissed with a reason (stuck.dismiss), it has nothing to choose
     const open = r?.questions.filter((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? []
-    const question = open.find((q) => q.kind !== 'stuck') ?? open[0] ?? null
+    // the question asked for (an "Answer it" link names it: test-esp32 #107, where both links opened the oldest), else
+    // the one the draft was written for, else the oldest; one asked for that is not open for this person falls through
+    const want = o.question ?? (typeof draft?.question === 'string' ? draft.question : undefined)
+    const question = (want ? open.find((q) => q.id === want) : undefined) ?? open.find((q) => q.kind !== 'stuck') ?? open[0] ?? null
     const fab = latestRun(db, 'kicad.fab')
     const fabResult = fab ? runResult(db, fab.id) : null
     const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
@@ -183,7 +187,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       caseBuild: caseRun ? { id: caseRun.id, status: caseRun.status, summary: caseRun.summary, result: runResult(db, caseRun.id) } : null,
       caseOptions: optRow && optJson ? { id: String(optRow.id), options: optJson } : null,
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
-      design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles,
+      design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles, ...(skill === 'architecture-choice' ? { stockLines: stockLines(db) } : {}),
       draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors, reviewBefore,
     }
   })
@@ -327,12 +331,17 @@ export function pendingDecisions(skill: string, draft: Record<string, unknown>, 
     case 'architecture-choice': {
       const c = draft.choice as { option?: unknown; reason?: unknown } | undefined
       if (!c || typeof c.option !== 'string') return []
-      // taking trace's recommendation asks for no reason in the decision card: its own why is the reason
-      const rec = architectureView(rows, decided).options.find((o) => o.recommended && o.id === c.option)
+      // taking trace's recommendation asks for no reason in the decision card: its own why is the reason, unless
+      // another option scores higher (test-esp32 #96), when the person's own reason is asked for
+      const a = architectureView(rows, decided)
+      const scores = Array.isArray(draft.scores) ? (draft.scores as unknown[]).filter((s): s is { option: string; criterion: string; score: number } => !!s && typeof s === 'object' && typeof (s as { score?: unknown }).score === 'number') : []
+      const rec = outscoredBy(a, c.option, scores) ? undefined : a.options.find((o) => o.recommended && o.id === c.option)
       const reason = typeof c.reason === 'string' && c.reason.trim() ? c.reason
         : typeof draft.why === 'string' && draft.why.trim() ? draft.why
         : rec ? `Took trace's recommendation${rec.why ? `: ${rec.why}` : '.'}`.slice(0, 2000) : ''
-      return parse({ kind: 'architecture', option: c.option, reason, deciding: list(draft.deciding), ...(draft.scores ? { scores: draft.scores } : {}), ...(typeof draft.only_one === 'string' ? { only_one: draft.only_one } : {}) })
+      const out = parse({ kind: 'architecture', option: c.option, reason: reason || 'none given', deciding: list(draft.deciding), ...(draft.scores ? { scores: draft.scores } : {}), ...(typeof draft.only_one === 'string' ? { only_one: draft.only_one } : {}) })
+      // no reason at all is still the decision, so recording it says which reason is missing (design.decide's words)
+      return out.map((d) => (d.kind === 'architecture' && !reason ? { ...d, reason: '' } : d))
     }
     case 'pin-plan-review': {
       const parts = list(draft.parts).filter((x): x is string => typeof x === 'string')
@@ -359,6 +368,12 @@ export function optionWaiverWords(w: OptionWaiver): string {
   return `Records a waiver in your name: ${what}, rated ${w.severity}, ${w.scope}. Risk: ${w.risk.replace(/\.$/, '')}.${caught}`
 }
 
+/** The options another one outscores, each with why choosing it asks for a reason; empty when none does. */
+function reasonNeeded(a: ReturnType<typeof architectureView>): { reasonNeeded?: Record<string, string> } {
+  const m = Object.fromEntries(a.options.flatMap((o) => { const h = outscoredBy(a, o.id); return h ? [[o.id, outscoredWords(h)]] : [] }))
+  return Object.keys(m).length ? { reasonNeeded: m } : {}
+}
+
 /** What a skill's screen reads beyond the bar. */
 /**
  * What changed in a requirement since a person last decided it: its words and its acceptance criterion as the
@@ -382,8 +397,11 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       const q = i.question
       if (!q) return {}
       const rec = q.options.find((o) => o.recommended)
+      // what it asks about has moved on since (test-esp32 #108): the page says so above the question
+      const stale = i.r ? outOfDate(q, i.r) : null
       return {
         question: {
+          ...(stale ? { outOfDate: stale } : {}),
           id: q.id, to: q.askedOf || q.askedOfSub ? 'you' : q.askedPart === 'admins' ? 'the admins' : 'the contributors', text: q.text, askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: q.blocks } : {}),
           ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}), ...(o.waives ? { waiver: optionWaiverWords(o.waives) } : {}), ...(o.needs ? { needs: o.needs } : {}) })),
           sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ?? s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
@@ -432,13 +450,18 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       if (!i.design) return {}
       const a = architectureView(i.design.rows, i.design.decisions)
       const rec = a.options.find((o) => o.recommended)
+      // the key parts of the option going ahead (chosen, else recommended), with stock, price and exception
+      const current = a.options.find((o) => o.id === a.current)
       return {
         architecture: a,
+        ...(current ? { key_parts: keyPartsView(current, i.stockLines ?? [], i.r?.journey.build.quantity ?? null, i.r?.waivers ?? []) } : {}),
         ...(a.options.length ? {
           recommendation: {
             question: 'Which architecture goes forward?', recommended: rec?.id ?? a.options[0]?.id ?? '',
             options: a.options.map((o) => ({ id: o.id, label: `Option ${o.id}: ${o.name}`, detail: `${o.summary}${a.criteria.length ? ` Weighted score ${o.total}.` : ''}` })),
             ...(rec?.why ? { why: rec.why } : {}), ...(rec?.gives_up ? { givesUp: rec.gives_up } : {}),
+            // the options another outscores, the recommendation among them: choosing one asks for the person's reason
+            ...reasonNeeded(a),
           },
         } : {}),
       }
@@ -499,9 +522,9 @@ function waiverTarget(d: Record<string, unknown>): { kind: 'criterion' | 'requir
 }
 
 export const SKILL_ACTIONS = {
-  'skill.get': def('read', Repo.extend({ skill: SkillId }), async (a, ctx) => {
+  'skill.get': def('read', Repo.extend({ skill: SkillId, question: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional() }), async (a, ctx) => {
     const sk = skillDef(a.skill)!
-    const i = await inputFor(ctx, a.repo, a.skill)
+    const i = await inputFor(ctx, a.repo, a.skill, undefined, { question: a.question })
     const checks = checkSkill(a.skill, i) ?? []
     return {
       repo: a.repo, skill: sk.id, name: sk.name, stage: sk.stage,

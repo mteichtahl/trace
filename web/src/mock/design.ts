@@ -145,17 +145,37 @@ function submitReview(d: ReviewDraft): Response {
   return ok({ ok: true, repo: SOIL, skill: 'requirements-review', id: `rec_${Math.random().toString(16).slice(2, 6)}`, started: [], ...(recorded ? { recorded } : {}), criteria, ...(waits ? { draft_kept: true } : {}) })
 }
 
+/**
+ * The key parts of each option with their newest parts check, for Accept the key parts (test-esp32 #38, #96): option B's
+ * STM32WL is short at LCSC for the 10 boards and excepted by Priya; A's are all in stock, one unchecked.
+ */
+const check = (run: string, order_code: string | null, need: number, status: string, stock: number | null, unit_price: number | null, note: string) =>
+  ({ run, at, boards: 10, order_code, need, status, flags: status === 'low' ? ['low-stock'] : status === 'short' ? ['short'] : [], stock, unit_price, currency: 'USD', note })
+const KEY_PARTS: Record<string, NonNullable<SkillView['key_parts']>['parts']> = {
+  A: [
+    { block: 'b-power', block_name: 'Power', mpn: 'TLV75533PDBVR', role: '3.3 V regulator', off_board: false, check: check('3c19aa01', 'C2848334', 10, 'ok', 48210, 0.118, '48210 in stock, 10 needed'), standing: 'ok', why: null, exception: null },
+    { block: 'b-mcu', block_name: 'MCU', mpn: 'STM32L072CZT6', role: null, off_board: false, check: check('3c19aa01', 'C93986', 10, 'ok', 1830, 4.62, '1830 in stock, 10 needed'), standing: 'ok', why: null, exception: null },
+    { block: 'b-radio', block_name: 'Radio', mpn: 'SX1262IMLTRT', role: 'LoRa radio', off_board: false, check: null, standing: 'unchecked', why: 'Not checked for stock yet: trace runs the parts check at the build quantity.', exception: null },
+  ],
+  B: [
+    { block: 'b-power', block_name: 'Power', mpn: 'TLV75533PDBVR', role: '3.3 V regulator', off_board: false, check: check('3c19aa01', 'C2848334', 10, 'ok', 48210, 0.118, '48210 in stock, 10 needed'), standing: 'ok', why: null, exception: null },
+    { block: 'b-mcu', block_name: 'MCU and radio', mpn: 'STM32WLE5JCI6', role: 'microcontroller with LoRa radio', off_board: false, check: check('3c19aa01', 'C2652063', 10, 'short', 6, 5.87, '6 in stock, 10 needed: 4 short'), standing: 'problem', why: 'Short: 10 needed, 6 in stock.', exception: { reason: 'Four come from the last build\'s spares; the rest from LCSC.', by: 'Priya', scope: 'part' } },
+    { block: 'b-usb', block_name: 'USB-C and charger', mpn: 'MCP73831T-2ACI/OT', role: 'charger', off_board: false, check: check('3c19aa01', 'C424093', 10, 'low', 14, 0.452, '14 in stock covers 10, with under 2× to spare'), standing: 'ok', why: null, exception: null },
+  ],
+}
+
 const SKILLS: Record<string, (draft?: ReviewDraft) => Partial<SkillView>> = {
   'architecture-choice': () => {
     const a = architecture()
     return {
       summary: 'Two options are proposed. trace recommends **option B** (STM32WL): it wins on cost and power, and loses on part availability.',
       architecture: { ...a, options: OPTIONS, current: a.id ?? null },
-      recommendation: { question: 'Which architecture goes forward?', recommended: 'B', options: OPTIONS.map((o) => ({ id: o.id, label: `Option ${o.id}: ${o.name}`, detail: `${o.summary} Weighted score ${o.total}.` })), why: OPTIONS[1]!.why!, givesUp: OPTIONS[1]!.gives_up! },
+      recommendation: { question: 'Which architecture goes forward?', recommended: 'B', options: OPTIONS.map((o) => ({ id: o.id, label: `Option ${o.id}: ${o.name}`, detail: `${o.summary} Weighted score ${o.total}.` })), why: OPTIONS[1]!.why!, givesUp: OPTIONS[1]!.gives_up!, reasonNeeded: { A: 'Option B scores higher (23 against 19)' } },
+      key_parts: { option: a.id ?? 'B', quantity: 10, parts: KEY_PARTS[a.id ?? 'B'] ?? [] },
       checks: [
         { id: 'two', status: 'met', detail: '2 options compared.' }, fixed ? { id: 'fixed', status: 'met' } : { id: 'fixed', status: 'not_met', detail: 'Fix the criteria and their weights first, before reading any score.' },
         chosen ? { id: 'scored', status: 'met' } : { id: 'scored', status: 'not_met', detail: 'Choose an option and name the criteria that decided it.' },
-        { id: 'mapped', status: 'not_met', detail: '1 requirement served by no block of option B: R-003.' }, { id: 'stock', status: 'not_met', detail: 'Every key part is in stock for the build quantity, or its exception is signed: not met yet.' },
+        { id: 'mapped', status: 'not_met', detail: '1 requirement served by no block of option B: R-003.' }, { id: 'stock', status: 'met', detail: 'From the architect.stock shape over the project\'s records, 1 finding waived.' },
       ],
     }
   },

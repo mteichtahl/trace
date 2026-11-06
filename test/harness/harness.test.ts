@@ -120,10 +120,24 @@ describe('open-pr', () => {
     })
     await prs.openPr(deps(f, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/x' }), { OWN_TOKEN: 't' }))
     expect(f.called('pulls.create')[0]!.args.title).toBe('Case: printed two-part shell (+1 more)')
-    // only records: named as before
+    // only records: the record's name, never its job's id (log #14, #59)
     const g = fakeGithub({ 'pulls.list': [], 'repos.compareCommits': { ahead_by: 1, commits: [{ sha: SHA('a'), commit: { message: record } }] }, 'pulls.create': { number: 21, html_url: 'u' } })
     await prs.openPr(deps(g, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/y' }), { OWN_TOKEN: 't' }))
-    expect(g.called('pulls.create')[0]!.args.title).toBe('trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)')
+    expect(g.called('pulls.create')[0]!.args.title).toBe('The docs specialist\'s record')
+    // a merge commit first is not the work either (log #154)
+    const merge = 'Merge claude/handoff-hoac40d08bf1664e into claude/handoff-hobe8233b1531243 (trace: the project database merged)'
+    const h = fakeGithub({ 'pulls.list': [], 'repos.compareCommits': { ahead_by: 3, commits: [merge, record, 'EMC: ferrite on the USB shield'].map((message, i) => ({ sha: SHA(String(i)), commit: { message } })) }, 'pulls.create': { number: 22, html_url: 'u' } })
+    await prs.openPr(deps(h, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/z' }), { OWN_TOKEN: 't' }))
+    expect(h.called('pulls.create')[0]!.args.title).toBe('EMC: ferrite on the USB shield (+2 more)')
+  })
+
+  it('titles an open change again when it was titled by a merge commit and its commits now name work (log #154)', async () => {
+    const merge = 'Merge claude/handoff-hoac40d08bf1664e into claude/handoff-hobe8233b1531243 (trace: the project database merged)'
+    const open = { number: 21, title: `${merge} (+2 more)`, base: { ref: 'main' } }
+    const commits = [merge, 'trace: the emc specialist\'s record (job-mw4emc01-0a1b2c3d)', 'EMC: ferrite on the USB shield'].map((message, i) => ({ sha: SHA(String(i)), commit: { message } }))
+    const f = fakeGithub({ 'pulls.list': [open], 'pulls.listCommits': commits })
+    await prs.openPr(deps(f, fakeCore(), cfgOf(), context({ ref: 'refs/heads/claude/handoff-hobe8233b1531243' }), { OWN_TOKEN: 't' }))
+    expect(f.called('pulls.update')[0]!.args).toMatchObject({ pull_number: 21, title: 'EMC: ferrite on the USB shield (+2 more)' })
   })
 
   it('titles an open record change again once a push brings design work into it', async () => {

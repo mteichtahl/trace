@@ -28,6 +28,15 @@ interface Draft extends SkillDraftBase, DesignDraft {
   choice?: { option: string; reason?: string }
 }
 
+/**
+ * Does the draft's choice still lack the reason it needs? One is needed when it is not trace's recommendation, or when
+ * another option outscores it (the recommendation included: test-esp32 #96). Pure.
+ */
+export function needsReason(choice: Draft['choice'], rec: { recommended: string; reasonNeeded?: Record<string, string> } | undefined): boolean {
+  if (!choice || (choice.reason ?? '').trim().length >= 3) return false
+  return choice.option !== rec?.recommended || Boolean(rec?.reasonNeeded?.[choice.option])
+}
+
 export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const s = useSkill<Draft>(repo, def, { done: [], resolved: [] })
   const v = s.view.data
@@ -37,7 +46,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const items = all.filter((it) => !decidedByReview(def.id, it) || (it.id.startsWith('requirement:') && s.step.id !== 'decide'))
   const decisionOf = (it: { id: string }) => s.draft.data.decisions?.find((x) => `requirement:${x.requirement}` === it.id)
   const last = s.stepIndex === def.steps.length - 1
-  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(s.draft.data.choice && !s.draft.data.choice.reason && s.draft.data.choice.option !== v?.recommendation?.recommended ? { reasons: 'not_met' as const } : {}) }, s.goTo)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
   const gate = def.id === 'gate-signing'
 
   return (
@@ -83,8 +92,9 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       <DesignSteps repo={repo} skill={def.id} step={s.step.id} view={v} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} />
       {v?.pending_errors?.length ? <p className="mt-3 text-sm text-destructive">{v.pending_errors.join(' ')}</p> : null}
 
-      {/* Gate signing has no items of its own: they live on the gate's screen, so an empty "nothing open" here misleads */}
-      {!gate && !(all.length > 0 && items.length === 0) && <section className="mt-6" aria-labelledby="items">
+      {/* Gate signing has no items of its own: they live on the gate's screen, so an empty "nothing open" here misleads;
+          Architecture choice's key parts are their own list (design-steps.tsx KeyParts) */}
+      {!gate && !(def.id === 'architecture-choice' && s.step.id === 'parts' && v?.key_parts) && !(all.length > 0 && items.length === 0) && <section className="mt-6" aria-labelledby="items">
         <h2 id="items" className="text-base font-semibold">For this step</h2>
         {items.length === 0 ? (
           <EmptyState className="mt-2">{s.view.isLoading ? 'Loading what trace prepared…' : `trace has nothing open for “${s.step.title.toLowerCase()}”. ${s.step.detail}`}</EmptyState>

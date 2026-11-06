@@ -1186,6 +1186,8 @@
           "reason": "Two criteria wait for the bench.",
           "risk": "A late finding.",
           "severity": "degraded",
+          "about": "the criterion “Every requirement has a criterion that can be measured, with a number and a unit”",
+          "criterion": "define.measurable",
           "caught_where": "Bring up",
           "scope": "this revision only",
           "by": "admin@example.com",
@@ -1205,7 +1207,7 @@
           "kind": "waiver.added",
           "stage": "define",
           "ref": "0123456789abcdef",
-          "summary": "A waiver was taken on criterion define.measurable (rated degraded): Two criteria wait for the bench.",
+          "summary": "A waiver was taken on the criterion “Every requirement has a criterion that can be measured, with a number and a unit” (rated degraded): Two criteria wait for the bench.",
           "by": "admin@example.com"
         },
         {

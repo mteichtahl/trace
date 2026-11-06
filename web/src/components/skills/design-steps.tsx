@@ -9,7 +9,8 @@
  *   Architecture choice  the criteria step fixes the criteria and their weights now, before any score is read
  *                        (design.decide criteria: "criteria fixed before scoring" checks it was first); the choose
  *                        step names the criteria that decided it (draft.deciding); the option and its reason come
- *                        from the decision card above (draft.choice)
+ *                        from the decision card above (draft.choice); the parts step lists the key parts of the
+ *                        option going ahead with stock, price and exception (KeyParts, from skill.get's key_parts)
  *   Pin plan review      nothing to add: Submit agrees every part's plan as it stands, once its checks pass
  *
  * The quality bar is the server's, computed with this draft laid over the record, so it moves as the person decides.
@@ -25,7 +26,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagramCanvas } from '@/components/project/block-diagram'
 import { useCall } from '@/lib/queries'
-import type { ArchitectureRecord } from '@/lib/types-s1'
+import type { ArchitectureRecord, KeyPartView } from '@/lib/types-s1'
 import type { SkillItem, SkillView } from '@/lib/types-s1'
 
 export interface DesignDraft {
@@ -79,6 +80,7 @@ export function DesignSteps({ repo, skill, step, view, draft, setDraft }: { repo
   if (skill === 'architecture-choice' && (step === 'read' || step === 'score')) return <CompareOptions view={view} scores={step === 'score'} />
   if (skill === 'architecture-choice' && step === 'criteria') return <FixCriteria repo={repo} view={view} />
   if (skill === 'architecture-choice' && step === 'choose') return <Deciding view={view} draft={draft} setDraft={setDraft} />
+  if (skill === 'architecture-choice' && step === 'parts') return <KeyParts view={view} />
   return null
 }
 
@@ -270,6 +272,85 @@ function CompareOptions({ view, scores }: { view?: SkillView; scores: boolean })
       )}
       <ArchitectureSummary a={a} current={current} requirements={requirements} />
       {scores && <OptionsTable a={a} current={current} />}
+    </section>
+  )
+}
+
+/** "US$0.42", "€1.10", or the amount and its currency code. */
+export function price(amount: number | null, currency: string | null): string {
+  if (amount === null) return 'No price'
+  const sign: Record<string, string> = { USD: 'US$', EUR: '€', GBP: '£', AUD: 'A$', CNY: '¥' }
+  const n = amount < 1 ? amount.toFixed(3).replace(/0$/, '') : amount.toFixed(2)
+  return currency && sign[currency] ? `${sign[currency]}${n}` : `${n}${currency ? ` ${currency}` : ''}`
+}
+
+/** A key part's standing in words, with the badge it shows. */
+function partStatus(p: KeyPartView): { status: 'met' | 'waived' | 'not_met' | 'untested' | 'warning'; label: string } {
+  if (p.exception && p.standing !== 'ok') return { status: 'waived', label: 'Excepted' }
+  if (p.standing === 'unchecked') return { status: 'untested', label: 'Not checked' }
+  if (p.standing === 'problem') return { status: 'not_met', label: p.check?.status === 'short' ? 'Short' : p.check?.status === 'out' ? 'Out of stock' : 'Not in stock' }
+  if (p.check?.status === 'low') return { status: 'warning', label: 'Low stock' }
+  return { status: 'met', label: 'In stock' }
+}
+
+/**
+ * Accept the key parts: each key part of the option going ahead with its part number, the supplier code it was
+ * checked with, stock against what the build needs, the unit price at that quantity, and its exception when one is
+ * signed (test-esp32 #38, #96: the step showed only the diagram, though its check was met). From the newest parts
+ * check of each part in the record.
+ */
+export function KeyParts({ view }: { view?: SkillView }) {
+  const k = view?.key_parts
+  if (!k) return null
+  const name = view?.architecture?.options.find((o) => o.id === k.option)?.name
+  const chosen = view?.architecture?.chosen?.option === k.option
+  return (
+    <section className="mt-6 space-y-2" aria-labelledby="key-parts">
+      <h2 id="key-parts" className="text-base font-semibold">Key parts of option {k.option}{name ? `: ${name}` : ''}</h2>
+      <p className="text-sm text-muted-foreground">
+        {chosen ? 'The option you chose.' : 'trace\'s recommendation, until you choose.'} Stock and price are from the newest parts check of each part{k.quantity ? `, for the ${k.quantity} boards the project builds` : ''}.
+      </p>
+      {!k.parts.length ? (
+        <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">No block of option {k.option} marks a key part yet: the agents mark them when they propose the blocks.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border">
+          <table className="w-full min-w-[640px] text-sm">
+            <caption className="sr-only">Key parts with stock, price and exceptions</caption>
+            <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+              <tr>
+                <th scope="col" className="px-3 py-2 font-medium">Part</th>
+                <th scope="col" className="px-3 py-2 font-medium">Supplier code</th>
+                <th scope="col" className="px-3 py-2 font-medium">Stock</th>
+                <th scope="col" className="px-3 py-2 font-medium">Unit price</th>
+                <th scope="col" className="px-3 py-2 font-medium">Standing</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {k.parts.map((p) => {
+                const st = partStatus(p)
+                return (
+                  <tr key={`${p.block}/${p.mpn}`} className="align-top">
+                    <th scope="row" className="px-3 py-2 text-left font-normal">
+                      <span className="font-medium">{p.mpn}</span>
+                      <span className="block text-xs text-muted-foreground">{p.block_name}{p.role ? `: ${p.role}` : ''}{p.off_board ? ' (off the board)' : ''}</span>
+                    </th>
+                    <td className="px-3 py-2">{p.check?.order_code ?? <span className="text-xs text-muted-foreground">None given</span>}</td>
+                    <td className="px-3 py-2 tabular-nums">
+                      {p.check ? <>{p.check.stock === null ? 'Not published' : p.check.stock.toLocaleString('en')}<span className="block text-xs text-muted-foreground">{p.check.need} needed{p.check.boards ? ` for ${p.check.boards} boards` : ''}</span></> : <span className="text-xs text-muted-foreground">Not checked</span>}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">{p.check ? price(p.check.unit_price, p.check.currency) : <span className="text-xs text-muted-foreground">—</span>}</td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={st.status} label={st.label} />
+                      {p.why && <span className="mt-1 block text-xs text-muted-foreground">{p.why}</span>}
+                      {p.exception && <span className="mt-1 block text-xs">Exception{p.exception.scope === 'criterion' ? ' for the stock check as a whole' : ''}, by {p.exception.by}: {p.exception.reason}</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   )
 }

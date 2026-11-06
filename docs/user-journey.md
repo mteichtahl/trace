@@ -471,9 +471,9 @@ Steps:
 1. **Agree the criteria:** start from cost, risk, part availability, power, size and schedule; the person adds, removes or weights them before seeing any scores.
 2. **Read each option:** block diagram, key parts with stock and price, how each requirement is met, and the risks trace sees.
 3. **Score:** each option on each criterion, with a one-line reason per score.
-4. **Choose and state why:** trace recommends one option, with the scores and evidence behind it and what it gives up; the person takes it or picks another, and states the deciding criteria in their own words.
+4. **Choose and state why:** trace recommends one option, with the scores and evidence behind it and what it gives up; the person takes it or picks another, and states the deciding criteria in their own words. A reason is asked for whenever the choice is not the recommendation, or another option scores higher than it.
 5. **Map:** confirm every requirement maps to a block in the chosen option; unmapped ones go back to Requirements review or get a block.
-6. **Accept the key parts:** each key part follows the in-stock order, or its exception is written.
+6. **Accept the key parts:** each key part of the option going ahead, with its part number, supplier code, stock against the build quantity and unit price from its newest parts check, follows the in-stock order, or its exception is written.
 
 Quality bar:
 
