@@ -29,6 +29,21 @@ describe('the journey store in the central bucket', () => {
     expect((await new JourneyStore(new S3Backend('bucket', 'projects', s3), 'acme/other').read((db) => loadJourney(db))).result).toBeNull()
   })
 
+  it('saves a change that wrote a row though it said there was nothing to save, and answers the new version', async () => {
+    // journey.criterion.open said `changed: false` after writing an open, so the open was dropped while the action
+    // answered ok with the old version (test-esp32-e2e: three opens in a row, all "version":250, "opened 0 of 3")
+    const s3 = new FakeS3()
+    const store = new JourneyStore(new S3Backend('bucket', 'projects', s3), 'acme/board')
+    await start(store)
+    const r = await store.update((db) => { recordOpen(db, { criterion: 'define.accepted' }, 'me'); return { result: 'opened', changed: false } })
+    expect(r).toEqual({ result: 'opened', version: 2, changed: true })
+    expect(s3.puts).toBe(2)
+    expect((await store.read((db) => loadJourney(db)?.opens.map((o) => o.item))).result).toEqual(['define.accepted'])
+    // nothing written and nothing to save: still no put
+    expect(await store.update((db) => ({ result: loadJourney(db)?.opens.length, changed: false }))).toEqual({ result: 1, version: 2, changed: false })
+    expect(s3.puts).toBe(2)
+  })
+
   it('makes its scratch folder when it is not there yet (the API\'s, a folder of /tmp nothing else creates)', async () => {
     const scratch = join(mkdtempSync(join(tmpdir(), 'trace-js-')), 'trace-api')
     const store = new JourneyStore(new S3Backend('bucket', 'projects', new FakeS3()), 'acme/board', { scratch })

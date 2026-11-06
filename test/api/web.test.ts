@@ -37,7 +37,7 @@ const REVIEWER = { sub: 'w-rev', email: 'w-rev@example.com', groups: ['trace-use
 const GUEST = { sub: 'w-guest', email: 'w-guest@example.com', groups: ['trace-guests'] }
 const OUTSIDER = { sub: 'w-out', email: 'w-out@example.com', groups: ['trace-users'] }
 
-const github = new FakeGitHub(['acme/web', 'acme/other', 'acme/secret', 'acme/fresh', 'acme/ident', 'acme/houserules'])
+const github = new FakeGitHub(['acme/web', 'acme/other', 'acme/secret', 'acme/fresh', 'acme/ident', 'acme/houserules', 'acme/reopened'])
 const cognito = new FakeCognito()
 const scratch = mkdtempSync(join(tmpdir(), 'trace-web-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-bucket-'))
@@ -846,5 +846,53 @@ describe('the release copy', () => {
     expect(bare).not.toHaveProperty('documents')
     expect(startedJobs).toEqual([])
     await expect(run(ADMIN, 'journey.snapshot', { repo: 'acme/fresh2' })).rejects.toThrow()
+  })
+})
+
+describe('opening evidence again after it stopped counting', () => {
+  // test-esp32-e2e, the Architect gate: opens from before the criterion was checked again (or the gate returned) do
+  // not count (openedBy, #320), but opening the evidence again skipped the write because an open was on record, so
+  // every open answered ok with the same version and the gate stayed at "evidence opened for 0 of 3"; the signature
+  // was then refused
+  const repo = 'acme/reopened'
+  type Got = { gates: { id: string; criteria: { id: string; opened_by_you: boolean }[] }[] }
+  const openedNow = async (): Promise<Record<string, boolean>> =>
+    Object.fromEntries(((await run(ADMIN, 'journey.get', { repo })) as Got).gates.find((g) => g.id === 'define')?.criteria.map((c) => [c.id, c.opened_by_you]) ?? [])
+  const open = async (criterion: string): Promise<number> => ((await run(ADMIN, 'journey.criterion.open', { repo, criterion })) as { version: number }).version
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 5))
+
+  it('is saved, with a new version, and counts towards the signature', async () => {
+    await journeyStore({ principal: ADMIN, deps }, repo).update((db) => {
+      startJourney(db, { template: 'board', by: 'seed', name: 'Reopened' })
+      for (const row of db.prepare("SELECT id FROM gate_criteria WHERE gate='define'").all()) setCriterion(db, String(row.id), 'met', [{ kind: 'record', ref: 'requirements' }], 'trace')
+      return { result: null }
+    })
+    seedProject(repo)
+    const ids = Object.keys(await openedNow())
+    expect(ids.length).toBeGreaterThan(1)
+    let v = 0
+    for (const id of ids) v = await open(id)
+    expect(Object.values(await openedNow()).every(Boolean)).toBe(true)
+    // opening it again while it counts writes nothing: the same version
+    expect(await open(ids[0] as string)).toBe(v)
+    // the first criterion is checked again: the earlier open no longer counts
+    await tick()
+    await journeyStore({ principal: ADMIN, deps }, repo).update((db) => { setCriterion(db, ids[0] as string, 'met', [{ kind: 'record', ref: 'requirements' }], 'trace'); return { result: null } })
+    v++
+    expect((await openedNow())[ids[0] as string]).toBe(false)
+    await tick()
+    const again = await open(ids[0] as string)
+    expect(again).toBe(v + 1)
+    expect((await openedNow())[ids[0] as string]).toBe(true)
+    // the gate is returned: none of the opens count; each one opened again is saved
+    await tick()
+    await run(ADMIN, 'gate.return', { repo, gate: 'define', reason: 'Look at the limits again.' })
+    expect(Object.values(await openedNow()).some(Boolean)).toBe(false)
+    await tick()
+    const versions: number[] = []
+    for (const id of ids) versions.push(await open(id))
+    expect(new Set(versions).size).toBe(ids.length)
+    expect(Object.values(await openedNow()).every(Boolean)).toBe(true)
+    expect(await run(ADMIN, 'gate.sign', { repo, gate: 'define' })).toMatchObject({ advanced_to: 'architect' })
   })
 })

@@ -91,6 +91,11 @@ export class BucketDb {
     return Number((db.prepare('PRAGMA user_version').get() as { user_version?: unknown } | undefined)?.user_version ?? 0)
   }
 
+  /** Rows inserted, updated or deleted on this connection so far (the schema's own statements on opening included). */
+  private static rowsChanged(db: DatabaseSync): number {
+    return Number((db.prepare('SELECT total_changes() AS n').get() as { n?: unknown } | undefined)?.n ?? 0)
+  }
+
   /** The store's bytes and ETag (null: none yet). */
   protected async fetch(): Promise<{ body: Uint8Array; etag: string } | null> {
     return this.store.get(this.key)
@@ -122,7 +127,8 @@ export class BucketDb {
 
   /**
    * Change the database: fn runs on a fresh copy (it opens its own transactions), and the copy is put back with a
-   * condition; a lost race runs fn again on a fresh copy. `changed: false` (nothing to do): nothing is written.
+   * condition; a lost race runs fn again on a fresh copy. `changed: false` (nothing to do): nothing is written, unless
+   * fn wrote a row all the same, which is saved (a write is never dropped while its caller answers ok).
    */
   async update<T>(fn: (db: DatabaseSync) => { result: T; changed?: boolean }): Promise<{ result: T; version: number; changed: boolean }> {
     let last: unknown = null
@@ -133,14 +139,20 @@ export class BucketDb {
         const db = this.openAt(t.path)
         let out: { result: T; changed?: boolean }
         let version: number
+        let save: boolean
         try {
+          const rows = BucketDb.rowsChanged(db)
           out = fn(db)
           version = BucketDb.version(db)
-          if (out.changed !== false) db.exec(`PRAGMA user_version = ${++version}`)
+          // `changed: false` says there is nothing to save, but the copy is the judge: a change that wrote a row and
+          // still said false was dropped while its caller answered ok with the old version (journey.criterion.open,
+          // test-esp32-e2e). A row written is saved
+          save = out.changed !== false || BucketDb.rowsChanged(db) !== rows
+          if (save) db.exec(`PRAGMA user_version = ${++version}`)
         } finally {
           db.close()
         }
-        if (out.changed === false) return { result: out.result, version, changed: false }
+        if (!save) return { result: out.result, version, changed: false }
         try {
           await this.store.put(this.key, new Uint8Array(readFileSync(t.path)), {
             ...(got ? { ifMatch: got.etag } : { ifNoneMatch: true }), contentType: 'application/vnd.sqlite3',
