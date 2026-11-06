@@ -3,7 +3,7 @@ import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { answerChecks, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
+import { answerChecks, arrivingChoice, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waiverChecks, type WaiverDraft } from './form-skills'
@@ -81,6 +81,13 @@ describe('Change request', () => {
 })
 
 describe('Question answer', () => {
+  it('arrives with the option "Use <option>" named, only when it is one of this question\'s options (#198)', () => {
+    const options = [{ id: 'a' }, { id: 'b' }]
+    expect(arrivingChoice(options, 'b')).toBe('b')
+    expect(arrivingChoice(options, 'c')).toBeNull()
+    expect(arrivingChoice(options, 'other')).toBeNull()
+    expect(arrivingChoice(options, undefined)).toBeNull()
+  })
   it('refuses "it depends" and wants a number for a quantity', () => {
     const d = { done: [], answer: 'it depends', value: '', source: '', lasts: '' as const }
     expect(answerChecks({ ...d, option: 'other' }, { unit: 'A' }).resolves).toBe('not_met')

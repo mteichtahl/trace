@@ -12,7 +12,7 @@
  */
 import { UseAgentUpdate, useAgent } from '@copilotkit/react-core/v2'
 import { ArrowRight, Check, Circle, CircleDot } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -377,6 +377,15 @@ export function answeredWords(r: Pick<ResultOf<'question.answer'>, 'summary' | '
   return said
 }
 
+/**
+ * The option a link chose for the person ("Use <option>" on the Overview: `?option=`), when it is one of this
+ * question's options; null otherwise (an option of another question is never taken). Pure.
+ */
+export function arrivingChoice(options: readonly { id: string }[], option: string | undefined): string | null {
+  if (!option || option === 'other') return null
+  return options.some((o) => o.id === option) ? option : null
+}
+
 /** The question-answer bar, from the draft. Pure. */
 export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[]; question?: string; needs?: Record<string, string> }): Record<string, CriterionStatus> {
   // a draft written for another question answers nothing here, even when that question had the same option ids
@@ -401,8 +410,12 @@ export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: 
   }
 }
 
-/** `question`: the one to answer (its "Answer it" link names it: test-esp32 #107); without it, the oldest open one. */
-export function QuestionAnswer({ repo, def, question }: { repo: string; def: SkillDef; question?: string | undefined }) {
+/**
+ * `question`: the one to answer (its "Answer it" link names it: test-esp32 #107); without it, the oldest open one.
+ * `option`: the option the person already chose where the question was shown (the next step's "Use <option>"): it
+ * arrives chosen, once, so it is not picked again; Choose again still clears it.
+ */
+export function QuestionAnswer({ repo, def, question, option }: { repo: string; def: SkillDef; question?: string | undefined; option?: string | undefined }) {
   const s = useSkill<AnswerDraft>(repo, def, { done: [], answer: '', value: '', source: '', lasts: '' }, { question })
   const v = s.view.data
   const q = v?.question
@@ -419,6 +432,17 @@ export function QuestionAnswer({ repo, def, question }: { repo: string; def: Ski
     if (otherQuestion) set({ question: q!.id, option: undefined, reason: undefined, answer: '', detail: '', value: '', source: '', lasts: '' })
     else if (stale) set({ option: undefined, reason: undefined })
   }, [stale, otherQuestion]) // eslint-disable-line react-hooks/exhaustive-deps
+  // the option chosen before arriving ("Use <option>"): taken once the question is here, when it is one of its options
+  const arrived = useRef(false)
+  useEffect(() => {
+    if (arrived.current || !q || !option) return
+    arrived.current = true
+    const o = arrivingChoice(options, option)
+    if (!o) return
+    set({ question: q.id, option: o, reason: undefined, ...(otherQuestion ? { answer: '', detail: '', value: '', source: '', lasts: '' as const } : {}) })
+    // straight on to what is left: the detail the option needs, else whether it lasts
+    if (s.stepIndex < 2) s.goTo(options.find((x) => x.id === o)?.needs ? 'specific' : 'lasts')
+  }, [q, option]) // eslint-disable-line react-hooks/exhaustive-deps
   const chosen = !!d.option && d.option !== 'other' && !stale
   // the chosen option records a waiver in this person's name: say so beside the answer, as the option did
   const chosenWaiver = chosen ? options.find((o) => o.id === d.option)?.waiver : undefined

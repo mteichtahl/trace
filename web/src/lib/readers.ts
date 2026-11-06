@@ -82,6 +82,21 @@ function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): stri
   }
 }
 
+/**
+ * A question's address with the option its "Use <option>" button names (`&option=<id>`): the skill opens with it
+ * chosen. The button names the recommended option (src/core/journey.ts nextStep); any other button, or a question
+ * with no such option, leaves the address as it is. Pure.
+ */
+export function withChosen(to: string, questions: unknown, id: string, button: string | null | undefined): string {
+  if (!button?.startsWith('Use ')) return to
+  const q = (Array.isArray(questions) ? questions : []).find((x): x is Obj => isObj(x) && String(x.id) === id)
+  const label = button.slice('Use '.length)
+  const rec = q && isObj(q.recommended) && String(q.recommended.label) === label ? q.recommended
+    : arr(q?.options).find((o) => String(o.label) === label)
+  if (!rec || !str(rec.id)) return to
+  return `${to}${to.includes('?') ? '&' : '?'}option=${encodeURIComponent(String(rec.id))}`
+}
+
 // ------------------------------------------------------------------ the guided flow (stage guide, steps, changes)
 
 const STEP_OWNERS = new Set<StepOwner>(['you', 'trace', 'admins', 'contributors', 'person'])
@@ -306,7 +321,9 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
   const summary = `${String(n.summary ?? '')}${recommendation && !String(n.summary ?? '').includes(recommendation) ? ` **${recommendation}**` : ''}`
   // the step's own place: a person's criterion opens the skill it is done in, never the gate's signing page (refTo);
   // someone who cannot do it (a reviewer: "Read the stage") reads the gate's evidence instead
-  const to = n.yours || !(isObj(n.ref) && n.ref.kind === 'criterion') ? refTo(repo, n.ref, criterionGate) : (criterionGate.get(String(n.ref.id)) ? `/p/${pid(repo)}/gates/${criterionGate.get(String(n.ref.id))}` : undefined)
+  const to0 = n.yours || !(isObj(n.ref) && n.ref.kind === 'criterion') ? refTo(repo, n.ref, criterionGate) : (criterionGate.get(String(n.ref.id)) ? `/p/${pid(repo)}/gates/${criterionGate.get(String(n.ref.id))}` : undefined)
+  // "Use <option>": the question opens with that option already chosen, not to be picked again (#198)
+  const to = to0 && isObj(n.ref) && n.ref.kind === 'question' ? withChosen(to0, raw.questions, String(n.ref.id), str(n.button)) : to0
   const stepAt = isObj(n.step) && Number(n.step.total) > 0 ? { index: Number(n.step.index), total: Number(n.step.total) } : null
   // an action the button calls (requirements.draft) has no address: the card calls it (lib/next-actions.ts)
   const act = isObj(n.ref) && n.ref.kind === 'action' && str(n.ref.id) ? String(n.ref.id) : undefined

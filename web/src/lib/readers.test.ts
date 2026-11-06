@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import answers from './api-answers.json'
-import { READERS, readFileUrl, readJob, readJourney } from './readers'
+import { READERS, readFileUrl, readJob, readJourney, withChosen } from './readers'
 import type { InboxItem, Journey, Member, MeDoc, ProjectJobs } from './types'
 import type { JourneyMore } from './types-s1'
 
@@ -85,8 +85,8 @@ describe('reading the API\'s answers', () => {
     expect(g.waivers).toEqual([expect.objectContaining({ risk: 'degraded', caught: 'Bring up', reason: 'Two criteria wait for the bench.' })])
     expect(g.criteria.every((c) => c.findings === undefined)).toBe(true)
     expect(j.gates.find((x) => x.id === 'capture')?.state).toBe('locked')
-    // the question itself, by id (test-esp32 #107)
-    expect(j.next).toMatchObject({ kind: 'task', owner: 'you', action: { label: 'Use 2.7 to 3.6 V', to: `/p/acme~answers/do/question-answer?question=${j.questions[0]!.id}` } })
+    // the question itself, by id (test-esp32 #107), with the option its button names already chosen (#198)
+    expect(j.next).toMatchObject({ kind: 'task', owner: 'you', action: { label: 'Use 2.7 to 3.6 V', to: `/p/acme~answers/do/question-answer?question=${j.questions[0]!.id}&option=a` } })
     expect(j.next.summary).toMatch(/\*\*trace recommends 2\.7 to 3\.6 V/)
     expect(j.questions).toEqual([expect.objectContaining({ text: 'What is the supply range?', recommended: { id: 'a', label: '2.7 to 3.6 V' }, blocks: 'sizing the regulator' })])
     expect(j.decisions?.[0]).toMatchObject({ kind: 'waiver', state: 'active' })
@@ -223,5 +223,24 @@ describe('reading the API\'s answers', () => {
     // the same version again: the same address
     expect((readFileUrl(answers['files.url'].result) as { url: string }).url).toBe(u.url)
     expect(readFileUrl({ url: 'https://github.example/raw' })).toEqual({ url: 'https://github.example/raw' })
+  })
+})
+
+describe('"Use <option>" arrives with the option chosen (#198)', () => {
+  const qs = [{ id: 'aq1', recommended: { id: 'b', label: 'GND-VCC' }, options: [{ id: 'a', label: 'VCC-GND' }, { id: 'b', label: 'GND-VCC' }] }]
+  const to = '/p/x/do/question-answer?question=aq1'
+
+  it('names the option the button uses', () => {
+    expect(withChosen(to, qs, 'aq1', 'Use GND-VCC')).toBe(`${to}&option=b`)
+    // the button may name another of its options
+    expect(withChosen(to, qs, 'aq1', 'Use VCC-GND')).toBe(`${to}&option=a`)
+    expect(withChosen('/p/x/do/question-answer', qs, 'aq1', 'Use GND-VCC')).toBe('/p/x/do/question-answer?option=b')
+  })
+
+  it('leaves the address alone for Answer, an option it does not have, or another question', () => {
+    expect(withChosen(to, qs, 'aq1', 'Answer')).toBe(to)
+    expect(withChosen(to, qs, 'aq1', 'Use SDA-SCL')).toBe(to)
+    expect(withChosen(to, qs, 'aq2', 'Use GND-VCC')).toBe(to)
+    expect(withChosen(to, undefined, 'aq1', 'Use GND-VCC')).toBe(to)
   })
 })

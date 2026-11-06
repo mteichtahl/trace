@@ -6,13 +6,15 @@
  * list. `blocked` holds Submit whatever the checks say, with its reason beside it (the project's agent is not set up
  * yet, so nothing could be saved). `saving`: the person's last change is still being saved, and the bar is checked on
  * the saved draft (a tick pressed just before Submit would otherwise be checked as not there yet, test-esp32 #64), so
- * a Submit pressed meanwhile waits for the save and then submits.
+ * a Submit pressed meanwhile waits for the save and then submits. Only the bar for the screen's width is drawn, so
+ * there is one Submit in the page.
  */
 import { Check, Circle, CircleMinus, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import type { CriterionStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -61,6 +63,9 @@ function Item({ c, wrap = false }: { c: QualityCheck; wrap?: boolean }) {
 export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, saving = false, className }: QualityBarProps) {
   const [busy, setBusy] = useState(false)
   const [list, setList] = useState(false)
+  // one bar at a time: the desktop one or the phone one, never both in the page with one hidden, so Submit is one
+  // button wherever it is looked for (#198: a hidden copy listed first did nothing when pressed)
+  const wide = useMediaQuery('(min-width: 768px)')
   const met = checks.filter((c) => c.status !== 'not_met').length
   const todo = missing(checks)
   const ready = todo.length === 0 && !blocked
@@ -119,56 +124,60 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
     <footer className={cn('sticky bottom-0 z-10 border-t bg-background/95 backdrop-blur', className)} aria-label="Quality bar">
       {why}
       {/* desktop */}
-      <div className="hidden items-center gap-4 px-6 py-3 md:flex">
-        <p className="shrink-0 text-sm font-semibold" aria-live="polite">
-          {met} of {checks.length} met
-        </p>
-        <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-          {checks.map((c) => (
-            <Item key={c.id} c={c} />
-          ))}
+      {wide && (
+        <div className="flex items-center gap-4 px-6 py-3">
+          <p className="shrink-0 text-sm font-semibold" aria-live="polite">
+            {met} of {checks.length} met
+          </p>
+          <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+            {checks.map((c) => (
+              <Item key={c.id} c={c} />
+            ))}
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-0.5">
+            {ready ? (
+              button
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>{button}</TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs">
+                  {blocked && <p className={cn(todo.length > 0 && 'mb-1')}>{blocked}</p>}
+                  {todo.length > 0 && (
+                    <>
+                      <p className="mb-1 font-medium">Still missing:</p>
+                      <ul className="list-disc pl-4">
+                        {todo.map((c) => (
+                          <li key={c.id}>{c.text}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {ready && saving && <span id="quality-missing" className="text-xs text-muted-foreground">{queued ? 'Saving your draft, then submitting…' : 'Saving your draft…'}</span>}
+            {!ready && (
+              <span id="quality-missing" className="max-w-xs text-right text-xs text-muted-foreground">
+                {blocked ? `Waits for the project's agent${todo.length ? ` · ${todo.length} check${todo.length > 1 ? 's' : ''} left` : ''}` : `${todo.length} check${todo.length > 1 ? 's' : ''} left`}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-0.5">
-          {ready ? (
-            button
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>{button}</TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                {blocked && <p className={cn(todo.length > 0 && 'mb-1')}>{blocked}</p>}
-                {todo.length > 0 && (
-                  <>
-                    <p className="mb-1 font-medium">Still missing:</p>
-                    <ul className="list-disc pl-4">
-                      {todo.map((c) => (
-                        <li key={c.id}>{c.text}</li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-              </TooltipContent>
-            </Tooltip>
-          )}
-          {ready && saving && <span id="quality-missing" className="text-xs text-muted-foreground">{queued ? 'Saving your draft, then submitting…' : 'Saving your draft…'}</span>}
-          {!ready && (
-            <span id="quality-missing" className="max-w-xs text-right text-xs text-muted-foreground">
-              {blocked ? `Waits for the project's agent${todo.length ? ` · ${todo.length} check${todo.length > 1 ? 's' : ''} left` : ''}` : `${todo.length} check${todo.length > 1 ? 's' : ''} left`}
-            </span>
-          )}
-        </div>
-      </div>
+      )}
       {/* phone */}
-      <div className="flex items-center gap-3 px-4 py-3 md:hidden">
-        <button type="button" className="flex-1 text-left text-sm font-semibold underline-offset-4 hover:underline" onClick={() => setList(true)}>
-          {met} of {checks.length} met
-          {blocked ? (
-            <span className="block text-xs font-normal text-muted-foreground">Waits for the project's agent</span>
-          ) : !ready && (
-            <span className="block text-xs font-normal text-muted-foreground">{todo.length} left before you can submit · <span className="text-primary">See which</span></span>
-          )}
-        </button>
-        {button}
-      </div>
+      {!wide && (
+        <div className="flex items-center gap-3 px-4 py-3">
+          <button type="button" className="flex-1 text-left text-sm font-semibold underline-offset-4 hover:underline" onClick={() => setList(true)}>
+            {met} of {checks.length} met
+            {blocked ? (
+              <span className="block text-xs font-normal text-muted-foreground">Waits for the project's agent</span>
+            ) : !ready && (
+              <span className="block text-xs font-normal text-muted-foreground">{todo.length} left before you can submit · <span className="text-primary">See which</span></span>
+            )}
+          </button>
+          {button}
+        </div>
+      )}
       <Drawer open={list} onOpenChange={setList}>
         <DrawerContent>
           <DrawerHeader>
