@@ -29,6 +29,7 @@ import { type PinFinding, architectureView, intentView, linksView, missingFields
 import type { Finding, TraceRequirement } from './record-read.js'
 import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
+import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine, releaseRecommendation, releaseView } from './release-review.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
 export interface CheckResult {
@@ -89,6 +90,8 @@ export interface CheckInput {
   ids?: InstrumentId[]
   /** the bring-up readings (bringup_readings), from the run record and the bench's live copy */
   readings?: Reading[]
+  /** Release review: what its steps show, from the record (release-review.ts) */
+  release?: ReleaseRecord | null
   /** the person's draft of this skill (its own shape per skill), or null */
   draft: Record<string, unknown> | null
   /** the gate Gate signing is about; the question Question answer is about */
@@ -151,6 +154,20 @@ function architectureReasons(input: CheckInput): CheckResult {
   if (a.recommended && choice.option !== a.recommended && !own) return notMet('reasons', `Option ${a.recommended} is trace's recommendation: say in a line why you chose ${choice.option} instead.`)
   const higher = outscoredBy(a, choice.option)
   return higher && !own ? notMet('reasons', `${outscoredWords(higher)}: say in a line why you chose ${choice.option}.`) : shared
+}
+
+/**
+ * Release review's reasons: choosing other than trace's recommendation (releasing when it recommends a return, or the
+ * other way) needs the person's note as the reason. The draft's choice is { option }, its note the reason.
+ */
+function releaseReasons(input: CheckInput): CheckResult {
+  const d = decisionOf(input.draft)
+  if (!d) return met('reasons')
+  const rec = releaseRecommendation(input.r, releaseView(input.r, input.release ?? null, { drc: input.drc, board: input.board, handPlaced: input.handPlaced ?? null }), input.requirements)
+  const chosen = d.choice === 'release' ? 'release' : `return:${d.stage}`
+  if (!rec || chosen === rec.recommended || noteOf(input.draft).length >= 3) return met('reasons')
+  const words = rec.options.find((o) => o.id === rec.recommended)?.label ?? rec.recommended
+  return notMet('reasons', `trace recommends ${words.charAt(0).toLowerCase()}${words.slice(1)} (${rec.why.replace(/\.$/, '')}): say in the note why you chose otherwise.`)
 }
 
 type Checker = (input: CheckInput) => CheckResult
@@ -439,7 +456,12 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'gate-signing/admin': (i) => (i.viewer.admin ? met('admin') : notMet('admin', 'Only an admin can sign a gate.')),
 
   // ---- Release review
-  'release-review/areas': () => yours('areas', 'the release report\'s five areas with who acknowledged each, in the record'),
+  // each area acknowledged on its own step (the draft's acknowledged), not one tick for all five
+  'release-review/areas': (i) => {
+    const done = acknowledged(i.draft)
+    const left = AREAS.filter((a) => !done.includes(a))
+    return left.length ? notMet('areas', `Acknowledge ${andList(left.map((a) => AREA_TITLES[a].toLowerCase()))} on ${left.length === 1 ? 'its step' : 'their steps'}.`) : met('areas')
+  },
   'release-review/untested': (i) => {
     const untested = i.requirements.filter((q) => q.evidence === 'untested')
     const failing = i.requirements.filter((q) => q.evidence === 'failing')
@@ -447,10 +469,28 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (untested.length) return notMet('untested', `${plural(untested.length, 'requirement')} untested: ${ids(untested)}.`)
     return failing.length ? notMet('untested', `${plural(failing.length, 'requirement')} failing and not waived: ${ids(failing)}.`) : met('untested')
   },
-  'release-review/single': () => yours('single', 'each part\'s sources and lifecycle from a parts check, with their acknowledgement, in the record'),
+  // from the parts check's sellers and lifecycle per line (parts.bom_check); where it has neither, the person checks
+  'release-review/single': (i) => {
+    const p = i.release?.parts
+    const lines = (Array.isArray(p?.result?.lines) ? p.result.lines as unknown[] : []).filter((l): l is Record<string, unknown> => !!l && typeof l === 'object').map(partLine).filter((l) => l.need > 0)
+    if (!p || !lines.length) return yours('single', 'a parts check (parts.bom_check) with each part\'s sellers and lifecycle')
+    const acked = new Set(Array.isArray(i.draft?.parts_ack) ? (i.draft.parts_ack as unknown[]).filter((x): x is string => typeof x === 'string') : [])
+    const open = lines.filter((l) => (l.single === true || l.inactive === true) && !acked.has(l.key))
+    if (open.length) return notMet('single', `Acknowledge ${andList(open.slice(0, 5).map((l) => l.mpn ?? `line ${l.line}`))}${open.length > 5 ? ` and ${open.length - 5} more` : ''} on the parts list.`)
+    const unknown = lines.filter((l) => l.single === null && l.inactive === null).length
+    if (unknown) return yours('single', `the sellers and lifecycle of ${plural(unknown, 'part')} the parts check has none for`)
+    const flagged = lines.filter((l) => l.single === true || l.inactive === true).length
+    return met('single', flagged ? `${plural(flagged, 'part')} acknowledged.` : 'No part in the parts check has a single seller or is not active.')
+  },
   'release-review/cost': (i) => {
     const b = i.r?.journey.build
     return b && b.unit_cost !== null ? met('cost', `${b.quantity} boards at ${b.currency} ${b.unit_cost} each.`) : notMet('cost', 'Set the expected unit cost in the project\'s build plan.')
+  },
+
+  'release-review/decision': (i) => {
+    const d = decisionOf(i.draft)
+    if (!d) return notMet('decision', 'Choose: release, or return to a stage.')
+    return d.choice === 'return' && noteOf(i.draft).length < 5 ? notMet('decision', 'Say in the note what has to change.') : met('decision')
   },
 
   // ---- Order submit
@@ -580,7 +620,7 @@ export function checkSkill(skill: string, input: CheckInput): CheckResult[] | nu
   if (!def) return null
   const confirmed = input.draft?.confirmed && typeof input.draft.confirmed === 'object' ? input.draft.confirmed as Record<string, unknown> : {}
   return def.checks.map((c: SkillCheckDef) => {
-    const r = c.id === 'reasons' ? (skill === 'architecture-choice' ? architectureReasons(input) : reasons(input)) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
+    const r = c.id === 'reasons' ? (skill === 'architecture-choice' ? architectureReasons(input) : skill === 'release-review' ? releaseReasons(input) : reasons(input)) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
     // what no tool can check yet, the person checked themselves: met, and said to be theirs
     return r.confirmable && r.unavailable && confirmed[c.id] === true
       ? { id: r.id, status: 'met', confirmed: true, detail: `You confirmed it: trace cannot check it from the record yet (it needs ${r.unavailable}).` }

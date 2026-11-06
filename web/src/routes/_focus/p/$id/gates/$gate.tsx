@@ -14,7 +14,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { ArrowRight, Clock, KeyRound, Loader2, Lock, Receipt, X } from 'lucide-react'
+import { ArrowRight, CircleHelp, Clock, KeyRound, Loader2, Lock, Receipt, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -124,7 +124,8 @@ function GatePage() {
 
 /**
  * The stage still has work pending (open changes, jobs still working): the gate is neither reviewed nor signed until
- * it is settled, so the review is not shown. What is pending, and the way to settle it.
+ * it is settled, so the review is not shown. What is pending, and the way to settle it: a job waiting on a person's
+ * answer has Answer it beside its line (#197).
  */
 function GatePending({ journey: j, gate: g }: { journey: Journey; gate: GateMore }) {
   const id = projectId(j.repo)
@@ -142,9 +143,21 @@ function GatePending({ journey: j, gate: g }: { journey: Journey; gate: GateMore
       </p>
       <p className="mt-2 text-sm text-muted-foreground">A stage is reviewed and signed once its work is settled, so the gate checks the design as it will stand.</p>
       <ul className="mt-5 space-y-2" aria-label="What is pending">
-        {pending.map((p) => (
-          <li key={p} className="flex gap-2 rounded-lg border bg-card p-3 text-sm"><Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden /><Rich text={p} /></li>
-        ))}
+        {pending.map((p) => {
+          // a job waiting on a person's answer: the question to answer, beside its line (#197)
+          const ask = g.asking?.find((a) => a.line === p)
+          return (
+            <li key={p} className="flex items-start gap-2 rounded-lg border bg-card p-3 text-sm">
+              {ask ? <CircleHelp className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden /> : <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />}
+              <span className="min-w-0 flex-1"><Rich text={p} /></span>
+              {ask && (
+                <Link to="/p/$id/do/$skill" params={{ id, skill: 'question-answer' }} search={{ question: ask.question }} className="shrink-0 text-primary hover:underline" aria-label={`Answer it: ${ask.text}`}>
+                  Answer it
+                </Link>
+              )}
+            </li>
+          )
+        })}
       </ul>
       {found.length > 0 && (
         <section className="mt-6" aria-labelledby="pending-findings">
@@ -637,10 +650,14 @@ export function GateRecord({ journey: j, gate: g }: { journey: Journey; gate: Ga
           ) : (
             <ul className="mt-2 divide-y rounded-lg border">
               {g.criteria.map((c) => (
-                <li key={c.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm">
+                <li key={c.id} className="flex items-start gap-3 px-4 py-2.5 text-sm">
                   <StatusBadge status={c.status === 'not_met' ? 'not_met' : c.status === 'waived' ? 'waived' : 'met'} />
-                  <span className="min-w-0 flex-1">{c.text}</span>
-                  {c.evidence && <EvidenceChip evidence={{ ...c.evidence, to: c.evidence.kind === 'run' && c.evidence.id ? `/p/${projectId(j.repo)}/runs/${c.evidence.id}` : c.evidence.to }} />}
+                  {/* the criterion keeps a readable width and its evidence chip wraps under it, shrinking to the row:
+                      a long chip ("kicad_drc: 0 errors, 0 unconnected, …") took the width and left one word a line */}
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="min-w-[min(14rem,100%)] flex-1">{c.text}</span>
+                    {c.evidence && <EvidenceChip className="min-w-0" evidence={{ ...c.evidence, to: c.evidence.kind === 'run' && c.evidence.id ? `/p/${projectId(j.repo)}/runs/${c.evidence.id}` : c.evidence.to }} />}
+                  </div>
                 </li>
               ))}
             </ul>

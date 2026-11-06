@@ -9,7 +9,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type PendingChanges, type Viewer, applyChange, guardsFabricate, isReleased, journeyView, loadJourney, loadOrders, nextRevision,
-  pendingBlockers, recordOpen, recordOrder, returnForChange, setCriterion, signBlockers, signGate, startJourney, withPending,
+  pendingBlockers, type QuestionView, recordOpen, recordOrder, returnForChange, setCriterion, signBlockers, signGate, startJourney, withAsks, withPending,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { changesStage } from '../../src/api/actions-design.js'
@@ -102,6 +102,38 @@ describe('every gate, while its stage has work pending', () => {
     expect(v.gates.find((g) => g.id === 'define')).toMatchObject({ may_sign: false, pending: [expect.stringMatching(/still working/)] })
     expect(v.next).toMatchObject({ kind: 'working', belongs_to: 'trace', job_id: 'job-1' })
     expect(v.next.summary).toMatch(/is locked: 1 job is still working/)
+  })
+
+  it('a job waiting on a person\'s answer says so, with the question to answer, not "still working" (#197)', () => {
+    start()
+    meetAll('define'); openAll('define')
+    const busy: PendingChanges = { changes: [], requirements: [], work: [
+      { id: 'pabc.sess.job-1', worker: 'job-1', title: 'Draw the OLED header', state: 'running' },
+      { id: 'job-2', title: 'Check the ERC', state: 'running' },
+    ] }
+    const q = (o: Partial<QuestionView>): QuestionView => ({
+      id: 'aq1', kind: 'question', asked_by: 'the Implementation specialist', for_you: true, for: 'you', stage: 'define', text: 'Which pin order does J2 need?', blocks: null,
+      options: [], recommended: null, sources: [], job_id: 'job-1', asked_at: '2026-11-06T10:00:00.000Z', answered: null, ...o,
+    })
+    // the question asked in the job (by the index's id), open: the job waits on it; an answered one, or another job's, does not count
+    const asks = withAsks(busy, [q({}), q({ id: 'aq0', job_id: 'job-2', answered: { answer: 'x', option_id: null, reason: null, by: null, at: '2026-11-06T09:00:00.000Z' } })])
+    expect(asks.work?.map((w) => w.asking?.question ?? null)).toEqual(['aq1', null])
+    expect(pendingBlockers(rec(), 'define', asks)).toEqual([
+      '"Draw the OLED header" is waiting on your answer: Which pin order does J2 need?',
+      expect.stringMatching(/^Wait for 1 job still working to finish, or stop it \("Check the ERC"\)/),
+    ])
+    // the view: the gate lists the question to answer beside its line
+    const before = journeyView(rec(), ADMIN)
+    const v = withPending(rec(), { ...before, questions: [q({})] }, ADMIN, busy)
+    expect(v.gates.find((g) => g.id === 'define')?.asking).toEqual([{ question: 'aq1', text: 'Which pin order does J2 need?', job: 'Draw the OLED header', for: 'you', line: '"Draw the OLED header" is waiting on your answer: Which pin order does J2 need?' }])
+    // with another job still working, the step is still to wait
+    expect(v.next).toMatchObject({ kind: 'working' })
+    // with only the waiting job left, the step is answering it
+    const only = withPending(rec(), { ...before, questions: [q({})] }, ADMIN, { ...busy, work: [busy.work![0]!] })
+    expect(only.next).toMatchObject({ kind: 'answer', belongs_to: 'you', button: 'Answer it', ref: { kind: 'question', id: 'aq1' } })
+    expect(only.next.summary).toMatch(/is locked: "Draw the OLED header" is waiting on your answer/)
+    // a question for the admins reads as theirs
+    expect(pendingBlockers(rec(), 'define', withAsks({ ...busy, work: [busy.work![0]!] }, [q({ for: 'admins', for_you: false })]))).toEqual(['"Draw the OLED header" is waiting on an answer from the admins: Which pin order does J2 need?'])
   })
 
   it('stays locked when trace cannot look', () => {

@@ -207,6 +207,8 @@ describe('changes in words, and what the decision bar may do', () => {
     expect(checksWords(c)).toBe('Checks running, 4 of 7 done')
     expect(checksWords({ ...c, failed: 1, running: 0, failing: ['ERC'] })).toBe('1 check failing: ERC')
     expect(checksWords(null)).toBe('Checks not readable')
+    // the skipped ones said, so the count adds up to the checks listed (test-esp32 #201)
+    expect(checksWords({ total: 5, passed: 3, failed: 0, running: 0, skipped: 2, failing: [] })).toBe('3 checks passed, 2 skipped')
     expect(checksWords({ ...c, total: 0, passed: 0, running: 0 })).toBe('No checks yet')
     expect(changeLine({ verdict: 'blocked', checks: null, checks_denied: true } as never)).toMatch(/Actions: read/)
     expect(changeLine({ verdict: 'conflict', checks: null } as never)).toMatch(/trace will bring it up to date/)

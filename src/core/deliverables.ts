@@ -16,6 +16,7 @@
  */
 import { DOC_KINDS, DOCS } from '../docs/catalog.js'
 import { type JobRow, isLive } from './job-index.js'
+import { shownJobTitle } from './plain-words.js'
 
 export interface Deliverable {
   /** stable key: architecture, pins, sheets, doc:<kind> */
@@ -106,7 +107,7 @@ export function coveringWork(request: string, kind: string, work: readonly Work[
     if (!working && !review) continue
     const theirs = new Set(deliverablesOf(j.title, requestOf(j.payload), j.summary, w.change?.title).map((d) => d.key))
     const both = asked.filter((d) => theirs.has(d.key))
-    if (both.length) return { job: j.id, change: w.change ?? null, state: working ? 'working' : 'review', deliverables: both, title: w.change?.title ?? j.title }
+    if (both.length) return { job: j.id, change: w.change ?? null, state: working ? 'working' : 'review', deliverables: both, title: w.change?.title ?? shownJobTitle(j) }
   }
   return null
 }

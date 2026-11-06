@@ -29,6 +29,7 @@ import { userInfo } from 'node:os'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
 import { dec, enc, ensureProjectSchema, openProject, transaction, type Json } from '../../core/store.js'
+import type { WaiverRef } from './verdict.js'
 
 const REQ_COLS = ['text', 'kind', 'acceptance', 'source', 'page', 'status', 'tags', 'created', 'updated', 'by'] as const
 const TEST_COLS = ['title', 'requirements', 'method', 'tool', 'args', 'command', 'expect', 'status', 'last_run', 'note', 'created', 'updated', 'by'] as const
@@ -354,6 +355,16 @@ export class VerifyDb {
   test(id: string): TestItem | null {
     const r = this.db.prepare('SELECT * FROM test_items WHERE id=?').get(id)
     return r ? toTest(r) : null
+  }
+
+  /**
+   * The journey's waivers on requirements and tests, where this database holds them (the API's merged copy does; a
+   * repository's own record has none: people's waivers are the journey's), for the shared verdict (verdict.ts).
+   */
+  waivers(): WaiverRef[] {
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='waivers'").get()) return []
+    return (this.db.prepare("SELECT id, target_kind, target, caught_where, closed_at FROM waivers WHERE target_kind IN ('requirement', 'test')").all() as Record<string, unknown>[])
+      .map((r) => ({ id: String(r.id), targetKind: String(r.target_kind), target: String(r.target), caughtWhere: s(r.caught_where), closedAt: r.closed_at === null || r.closed_at === undefined ? null : Number(r.closed_at) }))
   }
 
   tests(filter: { requirement?: string | undefined; method?: string | undefined; status?: string | undefined } = {}): TestItem[] {

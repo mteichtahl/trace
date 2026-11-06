@@ -92,7 +92,7 @@ function keepLines(db: DatabaseSync, run: string, lines: readonly BomLine[]): vo
 
 export const partsBomCheck = defineTool({
   name: 'parts.bom_check',
-  description: 'Check a BOM (a CSV path with MPN/Qty/LCSC columns, or rows) for a build of N boards: per line the best offer, stock, unit price at the quantity bought (qty × boards, at least the MOQ), flags (out of stock, short, low, not found, end of life) and the total. Recorded with every line, so the stock criteria (shape.check) read it; returns run_id. Check at the project\'s build quantity.',
+  description: 'Check a BOM (a CSV path with MPN/Qty/LCSC columns, or rows) for a build of N boards: per line the best offer, stock, unit price at the quantity bought (qty × boards, at least the MOQ), flags (out of stock, short, low, not found, end of life), the lifecycle and the sellers that have the part in stock (for single-source parts), and the total. Recorded with every line, so the stock criteria (shape.check) read it; returns run_id. Check at the project\'s build quantity.',
   input: z.object({
     path: z.string().optional(), rows: z.array(BomRowArg).max(2000).optional(), boards: z.number().int().min(1).default(1),
     providers: providersArg, fresh: z.boolean().default(false), limit: z.number().int().min(1).max(2000).default(200),

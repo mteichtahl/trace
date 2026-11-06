@@ -20,3 +20,15 @@ describe('checks no tool can make yet', () => {
     expect(data.confirmed).toEqual({ notes: true })
   })
 })
+
+describe('on a step', () => {
+  it('shows only the boxes of that step and of no step', () => {
+    const rr = SKILLS.find((s) => s.id === 'release-review')!
+    const checks = [{ id: 'single', unavailable: 'sellers and lifecycle', confirmable: true }]
+    const draft = { data: {}, setData: () => {} }
+    const { rerender } = render(<Unavailable def={rr} draft={draft} checks={checks} step="emc" />)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    rerender(<Unavailable def={rr} draft={draft} checks={checks} step="bom" />)
+    expect(screen.getByRole('checkbox', { name: /I checked it: single-source/ })).toBeInTheDocument()
+  })
+})

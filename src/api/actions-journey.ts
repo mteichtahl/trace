@@ -69,7 +69,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
-  confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
+  confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withAsks, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -89,7 +89,7 @@ import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, ha
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
 import { dueRetry, stuckFor, stuckLook } from './stuck-checks.js'
-import { waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
+import { runningOn, waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
 import { OWNED_REFUSED, OWNED_STARTED, type OwnedDue, ownedDue, ownedStep, reviewWaits, stageSince } from './owned-work.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
@@ -97,7 +97,7 @@ import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafti
 import type { JobRow } from '../core/job-index.js'
 import { type Followup, carryOnPlace, followupStatus, landedOn, loadFollowups, putFollowup, updateFollowup } from '../core/answer-followups.js'
 import { assertNotHeld } from './held.js'
-import { type ReopenedWork, finishRequest, keptOf, readTrace, reopenedWork, resignBasis, resignPlan, scopedRequest } from './reopen-scope.js'
+import { type ReopenedWork, finishRequest, keptOf, readTrace, reopenHeadline, reopenedWork, resignBasis, resignPlan, scopedRequest } from './reopen-scope.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -452,9 +452,9 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
     request: [
       'The layout review gate was signed: the project is in Sign-off. Prepare the release report.',
       'Run what the layout made possible (the items planned for after layout), then close coverage (verify.coverage): every requirement verified or waived, the gaps named. Record signoff.coverage with journey.check.',
-      'Hand the parts list check (cost and stock at the build quantity, then shape.check signoff.bom) to the Implementation specialist, and the interference prechecks (then signoff.emc) to the EMC specialist, each with journey.handoff, and put their answers in the report.',
+      'Hand the parts list check (cost and stock at the build quantity, then shape.check signoff.bom) to the Implementation specialist, and the interference prechecks (then signoff.emc) to the EMC specialist, each with journey.handoff. verify.report reads their runs from the record, so wait for their answers first.',
       'When the build plan includes panel and mounting hardware, the parts list hand-off also asks for the hardware list (the parts list tool with hardware: true). Put it in the report as its own list (case parts, screws, panel parts), never added to the parts list or its cost check.',
-      'Write the release report with verify.report: coverage, interference estimates, the parts list and its cost, and every open waiver, for a person to review. Do not sign or waive anything yourself.',
+      'Write the release report with verify.report: it holds coverage, interference estimates, the parts list with its cost and stock, and every open waiver, for a person to review. Release review approves the report it records. Do not sign or waive anything yourself.',
     ].join('\n'),
   },
 }
@@ -686,7 +686,7 @@ export const JOURNEY_ACTIONS = {
     const changed = withChanges(r, seen ? journeyView(seen, viewer) : journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
-    })))
+    })), { workingOn: jobs.error ? undefined : (id) => runningOn(jobs.rows, id) }) // "Meanwhile, trace goes on with" only over a job running on it (#204)
     // a stage is reviewed and signed only once its work is settled: its gate is locked while a change of it (or an
     // earlier stage) is open or an agent is still working, and the gates into Fabricate while anything is changing
     // a question waiting on a change that is no longer open is out of date (test-esp32 #108); only when the open
@@ -834,7 +834,9 @@ export const JOURNEY_ACTIONS = {
       ])
       const fab = guardsFabricate(now0, a.gate)
       const why = open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null) ?? (fab && changedReqs === null ? 'the requirements could not be read' : null)
-      pending = pendingOf(open.list, why, fab ? (changedReqs ?? []) : [], jobs.rows)
+      // a job waiting on an open question says so in the refusal, as on the gate page (#197)
+      const viewer = await viewerOf(ctx.principal, a.repo)
+      pending = withAsks(pendingOf(open.list, why, fab ? (changedReqs ?? []) : [], jobs.rows), journeyView(now0, viewer, undefined, facts).questions)
     }
     // a criterion met on evidence that is now out of date does not count until it is checked again
     const staleRun = now0 ? await evidenceStaleness(ctx, a.repo, facts ? mergeAgentFacts(now0, facts) : now0) : undefined
@@ -871,7 +873,9 @@ export const JOURNEY_ACTIONS = {
     let kickoff: { jobId?: string; started?: string[]; jobError?: string } = {}
     if (work && request) {
       try {
-        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        // named by what it does (its request leads with why the stage is open again: test-esp32 #196)
+        const headline = reopened ? reopenHeadline(reopened.stage, reopened.scope.kept) : undefined
+        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, ...(headline ? { headline } : {}), agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
         kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
       } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
     }

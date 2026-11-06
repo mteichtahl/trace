@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { GateView, NextStep, StageView } from '../../src/core/journey.js'
 import type { JobRow } from '../../src/core/job-index.js'
 import { stuckView } from '../../src/api/stuck-checks.js'
-import { findingsOf, waitsOn, waitsOnSteps, workingNow } from '../../src/api/waits-on.js'
+import { findingsOf, runningOn, waitsOn, waitsOnSteps, workingNow } from '../../src/api/waits-on.js'
 
 const AT = Date.parse('2026-11-05T07:00:00Z') / 1000
 const iso = (s: number): string => new Date(s * 1000).toISOString()
@@ -90,5 +90,17 @@ describe('who the next step waits on', () => {
   it('counts queued and live jobs only: a paused or lost one is not working', () => {
     const row = (state: string, beatAt: number | null): JobRow => ({ id: state, state, kind: 'task', parentJob: null, beatAt, startedAt: AT - 600, updatedAt: AT - 600 } as unknown as JobRow)
     expect(workingNow([row('queued', null), row('running', AT - 10), row('running', AT - 3 * 3600), row('paused', null), row('succeeded', null)], AT)).toBe(2)
+  })
+
+  // test-esp32 #204: "Meanwhile, trace goes on with: …" while trace was doing nothing
+  it('a job runs on a criterion when it is running and alive, and names it or no criterion at all', () => {
+    const row = (state: string, beatAt: number | null, request: string): JobRow => ({ id: state, state, kind: 'task', parentJob: null, beatAt, startedAt: AT - 600, updatedAt: AT - 600, title: request, payload: JSON.stringify({ request }) } as unknown as JobRow)
+    expect(runningOn([], 'layout.fit', AT)).toBe(false)
+    expect(runningOn([row('running', AT - 10, 'Fit the board in its case; record layout.fit with journey.check.')], 'layout.fit', AT)).toBe(true)
+    expect(runningOn([row('running', AT - 10, 'Fix the build.')], 'layout.fit', AT)).toBe(true)
+    // on another criterion, not alive, finished or only queued: not on it
+    expect(runningOn([row('running', AT - 10, 'Record layout.drc with journey.check.')], 'layout.fit', AT)).toBe(false)
+    expect(runningOn([row('running', AT - 3 * 3600, 'Record layout.fit.')], 'layout.fit', AT)).toBe(false)
+    expect(runningOn([row('succeeded', null, 'Record layout.fit.'), row('queued', null, 'Record layout.fit.')], 'layout.fit', AT)).toBe(false)
   })
 })

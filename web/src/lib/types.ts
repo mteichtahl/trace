@@ -482,6 +482,8 @@ export interface Question {
   detail?: string
   /** what it asks about has moved on since it was asked (the criterion met, the change no longer open): why */
   outOfDate?: string
+  /** the job that asked it (the job index's id): that job waits on the answer (#197) */
+  jobId?: string
 }
 
 export interface RunSummary {
@@ -530,6 +532,8 @@ export interface RunSummary {
   heard?: { at: string; overdueAt: string; lostAt: string }
   /** lost: dismissed by a person (with their reason) or started again; it then leaves "Ended without finishing" */
   settled?: { how: 'dismissed' | 'restarted'; by: string; at: string; reason?: string }
+  /** the job index's own id (`id` is the API's): the one its questions name (Question.jobId) */
+  workerJobId?: string
 }
 
 /** Where a hand-off between specialists stands (src/core/handoffs.ts). */

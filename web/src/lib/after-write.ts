@@ -4,9 +4,9 @@
  * event came or the page was reloaded). One table, by action, so no screen has to know what every other screen reads:
  * `call` (lib/api.ts) tells the listener here of every answer it gets, and the listener
  *
- *   1. applies what the answer settles to what is on screen now (an answered question leaves Waiting on people, an
- *      accepted or discarded change leaves the lists, a waived finding leaves its criterion), so nothing waits on a
- *      round trip to look right;
+ *   1. applies what the answer settles to what is on screen now (an answered question leaves Waiting on people and
+ *      stops being the next step, an accepted or discarded change leaves the lists, a waived finding leaves its
+ *      criterion), so nothing waits on a round trip to look right;
  *   2. invalidates every query the act may have changed (writeInvalidations), so the active ones refetch now;
  *   3. looks once more a little later (AGAIN_MS): what an act starts lands a moment after its answer (the job an answer
  *      carries on enters the job index, GitHub's lists catch up with a merge), and an event may not come for it.
@@ -16,7 +16,7 @@
  */
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import type { ActionName } from './api'
-import type { Gate, InboxItem, Journey } from './types'
+import type { Gate, InboxItem, Journey, NextStep } from './types'
 
 /** How long after an act the screens look once more. */
 export const AGAIN_MS = 4_000
@@ -98,9 +98,21 @@ function waivedFinding(action: string, args: Args): string | null {
   return null
 }
 
+/** Whether the next step is answering question `id` (its ref, or its button's address naming it). Pure. */
+export function stepAnswers(n: Pick<NextStep, 'ref' | 'action'> | undefined, id: string): boolean {
+  if (!n) return false
+  if (n.ref?.kind === 'question' && n.ref.id === id) return true
+  const to = n.action?.to
+  return !!to && new URLSearchParams(to.split('?')[1] ?? '').get('question') === id
+}
+
+/** The next step once its question is answered, until journey.get says what comes next: trace carries on. */
+export const ANSWERED_STEP: NextStep = { kind: 'working', owner: 'trace', summary: 'Answered. trace carries on with it.', short: 'trace carries on' }
+
 /**
  * What an act's ok answer settles, applied to the data on screen: an answered (or dismissed) question leaves the
- * journey's questions and the inbox, an accepted or discarded change leaves the inbox and the change list, a waived
+ * journey's questions and the inbox, and is no longer the next step (#199: its "Use …" stayed while Waiting on people
+ * already said 0), an accepted or discarded change leaves the inbox and the change list, a waived
  * finding leaves the criterion it was listed under. The refetch that follows brings everything else. Pure on the
  * client's cache: nothing is applied to a query that holds no data.
  */
@@ -111,7 +123,12 @@ export function applyWrite(qc: Pick<QueryClient, 'setQueriesData'>, action: stri
   const inbox = (keep: (i: InboxItem) => boolean): void => { qc.setQueriesData<InboxItem[]>({ queryKey: ['inbox'] }, (xs) => (Array.isArray(xs) ? xs.filter(keep) : xs)) }
   if ((action === 'question.answer' && typeof args.question === 'string') || (action === 'stuck.dismiss' && typeof args.job === 'string')) {
     const id = (action === 'question.answer' ? args.question : args.job) as string
-    journey((j) => (j.questions.some((x) => x.id === id) ? { ...j, questions: j.questions.filter((x) => x.id !== id) } : j))
+    journey((j) => {
+      const asked = j.questions.some((x) => x.id === id)
+      const next = stepAnswers(j.next, id)
+      if (!asked && !next) return j
+      return { ...j, questions: j.questions.filter((x) => x.id !== id), ...(next ? { next: ANSWERED_STEP } : {}) }
+    })
     inbox((i) => !(i.repo === repo && i.questionId === id))
     return
   }

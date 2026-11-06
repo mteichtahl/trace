@@ -404,7 +404,7 @@ export async function changeRuns(ctx: Context, repo: string, number: number): Pr
 function jobItem(repo: string, j: IndexedJob, q: QuietProfile | null): ActivityItem | null {
   if (j.state !== 'running' && j.state !== 'queued' && j.state !== 'paused') return null
   return {
-    kind: 'job', repo, run: `job:${j.workerJobId}`, title: j.title, state: j.state,
+    kind: 'job', repo, run: `job:${j.workerJobId}`, title: j.headline ?? j.title, state: j.state,
     step: j.state === 'queued' ? (j.queue?.startsWhen ?? j.step) : j.step, stepIndex: null, stepCount: null,
     startedAt: j.startedAt, typicalS: j.typicalS, heardAt: j.heard?.at ?? null, newest: j.step ? short(j.step) : null,
     usualQuietS: usual(q, 'job', j.agent ?? j.kind, j.step),

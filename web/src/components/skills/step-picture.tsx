@@ -32,7 +32,7 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
   }
   if (kind === 'board' || kind === 'render') {
     const findings = kind === 'board' ? (view?.findings ?? d?.board?.findings ?? []) : []
-    return <FindingsPicture repo={repo} title={kind === 'render' ? 'Board render · top' : 'Board · top'} subtitle={d?.board?.size} path={d?.board?.path} findings={findings} selected={selected} onSelect={onSelect} height={height} onAsk={() => openPanel(true)} emptyText="No board yet: trace draws it once the board file exists." />
+    return <FindingsPicture repo={repo} title={kind === 'render' ? 'Board render · top' : 'Board · top'} subtitle={d?.board?.size} path={d?.board?.path} findings={findings} selected={selected} onSelect={onSelect} height={height} onAsk={() => openPanel(true)} emptyText={boardEmpty(d?.board, design.isLoading)} />
   }
   if (kind === 'block-diagram') {
     return (
@@ -74,6 +74,12 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
       {wires.length ? <BenchWiring wires={wires} /> : <Empty kind={kind} loading={false} />}
     </CanvasFrame>
   )
+}
+
+/** Why the board has no picture: no board file yet, or a board with no drawing recorded (the file exists). Pure. */
+export function boardEmpty(board: { file?: string } | undefined, loading = false): string {
+  if (loading) return 'Loading the drawing…'
+  return board ? 'The board exists, but no drawing of it is recorded yet: trace draws it from the KiCad export (kicad.export pcb_svg).' : 'No board yet: trace draws it once the board file exists.'
 }
 
 function Empty({ kind, loading }: { kind: PictureKind; loading: boolean }) {

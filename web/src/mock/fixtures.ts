@@ -81,7 +81,8 @@ export const JOURNEYS: Record<string, Journey> = {
       // each "Answer it" opens its own question (test-esp32 #107); one out of date says why (#108); a stuck report reads
       // in plain words, the agent's own behind Show detail (#35)
       { id: 'aq5d2b9c0f1e3a774', to: 'you', text: 'The design document waits on the schematic: #6 is not merged. Write it from the branch now, or wait for #6?', askedAt: ago(42 * 60_000), blocks: 'the design document', outOfDate: 'Change #6 is no longer open (accepted or discarded since this was asked), so this may no longer need an answer.' },
-      { id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * 60_000), blocks: 'the schematic' },
+      // asked in a job that waits on it: "trace is doing" says so, not "still running" (#197)
+      { id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * 60_000), blocks: 'the schematic', jobId: 'job_sch1' },
       {
         id: 'st3c9e0d1b2a4f56', to: 'the contributors', stuck: true, askedAt: ago(15 * 60_000),
         text: 'trace could not make the PDF of the design document because its diagram tool failed. The written document is committed.',
@@ -159,7 +160,7 @@ export const JOURNEYS: Record<string, Journey> = {
       action: { label: 'Watch', to: '/p/acme~panel-controller/runs/run_51c0' },
       jobId: 'job_t1',
     },
-    questions: [],
+    questions: [{ id: 'aq7c2f0e9d4b1a6c8', to: 'you', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', askedAt: ago(14 * 60_000), blocks: 'the layout gate', jobId: 'job_fit1' }],
     waivers: [],
     jobs: [{ id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45 }],
     recent: [],

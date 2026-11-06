@@ -58,8 +58,9 @@ export interface Drafting {
 
 /** The jobs the index lists that draft the requirements from the intent, newest first. */
 export function draftingJobs(rows: readonly JobRow[]): JobRow[] {
-  const title = REQUIREMENTS_FROM_INTENT.replace(/\s+/g, ' ').trim().slice(0, 200)
-  return rows.filter((j) => j.kind === 'task' && !j.parentJob && (jobRequest(j) === REQUIREMENTS_FROM_INTENT || (!j.payload && j.title === title)))
+  // its title as the index gives it now (a headline), or as it gave it before (the request's first 200 characters)
+  const titles = [titleOf(REQUIREMENTS_FROM_INTENT), REQUIREMENTS_FROM_INTENT.replace(/\s+/g, ' ').trim().slice(0, 200)]
+  return rows.filter((j) => j.kind === 'task' && !j.parentJob && (jobRequest(j) === REQUIREMENTS_FROM_INTENT || (!j.payload && titles.includes(j.title))))
     .sort((a, b) => (b.queuedAt ?? b.startedAt ?? b.updatedAt) - (a.queuedAt ?? a.startedAt ?? a.updatedAt))
 }
 

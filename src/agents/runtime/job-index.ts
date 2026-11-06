@@ -44,6 +44,7 @@ import { type SnsApi, type SqsApi, openWaitQueue, staleAfterMs, waitQueueName } 
 import type { Admit, JobEvent, Jobs } from './jobs.js'
 import { type JobInfo, type JobPayload, isDelegated, isHandoff } from './schemas.js'
 import { handoffTitle } from '../../core/handoffs.js'
+import { jobHeadline } from '../../core/plain-words.js'
 import { heldReason } from '../../core/lifecycle.js'
 
 export const STEP_EVERY_MS = 15_000
@@ -65,7 +66,8 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 /** The request in one line, for a person. */
 export function titleOf(p: JobPayload): string {
   switch (p.kind) {
-    case 'task': return isHandoff(p) ? handoffTitle(p.handoff.from, p.handoff.question) : p.request.replace(/\s+/g, ' ').trim().slice(0, 200)
+    // its headline, or its request's first plain sentence: never the prompt cut short (test-esp32 #196)
+    case 'task': return isHandoff(p) ? handoffTitle(p.handoff.from, p.handoff.question) : jobHeadline(p)
     case 'work-item': return `${p.item.kind === 'agent-fix' ? 'Issue' : 'Pull request'} #${p.item.number}: ${p.item.title}`.slice(0, 200)
     case 'sweep': return `Looking for work on ${p.repositories.length === 1 ? p.repositories[0] : `${p.repositories.length} projects`}`
   }

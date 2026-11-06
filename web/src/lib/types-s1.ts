@@ -20,6 +20,8 @@ export interface GateMore extends Gate {
   record?: { notes?: string; acknowledged?: string[]; returned?: { by: string; at: string; reason: string } }
   /** the work still pending that holds it (open changes, jobs still working): while any, it is not reviewed or signed */
   pending?: string[]
+  /** the jobs among it that wait on an open question (#197): the question, its job, and its line in `pending` */
+  asking?: { question: string; text: string; job: string; line: string }[]
 }
 
 /** Journey extras the Decisions tab reads (assumed part of journey.get: "decisions log"). */
@@ -197,6 +199,31 @@ export interface SkillView {
   /** Incoming inspection: the boards recorded, and the parts the fab does not place */
   boards?: BoardView[]
   handPlaced?: string[]
+  /** Release review: what each step shows, from the record (src/api/release-review.ts) */
+  release?: ReleaseView
+}
+
+/** Release review's steps from the record (src/api/release-review.ts ReleaseView). */
+export interface ReleaseView {
+  emc: {
+    precheck: { run: string; at: string; status: string; summary: string | null; counts: { error: number; warn: number; info: number }; findings: { severity: 'error' | 'warn' | 'info'; rule: string; text: string; where: string | null }[]; more: number } | null
+    estimates: { run: string; kind: string; status: string; summary: string | null; at: string }[]
+    criterion: { id: string; text: string; status: 'met' | 'not_met' | 'waived' } | null
+    waivers: { id: string; target: string; reason: string; risk: string; severity: string; by: string }[]
+  }
+  parts: {
+    run: string; at: string; status: string; summary: string | null
+    boards: number | null; build_quantity: number | null; currency: string | null; total: number | null; per_board: number | null; for_build: number | null
+    line_count: number; counts: Record<string, number>; blocking: number
+    lines: { key: string; line: number; mpn: string | null; refs: string | null; status: string; stock: number | null; need: number; unit_price: number | null; sellers: string[] | null; lifecycle: string | null; single: boolean | null; inactive: boolean | null }[]
+    flagged: string[]; unknown: number
+  } | null
+  fab: {
+    drc: { run: string | null; at: string | null; errors: number; findings: number; waived: number } | null
+    board: { size: string | null; layers: string[] | null } | null
+    hand_placed: string[] | null
+  }
+  changes: { revision: string; previous: string | null; started: { summary: string; by: string | null; at: string } | null; items: { kind: string; summary: string; by: string | null; at: string }[] }
 }
 
 // ------------------------------------------------------------------ requirements and traceability
@@ -213,6 +240,8 @@ export interface CoverageRow {
   verdict: Verdict
   tests: { id: string; method: string; status: string; last_run: string | null }[]
   points?: { id: string; hits: number; goal: number; met: boolean }[]
+  /** what was set aside on it, in words ("TST-031 waived to Fabricate"): said beside a verified verdict */
+  note?: string
   /** assumed extras where the project has them */
   source?: string | null
   priority?: 'must' | 'should'
@@ -235,6 +264,8 @@ export interface TracedRequirement {
   why: string
   tests: { id: string; title: string; method: string; status: string; last_run: string | null }[]
   waiver: string | null
+  /** what was set aside on it, in words ("TST-031 waived to Fabricate"), the verification report's own words */
+  note?: string
 }
 
 /** One intent line (requirements.trace): agents propose it, a person accepts, edits or rejects it (Intent builder). */
@@ -249,7 +280,8 @@ export interface TraceIntent {
   /** what the Intent builder flags: needs_number, vague, conflict, not_testable, interface_incomplete */
   flags?: string[]
   source?: { kind: 'person' | 'brief' | 'document' | 'design'; ref?: string; quote?: string; page?: number } | null
-  decided?: { by: string; at: string; reason?: string }
+  /** `gate`: the person accepted these words by signing that gate after they were last written */
+  decided?: { by: string; at: string; reason?: string; gate?: string }
   /** a person left it without a requirement, with this reason */
   uncovered?: string
   /** a requirement is derived from it */

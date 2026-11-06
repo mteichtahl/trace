@@ -49,6 +49,8 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
       crit('ar1', 'At least two options compared on fixed criteria', 'record', 'record', 'Options A, B and C scored on 6 criteria, weights fixed before scoring.', true),
       crit('ar2', 'Every requirement maps to a block', 'record', 'record', '24 of 24 requirements map to a block in option B.', true),
       crit('ar3', 'Every key part in stock for 10 boards', 'run_3c19', 'run', 'All 5 key parts in stock at LCSC.', true),
+      // a long chip beside its criterion (test-esp32 #195: the criterion wrapped one word a line)
+      { ...crit('ar4', 'The design rule check is clean, or each finding is waived', 'run_3d02', 'run', 'DRC on push 2b9e04: 0 errors, 2 warnings.', true), evidence: { kind: 'run', label: 'kicad_drc: 0 errors, 0 unconnected, 0 parity, 2 warnings', id: 'run_3d02', summary: 'DRC on push 2b9e04: 0 errors, 2 warnings.' } },
     ],
     record: { acknowledged: [] },
   },
@@ -97,8 +99,10 @@ const FIT = (ref: string, text: string) => ({ id: `layout.fit@urn:trace:acme:acm
 export const PANEL_GATE: Partial<GateMore> = {
   pending: [
     '2 open record changes: #21 (case settings) and #22 (lid-mounted display).',
-    'The Implementation specialist\'s job is waiting for your answer on the case fit.',
+    // the job waiting on the case fit question: Answer it beside its line (#197)
+    '"Fit the board to the case" is waiting on your answer: Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?',
   ],
+  asking: [{ question: 'aq7c2f0e9d4b1a6c8', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', job: 'Fit the board to the case', line: '"Fit the board to the case" is waiting on your answer: Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?' }],
   criteria: [
     crit('pf1', 'Timing closes at 100 MHz', 'run_t100', 'run', 'Timing: worst slack +0.42 ns.', false),
     crit('pf2', 'Every requirement that can be checked is verified or waived', 'record', 'record', '14 of 14 verified.', false),
@@ -231,7 +235,8 @@ export const COVERAGE: CoverageResult = {
     R('R-004', 'Runs from one 3.7 V lithium cell, 2,000 mAh', 'electrical', 'Input 3.0 to 4.2 V', 'verified', ['TST-004']),
     R('R-006', 'Reaches the gateway at 2 km line of sight', 'functional', '≥ 2 km at SF10, 14 dBm, 10 % packet loss', 'failing', ['TST-H06'], 'fail'),
     R('R-008', 'Charges and configures over USB-C', 'functional', 'USB 2.0 full speed; 500 mA charge', 'untested', ['TST-H08']),
-    R('R-011', 'Battery life at least 2 years at one reading every 15 minutes', 'electrical', '≥ 2 years at 25 °C', 'verified', ['TST-011']),
+    // verified on its passing test, its field test waived to a later stage: the verdict says so (verify verdict.ts)
+    { ...R('R-011', 'Battery life at least 2 years at one reading every 15 minutes', 'electrical', '≥ 2 years at 25 °C', 'verified', ['TST-011']), note: 'TST-H11 waived to Fabricate' },
     R('R-014', 'Output capacitor at least 2.2 µF on the 3V3 rail', 'electrical', 'C ≥ 2.2 µF after derating', 'waived', ['TST-014']),
     R('R-017', 'Meets CISPR 32 class B radiated emissions', 'emc', 'Below the class B limit with 6 dB margin (estimate)', 'untested'),
   ],
@@ -528,13 +533,51 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
       recommendation: { recommended: 'approve', options: [{ id: 'approve', label: 'Approve for this revision' }, { id: 'defer', label: 'Defer to Rev B' }, { id: 'reject', label: 'Reject' }], why: 'Rev A is not released yet, so the change is cheapest now.', givesUp: 'About 3 days on the schedule.' },
     },
   },
-  // two checks no tool makes yet, the person's to confirm ("I checked it"): the bar counts a tick at once (#210)
   'release-review': {
+    summary: 'Rev A at Sign-off. The EMC precheck found one return-path error, waived for the lab scan; every parts list line is in stock. Read each area, acknowledge it, then decide.',
     checks: [
-      { id: 'areas', status: 'met' }, { id: 'untested', status: 'met' },
-      { id: 'single', status: 'not_met', unavailable: 'a parts lifecycle lookup', confirmable: true },
-      { id: 'cost', status: 'not_met', unavailable: 'a build quantity in the record', confirmable: true },
+      { id: 'areas', status: 'not_met', detail: 'Acknowledge each area on its step.' }, { id: 'untested', status: 'met' },
+      { id: 'single', status: 'not_met', detail: 'Acknowledge ESP32-C3-MINI-1-N4 and AP2112K-3.3TRG1 on the parts list.' },
+      { id: 'cost', status: 'met', detail: '10 boards at USD 4.72 each.' }, { id: 'decision', status: 'not_met', detail: 'Choose: release, or return to a stage.' },
     ],
+    recommendation: {
+      question: 'Release, or return to the stage the concern belongs to?', recommended: 'release',
+      options: [
+        { id: 'release', label: 'Release', detail: 'Approve the release report; the release gate is signed next.' },
+        { id: 'return:signoff', label: 'Return to Sign-off', detail: 'Keep the stage open, with what has to change.' },
+        { id: 'return:layout', label: 'Return to Layout', detail: 'Reopen Layout; the gates from there are signed again.' },
+        { id: 'return:capture', label: 'Return to Capture', detail: 'Reopen Capture; the gates from there are signed again.' },
+      ],
+      why: 'Every requirement is verified or waived, and nothing in the report stands in the way.',
+    },
+    release: {
+      emc: {
+        precheck: {
+          run: 'run_e3c1a9f2', at: ago(2 * HOUR), status: 'fail', summary: '1 errors, 2 warnings, 4 notes', counts: { error: 1, warn: 2, info: 4 }, more: 0,
+          findings: [
+            { severity: 'error', rule: 'return_path', text: '/USB_D+ crosses a split in the ground plane on In1.Cu', where: '/USB_D+' },
+            { severity: 'warn', rule: 'edge_proximity', text: '/SCK runs 0.8 mm from the board edge (guideline 1 mm)', where: '/SCK' },
+            { severity: 'warn', rule: 'edge_spectrum', text: '/SCK 8 MHz harmonics: 4.1 dB margin to CISPR 32 class B at 120 MHz', where: '/SCK' },
+          ],
+        },
+        estimates: [],
+        criterion: { id: 'signoff.emc', text: 'Interference prechecks pass or are waived.', status: 'waived' },
+        waivers: [{ id: 'W-7', target: 'signoff.emc', reason: 'The radiated scan is booked with the lab for the first boards.', risk: 'A re-spin if the USB harmonics fail.', severity: 'degraded', by: 'Marc Teichtahl' }],
+      },
+      parts: {
+        run: 'run_b07d44e1', at: ago(3 * HOUR), status: 'pass', summary: '14 lines for 10 boards: every line in stock; 47.16 USD',
+        boards: 10, build_quantity: 10, currency: 'USD', total: 47.16, per_board: 4.72, for_build: 47.16, line_count: 4, counts: { ok: 4 }, blocking: 0,
+        lines: [
+          { key: 'ESP32-C3-MINI-1-N4', line: 1, mpn: 'ESP32-C3-MINI-1-N4', refs: 'U1', status: 'ok', stock: 2140, need: 10, unit_price: 2.71, sellers: ['LCSC/JLCPCB'], lifecycle: 'Active', single: true, inactive: false },
+          { key: 'AP2112K-3.3TRG1', line: 2, mpn: 'AP2112K-3.3TRG1', refs: 'U2', status: 'ok', stock: 48210, need: 10, unit_price: 0.12, sellers: ['LCSC/JLCPCB', 'Mouser'], lifecycle: 'NRND', single: false, inactive: true },
+          { key: 'GRM155R71C104KA88D', line: 3, mpn: 'GRM155R71C104KA88D', refs: 'C1, C2, C3, C4', status: 'ok', stock: 912000, need: 40, unit_price: 0.003, sellers: ['LCSC/JLCPCB', 'Mouser'], lifecycle: 'Active', single: false, inactive: false },
+          { key: 'USB4105-GF-A', line: 4, mpn: 'USB4105-GF-A', refs: 'J1', status: 'ok', stock: 15800, need: 10, unit_price: 0.48, sellers: null, lifecycle: null, single: null, inactive: null },
+        ],
+        flagged: ['ESP32-C3-MINI-1-N4', 'AP2112K-3.3TRG1'], unknown: 1,
+      },
+      fab: { drc: { run: 'run_d1f0c2b8', at: ago(5 * HOUR), errors: 0, findings: 3, waived: 3 }, board: { size: '50 × 30 mm', layers: ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'] }, hand_placed: ['J1'] },
+      changes: { revision: 'A', previous: null, started: null, items: [] },
+    },
   },
 }
 
@@ -587,6 +630,17 @@ QUESTIONS['acme/panel-controller'] = {
  * merged since).
  */
 export const QUESTIONS_BY_ID: Record<string, NonNullable<SkillView['question']>> = {
+  // the panel controller's case fit, which its job waits on (#197)
+  'aq7c2f0e9d4b1a6c8': {
+    id: 'aq7c2f0e9d4b1a6c8', to: 'you', text: 'Waive the 3 case-fit findings under the display window, or move the window 4 mm to the left?', askedAt: ago(14 * MIN), blocks: 'the layout gate',
+    context: 'Asked by the Mechanical specialist.',
+    recommended: { id: 'move', label: 'Move the window' },
+    options: [
+      { id: 'move', label: 'Move the window', detail: 'Clears Q1, R4 and R5; the lid drawing changes.' },
+      { id: 'waive', label: 'Waive the findings', detail: 'The parts stay visible through the window.' },
+    ],
+    sources: [{ kind: 'run', label: 'case fit, run_fit7' }],
+  },
   'aq0e1ed2c4a7b9f31': {
     id: 'aq0e1ed2c4a7b9f31', to: 'you', text: 'Which pin order does the OLED header J2 need: GND-VCC-SCL-SDA or VCC-GND-SCL-SDA? A wrong order reverses the module\'s supply.', askedAt: ago(24 * MIN), blocks: 'the schematic',
     context: 'Asked by the Implementation specialist.',
