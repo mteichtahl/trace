@@ -40,6 +40,11 @@ function readWaiver(w: Obj): Waiver {
     id: String(w.id), title: `${str(target.kind) ?? 'item'} ${str(target.id) ?? ''}`.trim(), reason: String(w.reason ?? ''),
     risk: riskOf(w.severity), caught: str(w.caught_where) ?? 'Nowhere: accepted for good', acknowledged: Boolean(w.acknowledged),
     severity: str(w.severity), riskText: str(w.risk), scope: str(w.scope),
+    ...(str(w.by) ? { by: String(w.by) } : {}), ...(str(w.at) ? { at: String(w.at) } : {}),
+    ...(str(target.kind) && str(target.id) ? { target: { kind: String(target.kind), id: String(target.id) } } : {}),
+    closed: Boolean(w.closed),
+    ...(isObj(w.withdrawn) ? { withdrawn: { by: str(w.withdrawn.by) ?? null, at: String(w.withdrawn.at), reason: String(w.withdrawn.reason ?? ''), replacedBy: str(w.withdrawn.replaced_by) ?? null } } : {}),
+    mayWithdraw: Boolean(w.may_withdraw), ...(str(w.withdraw_blocked) ? { withdrawBlocked: String(w.withdraw_blocked) } : {}),
   }
 }
 
@@ -208,8 +213,8 @@ export function readChangeDiff(raw: unknown): ChangeDiff {
   }
 }
 
-const DECISION_KIND: Record<string, DecisionEntry['kind']> = { 'gate.signed': 'gate', 'gate.returned': 'gate', 'question.answered': 'question', 'waiver.added': 'waiver', 'skill.submitted': 'decision' }
-const DECISION_STATE: Record<string, DecisionEntry['state']> = { 'gate.signed': 'signed', 'gate.returned': 'returned', 'question.answered': 'answered', 'waiver.added': 'active' }
+const DECISION_KIND: Record<string, DecisionEntry['kind']> = { 'gate.signed': 'gate', 'gate.returned': 'gate', 'question.answered': 'question', 'waiver.added': 'waiver', 'waiver.withdrawn': 'waiver', 'skill.submitted': 'decision' }
+const DECISION_STATE: Record<string, DecisionEntry['state']> = { 'gate.signed': 'signed', 'gate.returned': 'returned', 'question.answered': 'answered', 'waiver.added': 'active', 'waiver.withdrawn': 'withdrawn' }
 
 /** The journey's icon: its JSON (glyph and colour), as projects.create keeps it. */
 function readIcon(v: unknown): { icon?: ProjectIcon } {
@@ -347,6 +352,8 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     ...(Array.isArray(raw.later) ? { later: raw.later.map(String).filter((s): s is 'certify' | 'produce' | 'sustain' => ['certify', 'produce', 'sustain'].includes(s)) } : {}),
     decisions: decisions.map((d) => ({
       id: String(d.id), kind: DECISION_KIND[String(d.kind)] ?? 'decision', title: String(d.summary), by: str(d.by) ?? 'trace', at: String(d.at),
+      // what it is about (a gate, a question, a waiver): the Decisions page shows a waiver once, at the time it was taken
+      ...(str(d.ref) ? { ref: String(d.ref) } : {}),
       ...(DECISION_STATE[String(d.kind)] ? { state: DECISION_STATE[String(d.kind)] } : {}),
       ...(String(d.kind).startsWith('gate.') && d.ref ? { to: `/p/${pid(repo)}/gates/${String(d.ref)}` } : {}),
     })),

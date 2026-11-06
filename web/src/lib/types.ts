@@ -195,6 +195,18 @@ export interface Waiver {
   severity?: string
   riskText?: string
   scope?: string
+  /** who took it and when (journey.get always says; the mock may not) */
+  by?: string
+  at?: string
+  /** what it waives, by kind and id: "Take it again" opens the Waiver skill on it */
+  target?: { kind: string; id: string }
+  /** no longer in force: withdrawn, taken again, or closed with its revision */
+  closed?: boolean
+  /** withdrawn by its author or an admin, with why; `replacedBy` the waiver taken again in its place */
+  withdrawn?: { by: string | null; at: string; reason: string; replacedBy: string | null }
+  /** whether this person may withdraw it or take it again; when not, why (test-esp32 #149) */
+  mayWithdraw?: boolean
+  withdrawBlocked?: string
 }
 
 export interface Gate {

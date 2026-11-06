@@ -98,7 +98,9 @@ export interface Actions {
   'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string; started?: string[]; rule?: RuleProposed; rule_error?: string } }
   /** `job`: the stuck agent's job id, or the stuck item's own id (an inbox item's questionId) */
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
-  'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }
+  'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string; replaces?: string }; result: { repo: string; waiver: { id: string } } }
+  /** withdraw a waiver in force with a reason kept in the record: its author or an admin (test-esp32 #149) */
+  'waiver.withdraw': { args: Repo & { waiver: string; reason: string }; result: { repo: string; waiver: { id: string; closed: boolean }; summary: string } }
   inbox: { args: Record<string, never>; result: InboxItem[] }
   /** where a project's time went, by stage (Operations' Process tab) */
   'journey.time': { args: Repo; result: import('./admin-types').JourneyTime }

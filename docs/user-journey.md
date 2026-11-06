@@ -530,6 +530,12 @@ Quality bar:
 
 Produces: a waiver record linked to what it waives; it is listed at every later gate until it closes.
 
+**Withdrawing or correcting a waiver** (src/core/journey.ts `withdrawWaiver`, `withdrawProblem`; the app's components/waiver-actions.tsx). Each waiver in force, wherever it is listed (the Decisions page, the gate), has two actions for its author or an admin; anyone else reads who may. A waiver recorded by answering a question is the person's own and behaves the same.
+
+- **Withdraw** asks why in a sentence, kept in the decisions log with who and when. What it waived counts again: a criterion it covered is not met unless another waiver covers it, and a finding is open again where the rule check is read.
+- **Take it again** opens this skill filled in from the waiver, to correct what was wrong (its severity, its reason). Taking the new one withdraws the old one in the same step, and the record keeps both.
+- **A signed gate stands on it.** A waiver a live signature acknowledged cannot be withdrawn or taken again, since a signature is never edited: an admin reopens that stage first (return the current gate and reopen it), which takes the signature back, and the gate is signed again on what the record then holds. The refusal says so.
+
 ### Board setup
 
 The skill sets up everything trace's placer needs before it can place: the outline, the stackup, the mounting and the parts whose position is fixed by the mechanics. It draws the answers from the intent's physical section and asks only for what is still open.
