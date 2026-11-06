@@ -5,7 +5,8 @@
  *
  * Submit says what it came to on the skill's page whatever the skill (submit-outcome.tsx): refused, or recorded with
  * a criterion it sets still not met, it stays here with the draft kept, says what blocked it and which step fixes it;
- * met in full, it says what it recorded, the criteria it set change on screen at once, and the person returns.
+ * met in full, it says what it recorded, the criteria it set change on screen at once, and the person returns to the
+ * project page the skill was opened from, else the project's overview (lib/return-to.ts; never browser history, #210).
  */
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -17,6 +18,7 @@ import type { QualityCheck } from '@/components/quality-bar'
 import { useCommands } from '@/components/shell/command-menu'
 import { projectId, projectName } from '@/lib/api'
 import { useAction, useJourney } from '@/lib/queries'
+import { returnTo } from '@/lib/return-to'
 import type { CriterionStatus } from '@/lib/types'
 import type { SkillView } from '@/lib/types-s1'
 import { type SkillDef, checksOf } from './definitions'
@@ -29,13 +31,19 @@ export interface SkillDraftBase {
 }
 
 /**
- * The checks the person's own tick decides (the checker's `by_draft`: nothing in the record holds them back), from the
- * draft on screen. The record's verdict follows only once the draft is saved and the bar checked again, seconds
- * later; the tick counts at once (test-esp32 #64). Pure.
+ * The checks the person's own tick decides, from the draft on screen: the checker's `by_draft` (nothing in the record
+ * holds them back), and the "I checked it" confirmations of checks no tool can make yet (`confirmable`, or already
+ * `confirmed`: the draft's confirmed[id]). The record's verdict follows only once the draft is saved and the bar
+ * checked again, seconds later; the tick counts at once (test-esp32 #64, #210). Pure.
  */
 export function draftChecks(view: Pick<SkillView, 'checks'> | undefined, draft: object): Record<string, CriterionStatus> {
   const d = draft as Record<string, unknown>
-  return Object.fromEntries((view?.checks ?? []).filter((c) => c.by_draft && !c.unavailable).map((c) => [c.id, d[c.by_draft!] === true ? 'met' : 'not_met']))
+  const confirmed = d.confirmed && typeof d.confirmed === 'object' ? d.confirmed as Record<string, unknown> : {}
+  return Object.fromEntries((view?.checks ?? []).flatMap((c): [string, CriterionStatus][] => {
+    if (c.confirmable || c.confirmed) return [[c.id, confirmed[c.id] === true ? 'met' : 'not_met']]
+    if (c.by_draft && !c.unavailable) return [[c.id, d[c.by_draft] === true ? 'met' : 'not_met']]
+    return []
+  }))
 }
 
 /** The quality bar: the checker's verdict per check, overridden by what the screen computes; unknown is Not met. */
@@ -43,11 +51,14 @@ export function qualityChecks(def: SkillDef, view: Pick<SkillView, 'checks'> | u
   const from = new Map((view?.checks ?? []).map((c) => [c.id, c]))
   return checksOf(def).map((c) => {
     // what the screen works out from the draft as it is typed wins over the record's last answer, except where the
-    // record cannot check it yet (unavailable): then it stays not met, as Submit would be refused
+    // record cannot check it yet (unavailable): then it stays not met, as Submit would be refused, unless it is the
+    // person's to confirm (confirmable) and their tick says so
     const api = from.get(c.id)
-    const status: CriterionStatus = api?.unavailable ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
+    const mine = (api?.confirmable || api?.confirmed) && local[c.id] !== undefined
+    const held = !!api?.unavailable && !mine
+    const status: CriterionStatus = held ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
     // the record's words are about its own verdict: where the screen's differs, they no longer fit
-    const detail = api?.unavailable ? `cannot be checked yet: needs ${api.unavailable}` : local[c.id] && api && local[c.id] !== api.status ? undefined : api?.detail
+    const detail = api?.unavailable && status === 'not_met' ? `cannot be checked yet: needs ${api.unavailable}` : local[c.id] && api && local[c.id] !== api.status ? undefined : api?.detail
     return { id: c.id, text: status === 'not_met' && detail ? `${c.text} (${detail})` : c.text, status, onJump: c.step && jump ? () => jump(c.step!) : undefined }
   })
 }
@@ -81,6 +92,9 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
     if (window.history.length > 1) router.history.back()
     else void navigate({ to: '/p/$id', params: { id: projectId(repo) } })
   }, [router, navigate, repo])
+  // once submitted: the project page the skill was opened from, else the overview; never history, which may be a page
+  // outside the project (#210)
+  const leave = useCallback(() => void navigate({ href: returnTo(repo) }), [navigate, repo])
 
   const steps = useMemo(() => focusSteps(def, stepIndex, draft.data.done), [def, stepIndex, draft.data.done])
   // done steps can be revisited; later ones open once reached
@@ -120,7 +134,7 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
       draft.discard()
       reread()
       toast(typeof done === 'function' ? done(result) : doneWords(done, result))
-      close()
+      leave()
     } catch (e) {
       // refused: the person stays on the skill with the draft kept, and the page says what blocked it
       draft.keep()
@@ -129,7 +143,7 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
     } finally {
       submitting.current = false
     }
-  }, [def, repo, draft, close, qc])
+  }, [def, repo, draft, leave, qc])
   const outcomeNode = outcome ? <SubmitOutcomePanel def={def} outcome={outcome} onJump={goTo} onDismiss={() => setOutcome(null)} /> : null
 
   useTraceContext({ label: def.name, description: 'The guided skill the person is doing', value: { skill: def.id, repo, step: step.title, stepNumber: stepIndex + 1, of: def.steps.length } }, 'skill')

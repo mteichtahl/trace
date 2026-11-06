@@ -528,6 +528,14 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
       recommendation: { recommended: 'approve', options: [{ id: 'approve', label: 'Approve for this revision' }, { id: 'defer', label: 'Defer to Rev B' }, { id: 'reject', label: 'Reject' }], why: 'Rev A is not released yet, so the change is cheapest now.', givesUp: 'About 3 days on the schedule.' },
     },
   },
+  // two checks no tool makes yet, the person's to confirm ("I checked it"): the bar counts a tick at once (#210)
+  'release-review': {
+    checks: [
+      { id: 'areas', status: 'met' }, { id: 'untested', status: 'met' },
+      { id: 'single', status: 'not_met', unavailable: 'a parts lifecycle lookup', confirmable: true },
+      { id: 'cost', status: 'not_met', unavailable: 'a build quantity in the record', confirmable: true },
+    ],
+  },
 }
 
 export const QUESTIONS: Record<string, SkillView['question']> = {

@@ -2,7 +2,7 @@
  * The signed-in shell: guard, the one live connection, CopilotKit, and the shell itself. Every screen with the left
  * rail is a child of this route (files under routes/_app/).
  */
-import { Outlet, createFileRoute } from '@tanstack/react-router'
+import { Outlet, createFileRoute, useLocation } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { AfterAccept } from '@/components/changes/after-accept'
@@ -12,6 +12,7 @@ import { loadConfig } from '@/lib/config'
 import { requireSignedIn } from '@/lib/guard'
 import { liveStatus, startLive } from '@/lib/live'
 import { keepFresh } from '@/lib/push'
+import { rememberPage } from '@/lib/return-to'
 
 export function useLiveConnection() {
   const qc = useQueryClient()
@@ -43,9 +44,16 @@ function usePushFresh() {
   }, [])
 }
 
+/** The page shown, remembered: a guided skill opened from it returns to it once submitted (lib/return-to.ts). */
+function useRememberPage() {
+  const href = useLocation({ select: (l) => l.href })
+  useEffect(() => rememberPage(href), [href])
+}
+
 function AppLayout() {
   useLiveConnection()
   usePushFresh()
+  useRememberPage()
   return (
     <ChatProvider>
       <AppShell>

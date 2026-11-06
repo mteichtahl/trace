@@ -31,7 +31,7 @@ import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
-import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
+import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
 
 // ------------------------------------------------------------------ waiver
 
@@ -113,7 +113,7 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
   const target = waivable.find((w) => w.id === d.what)
   const againstRec = target?.recommendation === 'fix'
   const local = { ...waiverChecks(d), reasons: againstRec && (d.reasonAgainst ?? '').trim().length < 3 ? 'not_met' as const : 'met' as const }
-  const checks = qualityChecks(def, v, local, s.goTo)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...local }, s.goTo)
 
   return (
     <FocusLayout
@@ -258,7 +258,7 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
   const released = !!imp?.released
   const set = (p: Partial<ChangeDraft>) => s.draft.setData((x) => ({ ...x, ...p }))
   const rec = imp?.recommendation
-  const checks = qualityChecks(def, v, { ...changeChecks(d, released), reasons: d.choice && rec && d.choice.option !== rec.recommended && !d.choice.reason ? 'not_met' : 'met' }, s.goTo)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, d), ...changeChecks(d, released), reasons: d.choice && rec && d.choice.option !== rec.recommended && !d.choice.reason ? 'not_met' : 'met' }, s.goTo)
   const request = `Change request (${d.what}): ${d.change.trim()}\nWhy: ${d.why.trim()}\nScope: ${d.revision === 'next' ? 'the next revision' : 'this revision'}, ${d.covers === 'firmware' ? 'firmware only' : 'hardware and firmware'}.${d.choice ? `\nDecision: ${d.choice.option}${d.choice.reason ? ` (reason: ${d.choice.reason})` : ''}` : ''}\nRaise it for approval at a gate; a changed requirement goes through Requirements review.`
 
   return (

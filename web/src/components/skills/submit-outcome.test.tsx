@@ -103,7 +103,9 @@ describe("a skill's Submit says what it came to", () => {
     submit = async () => DONE
     wrap(<Screen />)
     await userEvent.click(screen.getByRole('button', { name: 'Submit review' }))
-    await waitFor(() => expect(navigate).toHaveBeenCalled())
+    // the project's overview (nothing remembered here), never back in history (#210)
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ href: '/p/acme~soil-sensor' }))
+    expect(back).not.toHaveBeenCalled()
     expect(toast).toHaveBeenCalledWith('Requirements review submitted. Recorded: 2 requirements accepted. Met: Every requirement is accepted or struck.')
     expect(screen.queryByTestId('submit-outcome')).toBeNull()
     await waitFor(() => expect(drafts).toContain(null))
