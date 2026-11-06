@@ -15,7 +15,7 @@
 import { existsSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { z } from 'zod'
-import { SPECIALIST_KINDS, SpecialistKindSchema } from '../agents/kinds.js'
+import { SPECIALIST_KINDS, type SpecialistKind, SpecialistKindSchema } from '../agents/kinds.js'
 import { dec, enc, findRoot, open, openProject, projectPath, transaction } from './store.js'
 
 // ------------------------------------------------------------------ the electronics sections' items
@@ -115,10 +115,26 @@ export type FirmwareTarget = z.output<typeof FirmwareTargetSchema>
 
 export const DispatchOnSchema = z.object({ match: z.string(), workflow: z.string(), note: z.string().optional() }).strict()
 
-/** One specialist's settings (agents.<kind>.*): its model ('' = worker.model), turn limit and extra instructions. */
-const SpecialistSettingsSchema = z.object({
+/**
+ * What one job of each specialist may spend on its model before it stops and asks (agents.<kind>.max_usd), in US$
+ * (the Agent SDK's own estimate of the run, maxBudgetUsd). Set above the dearest job of its kind that test-esp32 run 2
+ * needed, so ordinary work never meets it: the layout job was US$17.74 (impl), and the documents are written section by
+ * section from records already checked. What it stops is a job going round in circles (the stuck Prove docs job, #69,
+ * #72): it pauses with its work kept, and a person resumes it (another job's worth) or not.
+ */
+export const SPECIALIST_MAX_USD = { verify: 10, impl: 25, ams: 10, emc: 10, render: 5, thermal: 10, docs: 5 } as const satisfies Record<SpecialistKind, number>
+/**
+ * Each specialist's turn limit. The documentation specialist's is lower: its jobs in test-esp32 run 2 took 8 to 41 turns
+ * (#42, #73, #77, #124), and one past 60 is stuck on a tool, not writing (#69), so it stops there and asks.
+ */
+export const SPECIALIST_MAX_TURNS = { verify: 120, impl: 120, ams: 120, emc: 120, render: 120, thermal: 120, docs: 60 } as const satisfies Record<SpecialistKind, number>
+
+/** One specialist's settings (agents.<kind>.*): its model ('' = worker.model), turn and spend limits, extra instructions. */
+const specialistSettings = (kind: SpecialistKind) => z.object({
   model: z.string().default(''),
-  max_turns: z.number().int().min(1).max(2000).default(120),
+  max_turns: z.number().int().min(1).max(2000).default(SPECIALIST_MAX_TURNS[kind]),
+  /** US$ one job may spend on its model before it pauses and asks; 0: no limit. */
+  max_usd: z.number().min(0).max(1000).default(SPECIALIST_MAX_USD[kind]),
   /** Appended to the specialist's prompt after .trace/rules.md (which wins where they differ). May be empty. */
   instructions: z.string().max(4000).default(''),
 }).strict().prefault({})
@@ -229,13 +245,13 @@ export const ConfigSchema = z.object({
      */
     handoff_max_per_job: z.number().int().min(0).max(10).default(3),
     handoff_max_per_project: z.number().int().min(0).max(50).default(10),
-    verify: SpecialistSettingsSchema,
-    impl: SpecialistSettingsSchema,
-    ams: SpecialistSettingsSchema,
-    emc: SpecialistSettingsSchema,
-    render: SpecialistSettingsSchema,
-    thermal: SpecialistSettingsSchema,
-    docs: SpecialistSettingsSchema,
+    verify: specialistSettings('verify'),
+    impl: specialistSettings('impl'),
+    ams: specialistSettings('ams'),
+    emc: specialistSettings('emc'),
+    render: specialistSettings('render'),
+    thermal: specialistSettings('thermal'),
+    docs: specialistSettings('docs'),
   }).strict().prefault({}),
   electronics: z.object({
     /** KiCad project files (.kicad_pro), relative to the repository; empty = every one found */
