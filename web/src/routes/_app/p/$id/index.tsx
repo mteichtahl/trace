@@ -19,7 +19,7 @@ import { StageCelebration, useStageCelebration } from '@/components/changes/cele
 import { ChangesFromTrace, useChanges } from '@/components/changes/changes-list'
 import { FoldLink, FoldRow, FoldRows } from '@/components/fold-row'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { useChangeActions } from '@/components/changes/use-change-actions'
+import { useAcceptNow } from '@/components/changes/use-change-actions'
 import { StageChip, StageGuidePanel, StageSheet } from '@/components/stage-guide'
 import { useAuth } from '@/lib/auth'
 import { changeOf, nextPlace } from '@/lib/guided'
@@ -73,7 +73,8 @@ function Overview() {
   const admin = user?.class === 'admin'
   const [sheet, setSheet] = useState<Stage | null>(null)
   const celebrate = useStageCelebration(j.data)
-  const actions = useChangeActions(repo)
+  // Accept now: the change read again at the click, its head accepted, the progress and any refusal said on the card
+  const acceptNow = useAcceptNow(repo)
   const lostJob = useLostJob(repo)
   // the change the next step is about: whether this person may accept it straight from the card
   const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
@@ -216,6 +217,8 @@ function Overview() {
     : null
   // after a change of requirements: the gates to sign again, and which keep their evidence (journey.get resign)
   const resign = d.resign ? <ResignGates resign={d.resign} id={id} className="mt-4" /> : null
+  // Accept now: kept while an accept is on its way, so the card shows its progress even if a refresh meanwhile says otherwise
+  const onAccept = changeNo && (canAccept || acceptNow.busy) ? () => acceptNow.run({ number: changeNo, title: change.data?.title ?? `Change ${changeNo}`, step: place }) : undefined
   const nextCard = held ? <HeldNextCard repo={repo} part={part} /> : (
     <NextStepCard
       step={d.next}
@@ -223,8 +226,9 @@ function Overview() {
       run={nextRun}
       place={place}
       pinned={phone}
-      onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
-      accepting={actions.accept.isPending}
+      onAccept={onAccept}
+      accepting={acceptNow.busy}
+      acceptRefused={acceptNow.refused?.number === changeNo ? acceptNow.refused.text : null}
       resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
       callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" />
         // checks no runner picked up: run them again once the runner is fixed (test-esp32 log #146)

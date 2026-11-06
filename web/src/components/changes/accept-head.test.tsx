@@ -1,7 +1,7 @@
 /**
  * Accepting sends the head the person was shown (docs/guided-flow.md: change.accept's head_sha), wherever it is taken:
- * the review page and the next-step card pass change.get's head.sha to useChangeActions; a Needs you card, which shows
- * no change detail, reads change.get first and sends what that says. Also: the changes list polls no faster than every
+ * the review page passes change.get's head.sha to useChangeActions; a Needs you card and the Overview's next-step card,
+ * which show no change detail, read change.get first and send what that says (accept-now.test.tsx). Also: the changes list polls no faster than every
  * 60 s while live events are connected, and a change's pictures are fetched only from https or the app's own origin.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -27,14 +27,14 @@ const client = () => new QueryClient({ defaultOptions: { queries: { retry: false
 beforeEach(() => {
   mockCall.mockReset()
   mockCall.mockImplementation((async (action: string) => {
-    if (action === 'change.get') return { number: 12, title: 'Power sheet', head: { ref: 'claude/task-12', sha: NOW } }
+    if (action === 'change.get') return { number: 12, title: 'Power sheet', state: 'open', may_accept: true, blockers: [], head: { ref: 'claude/task-12', sha: NOW } }
     if (action === 'change.accept') return { merged: true, sha: 'm', stage: 'capture', next: 'trace checks Capture.' }
     return {}
   }) as never)
 })
 
 describe('accepting sends the head that was shown', () => {
-  it('the review page and the next-step card: the sha they displayed', async () => {
+  it('the review page: the sha it displayed', async () => {
     const { result } = renderHook(() => useChangeActions('acme/soil-sensor'), { wrapper: wrapper(client()) })
     await act(async () => { await result.current.accept.mutateAsync({ number: 12, head: SHOWN, title: 'Power sheet', note: 'ok' }) })
     expect(mockCall).toHaveBeenCalledWith('change.accept', { repo: 'acme/soil-sensor', number: 12, head_sha: SHOWN, note: 'ok' })
