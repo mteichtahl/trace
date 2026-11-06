@@ -122,6 +122,9 @@ export class FakeGitHub implements GitHubApi {
   /** open pull requests, as the list gives them (none unless a test adds some) */
   openList: PullSummary[] = []
   async openPulls(): Promise<never[]> { return this.openList as never[] }
+  /** "repo:branch" → the merged pull request from it (none unless a test adds one) */
+  mergedList = new Map<string, { number: number; mergedAt: string }>()
+  async mergedPullFor(repo: string, branch: string): Promise<{ number: number; mergedAt: string } | null> { this.calls.push(`mergedPullFor ${repo} ${branch}`); return this.mergedList.get(`${repo}:${branch}`) ?? null }
   async openIssues(): Promise<never[]> { return [] }
   async workflowRuns(): Promise<never[]> { return [] }
   dispatched: string[] = []

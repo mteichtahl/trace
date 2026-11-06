@@ -528,8 +528,9 @@ export interface RunSummary {
   handoff?: { id: string; from?: string; fromName?: string }
   /** running: when trace last heard from it, when that is late (overdue), and when it is declared lost if still silent */
   heard?: { at: string; overdueAt: string; lostAt: string }
-  /** lost: dismissed by a person (with their reason) or started again; it then leaves "Ended without finishing" */
-  settled?: { how: 'dismissed' | 'restarted'; by: string; at: string; reason?: string }
+  /** lost: dismissed by a person (with their reason) or started again; it then leaves "Ended without finishing". Or
+   * merged: its change (`number`) was merged after its runtime went quiet, so it is finished (shown as succeeded) */
+  settled?: { how: 'dismissed' | 'restarted' | 'merged'; by: string; at: string; reason?: string; number?: number }
 }
 
 /** Where a hand-off between specialists stands (src/core/handoffs.ts). */

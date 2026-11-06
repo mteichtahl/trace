@@ -103,6 +103,11 @@ export interface GitHubApi {
   /** The commits that changed `path` on `ref`, newest first (at most `limit`). Optional: absent, no history is shown. */
   commits?(repo: string, path: string, ref: string, limit: number): Promise<CommitSummary[]>
   openPulls(repo: string): Promise<PullSummary[]>
+  /**
+   * The pull request from `branch` (in the repository itself, not a fork) that was merged, newest first, or null when
+   * none was. Optional: absent, a job whose runtime went quiet after its change was merged is not known to have finished.
+   */
+  mergedPullFor?(repo: string, branch: string): Promise<{ number: number; mergedAt: string } | null>
   openIssues(repo: string, label: string): Promise<IssueSummary[]>
   /** The newest runs, of every workflow; `only` narrows them to one workflow (its file name) and branch on GitHub's side,
    * so a busy repository's other runs never push the ones asked for out of the page. */
@@ -437,6 +442,14 @@ export class HttpGitHub implements GitHubApi {
       headRepo: p.head.repo?.full_name ?? null, author: p.user?.login ?? null, ...(p.head.sha ? { sha: p.head.sha } : {}),
       ...(p.base?.ref ? { base: p.base.ref } : {}),
     }))
+  }
+
+  async mergedPullFor(repo: string, branch: string): Promise<{ number: number; mergedAt: string } | null> {
+    const owner = repo.split('/')[0] ?? ''
+    const q = `state=closed&head=${encodeURIComponent(`${owner}:${branch}`)}&sort=updated&direction=desc&per_page=10`
+    const M = z.object({ number: z.number(), merged_at: z.string().nullable().optional() }).loose()
+    const merged = z.array(M).parse(await this.json('GET', `${this.p(repo)}/pulls?${q}`)).find((p) => p.merged_at)
+    return merged ? { number: merged.number, mergedAt: merged.merged_at as string } : null
   }
 
   async openIssues(repo: string, label: string): Promise<IssueSummary[]> {

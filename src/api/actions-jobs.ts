@@ -45,6 +45,11 @@
  * its own, once, on the next journey.get (restartLostJobs), with a note in the decisions. If that attempt is lost too,
  * a person decides: its card offers Start again and Dismiss, and the next step says it ended without finishing.
  *
+ * MERGED IS FINISHED (#186, #202): a job whose runtime went quiet after it opened its change is lost to the index, but
+ * once a person merges that change its work is in the design: it is shown finished (succeeded, settled `merged`), never
+ * on "Ended without finishing", never the next step, never auto-started again, and the step it worked on never reads
+ * "stopped" for it (lostMerged: the merged pull request from its branch, asked of GitHub only for such jobs).
+ *
  * A work item (a workflow's) can only be cancelled: the workflows claim it and would dispatch it again. A delegated
  * worker is controlled through its specialist's job. A hand-off job (one specialist asked another) is held, moved up and
  * cancelled like a person's task, but never paused: cancelled, its asker is told it was not answered. Every job view (here, `job`, journey.get's jobs) carries
@@ -65,6 +70,8 @@ import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 import { assertNotHeld } from './held.js'
+import { cached } from './github-cache.js'
+import type { PullSummary } from './github.js'
 import { draftingJobs } from './drafting.js'
 import { plainTitle } from '../core/plain-words.js'
 import { type QueueFile, WAITS_FOR_AGENT, queuedHandle, readQueue, startQueued } from './agent-queue.js'
@@ -115,9 +122,11 @@ export interface IndexedJob extends JobView {
   handoff: { id: string; from: string | null; fromName: string | null } | null
   /**
    * lost: what a person (or trace) decided about it, once decided: dismissed (with their reason), or started again (the
-   * new job's row links back to it). A settled lost job leaves the overview's "Ended without finishing" and the next step
+   * new job's row links back to it); or what settled it on its own: its change was merged (MERGED IS FINISHED: `number`,
+   * the pull request; `by` is trace, `at` when it merged). A settled lost job leaves the overview's "Ended without
+   * finishing" and the next step
    */
-  settled: { how: 'dismissed' | 'restarted'; by: string; at: string; reason: string | null } | null
+  settled: { how: 'dismissed' | 'restarted' | 'merged'; by: string; at: string; reason: string | null; number?: number } | null
   controls: JobOp[]
 }
 
@@ -173,16 +182,30 @@ export const restartable = (j: Pick<JobRow, 'kind' | 'parentJob'> & Partial<Pick
 /** A claim to start a lost job again older than this, with no new job to show for it, failed without a word. */
 const RESTART_CLAIM_S = 15 * 60
 
-/** What was decided about a lost job: dismissed, or started again (claimed in the record, or its new job in the index). */
-export function settledOf(j: Pick<JobRow, 'resumedBy'>, c: JobControl | undefined, at: number): IndexedJob['settled'] {
+/** A lost job's change that was merged: the pull request from its branch, and when it merged (MERGED IS FINISHED). */
+export interface MergedChange { number: number; mergedAt: string }
+
+/**
+ * What was decided about a lost job: dismissed, or started again (claimed in the record, or its new job in the index);
+ * or, decided by no one, its change merged (`merged`: the pull request from its branch that was merged, if any).
+ */
+export function settledOf(j: Pick<JobRow, 'resumedBy'>, c: JobControl | undefined, at: number, merged?: MergedChange | null): IndexedJob['settled'] {
   if (c?.dismissed) return { how: 'dismissed', by: c.by, at: iso(c.at) as string, reason: c.reason }
   if (j.resumedBy) return { how: 'restarted', by: c?.restartedBy ?? 'trace', at: iso(c?.restartedAt ?? c?.at ?? at) as string, reason: null }
+  if (merged) return { how: 'merged', by: 'trace', at: merged.mergedAt, reason: null, number: merged.number }
   if (c?.restartedBy && c.restartedAt !== null && at - c.restartedAt < RESTART_CLAIM_S) return { how: 'restarted', by: c.restartedBy, at: iso(c.restartedAt) as string, reason: null }
   return null
 }
 
-/** The job index's rows as views, for this person. */
-export function jobViews(repo: string, rows: readonly JobRow[], controls: ReadonlyMap<string, JobControl>, o: { at: number; sub: string; write: boolean; pause: boolean; cancel: boolean }): IndexedJob[] {
+/** A lost job's summary once its change was merged: its own, or what is known. */
+const mergedSummary = (j: Pick<JobRow, 'summary'>, number: number | undefined): string =>
+  j.summary ?? `Its change${number ? ` (#${number})` : ''} was accepted into the design. trace stopped hearing from its runtime after it opened it, so it is counted as finished.`
+
+/**
+ * The job index's rows as views, for this person. `merged`: the lost jobs (by the worker's job id) whose change was
+ * merged (lostMerged): settled, never "Ended without finishing".
+ */
+export function jobViews(repo: string, rows: readonly JobRow[], controls: ReadonlyMap<string, JobControl>, o: { at: number; sub: string; write: boolean; pause: boolean; cancel: boolean; merged?: ReadonlyMap<string, MergedChange> }): IndexedJob[] {
   const queues = new Map<string, JobRow[]>()
   const out: IndexedJob[] = []
   for (const j of rows) {
@@ -202,15 +225,18 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       const startsWhen = c?.held ? `held by ${c.by}: it starts when someone resumes it` : (j.step?.replace(/^queued: /, '') ?? 'starts when it is its turn')
       queue = { position, of: q.length, startsWhen }
     }
-    const state: ViewState = lost ? 'lost' : discarded ? 'aborted' : j.state
-    const settled = lost ? settledOf(j, c, o.at) : null
+    const settled = lost ? settledOf(j, c, o.at, o.merged?.get(j.id)) : null
+    // its change was merged (MERGED IS FINISHED): finished, as of when trace last heard from it, never lost
+    const done = settled?.how === 'merged'
+    const said = lost && !done ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : null
+    const state: ViewState = done ? 'succeeded' : lost ? 'lost' : discarded ? 'aborted' : j.state
     out.push({
       id: indexedHandle(repo, j.session, j.id), workerJobId: j.id, kind: j.kind, repository: repo, agent: j.agent, agentName: j.agent ? AGENT_WORDS[j.agent] ?? j.agent : null,
       title: j.title, number: j.number, startedBy: j.requestedBy, yours: j.requestedBySub !== null && j.requestedBySub === o.sub, state,
-      step: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : discarded ? `discarded by ${c?.by ?? 'a person'}` : j.step, held: Boolean(c?.held),
-      queuedAt: iso(j.queuedAt), startedAt: iso(j.state === 'queued' ? null : j.startedAt), endedAt: iso(j.endedAt),
+      step: done ? null : said ?? (discarded ? `discarded by ${c?.by ?? 'a person'}` : j.step), held: Boolean(c?.held),
+      queuedAt: iso(j.queuedAt), startedAt: iso(j.state === 'queued' ? null : j.startedAt), endedAt: done ? iso(heardOf(j).heardAt) : iso(j.endedAt),
       typicalS: typicalSeconds(rows, j), where: j.where, branch: j.branch, queue,
-      parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : j.error,
+      parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: done ? mergedSummary(j, settled.number) : j.summary, error: done ? null : said ?? j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
       heard: state === 'running' ? (({ heardAt, overdueAt, lostAt }) => ({ at: iso(heardAt) as string, overdueAt: iso(overdueAt) as string, lostAt: iso(lostAt) as string }))(heardOf(j)) : null,
       handoff: j.handoff ? handoffOf(j) : null, settled,
@@ -300,9 +326,65 @@ export async function listJobs(ctx: Context, repo: string, o: { at?: number } = 
   // the work asked for while the project's agent was being set up (src/api/agent-queue.ts): started here once the agent
   // is there, so every look at the project's jobs (journey.get, jobs.list) starts it; until then listed as queued
   const queue = await agentQueueNow(ctx, repo, jobs)
-  const views = jobViews(repo, result.rows, controls, { at, sub: ctx.principal.sub, write, pause: Boolean(jobs.pause), cancel: Boolean(jobs.cancel) })
+  // a lost job whose change was merged is finished (MERGED IS FINISHED): asked of GitHub only for such jobs
+  const merged = await lostMerged(ctx, repo, result.rows, controls, at)
+  const views = jobViews(repo, result.rows, controls, { at, sub: ctx.principal.sub, write, pause: Boolean(jobs.pause), cancel: Boolean(jobs.cancel), merged })
   const live = new Set(views.filter((j) => j.state === 'running').map((j) => j.workerJobId))
   return { jobs: [...views, ...queuedJobViews(repo, queue, { at, sub: ctx.principal.sub, write })], batch: result.batch.filter((b) => b.endedAt === null && live.has(b.jobId)), rows: result.rows, queue }
+}
+
+/**
+ * The lost jobs a merged change settles, as listJobs asks: lost (running, and silent past STALE_AFTER_S) in the last
+ * day, not settled otherwise, not a delegated worker or a sweep, with a branch (lostMergeCandidates).
+ */
+export function lostMergeCandidates(rows: readonly JobRow[], controls: ReadonlyMap<string, JobControl>, at: number): JobRow[] {
+  return rows.filter((j) => j.state === 'running' && j.branch && !j.parentJob && j.kind !== 'sweep' && !isLive(j, at)
+    && at - heardOf(j).heardAt < DAY_S && !settledOf(j, controls.get(j.id), at))
+}
+
+/** How long "not merged" is kept for a lost job's branch: a merge shows within this, at no more than one look per branch. */
+const NOT_MERGED_TTL_MS = 60_000
+/** Merged pull requests stay merged: kept for the container's life (bounded), so a settled job costs no further look. */
+const MERGED_KEPT = new Map<string, MergedChange>()
+const MERGED_KEPT_MAX = 500
+
+/**
+ * MERGED IS FINISHED (#186, #202): a job whose runtime went quiet after it opened its change, and whose change a
+ * person then merged, finished its work: its card and the next step must not ask anyone to start it again or dismiss
+ * it, and the criterion it worked on must not read "stopped". For each lost job that could be one
+ * (lostMergeCandidates): a branch with an open pull request is not merged (the open list is the journey's own, kept in
+ * the same cache); otherwise GitHub is asked for a merged pull request from that branch, kept a while (and a merged one
+ * for good). A look that fails is no answer: the job stays lost.
+ */
+export async function lostMerged(ctx: Context, repo: string, rows: readonly JobRow[], controls: ReadonlyMap<string, JobControl>, at: number): Promise<Map<string, MergedChange>> {
+  const out = new Map<string, MergedChange>()
+  const candidates = lostMergeCandidates(rows, controls, at)
+  if (!candidates.length) return out
+  try {
+    const gh = await ctx.deps.github()
+    const lookup = gh.mergedPullFor?.bind(gh)
+    if (!lookup) return out
+    const open = await cached(ctx.deps.githubCache, repo, 'pulls', () => gh.openPulls(repo)).catch(() => null)
+    const own = (p: PullSummary): boolean => !p.headRepo || p.headRepo.toLowerCase() === repo.toLowerCase()
+    const openBranches = new Set((open ?? []).filter(own).map((p) => p.head))
+    await Promise.all(candidates.map(async (j) => {
+      const branch = j.branch as string
+      const key = `${repo.toLowerCase()}:${branch}`
+      let m = MERGED_KEPT.get(key) ?? null
+      if (!m) {
+        if (openBranches.has(branch)) return
+        m = await cached(ctx.deps.githubCache, repo, `merged:${branch}`, () => lookup(repo, branch), NOT_MERGED_TTL_MS).catch(() => null)
+        if (!m) return
+        if (MERGED_KEPT.size >= MERGED_KEPT_MAX) MERGED_KEPT.delete(MERGED_KEPT.keys().next().value as string)
+        MERGED_KEPT.set(key, m)
+      }
+      // merged after the job started: a pull request from its branch merged before then was an earlier job's work
+      if (Date.parse(m.mergedAt) / 1000 >= (j.startedAt ?? j.queuedAt ?? 0)) out.set(j.id, m)
+    }))
+  } catch {
+    // GitHub cannot be reached: nothing is known merged, and the lost jobs stay as they are
+  }
+  return out
 }
 
 /** A queued start claimed this long ago with no job recorded did not start. */
