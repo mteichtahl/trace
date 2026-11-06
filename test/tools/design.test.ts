@@ -13,7 +13,7 @@ import '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../../src/tools/design/decisions.js'
 import { DesignDb, readDesignRows } from '../../src/tools/design/db.js'
-import { architectureView, intentDraft, intentView, linksView, parseNets, pinCheck, pinPlanPrint } from '../../src/tools/design/record.js'
+import { architectureView, decidedFields, intentDraft, intentView, interfaceFromWords, linksView, missingFields, parseNets, pinCheck, pinPlanPrint } from '../../src/tools/design/record.js'
 import { drawingArtifacts, sheetOfSvg, sheetPlaces, svgSizeMm } from '../../src/tools/kicad/export.js'
 import { VerifyDb } from '../../src/tools/verify/db.js'
 import { allTools } from '../../src/tools/index.js'
@@ -110,6 +110,45 @@ describe('people\'s decisions over the proposals', () => {
     expect(intentView(rows, both).find((x) => x.id === 'I-b')?.flags).toContain('conflict')
     const reasoned = [both[0]!, { ...both[1]!, detail: { text: 'Reads every 10 seconds.', reason: 'Only for the first hour after install.' } }]
     expect(intentView(rows, reasoned).find((x) => x.id === 'I-b')?.flags).not.toContain('conflict')
+  })
+})
+
+describe('an interface statement\'s fields follow the person\'s edit (test-esp32 #20)', () => {
+  it('reads the five fields from plain words, and from labelled ones', () => {
+    expect(interfaceFromWords('USB-C receptacle, USB 2.0 full speed device, 12 Mbit/s, both directions, for charging and setup.')).toEqual({
+      type: 'USB device', connector: 'USB-C receptacle', protocol: 'USB 2.0 full speed', rate: '12 Mbit/s', direction: 'both',
+    })
+    expect(interfaceFromWords('An I2C bus to the OLED on a 4-pin header at 400 kHz, output only.')).toEqual({ type: 'I2C', connector: '4-pin header', protocol: 'I2C', rate: '400 kHz', direction: 'out' })
+    expect(interfaceFromWords('Debug UART: type: UART; connector: Tag-Connect TC2030; protocol: 115200 8N1; rate: 115200 baud; direction: both')).toEqual({
+      type: 'UART', connector: 'Tag-Connect TC2030', protocol: '115200 8N1', rate: '115200 baud', direction: 'both',
+    })
+    // nothing named, nothing taken
+    expect(interfaceFromWords('Talks to the gateway.')).toEqual({})
+  })
+
+  it('a field as it was stands while the new words still say it; one the words change follows them; one set by hand wins', () => {
+    const was = { type: 'power input', connector: 'USB-C receptacle', protocol: 'none', rate: '400 kHz' }
+    expect(decidedFields(was, 'USB-C power input at 1 MHz, in only.', undefined)).toEqual({ type: 'power input', connector: 'USB-C receptacle', protocol: 'none', rate: '1 MHz', direction: 'in' })
+    expect(decidedFields(was, 'USB-C power input, in only.', { protocol: ' USB PD sink ', rate: '' })).toMatchObject({ protocol: 'USB PD sink', rate: '400 kHz' })
+    expect(missingFields({ type: 'I2C', connector: ' ', rate: '400 kHz' })).toEqual(['connector', 'protocol', 'direction'])
+  })
+
+  it('the fields stored with an edit stand over the agent\'s, and the draft panel names the ones still empty', () => {
+    const dir = freshDb()
+    const d = new DesignDb(dir)
+    d.addIntent([{ id: 'I-oled', topic: 'interfaces', text: 'OLED display.', interface: { type: 'I2C', connector: '4-pin header' } }])
+    const rows = d.rows()
+    let draft = intentDraft(intentView(rows, []))
+    expect(draft.statements[0]).toMatchObject({ flag: 'Missing protocol, rate, direction', interface: { type: 'I2C', connector: '4-pin header' }, missing: ['protocol', 'rate', 'direction'] })
+    const edit: DesignDecision = { id: '1', kind: 'intent', target: 'I-oled', choice: 'edited', detail: { text: 'OLED display.', edited: 'OLED on I2C at 400 kHz, out.', interface: { protocol: 'I2C', rate: '400 kHz', direction: 'out' } }, by: 'p', byHash: 'h', at: 1, supersededAt: null }
+    const v = intentView(rows, [edit])
+    expect(v[0]).toMatchObject({ interface: { type: 'I2C', connector: '4-pin header', protocol: 'I2C', rate: '400 kHz', direction: 'out' } })
+    expect(v[0]?.flags).not.toContain('interface_incomplete')
+    draft = intentDraft(v)
+    expect(draft.statements[0]).toMatchObject({ state: 'accepted', missing: [] })
+    // rejected, the agent's fields are what is left
+    expect(intentView(rows, [{ ...edit, choice: 'rejected' }])[0]?.interface).toEqual({ type: 'I2C', connector: '4-pin header' })
+    d.close()
   })
 })
 

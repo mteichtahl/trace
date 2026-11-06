@@ -94,7 +94,12 @@ export interface IntentStatement {
   text: string
   state: 'accepted' | 'draft' | 'needs_number' | 'vague' | 'conflict'
   flag?: string
+  /** an interface statement's five fields as the check reads them (src/tools/design/record.ts intentDraft) */
+  interface?: Partial<Record<InterfaceField, string>>
+  /** the fields of those still empty */
+  missing?: InterfaceField[]
 }
+export type InterfaceField = 'type' | 'connector' | 'protocol' | 'rate' | 'direction'
 export interface IntentDraft {
   /** the topic being worked on (index into the 10 topics) */
   topic: number

@@ -3,7 +3,7 @@ import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { answerChecks, withIntentDecision } from './conversation-skills'
+import { answerChecks, changedFields, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waiverChecks, type WaiverDraft } from './form-skills'
@@ -165,5 +165,12 @@ describe('Intent builder decisions', () => {
     d = withIntentDecision(d, 'INT-R4', null)
     expect(d.decisions?.map((x) => x.statement)).toEqual(['INT-R4-interface'])
     expect(d.done).toEqual(['purpose'])
+  })
+
+  it('an interface edit sends only the fields the person changed, so the rest are read from the new words (test-esp32 #20)', () => {
+    const shown = { type: 'I2C', connector: '4-pin header', rate: '400 kHz' }
+    expect(changedFields(shown, { ...shown })).toBeUndefined()
+    expect(changedFields(shown, { ...shown, rate: '400 kHz ', direction: ' out ', protocol: '' })).toEqual({ direction: 'out' })
+    expect(changedFields(shown, { ...shown, connector: 'Qwiic' })).toEqual({ connector: 'Qwiic' })
   })
 })

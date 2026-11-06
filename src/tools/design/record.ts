@@ -19,7 +19,7 @@
  */
 import { limitsOf } from '../verify/extract.js'
 import { type DesignDecision, fingerprint, standing } from './decisions.js'
-import { type ArchBlockRow, type DesignRows, type IntentStatementRow, INTENT_TOPICS, type PinRow, TOPIC_NAMES } from './db.js'
+import { type ArchBlockRow, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_TOPICS, type PinRow, TOPIC_NAMES } from './db.js'
 
 // ------------------------------------------------------------------ intent
 
@@ -49,7 +49,93 @@ const iso = (t: number): string => new Date(t * 1000).toISOString()
  * 2,000 mAh, 15 minutes, IP67 is not one). */
 const NUMBER_UNIT = /(^|[^\w.])[-+±]?\d[\d,]*(\.\d+)?\s?(%|°\s?[CF]|[A-Za-zµΩ]{1,12})\b/
 const quantity = (s: { words: string; limits: readonly unknown[] }): boolean => s.limits.length > 0 || limitsOf(s.words).length > 0 || NUMBER_UNIT.test(s.words)
-const FIVE = ['type', 'connector', 'protocol', 'rate', 'direction'] as const
+/** The five fields of an interface statement, in the order the person reads them. */
+export const INTERFACE_FIELDS = ['type', 'connector', 'protocol', 'rate', 'direction'] as const
+export type InterfaceField = (typeof INTERFACE_FIELDS)[number]
+
+/** The fields of an interface left empty, in order. */
+export const missingFields = (i: IntentInterface | null | undefined): InterfaceField[] => INTERFACE_FIELDS.filter((k) => !i?.[k]?.trim())
+
+/** The fields given, trimmed, without the empty ones (so laying one set over another never blanks a field). */
+export function givenFields(x: unknown): IntentInterface {
+  const out: IntentInterface = {}
+  if (!x || typeof x !== 'object') return out
+  for (const k of INTERFACE_FIELDS) { const v = (x as Record<string, unknown>)[k]; if (typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, k === 'direction' ? 40 : 120) }
+  return out
+}
+
+// what an interface statement's words say of its five fields. The agent fills the fields as it drafts a statement; a
+// person who rewords it fills them from their words here, so the check reads the statement as it now stands (test-esp32
+// #20). Only what the words plainly say is taken: a field the words leave out stays as it was
+const TYPES: [RegExp, string][] = [
+  [/\bUSB\b[^,;]{0,30}?\b(device|host)\b/i, 'USB $1'], [/\bI\s?[2²]\s?C\b/i, 'I2C'], [/\bSPI\b/, 'SPI'], [/\bQSPI\b/, 'QSPI'],
+  [/\bI2S\b/i, 'I2S'], [/\bUART\b/i, 'UART'], [/\bRS[- ]?485\b/i, 'RS-485'], [/\bRS[- ]?232\b/i, 'RS-232'], [/\bCAN(?:[- ]?FD)?\b/, 'CAN'],
+  [/\bLoRa(?:WAN)?\b/i, 'LoRa radio'], [/\bWi-?Fi\b/i, 'Wi-Fi'], [/\b(Bluetooth|BLE)\b/i, 'Bluetooth'], [/\bEthernet\b/i, 'Ethernet'],
+  [/\b(JTAG|SWD)\b/, '$1'], [/\bGPIO\b/i, 'GPIO'], [/\bPWM\b/, 'PWM'], [/\banalog(?:ue)? (input|output)\b/i, 'analog $1'], [/\bUSB\b/, 'USB'],
+  [/\bantenna\b/i, 'antenna'], [/\bpower (input|output)\b/i, 'power $1'], [/\bbutton\b/i, 'button'], [/\bdisplay\b/i, 'display'],
+]
+const CONNECTORS: RegExp[] = [
+  /\b(?:USB[- ]?C|type[- ]C)(?: (?:receptacle|socket|plug|connector))?/i, /\bmicro[- ]?USB(?: (?:receptacle|socket|connector))?/i,
+  /\b[uU]\.FL\b(?: (?:connector|socket))?/, /\bIPEX\b(?: (?:connector|socket))?/i, /\bR?P?-?SMA\b(?: (?:connector|jack|socket))?/, /\bRJ-?45\b(?: (?:jack|socket|connector))?/i,
+  /\bM(?:8|12)\b(?: \d+-pin)?(?: connector)?/, /\b(?:Qwiic|STEMMA QT)\b(?: connector)?/i, /\bJST[- ][A-Z]{1,4}\b(?: \d+-pin)?(?: connector)?/,
+  /\b\d+[- ]pin (?:\d+(?:\.\d+)? ?mm )?(?:pin )?(?:header|socket|connector|terminal block)/i, /\b(?:pin header|terminal block|screw terminals?|edge connector|pogo pads?|test pads?|PCB antenna|chip antenna|on-board antenna|trace antenna|ribbon cable|FPC connector|FFC connector)\b/i,
+  /\b(?:soldered|no connector|on[- ]board|wired direct(?:ly)?)\b/i,
+]
+const PROTOCOLS: RegExp[] = [
+  /\bUSB ?[123]\.\d(?: (?:full|high|low|super)[- ]speed)?/i, /\b(?:full|high|low)[- ]speed USB\b/i, /\bUSB (?:CDC|HID|MSC|PD|power delivery)\b/i,
+  /\bLoRaWAN(?: ?\d(?:\.\d)+)?(?: [A-Z]{2}\d{3})?/i, /\b(?:802\.11 ?[a-z/]+|Wi-?Fi ?[4-7])\b/i, /\b(?:Bluetooth (?:LE|Low Energy|Classic)(?: ?\d(?:\.\d)?)?|BLE ?\d(?:\.\d)?)\b/i,
+  /\bI\s?[2²]\s?C (?:standard|fast|fast[- ]plus|high[- ]speed)(?: mode)?/i, /\bSPI mode \d\b/i, /\b(?:CAN ?2\.0[AB]?|CAN[- ]FD|CANopen|J1939)\b/i,
+  /\b(?:Modbus(?: RTU| TCP)?|DMX512|MQTT|HTTPS?|TCP\/IP|NMEA ?0183|SBUS|DShot\d*)\b/i, /\b[5-9][NEO][12]\b/, /\b(?:10|100|1000)BASE-T\w*\b/i,
+]
+const BUS_PROTOCOL = new Set(['I2C', 'SPI', 'QSPI', 'I2S', 'UART', 'RS-485', 'RS-232', 'CAN', 'Ethernet', 'Wi-Fi', 'Bluetooth', 'JTAG', 'SWD'])
+const RATE = /(?:^|[^\w.])(?:up to |at )?(\d[\d,]*(?:\.\d+)?)\s?((?:[kKMG]i?)?(?:bit\/s|bits?\/s|bps|b\/s|baud|Bd|Hz|B\/s|bytes?\/s|sps|samples\/s))(?![\w/])/
+const DIRECTION: [RegExp, string][] = [
+  [/\b(both directions|bidirectional|bi-directional|two[- ]way|in and out|input and output|half[- ]duplex|full[- ]duplex)\b/i, 'both'],
+  [/\b(input only|inputs?|inbound|receive only|in only|into the board)\b/i, 'in'],
+  [/\b(output only|outputs?|outbound|transmit only|out only|out of the board)\b/i, 'out'],
+]
+/** A labelled field in the words ("rate: 400 kHz", "Direction = in"), up to the next comma, semicolon or full stop. */
+const labelled = (words: string, k: InterfaceField): string | undefined => new RegExp(`\\b${k}\\s*[:=]\\s*([^,;\\n]+?)(?=[,;\\n]|\\.(?:\\s|$)|$)`, 'i').exec(words)?.[1]?.trim() || undefined
+
+/**
+ * The fields an interface statement's words give: a field labelled in the words ("rate: 400 kHz") first, else what
+ * the words plainly name (an I2C bus, a USB-C receptacle, USB 2.0 full speed, 12 Mbit/s, both directions). Pure; a
+ * field the words do not give is left out.
+ */
+export function interfaceFromWords(words: string): IntentInterface {
+  const out: IntentInterface = {}
+  const type = labelled(words, 'type') ?? TYPES.map(([re, name]) => { const m = re.exec(words); return m ? name.replace('$1', m[1] ?? '') : null }).find((x) => x !== null) ?? undefined
+  if (type) out.type = type
+  const connector = labelled(words, 'connector') ?? CONNECTORS.map((re) => re.exec(words)?.[0]?.trim()).find(Boolean)
+  if (connector) out.connector = connector
+  const protocol = labelled(words, 'protocol') ?? PROTOCOLS.map((re) => re.exec(words)?.[0]?.trim()).find(Boolean) ?? (type && BUS_PROTOCOL.has(type) ? type : undefined)
+  if (protocol) out.protocol = protocol
+  const rateLabel = labelled(words, 'rate')
+  const r = RATE.exec(words)
+  const rate = rateLabel ?? (r ? `${r[1]} ${r[2]}` : /\b(not applicable|no data|n\/a)\b/i.exec(words)?.[0])
+  if (rate) out.rate = rate
+  const direction = labelled(words, 'direction') ?? DIRECTION.map(([re, d]) => (re.test(words) ? d : null)).find((x) => x !== null) ?? undefined
+  if (direction) out.direction = direction
+  return givenFields(out)
+}
+
+/**
+ * An interface statement's fields after a person's decision: the fields the person set first; then for each other
+ * field, what their new words give, unless the field as it was still appears in those words (an agent's "power input"
+ * stands over a bare "USB" read from "USB-C power input"); then the field as it was. Pure.
+ */
+export function decidedFields(was: IntentInterface | null, words: string | null, given: unknown): IntentInterface {
+  const before = givenFields(was)
+  const read = words ? interfaceFromWords(words) : {}
+  const out: IntentInterface = {}
+  for (const k of INTERFACE_FIELDS) {
+    const b = before[k]?.toLowerCase(), r = read[k]?.toLowerCase()
+    const kept = b !== undefined && words !== null && (words.toLowerCase().includes(b) || (r !== undefined && b.includes(r)))
+    const v = kept ? before[k] : read[k] ?? before[k]
+    if (v !== undefined) out[k] = v
+  }
+  return { ...out, ...givenFields(given) }
+}
 
 /** Live statements (not withdrawn by their agent), with people's decisions over them. Rejected ones are kept, marked. */
 export function intentView(rows: DesignRows, decisions: readonly DesignDecision[]): IntentView[] {
@@ -63,9 +149,12 @@ export function intentView(rows: DesignRows, decisions: readonly DesignDecision[
     // an accepted statement whose words an agent changed afterwards is proposed again
     const changed = d?.choice === 'accepted' && seen !== null && seen !== s.text
     const state: IntentState = d?.choice === 'rejected' ? 'rejected' : edited !== null ? 'edited' : d?.choice === 'accepted' && !changed ? 'accepted' : 'proposed'
+    // the person's fields of an interface (set beside an edit, or filled from their new words) stand over the agent's
+    // while their decision does
+    const fields = (state === 'edited' || state === 'accepted') && d?.detail.interface && typeof d.detail.interface === 'object' ? { ...givenFields(s.interface), ...givenFields(d.detail.interface) } : s.interface
     const u = unc.get(s.id)
     return {
-      ...s, words: edited ?? s.text, state, changed_since: changed,
+      ...s, interface: fields, words: edited ?? s.text, state, changed_since: changed,
       decided: d ? { by: d.by, at: iso(d.at), ...(typeof d.detail.reason === 'string' ? { reason: d.detail.reason } : {}) } : null,
       uncovered: u && u.choice === 'left_out' ? String(u.detail.reason ?? '') : null, flags: [] as IntentFlag[],
     }
@@ -77,7 +166,7 @@ export function intentView(rows: DesignRows, decisions: readonly DesignDecision[
       if (QUANTITY_TOPICS.has(s.topic) && !quantity(s)) s.flags.push('needs_number')
       if (VAGUE_WORDS.test(s.words) && !quantity(s)) s.flags.push('vague')
       if (s.testable === false) s.flags.push('not_testable')
-      if (s.topic === 'interfaces' && FIVE.some((k) => !s.interface?.[k]?.trim())) s.flags.push('interface_incomplete')
+      if (s.topic === 'interfaces' && missingFields(s.interface).length) s.flags.push('interface_incomplete')
     }
     if (s.kind === 'question' && !s.owner?.trim()) s.flags.push('no_owner')
     if (openConflicts(s, alive).length) s.flags.push('conflict')
@@ -109,10 +198,14 @@ export function intentDraft(view: readonly IntentView[]) {
     topic: next === -1 ? INTENT_TOPICS.length - 1 : next,
     answered: answered.map((t) => t),
     statements: live.filter((s) => s.kind !== 'question').map((s) => {
-      const f = s.flags.map((x) => FLAG[x]).find(Boolean)
+      const f0 = s.flags.map((x) => FLAG[x]).find(Boolean)
+      // an incomplete interface says which fields it lacks
+      const f = f0 && f0.flag === FLAG.interface_incomplete?.flag ? { ...f0, flag: `Missing ${missingFields(s.interface).join(', ')}` } : f0
       const state = f ? f.state : s.state === 'accepted' || s.state === 'edited' ? 'accepted' as const : 'draft' as const
       const words = s.kind === 'dont_care' ? `Don't care: ${s.words}` : s.kind === 'unknown' ? `Unknown, decide by ${s.decide_by ?? '?'}: ${s.words}` : s.words
-      return { id: s.id, topic: TOPIC_NAMES[s.topic], text: words, state, ...(f ? { flag: f.flag } : {}) }
+      // an interface's five fields, and the ones still empty, so the panel shows them beside the words and Edit can set them
+      const fields = s.topic === 'interfaces' && s.kind === 'statement' ? { interface: { ...givenFields(s.interface) }, missing: missingFields(s.interface) } : {}
+      return { id: s.id, topic: TOPIC_NAMES[s.topic], text: words, state, ...(f ? { flag: f.flag } : {}), ...fields }
     }),
     questions: live.filter((s) => s.kind === 'question').map((s) => ({ id: s.id, text: s.words, owner: s.owner ?? 'no owner yet' })),
   }
