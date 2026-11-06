@@ -261,6 +261,26 @@ export interface StoredLogo { path: string; format: 'svg' | 'png'; base64: strin
 /** What trace says of a logo file (src/docs/logo.ts LogoCheck). */
 export interface LogoCheck { ok: boolean; format: 'svg' | 'png' | null; width: number | null; height: number | null; problems: string[] }
 
+/** Told of every ok answer `call` gets, with the action and its arguments (lib/after-write.ts: what an act changed). */
+export type CallListener = (action: ActionName, args: Record<string, unknown>) => void
+const listeners = new Set<CallListener>()
+
+/** Hear of every ok answer from now on; returns the function that stops it. */
+export function onAnswer(l: CallListener): () => void {
+  listeners.add(l)
+  return () => { listeners.delete(l) }
+}
+
+const told = (action: ActionName, args: unknown): void => {
+  for (const l of listeners) {
+    try {
+      l(action, (args ?? {}) as Record<string, unknown>)
+    } catch {
+      // a listener's failure is never the call's: the answer has come
+    }
+  }
+}
+
 export async function call<A extends ActionName>(action: A, args: ArgsOf<A>, o: { signal?: AbortSignal } = {}): Promise<ResultOf<A>> {
   let env: Envelope<ResultOf<A>>
   try {
@@ -269,8 +289,12 @@ export async function call<A extends ActionName>(action: A, args: ArgsOf<A>, o: 
     if (e instanceof HttpError) throw new ApiError(e.message, e.status, e.code)
     throw e
   }
-  if (!env || typeof env !== 'object' || !('ok' in env)) return env as ResultOf<A>
+  if (!env || typeof env !== 'object' || !('ok' in env)) {
+    told(action, args)
+    return env as ResultOf<A>
+  }
   if (!env.ok) throw new ApiError(env.error, 200, env.code)
+  told(action, args)
   const read = READERS[action]
   if (!read) return env.result
   try {

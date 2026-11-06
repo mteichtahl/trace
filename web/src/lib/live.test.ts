@@ -4,12 +4,20 @@ import { CHANGE_CHECKS_MS, CHANGE_MERGEABLE_MS, POLL_LIVE_MS, applyEvent, bumpLo
 
 describe('live events → query invalidation', () => {
   it('maps each event to the queries it makes stale', () => {
-    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'journey', at: '' })).toEqual([['journey.get', 'a/b'], ['inbox'], ['runs', 'a/b'], ['build.get', 'a/b'], ['skill.get', 'a/b'], ['jobs.list', 'a/b'], ['change.get', 'a/b'], ['changes.list', 'a/b']])
+    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'journey', at: '' })).toEqual([['journey.get', 'a/b'], ['inbox'], ['runs', 'a/b'], ['build.get', 'a/b'], ['skill.get', 'a/b'], ['jobs.list', 'a/b'], ['change.get', 'a/b'], ['changes.list', 'a/b'], ['tools.waits', 'a/b'], ['activity.list']])
     expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'chats', at: '' })).toContainEqual(['chats.recall', 'a/b'])
     expect(invalidationsFor({ type: 'job.updated', repo: 'a/b', jobId: 'j', state: 'done', at: '' })).toContainEqual(['tools.waits', 'a/b'])
     expect(invalidationsFor({ type: 'notification', id: 'n', kind: 'gate', repo: 'a/b', summary: '', at: '' })).toEqual([['inbox'], ['journey.get', 'a/b']])
     // the installation update added a new project's agent (src/web/journey-events.ts): its setup notice looks again now
     expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'agent', at: '' })).toEqual([['project.agent', 'a/b'], ['journey.get', 'a/b']])
+  })
+
+  it('refreshes what trace is doing when a task or a job changes (task, job.control publish \'jobs\')', () => {
+    // it fell back to the journey alone: the Overview's "trace is doing" and the Agents page stayed as they were
+    const keys = invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'jobs', at: '' })
+    expect(keys).toEqual(expect.arrayContaining([['jobs.list', 'a/b'], ['journey.get', 'a/b'], ['tools.waits', 'a/b'], ['activity.list']]))
+    // a job controlled where no project is named: every project's lists
+    expect(invalidationsFor({ type: 'record.changed', what: 'jobs', at: '' } as never)).toContainEqual(['jobs.list'])
   })
 
   it('invalidates matching queries and leaves the others', async () => {

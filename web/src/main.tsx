@@ -3,7 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ApiError } from '@/lib/api'
+import { ApiError, onAnswer } from '@/lib/api'
+import { afterWrite } from '@/lib/after-write'
 import { routeTree } from './routeTree.gen'
 
 export const queryClient = new QueryClient({
@@ -17,6 +18,9 @@ export const queryClient = new QueryClient({
     },
   },
 })
+
+// whatever a person does, wherever they do it, the screens showing what it changed read it again at once
+onAnswer(afterWrite(queryClient))
 
 const router = createRouter({
   routeTree,
