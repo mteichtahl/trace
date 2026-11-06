@@ -287,6 +287,8 @@ describe('verification record', () => {
     expect(reqs.find((r) => r.id === R1)?.verdict).toBe('coverage_gap') // the point has no hits
     const rep = await call('verify.report', { title: 'Test report' })
     expect(String(rep.markdown)).toMatch(/\| REQ-T1 \| timing \| verified \|/)
+    // the release report's other sections are there too, read from the record
+    expect(String(rep.markdown)).toMatch(/## Interference \(EMC\)[\s\S]*## Parts list[\s\S]*## Open waivers[\s\S]*## Open items/)
     // clean up for the tests below
     const v = new VerifyDb()
     v.db.exec('DELETE FROM test_items; DELETE FROM requirements; DELETE FROM coverage_points; DELETE FROM test_results; DELETE FROM coverage_hits')

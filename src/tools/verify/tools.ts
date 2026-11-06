@@ -7,7 +7,8 @@
  *   verify.plan          add / list / update / delete test items, each linked to requirements
  *   verify.run           run test items through their tools or commands; record pass/fail with evidence run ids
  *   verify.coverage      requirement coverage matrix, coverage points, functional and code coverage merged
- *   verify.report        the verification status as Markdown (stored as an artifact, optionally written to a file)
+ *   verify.report        the release report as Markdown: coverage, interference, the parts list and the open waivers
+ *                        (stored as the run's report.md, optionally written to a file)
  *   verify.verilator     lint + build + run a testbench with line/toggle/branch/user coverage
  *   verify.cocotb        cocotb tests on Icarus or Verilator; per-test verdicts from results.xml
  *   verify.formal        assertions and covers: bmc / prove / cover
@@ -19,12 +20,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, resolve } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
-import type { Json } from '../../core/store.js'
+import { type Json, Work } from '../../core/store.js'
+import { loadAgentFacts } from '../../core/agent-facts.js'
+import { type JourneyRecord, loadJourney, mergeAgentFacts } from '../../core/journey.js'
+import { journeyScope } from '../journey/tools.js'
 import { Recorder } from '../sim/record.js'
 import { ExpectSchema, METHODS, POINT_KINDS, REQ_KINDS, REQ_STATUS, TEST_STATUS, withVerify, type TestItem } from './db.js'
 import { extractCandidates } from './extract.js'
 import { tail } from './job.js'
 import { buildMatrix, reportMarkdown } from './matrix.js'
+import { releaseFacts, type ReleaseFacts } from './release.js'
 import { runCocotb } from './cocotb.js'
 import { runFormal } from './formal.js'
 import { runTest, validateToolArgs, type Verdict } from './run.js'
@@ -269,21 +274,58 @@ export const coverageTool = defineTool({
 
 // ------------------------------------------------------------------ verify.report
 
+/**
+ * The journey record the waivers and criteria are read from: the journey store's, with the agents' checks merged in,
+ * when the project is in scope; else the copy in the checkout's project database; else none.
+ */
+async function journeyNow(): Promise<{ rec: JourneyRecord | null; from: ReleaseFacts['record'] }> {
+  let scope: ReturnType<typeof journeyScope> | null = null
+  try { scope = journeyScope() } catch { scope = null }
+  if (scope) {
+    try {
+      const own = (await scope.journey.read((db) => loadJourney(db))).result
+      if (own) {
+        const s = scope
+        const facts = await s.facts.read((db) => loadAgentFacts(db)).then((x) => x.result, () => null)
+        return { rec: facts ? mergeAgentFacts(own, facts) : own, from: 'live' }
+      }
+    } catch { /* the store is out of reach: the checkout's copy below */ }
+  }
+  const w = new Work()
+  try {
+    const rec = loadJourney(w.db)
+    return { rec, from: rec ? 'checkout' : null }
+  } finally {
+    w.close()
+  }
+}
+
+async function releaseFactsNow(): Promise<ReleaseFacts> {
+  const { rec, from } = await journeyNow()
+  const w = new Work()
+  try {
+    return releaseFacts(w.db, rec, from)
+  } finally {
+    w.close()
+  }
+}
+
 export const reportTool = defineTool({
   name: 'verify.report',
-  description: 'The verification status as a Markdown report: summary, requirements with verdicts, tests with last runs, coverage points, code coverage by file, open items. Recorded (report.md artifact); written to path when given.',
+  description: 'The release report as Markdown: summary, requirements with verdicts, tests with last runs, coverage points, code coverage by file; interference (the newest emc.precheck with its findings and the newest spectrum, field-solver and signal integrity runs, as pre-compliance estimates, and what is waived); the parts list (the newest parts.bom_check: lines, cost and stock against the build quantity); every open waiver; and open items. Read from the record: run the prechecks and the parts list check first. Recorded (report.md artifact, the report the Sign-off review reads); written to path when given.',
   input: z.object({
     title: z.string().default('Verification report'),
     path: z.string().optional().describe('also write the report here (e.g. docs/verification.md)'),
     exclude: z.string().default('(^|/)(tb_|test_)[^/]*$|_tb\\.s?v$').describe('regex of files left out of code coverage'),
     max_chars: z.number().int().min(500).max(200_000).default(20_000).describe('characters of the report returned (all is stored)'),
   }),
-  run: (a) => {
+  run: async (a) => {
+    const release = await releaseFactsNow()
     const rec = new Recorder('verify.report', a.path ?? 'verification', a)
     try {
       const { md, m } = withVerify((v) => {
         const m = buildMatrix(v, { exclude: a.exclude || undefined })
-        return { m, md: reportMarkdown(m, v.tests(), { title: a.title, generated: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }) }
+        return { m, md: reportMarkdown(m, v.tests(), { title: a.title, generated: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }, release) }
       })
       rec.artifact('report.md', md, 'text/markdown')
       if (a.path) {

@@ -19,6 +19,7 @@
 import { Work } from '../../core/store.js'
 import { matcher, type CoveragePoint, type Requirement, type TestItem, type VerifyDb } from './db.js'
 import { mergeCoverage, parseCoverageDat, summarizeCoverage, type CovPoint } from './parse.js'
+import { releaseMarkdown, releaseOpenItems, type ReleaseFacts } from './release.js'
 
 export type Verdict = 'verified' | 'coverage_gap' | 'failing' | 'partial' | 'untested' | 'no_test' | 'waived'
 
@@ -145,8 +146,12 @@ export function buildMatrix(v: VerifyDb, opts: { runs?: string[] | undefined; co
 const esc = (s: string): string => s.replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim()
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
-/** The verification status as Markdown: summary, requirements with verdicts, tests, coverage, open items. */
-export function reportMarkdown(m: Matrix, tests: readonly TestItem[], meta: { title: string; generated: string; git?: string | null }): string {
+/**
+ * The verification status as Markdown: summary, requirements with verdicts, tests, coverage, open items. With
+ * `release`, it is the release report: interference, the parts list and the open waivers too, and what they leave open
+ * among the open items.
+ */
+export function reportMarkdown(m: Matrix, tests: readonly TestItem[], meta: { title: string; generated: string; git?: string | null }, release?: ReleaseFacts): string {
   const s = m.summary
   const out: string[] = [
     `# ${meta.title}`, '',
@@ -181,11 +186,14 @@ export function reportMarkdown(m: Matrix, tests: readonly TestItem[], meta: { ti
       out.push(`| ${f.file.split('/').pop()} | ${cell('line')} | ${cell('toggle')} | ${cell('branch')} |`)
     }
   }
+  if (release) out.push(...releaseMarkdown(release))
   const open = m.requirements.filter((r) => r.verdict !== 'verified' && r.verdict !== 'waived')
+  const more = release ? releaseOpenItems(release) : []
   out.push('', '## Open items', '')
-  if (!open.length && !m.orphan_tests.length) out.push('None.')
+  if (!open.length && !m.orphan_tests.length && !more.length) out.push('None.')
   for (const r of open) out.push(`- ${r.id} (${r.verdict}): ${esc(clip(r.text, 160))}`)
   if (m.orphan_tests.length) out.push(`- Tests linked to no live requirement: ${m.orphan_tests.join(', ')}`)
+  for (const x of more) out.push(`- ${x}`)
   out.push('')
   return out.join('\n')
 }
