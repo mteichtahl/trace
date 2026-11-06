@@ -41,7 +41,8 @@ import { z } from 'zod'
 import { def } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
 import { type ConflictReport, resolveConflicts } from './conflicts.js'
-import { driftOf, recordNow, recordsOfCommit, startStageScribe } from './docs-follow.js'
+import { docsOwed, driftOf, recordNow, recordsOfCommit, startStageScribe } from './docs-follow.js'
+import { STAGE_NAMES } from '../core/journey-catalog.js'
 import { startFollowOn } from './actions-journey.js'
 import { journeyStore } from './action-kit.js'
 import { loadJourney } from '../core/journey.js'
@@ -82,7 +83,12 @@ export const HOOK_ACTIONS = {
     const gh = await ctx.deps.github()
     const { sha } = await gh.defaultBranch(repo)
     const { records } = await recordsOfCommit(ctx, repo, sha)
-    if (!records.length) return { repo, commit: sha, records, started: null, why: 'the push changed no record a document is written from', ...design }
+    if (!records.length) {
+      // a push of only runs (a change of checks accepted) can still land what the documents waited for (docsOwed)
+      if (!(await docsOwed(ctx, repo, rec))) return { repo, commit: sha, records, started: null, why: 'the push changed no record a document is written from', ...design }
+      const r = await startStageScribe(ctx, repo, `The default branch moved to ${sha.slice(0, 12)}, which landed the last of ${STAGE_NAMES[rec.journey.currentStage]}'s design.`, { rec, also: ['journey'] })
+      return { repo, commit: sha, records, started: r.started ?? null, ...(r.jobId ? { job: r.jobId } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.waiting ? { waiting: r.waiting } : {}), ...(r.jobError ? { error: r.jobError } : {}), ...design }
+    }
     // the documents of a stage are written from its design: while some of it is still to land they wait, and the push
     // (or the person's act) that lands the last of it starts Scribe (docsAfterDesign)
     const r = await startStageScribe(ctx, repo, `The default branch moved to ${sha.slice(0, 12)}.`, { rec, records })

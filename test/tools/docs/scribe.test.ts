@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openProject } from '../../../src/core/store.js'
 import { sourcesOfPaths, staleSections } from '../../../src/docs/stale.js'
 import { allTools } from '../../../src/tools/index.js'
+import { documentName } from '../../../src/tools/docs/scribe.js'
 
 type Dict = Record<string, any>
 const reg = allTools()
@@ -44,6 +45,20 @@ describe('what a change touched, pure', () => {
     expect([...sourcesOfPaths(['hardware/a.kicad_sch', 'mechanical/case.py', 'README.md'])].sort()).toEqual(['enclosure', 'schematic'])
     const hld = staleSections(new Set(['requirements']), ['hld'])[0]!
     expect(hld.sections.map((s) => s.id)).toEqual(['requirements', 'risks'])
+  })
+})
+
+// test-esp32 #98: the design was titled "test-esp32-e2e", the repository, not the project
+describe('the name the documents carry', () => {
+  it('is the project\'s, from its journey, whatever name was given', () => {
+    expect(documentName('test-esp32-e2e', { journey: 'test-esp32', repository: 'mteichtahl/test-esp32-e2e' })).toBe('test-esp32')
+    expect(documentName(undefined, { journey: 'Soil sensor', repository: 'acme/soil' })).toBe('Soil sensor')
+  })
+
+  it('without a journey name: the name given, unless it is only the repository\'s', () => {
+    expect(documentName('Soil sensor', { journey: null, repository: 'acme/soil' })).toBe('Soil sensor')
+    expect(documentName('soil', { journey: null, repository: 'acme/soil' })).toBe('soil')
+    expect(documentName(undefined, { journey: null, repository: 'acme/soil' })).toBe('soil')
   })
 })
 

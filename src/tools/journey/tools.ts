@@ -162,7 +162,8 @@ export const status = defineTool({
     const v = journeyView(r, { hash: '', label: s.asker.label, admin: false, part: null }, undefined, f)
     const stage = v.current_stage
     return {
-      repository: s.repository, started: true, template: v.template, revision: v.revision, stage,
+      // the project's name: what its documents are titled (docs.init), never the repository's
+      repository: s.repository, project: r.journey.name ?? null, started: true, template: v.template, revision: v.revision, stage,
       next: { kind: v.next.kind, belongs_to: v.next.belongs_to, summary: v.next.summary },
       gates: v.gates.filter((g) => g.stage === stage).map((g) => ({
         id: g.id, title: g.title, state: g.state, met: g.met, total: g.total,

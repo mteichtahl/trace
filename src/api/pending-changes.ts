@@ -18,9 +18,9 @@ import { requirementEvidence } from './record-read.js'
  * The work still pending, as the gates read it (`error`: why the changes could not be listed): the open changes with
  * their stage, and the agents' jobs still working (`jobs`: the project's job index rows; absent when not looked at).
  */
-export function pendingOf(open: readonly { change: { number: number; title: string; verdict: string; stage?: StageId | null } }[], error: string | null, requirements: readonly string[] = [], jobs?: readonly JobRow[]): PendingChanges {
+export function pendingOf(open: readonly { change: { number: number; title: string; verdict: string; stage?: StageId | null }; content?: 'record' | 'docs' | null | undefined }[], error: string | null, requirements: readonly string[] = [], jobs?: readonly JobRow[]): PendingChanges {
   return {
-    changes: open.map(({ change: c }) => ({ number: c.number, title: c.title, ready: c.verdict === 'ready', stage: c.stage ?? null })), requirements,
+    changes: open.map(({ change: c, content }) => ({ number: c.number, title: c.title, ready: c.verdict === 'ready', stage: c.stage ?? null, ...(content ? { content } : {}) })), requirements,
     ...(jobs ? { work: stillWorking(jobs) } : {}),
     unknown: error ? error.slice(0, 200) : null,
   }

@@ -71,7 +71,12 @@ Two rules keep it trustworthy:
      review submitted, a question answered, a criterion waived or signed off), since no push follows those. A gate
      signed starts Scribe at once only when the stage it opens has no design work of its own. Started when a stage
      opened, Scribe wrote "pending" in every section the stage was about and asked how to write the rest (test-esp32
-     #58, #98, #120).
+     #58, #98, #120). The design counted is the accepted one: a criterion an agent checked on a change not accepted
+     yet does not count (its runs are not in the default branch's record), and while a change carrying the stage's
+     design work (its job named one of the stage's criteria) is open, the documents wait for it too. The push that
+     accepts the last of it starts Scribe whatever records that push changed itself, with the journey among the
+     records that changed, once no Documentation job has started since the stage's design last landed
+     (`docsOwed`);
    One Scribe job runs per project at a time. It compares with the commit the documents were last written at (their
    front matter), not with the push that started it, so a missed or skipped event is caught by the next one.
 3. **Surgical updates.** Scribe works out which sections the change touched and rewrites only those, then opens a
@@ -168,7 +173,7 @@ Each layer is one pull request that builds and passes on its own.
    and `figures.json` (each one's run, inputs hash and quality), so an unchanged figure is never made again and a draft
    is replaced only by a release. Blender renders with Cycles: Eevee cannot run on the tools function (no display).
 6. **Scribe** (merged, #264): the `docs` specialist (`src/agents/docs`: label `agent:docs`, its prompt in the catalog from its
-   definition) and its tools (`src/tools/docs/scribe.ts`): `docs.init` starts the documents a stage needs,
+   definition) and its tools (`src/tools/docs/scribe.ts`): `docs.init` starts the documents a stage needs (titled with the project's name from its journey, never the repository's: #98),
    `docs.stale` names the sections a change touched (its files, and the project database compared table by table),
    `docs.write_section` writes one section between its markers only when it passes the quality bar. As a specialist it
    has no file tools of its own; the worker commits its documents as a change stacked on the one documented.
