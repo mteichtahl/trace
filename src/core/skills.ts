@@ -154,6 +154,7 @@ export const SKILL_DEFS: readonly SkillDef[] = [
       { id: 'untested', text: 'No requirement untested; failing only waived', step: 'coverage' },
       { id: 'single', text: 'Single-source and not-active parts acknowledged', step: 'bom' },
       { id: 'cost', text: 'Expected cost for the build quantity stated', step: 'bom' },
+      { id: 'decision', text: 'Released, or returned with what must change', step: 'decide' },
       { id: 'reasons', text: 'Every choice against the recommendation has a reason' },
     ],
   },
