@@ -63,19 +63,21 @@ describe('start_task: trace asks, the person confirms', () => {
     const settingUp = (repo: string) => ({ repo, ready: false, state: 'setting_up', text: 'The installation update is running.', requested_at: null, update: null, expected_by: null, next_check_s: 60 })
     const answer = (body: unknown) => new Response(JSON.stringify({ ok: true, result: body }), { status: 200, headers: { 'content-type': 'application/json' } })
 
-    it('the conversation\'s own project: Confirm waits on what the screen\'s notice knows, and asks nothing itself', () => {
+    // nothing waits on a disabled button: the work is queued until the agent is there (test-esp32 log #2, #80)
+    it('the conversation\'s own project: Confirm goes ahead and says the work is queued, from what the screen\'s notice knows', () => {
       const fetch = vi.spyOn(globalThis, 'fetch')
       qc.setQueryData(keys.action('project.agent', { repo: 'acme/board' }), settingUp('acme/board'))
       render(<ChatRepo.Provider value="acme/board"><StartTaskCard args={args} status="executing" respond={vi.fn()} /></ChatRepo.Provider>, { wrapper })
-      expect(screen.getByRole('button', { name: /Confirm and start/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /Confirm and start/ })).toBeEnabled()
+      expect(screen.getByText(/the work is queued, and starts by itself once the agent is ready/)).toBeInTheDocument()
       expect(fetch).not.toHaveBeenCalled()
     })
 
-    it('a conversation on no project: asks for the named project\'s agent, and Confirm waits for it', async () => {
+    it('a conversation on no project: asks for the named project\'s agent, and says its work is queued', async () => {
       const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(settingUp('acme/board')))
       render(<StartTaskCard args={args} status="executing" respond={vi.fn()} />, { wrapper })
-      await waitFor(() => expect(screen.getByRole('button', { name: /Confirm and start/ })).toBeDisabled())
-      expect(screen.getByText(/trace is still setting up this project's agent/)).toBeInTheDocument()
+      await waitFor(() => expect(screen.getByText(/trace is still setting up this project's agent: the work is queued/)).toBeInTheDocument())
+      expect(screen.getByRole('button', { name: /Confirm and start/ })).toBeEnabled()
       expect(fetch.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)) as unknown)).toContainEqual({ action: 'project.agent', repo: 'acme/board' })
     })
   })

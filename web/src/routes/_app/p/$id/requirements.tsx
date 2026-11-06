@@ -160,8 +160,8 @@ export const mayWrite = (projects: readonly { repo: string; part?: string | unde
   projects ? (projects.find((p) => p.repo === repo)?.part ?? 'contributor') !== 'reviewer' : false
 
 /**
- * No requirements yet, and why (journey.get `drafting`): the intent is not written; trace is drafting them (its job,
- * running); they wait in a change; or the drafting stopped (lost, failed, cancelled) and can be started again. Without
+ * No requirements yet, and why (journey.get `drafting`): the intent is not written; drafting them is queued until the
+ * project's agent is set up; trace is drafting them (its job, running); they wait in a change; or the drafting stopped (lost, failed, cancelled) and can be started again. Without
  * the journey's word it says where requirements come from, as before.
  */
 export function NoRequirements({ id, repo, drafting, jobs, write }: { id: string; repo: string; drafting: Journey['drafting']; jobs: readonly RunSummary[]; write: boolean }) {
@@ -176,6 +176,12 @@ export function NoRequirements({ id, repo, drafting, jobs, write }: { id: string
         </div>
       )
     }
+    case 'waiting':
+      return (
+        <EmptyState className="mt-6">
+          No requirements yet. Your intent is submitted, and drafting them from it is queued: it starts by itself once this project's agent is set up. You need not submit again.
+        </EmptyState>
+      )
     case 'stopped':
       return (
         <EmptyState className="mt-6" action={write ? <DraftAgain repo={repo} /> : undefined}>
