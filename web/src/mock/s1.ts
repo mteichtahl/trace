@@ -41,6 +41,8 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'journey.criterion.open': {
       const c = gateOf(repo, String(a.gate))?.criteria.find((x) => x.id === a.criterion)
       if (c) c.opened = true
+      // a waiver's open (its Acknowledge box): counted for this signing, as journey.get's opened_by_you says
+      if (a.waiver) for (const w of [...(JOURNEYS[repo]?.waivers ?? []), ...(JOURNEYS[repo]?.gates.flatMap((g: Gate) => g.waivers) ?? [])]) if (w.id === a.waiver) w.opened = true
       return ok({ ok: true })
     }
     case 'criterion.confirm': {

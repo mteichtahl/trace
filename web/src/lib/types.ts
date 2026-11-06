@@ -197,7 +197,12 @@ export interface Waiver {
    *  for a requirement's or a test's waiver, which is the stage's only */
   criterion?: string | null
   caught: string
+  /** acknowledged at a signing of its gate, ever: the record keeps the first one, and a reopened stage's next signing
+   *  does not count it (read `opened`) */
   acknowledged?: boolean
+  /** this person opened it for the signing at hand (journey.get `opened_by_you`, the record's own rule: an open from
+   *  before the gate was last signed or returned does not count) */
+  opened?: boolean
   /** the record's own words: its severity (cosmetic | degraded | failure | safety), its risk, its scope */
   severity?: string
   riskText?: string
