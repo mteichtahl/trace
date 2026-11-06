@@ -144,6 +144,12 @@ export interface RecordChanges {
   tables?: TableChange[]
   /** null: it adds or changes no architecture option */
   options?: OptionsChange | null
+  /**
+   * The requirements its tests cover: those the test items it adds or changes, and the tests of the results it adds,
+   * name (a verification record change that re-runs tests names no requirement in its words, test-esp32 #200), with
+   * the tests, in the record's order
+   */
+  tested?: { requirements: string[]; tests: string[] }
 }
 
 /**
@@ -270,7 +276,31 @@ export function recordChanges(design: DatabaseSync, head: DatabaseSync): RecordC
     requirements: diff(design, head, 'requirements', ['text', 'acceptance', 'status']),
     tables,
     options: optionsChange(design, head),
+    tested: testedRequirements(design, head),
   }
+}
+
+const idList = (v: unknown): string[] => {
+  try {
+    const x: unknown = JSON.parse(str(v) || '[]')
+    return Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : []
+  } catch { return [] }
+}
+
+/**
+ * The requirements a change's tests cover: each test item it adds or changes, and each test a result it adds is for,
+ * by the requirements that test names in its copy of the record (only those the record has).
+ */
+function testedRequirements(design: DatabaseSync, head: DatabaseSync): { requirements: string[]; tests: string[] } {
+  if (!has(head, 'test_items')) return { requirements: [], tests: [] }
+  const items = rowsDiff(design, head, 'test_items')
+  const results = rowsDiff(design, head, 'test_results')
+  const tests = [...new Set([...items.added, ...items.changed].map((r) => str(r.id)).concat([...results.added, ...results.changed].map((r) => str(r.test_id))).filter(Boolean))].sort()
+  if (!tests.length) return { requirements: [], tests: [] }
+  const named = new Map((head.prepare('SELECT * FROM test_items').all() as Record<string, unknown>[]).map((r) => [str(r.id), idList(r.requirements)]))
+  const known = new Set(has(head, 'requirements') ? (head.prepare('SELECT id FROM requirements').all() as Record<string, unknown>[]).map((r) => str(r.id)) : [])
+  const requirements = [...new Set(tests.flatMap((t) => named.get(t) ?? []))].filter((id) => known.has(id))
+  return { requirements, tests: tests.filter((t) => named.has(t)) }
 }
 
 const clip = (s: string, n = 140): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
@@ -361,5 +391,9 @@ export function contentPhrase(o: { paths: readonly string[]; record: RecordChang
   return andList(parts.slice(0, 3))
 }
 
-/** The ids of the requirements a change's record adds or changes: the requirements it names (log #27). */
-export const recordRequirementIds = (r: RecordChanges | null): string[] => (r ? [...r.requirements.added, ...r.requirements.changed].map((x) => x.id) : [])
+/**
+ * The ids of the requirements a change's record adds or changes (log #27), and those the tests it adds, changes or
+ * re-runs cover (test-esp32 #200): the requirements it names.
+ */
+export const recordRequirementIds = (r: RecordChanges | null): string[] =>
+  (r ? [...new Set([...r.requirements.added, ...r.requirements.changed].map((x) => x.id).concat(r.tested?.requirements ?? []))] : [])

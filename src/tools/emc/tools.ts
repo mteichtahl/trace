@@ -45,84 +45,112 @@ const Signal = z.object({
 
 // ------------------------------------------------------------------------------------------- emc.spectrum
 
+const SpectrumInput = z.object({
+  signal: Signal.optional().describe('a trapezoidal pulse train: its harmonics drive the estimates'),
+  frequency_hz: z.number().positive().optional().describe('or one frequency (with dm.current_a / cm.current_ua)'),
+  fmin: z.number().positive().optional().describe('default 30 MHz'),
+  fmax: z.number().positive().optional().describe('default 1 GHz'),
+  max_harmonics: z.number().int().min(1).max(5000).optional().describe('harmonics returned (default 40, strongest margins first when limits apply)'),
+  dm: z.object({ loop_area_mm2: z.number().positive(), current_a: z.number().positive().optional().describe('with frequency_hz') }).strict().optional(),
+  cm: z.object({ cable_length_m: z.number().positive(), current_ua: z.number().positive().optional().describe('common-mode current, with frequency_hz; or the signal\'s current scaled by cm_fraction'), cm_fraction: z.number().gt(0).max(1).optional() }).strict().optional(),
+  distance_m: z.number().positive().optional().describe('default 3'),
+  cispr_class: Cls.optional().describe('default B'),
+  ground_reflection: z.boolean().optional().describe('x2 (6 dB) for a reflecting ground, as on a test site (default true)'),
+})
+
 export const spectrumTool = defineTool({
   name: 'emc.spectrum',
-  description: 'EMI closed forms, no solver: trapezoidal pulse-train harmonics and envelope (Paul, Introduction to EMC, §3.2: 2Ad, -20 dB/dec from 1/(pi tau), -40 dB/dec from 1/(pi tr)); differential-mode loop radiation E = 1.316e-14 f² A I / r and common-mode wire radiation E = 6.283e-7 f L I / r (Ott, EMC Engineering 2009, §12.1-12.2; x2 with ground reflection; L capped at lambda/2), the cable common-mode current that meets a limit, all against CISPR 32 class A/B at the given distance. Far-field, maximum-over-angle estimates for pre-compliance, not predictions of a test result.',
-  input: z.object({
-    signal: Signal.optional().describe('a trapezoidal pulse train: its harmonics drive the estimates'),
-    frequency_hz: z.number().positive().optional().describe('or one frequency (with dm.current_a / cm.current_ua)'),
-    fmin: z.number().positive().optional().describe('default 30 MHz'),
-    fmax: z.number().positive().optional().describe('default 1 GHz'),
-    max_harmonics: z.number().int().min(1).max(5000).optional().describe('harmonics returned (default 40, strongest margins first when limits apply)'),
-    dm: z.object({ loop_area_mm2: z.number().positive(), current_a: z.number().positive().optional().describe('with frequency_hz') }).strict().optional(),
-    cm: z.object({ cable_length_m: z.number().positive(), current_ua: z.number().positive().optional().describe('common-mode current, with frequency_hz; or the signal\'s current scaled by cm_fraction'), cm_fraction: z.number().gt(0).max(1).optional() }).strict().optional(),
-    distance_m: z.number().positive().optional().describe('default 3'),
-    cispr_class: Cls.optional().describe('default B'),
-    ground_reflection: z.boolean().optional().describe('x2 (6 dB) for a reflecting ground, as on a test site (default true)'),
-  }),
+  description: 'EMI closed forms, no solver: trapezoidal pulse-train harmonics and envelope (Paul, Introduction to EMC, §3.2: 2Ad, -20 dB/dec from 1/(pi tau), -40 dB/dec from 1/(pi tr)); differential-mode loop radiation E = 1.316e-14 f² A I / r and common-mode wire radiation E = 6.283e-7 f L I / r (Ott, EMC Engineering 2009, §12.1-12.2; x2 with ground reflection; L capped at lambda/2), the cable common-mode current that meets a limit, all against CISPR 32 class A/B at the given distance. Far-field, maximum-over-angle estimates for pre-compliance, not predictions of a test result. Recorded (the release report lists it); returns run_id.',
+  input: SpectrumInput,
+  // recorded, so the release report lists it among the interference estimates (verify.report)
   run: (a) => {
-    const dist = a.distance_m ?? 3
-    const cls = a.cispr_class ?? 'B'
-    const gr = a.ground_reflection ?? true
-    const out: Record<string, unknown> = { distance_m: dist, cispr_class: cls, ground_reflection: gr, limits: CISPR_SOURCE }
-    const fmin = a.fmin ?? 30e6
-    const fmax = a.fmax ?? 1e9
-    const evalAt = (f: number, iAmp: number | null): Record<string, unknown> => {
-      const lim = cisprLimit(cls, f, dist)
-      const row: Record<string, unknown> = { f_hz: r(f), ...(lim ? { limit_dbuv_m: r(lim.db_uv_m, 4) } : {}), ...(farField(f, dist) ? {} : { near_field: true }) }
-      if (a.dm && iAmp !== null) {
-        const e = dBuV(peakToRms(dmField(f, a.dm.loop_area_mm2 * 1e-6, iAmp, dist, gr)))
-        row.dm_dbuv_m = r(e, 4)
-        if (lim) row.dm_margin_db = r(lim.db_uv_m - e, 4)
-      }
-      if (a.cm) {
-        const icm = a.cm.current_ua !== undefined ? a.cm.current_ua * 1e-6 * Math.SQRT2 : iAmp !== null ? iAmp * (a.cm.cm_fraction ?? 1) : null
-        if (icm !== null) {
-          const c = cmField(f, a.cm.cable_length_m, icm, dist, gr)
-          const e = dBuV(peakToRms(c.e))
-          row.cm_dbuv_m = r(e, 4)
-          if (lim) row.cm_margin_db = r(lim.db_uv_m - e, 4)
-          if (c.capped) row.cm_length_capped_m = r(c.length_used, 4)
-        }
-        if (lim) row.cm_max_current_ua_rms = r(cmCurrentFor(f, a.cm.cable_length_m, fromdBuV(lim.db_uv_m), dist, gr) * 1e6, 4)
-      }
-      return row
+    const rec = new Recorder('emc.spectrum', spectrumSubject(a), a)
+    try {
+      const out = spectrum(a)
+      const w = out.worst as Record<string, unknown> | undefined
+      const margin = w ? Math.min(Number(w.dm_margin_db ?? Infinity), Number(w.cm_margin_db ?? Infinity)) : null
+      const summary = w && margin !== null && Number.isFinite(margin)
+        ? `worst margin ${r(margin, 3)} dB at ${r(Number(w.f_hz) / 1e6, 4)} MHz against CISPR 32 class ${String(out.cispr_class)} (pre-compliance estimate)`
+        : 'estimate without a limit to compare (pre-compliance estimate)'
+      rec.finish(out.pass === false ? 'fail' : 'pass', summary, { worst: w ?? null, pass: out.pass ?? null, cispr_class: out.cispr_class, distance_m: out.distance_m })
+      return { ...out, run_id: rec.id }
+    } catch (e) {
+      throw rec.fail(e)
     }
-    if (a.signal) {
-      const s = a.signal
-      const p: Trapezoid = { amplitude: s.amplitude, freq: s.freq_hz, duty: s.duty, rise: s.rise_s, fall: s.fall_s }
-      let corners: ReturnType<typeof envelopeCorners>
-      try {
-        corners = envelopeCorners(p)
-      } catch (e) {
-        throw new ToolError((e as Error).message)
-      }
-      const toI = (v: number): number => (s.unit === 'A' ? v : v / (s.impedance_ohm ?? 50))
-      const hs = harmonics(p, fmin, fmax, 100_000)
-      const unit = s.unit ?? 'V'
-      const rows = hs.map((h) => ({
-        n: h.n, ...evalAt(h.f, toI(h.amplitude)), amplitude: r(h.amplitude), envelope: r(h.envelope),
-        [unit === 'V' ? 'dbuv' : 'dbua']: r(unit === 'V' ? dBuV(peakToRms(h.amplitude)) : dBuA(peakToRms(h.amplitude)), 4),
-      }))
-      const margin = (x: Record<string, unknown>): number => Math.min(Number(x.dm_margin_db ?? Infinity), Number(x.cm_margin_db ?? Infinity))
-      const limited = rows.some((x) => Number.isFinite(margin(x)))
-      const shown = limited ? [...rows].sort((x, y) => margin(x) - margin(y)) : rows
-      const max = a.max_harmonics ?? 40
-      out.envelope = { low_amplitude: r(corners.low), f1_hz: r(corners.f1), f2_hz: r(corners.f2), unit, transition_used_s: r(Math.min(s.rise_s, s.fall_s ?? s.rise_s) / 0.8), note: 'trapezoid tr is the 0-100 % edge, taken as the 10-90 % rise / 0.8; unequal edges use the faster' }
-      out.harmonics = shown.slice(0, max)
-      out.harmonic_count = rows.length
-      if (limited) {
-        const w = shown[0] as Record<string, unknown>
-        out.worst = w
-        out.pass = margin(w) >= 0
-      }
-      return out
-    }
-    if (a.frequency_hz === undefined) throw new ToolError('give signal, or frequency_hz with dm.current_a / cm.current_ua')
-    const row = evalAt(a.frequency_hz, a.dm?.current_a ?? null)
-    return { ...out, ...row, note: 'currents are amplitudes (peak) for dm.current_a, rms for cm.current_ua; fields are rms' }
   },
 })
+
+/** What a spectrum estimate is of: the signal, else the one frequency. */
+function spectrumSubject(a: SpectrumArgs): string {
+  const mhz = (f: number): string => `${Number((f / 1e6).toPrecision(4))} MHz`
+  if (a.signal) return `${mhz(a.signal.freq_hz)} ${a.signal.amplitude} ${a.signal.unit ?? 'V'} signal, ${Number((a.signal.rise_s * 1e9).toPrecision(3))} ns rise`
+  return a.frequency_hz !== undefined ? mhz(a.frequency_hz) : 'spectrum'
+}
+
+type SpectrumArgs = z.output<typeof SpectrumInput>
+
+function spectrum(a: SpectrumArgs): Record<string, unknown> {
+  const dist = a.distance_m ?? 3
+  const cls = a.cispr_class ?? 'B'
+  const gr = a.ground_reflection ?? true
+  const out: Record<string, unknown> = { distance_m: dist, cispr_class: cls, ground_reflection: gr, limits: CISPR_SOURCE }
+  const fmin = a.fmin ?? 30e6
+  const fmax = a.fmax ?? 1e9
+  const evalAt = (f: number, iAmp: number | null): Record<string, unknown> => {
+    const lim = cisprLimit(cls, f, dist)
+    const row: Record<string, unknown> = { f_hz: r(f), ...(lim ? { limit_dbuv_m: r(lim.db_uv_m, 4) } : {}), ...(farField(f, dist) ? {} : { near_field: true }) }
+    if (a.dm && iAmp !== null) {
+      const e = dBuV(peakToRms(dmField(f, a.dm.loop_area_mm2 * 1e-6, iAmp, dist, gr)))
+      row.dm_dbuv_m = r(e, 4)
+      if (lim) row.dm_margin_db = r(lim.db_uv_m - e, 4)
+    }
+    if (a.cm) {
+      const icm = a.cm.current_ua !== undefined ? a.cm.current_ua * 1e-6 * Math.SQRT2 : iAmp !== null ? iAmp * (a.cm.cm_fraction ?? 1) : null
+      if (icm !== null) {
+        const c = cmField(f, a.cm.cable_length_m, icm, dist, gr)
+        const e = dBuV(peakToRms(c.e))
+        row.cm_dbuv_m = r(e, 4)
+        if (lim) row.cm_margin_db = r(lim.db_uv_m - e, 4)
+        if (c.capped) row.cm_length_capped_m = r(c.length_used, 4)
+      }
+      if (lim) row.cm_max_current_ua_rms = r(cmCurrentFor(f, a.cm.cable_length_m, fromdBuV(lim.db_uv_m), dist, gr) * 1e6, 4)
+    }
+    return row
+  }
+  if (a.signal) {
+    const s = a.signal
+    const p: Trapezoid = { amplitude: s.amplitude, freq: s.freq_hz, duty: s.duty, rise: s.rise_s, fall: s.fall_s }
+    let corners: ReturnType<typeof envelopeCorners>
+    try {
+      corners = envelopeCorners(p)
+    } catch (e) {
+      throw new ToolError((e as Error).message)
+    }
+    const toI = (v: number): number => (s.unit === 'A' ? v : v / (s.impedance_ohm ?? 50))
+    const hs = harmonics(p, fmin, fmax, 100_000)
+    const unit = s.unit ?? 'V'
+    const rows = hs.map((h) => ({
+      n: h.n, ...evalAt(h.f, toI(h.amplitude)), amplitude: r(h.amplitude), envelope: r(h.envelope),
+      [unit === 'V' ? 'dbuv' : 'dbua']: r(unit === 'V' ? dBuV(peakToRms(h.amplitude)) : dBuA(peakToRms(h.amplitude)), 4),
+    }))
+    const margin = (x: Record<string, unknown>): number => Math.min(Number(x.dm_margin_db ?? Infinity), Number(x.cm_margin_db ?? Infinity))
+    const limited = rows.some((x) => Number.isFinite(margin(x)))
+    const shown = limited ? [...rows].sort((x, y) => margin(x) - margin(y)) : rows
+    const max = a.max_harmonics ?? 40
+    out.envelope = { low_amplitude: r(corners.low), f1_hz: r(corners.f1), f2_hz: r(corners.f2), unit, transition_used_s: r(Math.min(s.rise_s, s.fall_s ?? s.rise_s) / 0.8), note: 'trapezoid tr is the 0-100 % edge, taken as the 10-90 % rise / 0.8; unequal edges use the faster' }
+    out.harmonics = shown.slice(0, max)
+    out.harmonic_count = rows.length
+    if (limited) {
+      const w = shown[0] as Record<string, unknown>
+      out.worst = w
+      out.pass = margin(w) >= 0
+    }
+    return out
+  }
+  if (a.frequency_hz === undefined) throw new ToolError('give signal, or frequency_hz with dm.current_a / cm.current_ua')
+  const row = evalAt(a.frequency_hz, a.dm?.current_a ?? null)
+  return { ...out, ...row, note: 'currents are amplitudes (peak) for dm.current_a, rms for cm.current_ua; fields are rms' }
+}
 
 // ------------------------------------------------------------------------------------------- emc.precheck
 

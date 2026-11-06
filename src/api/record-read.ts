@@ -230,14 +230,30 @@ export function latestNetlist(db: DatabaseSync): { run: CheckRun; nets: Map<stri
   }
 }
 
-/** The drawings the newest kicad.export run that kept any stored (drawings.json), as artifact paths for files.url. */
+/**
+ * The newest drawing of each thing kicad.export draws (the board, its render, each schematic sheet), across every
+ * export that kept any (drawings.json), as artifact paths for files.url; the run is the newest of them. An export of
+ * the sheets alone no longer hides the board an earlier export drew (the Release review's Fabrication step showed "No
+ * board yet" over a signed layout).
+ */
 export function latestDrawings(db: DatabaseSync): { run: CheckRun; drawings: (Drawing & { path: string })[] } | null {
-  const r = db.prepare("SELECT a.run_id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE a.name = 'drawings.json' AND r.kind = 'kicad.export' ORDER BY r.started DESC LIMIT 1").get() as { run_id?: string } | undefined
-  if (!r?.run_id) return null
-  const run = latestRunById(db, r.run_id)
-  const v = jsonOf(artifactText(db, r.run_id, 'drawings.json')) as { drawings?: Drawing[] } | null
-  const drawings = (Array.isArray(v?.drawings) ? v.drawings : []).filter((d) => typeof d.artifact === 'string').map((d) => ({ ...d, path: `runs/${r.run_id}/${d.artifact}` }))
-  return run ? { run, drawings } : null
+  const runs = db.prepare("SELECT a.run_id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE a.name = 'drawings.json' AND r.kind = 'kicad.export' ORDER BY r.started DESC LIMIT 20").all() as { run_id?: string }[]
+  const newest = runs[0]?.run_id ? latestRunById(db, runs[0].run_id) : null
+  if (!newest) return null
+  const drawings: (Drawing & { path: string })[] = []
+  const seen = new Set<string>()
+  for (const { run_id: id } of runs) {
+    if (!id) continue
+    const v = jsonOf(artifactText(db, id, 'drawings.json')) as { drawings?: Drawing[] } | null
+    for (const d of Array.isArray(v?.drawings) ? v.drawings : []) {
+      if (typeof d.artifact !== 'string') continue
+      const key = d.kind === 'sheet' ? `sheet:${d.file ?? d.artifact}:${d.sheet ?? ''}` : d.kind
+      if (seen.has(key)) continue
+      seen.add(key)
+      drawings.push({ ...d, path: `runs/${id}/${d.artifact}` })
+    }
+  }
+  return { run: newest, drawings }
 }
 
 function latestRunById(db: DatabaseSync, id: string): CheckRun | null {
