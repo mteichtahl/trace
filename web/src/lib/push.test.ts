@@ -22,6 +22,33 @@ describe('push on this device', () => {
     expect(await pushState()).toBe('needs-home-screen')
   })
 
+  /** A browser with push, its service worker container recording what is registered. */
+  const pushBrowser = (permission: NotificationPermission, register = vi.fn(async () => ({}))) => {
+    const reg = { pushManager: { getSubscription: vi.fn(async () => null) } }
+    vi.stubGlobal('navigator', { userAgent: UA.android, platform: 'Linux', maxTouchPoints: 5, serviceWorker: { register, ready: Promise.resolve(reg) } })
+    vi.stubGlobal('PushManager', class {})
+    vi.stubGlobal('Notification', { permission, requestPermission: vi.fn(async () => permission) })
+    return register
+  }
+
+  it('registers the service worker on start, though push was never turned on on this device', async () => {
+    localStorage.removeItem('trace.push')
+    const register = pushBrowser('default')
+    vi.resetModules()
+    const { keepFresh } = await import('./push')
+    await keepFresh()
+    expect(register).toHaveBeenCalledWith('/sw.js', { scope: '/' })
+  })
+
+  it('tries a failed registration again rather than remembering the failure', async () => {
+    const register = pushBrowser('default', vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({}))
+    vi.resetModules()
+    const { registerWorker } = await import('./push')
+    await expect(registerWorker()).rejects.toThrow('offline')
+    await expect(registerWorker()).resolves.toBeDefined()
+    expect(register).toHaveBeenCalledTimes(2)
+  })
+
   it('says a browser without push cannot have it', async () => {
     vi.stubGlobal('navigator', { userAgent: UA.android, platform: 'Linux', maxTouchPoints: 5 })
     expect(await pushState()).toBe('unsupported')
