@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GRAPH_EXTRA, GRAPH_LINKS, GRAPH_NODES } from '@/mock/fixtures-knowledge'
-import { LINK_KINDS, NODE_KINDS, distances, failingChains, filterGraph, groupBeyond, listRows, pathWords, readGraph, shortestPath, tabOrder } from './graph'
+import { LINK_KINDS, NODE_KINDS, distances, failingChains, filterGraph, groupBeyond, listRows, pathWords, readGraph, shortestPath, startingPoints, tabOrder } from './graph'
 
 const g = readGraph({ nodes: GRAPH_NODES, links: GRAPH_LINKS })
 const all = { nodeKinds: new Set(NODE_KINDS), linkKinds: new Set(LINK_KINDS), meaning: true, hidden: new Set<string>() }
@@ -57,5 +57,17 @@ describe('graph', () => {
     const rows = listRows(g, 'R-006')
     expect(rows).toHaveLength(GRAPH_LINKS.length)
     expect(rows.find((r) => r.link === 'fails')).toMatchObject({ kind: 'Run or evidence', status: 'Failing' })
+  })
+  it('suggests starting from the project\'s own requirements, failing ones first, never fixed ids', () => {
+    const rows = [
+      { id: 'REQ-1a2b3c', status: 'accepted', verdict: 'verified' },
+      { id: 'REQ-4d5e6f', status: 'struck', verdict: 'failing' },
+      { id: 'REQ-777aaa', status: 'accepted', verdict: 'untested' },
+      { id: 'REQ-888bbb', status: 'accepted', verdict: 'failing' },
+    ]
+    expect(startingPoints(rows)).toEqual(['REQ-888bbb', 'REQ-1a2b3c', 'REQ-777aaa'])
+    expect(startingPoints(rows, 1)).toEqual(['REQ-888bbb'])
+    // a project with no requirements yet offers nothing (it once offered the mock's R-006, in no real project)
+    expect(startingPoints([])).toEqual([])
   })
 })

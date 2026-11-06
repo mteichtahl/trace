@@ -70,7 +70,8 @@ test('web push: the service worker registers and push can be turned on', async (
   test.skip(!live, 'the mock has no push service')
   await context.grantPermissions(['notifications'], { origin: baseURL })
   await app.open('/me')
-  await page.getByRole('button', { name: 'Notifications' }).click()
+  // the page's own Notifications group, not the top bar's bell of the same name
+  await page.locator('#main').getByRole('button', { name: 'Notifications', exact: true }).click()
   const ready = await page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/')))
   expect(ready, 'the service worker registered').toBe(true)
   await expect(page.getByRole('switch', { name: /push|this device/i }).first()).toBeVisible()

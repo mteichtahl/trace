@@ -28,16 +28,39 @@ test('Home shows what needs you and the projects @phone', async ({ app, page }) 
 test('Next lists the next thing to do', async ({ app, page }) => {
   await app.open('/next')
   await expect(page.getByRole('heading', { name: 'Next', level: 1 })).toBeVisible()
-  await expect(page.getByRole('heading', { name: /^Up next/ })).toBeVisible()
+  // the count says how many need the person: one card alone, or the first with the rest under Up next
+  const count = page.getByText(/^(Just this one|1 of \d+ for you)$/)
+  if (!(await app.hasData(count, page.getByText(/^All clear\./), 'nothing needs the smoke user right now'))) return test.skip(true, 'live: nothing needs the smoke user right now')
+  const upNext = page.getByRole('heading', { name: /^Up next/ })
+  if (await page.getByText('Just this one', { exact: true }).isVisible()) await expect(upNext).toHaveCount(0)
+  else await expect(upNext).toBeVisible()
 })
 
 test('the trace-is-working indicator opens the activity list @phone', async ({ app, page }) => {
+  // the indicator shows only while trace works on something (components/activity.tsx): live, ask what it works on
+  const listed = live ? page.waitForResponse((r) => r.url().endsWith('/api/call') && actionOf(r.request().postData()) === 'activity.list') : null
   await app.open('/')
-  const working = page.getByRole('button', { name: /^trace is (working|idle)/ })
+  const working = page.getByRole('button', { name: /^trace is working on \d+/ })
+  if (listed) {
+    const items = ((await (await listed).json()) as { result?: { items?: unknown[] } }).result?.items ?? []
+    if (!items.length) {
+      await expect(working).toHaveCount(0)
+      return test.skip(true, 'live: trace is idle, so the top bar shows no indicator to open')
+    }
+  }
   await expect(working).toBeVisible()
   await working.click()
   await expect(page.getByRole('dialog')).toBeVisible()
 })
+
+/** The action an /api/call request asks for, from its JSON body. */
+function actionOf(body: string | null): string | undefined {
+  try {
+    return (JSON.parse(body ?? '') as { action?: string }).action
+  } catch {
+    return undefined
+  }
+}
 
 test('the theme switches between light, dark and system', async ({ app, page }) => {
   await app.open('/me')

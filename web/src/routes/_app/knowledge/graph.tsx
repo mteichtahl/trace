@@ -24,6 +24,7 @@ import { askTrace } from '@/components/chat/chat-state'
 import { useTraceContext } from '@/components/chat/context'
 import { DataTable, Highlight } from '@/components/data-table'
 import { useKnowledgeView, useScopeRepos } from '@/components/knowledge/use-knowledge'
+import { useCoverage } from '@/components/project/shared'
 import { Facts, NeedsBuilding, SideSheet } from '@/components/side-sheet'
 import { useCommands } from '@/components/shell/command-menu'
 import { EmptyState, ErrorState, Partial } from '@/components/states'
@@ -33,7 +34,7 @@ import { call, projectName } from '@/lib/api'
 import { plural } from '@/lib/format'
 import {
   type Graph, type GraphNode, type GroupNode, LINK_KINDS, LINK_WORD, type LinkKind, type ListRow, NODE_KINDS, NODE_WORD, type NodeKind, failingChains, filterGraph, groupBeyond, linksOf,
-  listRows, mergeGraphs, pathWords, readGraph, shortestPath, tabOrder,
+  listRows, mergeGraphs, pathWords, readGraph, shortestPath, startingPoints, tabOrder,
 } from '@/lib/graph'
 import { q } from '@/lib/queries'
 import { cn } from '@/lib/utils'
@@ -181,13 +182,7 @@ function GraphView() {
       {!focus ? (
         <EmptyState className="mt-6">
           Start from anything: type a requirement, part, run, file, memory or person in “Start from…”, or press Show in graph on any item elsewhere in the app.
-          <span className="mt-3 flex flex-wrap gap-2">
-            {['R-006', 'R-002', 'P-sx1262', 'run_8e14'].map((id) => (
-              <button key={id} type="button" className="rounded-full border bg-background px-3 py-1 font-mono text-sm text-foreground hover:bg-accent" onClick={() => setSearch({ focus: id })}>
-                {id}
-              </button>
-            ))}
-          </span>
+          {replayRepo && <StartingPoints repo={replayRepo} onPick={(id) => setSearch({ focus: id })} />}
         </EmptyState>
       ) : (
         <div className="mt-4">
@@ -333,6 +328,28 @@ function GraphView() {
   )
 }
 
+// ------------------------------------------------------------------ Places to start
+
+/**
+ * The empty graph's suggestions: a few of the project's own requirements, failing ones first. They come from the
+ * project's record, never from fixed ids (the mock's R-006 is in no real project: a live installation offered it, and
+ * starting from it drew nothing). Nothing while they load, or when the project has no requirements yet.
+ */
+function StartingPoints({ repo, onPick }: { repo: string; onPick: (id: string) => void }) {
+  const cov = useCoverage(repo)
+  const ids = startingPoints(cov.data?.requirements ?? [])
+  if (!ids.length) return null
+  return (
+    <span role="group" aria-label="Places to start" className="mt-3 flex flex-wrap gap-2">
+      {ids.map((id) => (
+        <button key={id} type="button" className="rounded-full border bg-background px-3 py-1 font-mono text-sm text-foreground hover:bg-accent" onClick={() => onPick(id)}>
+          {id}
+        </button>
+      ))}
+    </span>
+  )
+}
+
 // ------------------------------------------------------------------ Start from…
 
 function StartFrom({ focus, focusNode, nodes, onPick, onConnect }: { focus: string; focusNode?: GraphNode; nodes: GraphNode[]; onPick: (id: string) => void; onConnect: () => void }) {
@@ -379,7 +396,7 @@ function StartFrom({ focus, focusNode, nodes, onPick, onConnect }: { focus: stri
         </PopoverTrigger>
         <PopoverContent align="start" className="w-[min(420px,90vw)] p-1" onOpenAutoFocus={(e) => e.preventDefault()}>
           {matches.length === 0 && !text.trim() ? (
-            <p className="p-2 text-sm text-muted-foreground">Type an item's id, such as R-006 or run_8e14.</p>
+            <p className="p-2 text-sm text-muted-foreground">Type an item's id: a requirement's, a run's, a part's or a file's.</p>
           ) : (
             <ul>
               {matches.map((n) => (
