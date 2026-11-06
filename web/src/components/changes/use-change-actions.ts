@@ -6,9 +6,9 @@
  *
  * Accepting sends the head commit the person was shown (change.get's head.sha): the API refuses a change that moved
  * since ("It changed since you looked at it"), so nobody accepts work they did not see. A card that shows no change
- * detail (Needs you) reads change.get first and sends what that says.
+ * detail (Needs you, the Overview's next step) reads change.get again first and sends what that says (acceptLatest).
  */
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { call } from '@/lib/api'
@@ -34,28 +34,80 @@ export function confirmAccepted(a: { repo: string; project?: string; title: stri
   toast.success(w.title, { description: `${a.project ? `${a.project}: ` : ''}${w.description}`, action: { label: 'What happens next', onClick: () => showAfterAccept(a, true) } })
 }
 
+/** Why an accept did not go through, in the API's words (or the read's), for the toast and the card. */
+export function refusalWords(e: unknown): string {
+  const said = (e instanceof Error ? e.message : String(e ?? '')).trim()
+  const why = said || 'trace did not say why.'
+  return `${why}${/[.!?]$/.test(why) ? '' : '.'} Nothing changed.`
+}
+
+/**
+ * Accept a change from a card that shows no detail of its own (the Overview's next step, Home's Needs you): read
+ * change.get again now (a copy kept in the cache can be minutes old: a "bring up to date" since moved its head, test-esp32
+ * #185, #203), then accept the head that read says. A change that is no longer open, or that the read says cannot be
+ * accepted now, is refused here with the API's own blockers, never sent and never dropped without a word.
+ */
+export async function acceptLatest(qc: QueryClient, repo: string, number: number): Promise<ChangeAccepted> {
+  const d = await qc.fetchQuery({ ...q('change.get', { repo, number }), staleTime: 0 })
+  if (d.state === 'merged') throw new Error('It is already accepted.')
+  if (d.state === 'closed') throw new Error('It was discarded, so there is nothing to accept.')
+  if (!d.head?.sha) throw new Error('trace could not read which version of it to accept. Open the change and accept it there.')
+  if (!d.may_accept) throw new Error(`It cannot be accepted now. ${(d.blockers ?? []).join(' ')}`.trim())
+  return call('change.accept', { repo, number, head_sha: d.head.sha })
+}
+
+const refreshAfterAccept = (qc: QueryClient, repo: string) => {
+  for (const k of [['inbox'], ['journey.get', repo], ['changes.list', repo], ['change.get', repo]]) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
+}
+
 export function useAcceptFromInbox() {
   const qc = useQueryClient()
   const [busy, setBusy] = useState<string | null>(null)
   const run = (item: InboxItem, title: string) => {
-    if (!item.change) return
+    // the card draws its Accept only for an item with a change; anything else is said, not dropped
+    if (!item.change) {
+      toast.error('Could not accept the change', { description: 'This item names no change. Open it to review the change there.' })
+      return
+    }
     const { repo, number } = item.change
     setBusy(item.id)
-    // the card shows no head of its own: what change.get says now is what is accepted (the same query the card's
-    // Accept button was shown from, read again)
-    qc.fetchQuery({ ...q('change.get', { repo, number }), staleTime: 0 })
-      .then((d) => call('change.accept', { repo, number, head_sha: d.head.sha }))
+    acceptLatest(qc, repo, number)
       .then((r) => {
         confirmAccepted({ repo, project: item.project, title, result: r })
         qc.setQueryData<InboxItem[]>(['inbox', {}], (xs) => xs?.filter((x) => x.id !== item.id))
       })
-      .catch((e: unknown) => toast.error('Could not accept the change', { description: `${e instanceof Error ? e.message : String(e)} Nothing changed.` }))
+      .catch((e: unknown) => toast.error('Could not accept the change', { description: refusalWords(e) }))
       .finally(() => {
         setBusy(null)
-        for (const k of [['inbox'], ['journey.get', repo], ['changes.list', repo], ['change.get', repo]]) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
+        refreshAfterAccept(qc, repo)
       })
   }
   return { run, busy }
+}
+
+/**
+ * The Overview's "Accept now" (the next-step card): the same accept as Needs you (acceptLatest), with its progress
+ * (`busy` from the click until the API answers: the read, then the merge, up to about 20 s while GitHub takes the checks
+ * in) and, when it is refused, the API's reason kept on the card (`refused`) as well as in a toast, until the next try.
+ */
+export function useAcceptNow(repo: string) {
+  const qc = useQueryClient()
+  const accept = useMutation({
+    mutationFn: (a: { number: number; title: string; step?: { index: number; total: number; stage: string } | null }) => acceptLatest(qc, repo, a.number),
+    onSuccess: (r, a) => confirmAccepted({ repo, title: a.title, result: r }, a.step),
+    onError: (e) => toast.error('Could not accept the change', { description: refusalWords(e) }),
+    onSettled: () => refreshAfterAccept(qc, repo),
+  })
+  return {
+    run: (a: { number: number; title: string; step?: { index: number; total: number; stage: string } | null }) => {
+      // one accept at a time: the button is disabled while one is on its way, so a second click has nothing to say
+      if (accept.isPending) return
+      accept.mutate(a)
+    },
+    busy: accept.isPending,
+    /** the change the last refusal was for, and the reason in the API's words */
+    refused: accept.isError && accept.variables ? { number: accept.variables.number, text: refusalWords(accept.error) } : null,
+  }
 }
 
 export function useChangeActions(repo: string) {
