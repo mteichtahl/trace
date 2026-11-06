@@ -23,6 +23,8 @@ import { DOC_KINDS, DOCS, docsFor, type DocKind, skeleton, SOURCE_KINDS } from '
 import { checkDoc } from '../../docs/checks.js'
 import { parseDoc, replaceSection, setFront } from '../../docs/markers.js'
 import { sourcesOfDatabases, sourcesOfPaths, staleSections } from '../../docs/stale.js'
+import { loadJourney } from '../../core/journey.js'
+import { journeyScope } from '../journey/tools.js'
 
 const DB = '.trace/project.db'
 const git = (root: string, args: string[]): string => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim()
@@ -105,12 +107,39 @@ const stale = defineTool({
   },
 })
 
+/**
+ * The name a document's title and cover carry: the project's, as its journey names it, never the repository's. In the
+ * test run Scribe titled the design "test-esp32-e2e", the repository, not the project (test-esp32 #98). Without a
+ * journey name: the name given, unless it is only the repository's, else the repository's own. Pure.
+ */
+export function documentName(given: string | undefined, o: { journey: string | null; repository: string | null }): string {
+  const name = o.journey?.trim()
+  if (name) return name
+  const repo = o.repository?.trim() ?? ''
+  const short = repo.split('/').pop() ?? ''
+  const g = given?.trim()
+  if (g && g !== repo && g !== short) return g
+  return g || short || 'Project'
+}
+
+/** The project's name and repository from its journey, when this checkout runs with the project in scope. */
+async function journeyName(): Promise<{ journey: string | null; repository: string | null }> {
+  try {
+    const s = journeyScope()
+    const r = (await s.journey.read((db) => loadJourney(db))).result
+    return { journey: r?.journey.name ?? null, repository: s.repository }
+  } catch {
+    return { journey: null, repository: process.env.TRACE_PROJECT ?? process.env.GITHUB_REPOSITORY ?? null }
+  }
+}
+
 const init = defineTool({
   name: 'docs.init',
   description: 'Start each document the project\'s stage needs that the repository does not have yet: a skeleton with its front matter and every section pending, saying what it needs. The protocol specification only once the project has an interface (a protocol spec or model). Never replaces a document.',
-  input: z.object({ stage: z.enum(STAGE_IDS), project: z.string().min(1).max(120).describe('the project\'s name, for the title and cover'), revision: z.string().regex(/^[A-Z]{1,3}$/).default('A') }),
-  run: (a) => {
+  input: z.object({ stage: z.enum(STAGE_IDS), project: z.string().min(1).max(120).optional().describe('the project\'s name, for the title and cover (journey_status\'s project; never the repository\'s name). The project\'s journey name is used when it has one'), revision: z.string().regex(/^[A-Z]{1,3}$/).default('A') }),
+  run: async (a) => {
     const root = process.cwd()
+    const project = documentName(a.project, await journeyName())
     const commit = git(root, ['rev-parse', '--short=12', 'HEAD'])
     const date = new Date().toISOString().slice(0, 10)
     const created: string[] = []
@@ -118,10 +147,10 @@ const init = defineTool({
       const file = join(root, d.file)
       if (existsSync(file)) continue
       mkdirSync(dirname(file), { recursive: true })
-      writeFileSync(file, `${skeleton(d.kind, { project: a.project, revision: a.revision, commit, date })}\n`, { flag: 'wx' })
+      writeFileSync(file, `${skeleton(d.kind, { project, revision: a.revision, commit, date })}\n`, { flag: 'wx' })
       created.push(d.file)
     }
-    return { created, note: created.length ? 'Each section is pending: write the ones due by this stage with docs.write_section.' : 'Every document this stage needs is there already.' }
+    return { created, project, note: created.length ? 'Each section is pending: write the ones due by this stage with docs.write_section.' : 'Every document this stage needs is there already.' }
   },
 })
 

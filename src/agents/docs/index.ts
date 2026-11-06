@@ -27,7 +27,8 @@ export const docs: Specialist = {
   workflow: [
     'Recall earlier documentation sessions (memory_recall): terms the project uses, figures that needed care, what'
       + ' people asked to change in the documents. Read the stage (journey_status).',
-    'Find what to write: docs_init for any document the stage needs that does not exist yet; then docs_stale with'
+    'Find what to write: docs_init for any document the stage needs that does not exist yet, titled with the project\'s'
+      + ' name (journey_status\'s project), never the repository\'s; then docs_stale with'
       + ' base set to the change you document (a stacked change: its base branch; after a merge: the commit before it),'
       + ' and also set to the records your request says changed outside the repository (a gate signed: journey).'
       + ' Write only the sections it names, plus every pending section now due by the stage (docs_check says which).',

@@ -52,7 +52,13 @@ const deps: ActionDeps = {
   github: async () => github, cognito: () => new FakeCognito(), tools: () => new Registry([]), scratch,
   jobs: async () => ({
     repositoryOf: () => null,
-    startJob: async (p) => { started.push({ request: p.request, ...(p.agent ? { agent: p.agent } : {}), ...(p.branch ? { branch: p.branch } : {}) }); return { accepted: true, jobId: `job-${started.length}` } },
+    startJob: async (p) => {
+      started.push({ request: p.request, ...(p.agent ? { agent: p.agent } : {}), ...(p.branch ? { branch: p.branch } : {}) })
+      const id = `job-${started.length}`
+      // in the project's job index, as the runtime puts it: when the documents were last started (docsOwed)
+      await jobIndex(ctx(ADMIN), REPO).update((db) => { putJob(db, id, { state: 'succeeded', kind: 'task', agent: p.agent ?? null, title: id, startedAt: Date.now() / 1000, endedAt: Date.now() / 1000 }, Date.now() / 1000); return { result: null } })
+      return { accepted: true, jobId: id }
+    },
     jobStatus: async () => running,
   }),
   store: (p) => backendFor(join(bucket, p)),
@@ -77,6 +83,13 @@ const acceptRuns = async (stage: string): Promise<void> => {
   mkdirSync(join(dir, '.git'))
   const db = openProject(dir)
   for (const id of ids) db.prepare("INSERT INTO runs (id, kind, started, status) VALUES (?, 'verify.run', 1, 'pass')").run(`run-${id}`)
+  // the rule checks are read again from their newest report in the accepted record (#287): a clean one
+  const clean = { capture: ['erc', { kicad_version: '9.0.0', coordinate_units: 'mm', sheets: [{ path: '/', violations: [] }] }], layout: ['drc', { coordinate_units: 'mm', violations: [], unconnected_items: [], schematic_parity: [] }] } as const
+  const check = clean[stage as keyof typeof clean]
+  if (check) {
+    db.prepare("INSERT INTO runs (id, kind, subject, started, status) VALUES (?, ?, 'hw/board.kicad_pro', 2, 'pass')").run(`${check[0]}-clean`, `kicad.${check[0]}`)
+    db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)').run(`${check[0]}-clean`, `${check[0]}-report.json`, 'application/json', new TextEncoder().encode(JSON.stringify(check[1])))
+  }
   db.close()
   github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
 }
@@ -123,6 +136,7 @@ describe('Scribe starting on a push', () => {
 
   it('starts Scribe when the push changed a record, naming the records and the stage', async () => {
     await settle('capture')
+    await acceptRuns('capture')
     github.commit = { files: ['hardware/board.kicad_sch', 'README.md'], parent: 'sha-parent' }
     const r = await run(BACKEND, { repo: REPO })
     expect(r).toMatchObject({ records: ['schematic'], job: 'job-1' })
@@ -239,6 +253,7 @@ describe('the order of a stage\'s work: design first, the documents from it (tes
 
   it('a person\'s act that lands the last of the design work starts the documents (no push follows it)', async () => {
     await meet('layout.lengths', 'layout.renders')
+    await acceptRuns('layout')
     const n = started.length
     const w = (await perform('waiver.add', {
       repo: REPO, target: { kind: 'criterion', id: 'layout.fit' }, reason: 'this revision ships as a bare board', risk: 'the board is handled without a case',
@@ -275,6 +290,7 @@ describe('the nightly drift check', () => {
 
   it('starts Scribe when a record changed since the documents were last written', async () => {
     await atStage('capture')
+    await acceptRuns('capture')
     const before = started.length
     github.files.set(`${REPO}:sha-main:docs/design/high-level-design.md`, hld('abc1234def'))
     github.files.set(`${REPO}:sha-main:docs/design/low-level-design.md`, Buffer.from(skeleton('lld', { project: 'Docs follow', revision: 'A', commit: 'abc1234def', date: '2026-11-05' })))

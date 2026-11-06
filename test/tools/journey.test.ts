@@ -77,7 +77,8 @@ describe('the journey tools', () => {
 
   it('journey.status: the stage, its gate\'s criteria with their owners, and the next step', async () => {
     const s = await call('journey.status', {}) as { started: boolean; stage: string; gates: { id: string; criteria: { id: string; owner: string; status: string }[] }[]; next: { kind: string } }
-    expect(s).toMatchObject({ started: true, stage: 'define', next: { kind: 'task' } })
+    // the project's name, which its documents are titled with (test-esp32 #98), not the repository's
+    expect(s).toMatchObject({ started: true, stage: 'define', next: { kind: 'task' }, project: 'Soil sensor' })
     expect(s.gates[0]?.criteria.map((c) => [c.id, c.owner])).toEqual([['define.accepted', 'person'], ['define.measurable', 'person']])
   })
 

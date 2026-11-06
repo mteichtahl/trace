@@ -76,7 +76,7 @@ import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type DiscardView, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
   editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, traceChanges,
-  jobWorking, traceJob, unfinishedWords, verdictOf,
+  jobWorking, traceJob, unfinishedWords, verdictOf, creditedAgent,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
 import { editStore } from './edits.js'
@@ -91,7 +91,7 @@ import { backToDefine, changedRequirements, pastDefine } from './pending-changes
 import { hasTable } from './record-read.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
-import { type RecordChanges, betterTitle, contentBullets, recordChanges } from '../core/change-contents.js'
+import { type RecordChanges, betterTitle, changeContent, contentBullets, recordChanges, recordTitle } from '../core/change-contents.js'
 import { type RestartResult, type StuckLook, restartStuck, stuckFor, stuckLook } from './stuck-checks.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
@@ -248,21 +248,40 @@ const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: P
  * The open changes, oldest first, each with the gate criteria its job named (where its step goes in the journey) and
  * the status of the oldest `max` (the rest have none: their verdict is "checking", and they are never called ready).
  */
-export async function openChanges(ctx: Context, repo: string, o: { max?: number } = {}): Promise<{ change: ChangeSummary; criteria: string[] }[]> {
+/**
+ * Whether a change of trace's carries no design content (changeContent), for the gates (pendingBlockers): looked at only
+ * for a change that may be one (titled as a specialist's record, or the Documentation specialist's), from its files at
+ * its head commit, kept as long as the settings (a head commit's files never change). Null: design, or not known.
+ */
+async function contentOf(ctx: Context, gh: GitHubApi, repo: string, pull: PullSummary, job: JobRow): Promise<'record' | 'docs' | null> {
+  const docs = creditedAgent(job) === 'docs' || job.agent === 'docs'
+  if (!gh.pullFiles || !pull.sha || !(docs || recordTitle(pull.title))) return null
+  try {
+    const files = await cached(ctx.deps.githubCache, repo, `content:${pull.number}:${pull.sha}`, () => gh.pullFiles!(repo, pull.number), SETTINGS_TTL_MS)
+    const c = changeContent(files.map((f) => f.path))
+    return c === 'design' ? null : c
+  } catch {
+    return null
+  }
+}
+
+export async function openChanges(ctx: Context, repo: string, o: { max?: number } = {}): Promise<{ change: ChangeSummary; criteria: string[]; content?: 'record' | 'docs' | null }[]> {
   const gh = await ctx.deps.github()
   const { changes: mine, edits, rule, pulls, rows } = await tracePulls(ctx, repo)
   const stacks = stacksOf(pulls, repo, rule.defaultBranch)
   const max = o.max ?? MAX_STATUS
-  const [status, editStatus, { given, answers }, look] = await Promise.all([
+  const [status, editStatus, { given, answers }, look, contents] = await Promise.all([
     Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     Promise.all(edits.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     mine.length ? projectReview(ctx, repo, rows) : Promise.resolve({ given: new Set<string>(), answers: new Map<string, PendingAnswer[]>() }),
     // workflow runs no runner picks up (src/api/stuck-checks.ts): one look for the whole list, kept a minute
     mine.length ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),
+    Promise.all(mine.map(({ pull, job }) => contentOf(ctx, gh, repo, pull, job))),
   ])
   const works = mine.map(({ pull, job }, i) => ({
     change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head), stuck: stuckFor(look, pull.sha) }),
     criteria: criteriaNamed(jobRequest(job), job.title),
+    ...(contents[i] ? { content: contents[i] } : {}),
   }))
   const own = edits.map(({ pull, edit }, i) => ({
     change: editSummary({ pull, edit, status: editStatus[i] ?? null, hold: rule.hold, viewerSub: ctx.principal.sub }),
