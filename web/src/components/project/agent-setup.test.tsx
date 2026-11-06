@@ -1,14 +1,12 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TooltipProvider } from '@/components/ui/tooltip'
 import { TaskConfirmCard } from '@/components/chat/cards'
-import { QualityBar } from '@/components/quality-bar'
 import { auth } from '@/lib/auth'
 import type { AgentSetup } from '@/lib/types'
-import { AgentSetupNotice, UpdateProgress, agentBlocked, createdTitle, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
+import { AgentSetupNotice, UpdateProgress, agentQueueNote, createdTitle, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
 
 const NOW = Date.parse('2026-11-02T10:00:00Z')
 const setup = (o: Partial<AgentSetup> = {}): AgentSetup => ({
@@ -18,10 +16,10 @@ const setup = (o: Partial<AgentSetup> = {}): AgentSetup => ({
 })
 
 describe('the words of the notice', () => {
-  it('says trace is setting up the agent, that it cannot start work until then, and about when it is ready', () => {
+  it('says trace is setting up the agent, that work asked for meanwhile is queued, and about when it is ready', () => {
     const w = setupWords(setup(), NOW)
     expect(w.title).toBe('trace is setting up this project\'s agent')
-    expect(w.body).toMatch(/^Until it is ready, trace can't start work here, remember what you tell it or run this project's tools\. The installation update is running/)
+    expect(w.body).toMatch(/^You can carry on: write and submit the intent, or ask trace for work, and trace queues it and starts it once the agent is ready\. Until then it can't run this project's tools or remember what you tell it\. The installation update is running/)
     expect(w.when).toMatch(/^Usually ready by about \d\d:\d\d\.$/)
     expect(setupWords(setup({ expected_by: null }), NOW).when).toBe('Usually ready within the hour.')
     // past the estimate: the API's text says it is taking longer; no time in the past is promised
@@ -46,9 +44,10 @@ describe('the words of the notice', () => {
     expect(notReady({ ready: true })).toBe(false)
     expect(notReady(undefined)).toBe(false)
     expect(notReady({ unexpected: 1 })).toBe(false)
-    expect(agentBlocked(setup())).toBe('trace is still setting up this project\'s agent. This can be sent once it is ready.')
-    expect(agentBlocked(setup({ state: 'missing' }))).toMatch(/An admin can add it by running the installer/)
-    expect(agentBlocked(undefined)).toBeNull()
+    // work is queued while it is set up, never refused (log #2, #80)
+    expect(agentQueueNote(setup())).toBe('trace is still setting up this project\'s agent: the work is queued, and starts by itself once the agent is ready.')
+    expect(agentQueueNote(setup({ state: 'missing' }))).toMatch(/queued, and starts once an admin adds the agent by running the installer/)
+    expect(agentQueueNote(undefined)).toBeNull()
   })
 
   it('New project\'s last button says what happens', () => {
@@ -74,7 +73,7 @@ describe('the notice', () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(ready ? setup({ ready: true, state: 'ready', next_check_s: null }) : setup({ expected_by: new Date(Date.now() + 30 * 60_000).toISOString() })))
     render(<AgentSetupNotice repo="acme/new" />, { wrapper })
     expect(await screen.findByText('trace is setting up this project\'s agent')).toBeInTheDocument()
-    expect(screen.getByText(/trace can't start work here/)).toBeInTheDocument()
+    expect(screen.getByText(/trace queues it and starts it once the agent is ready/)).toBeInTheDocument()
     expect(screen.getByText(/Usually ready by about/)).toBeInTheDocument()
     expect(screen.getByText(/trace looks again in \d+ s\./)).toBeInTheDocument()
     expect(JSON.parse(String((fetch.mock.calls[0]![1] as RequestInit).body))).toEqual({ action: 'project.agent', repo: 'acme/new' })
@@ -157,18 +156,20 @@ describe('the update\'s progress', () => {
 })
 
 describe('what waits for the agent', () => {
-  it('the quality bar keeps Submit disabled with the reason, even with every check met', () => {
-    const { rerender } = render(<TooltipProvider><QualityBar checks={[{ id: 'a', text: 'Purpose stated', status: 'met' }]} onSubmit={() => undefined} submitLabel="Submit intent" blocked={agentBlocked(setup())} /></TooltipProvider>)
-    for (const b of screen.getAllByRole('button', { name: 'Submit intent' })) expect(b).toBeDisabled()
-    expect(screen.getAllByText(/Waits for the project's agent/).length).toBeGreaterThan(0)
-    rerender(<TooltipProvider><QualityBar checks={[{ id: 'a', text: 'Purpose stated', status: 'met' }]} onSubmit={() => undefined} submitLabel="Submit intent" blocked={null} /></TooltipProvider>)
-    for (const b of screen.getAllByRole('button', { name: 'Submit intent' })) expect(b).toBeEnabled()
+  // nothing waits on a disabled button while the agent is set up: the API queues the work (test-esp32 log #2, #80)
+  it('a chat\'s Confirm and start goes ahead, and says the work is queued', () => {
+    const confirm = vi.fn()
+    render(<TaskConfirmCard task={{ repo: 'acme/new', request: 'Draft the requirements' }} note={agentQueueNote(setup())} onConfirm={confirm} onCancel={() => undefined} />)
+    const b = screen.getByRole('button', { name: /Confirm and start/ })
+    expect(b).toBeEnabled()
+    expect(b).toHaveAccessibleDescription('trace is still setting up this project\'s agent: the work is queued, and starts by itself once the agent is ready.')
+    fireEvent.click(b)
+    expect(confirm).toHaveBeenCalledOnce()
   })
 
-  it('a chat\'s Confirm and start waits, and says why', () => {
-    render(<TaskConfirmCard task={{ repo: 'acme/new', request: 'Draft the requirements' }} blocked={agentBlocked(setup())} onConfirm={() => undefined} onCancel={() => undefined} />)
-    expect(screen.getByRole('button', { name: /Confirm and start/ })).toBeDisabled()
-    expect(screen.getByText('trace is still setting up this project\'s agent. This can be sent once it is ready.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+  it('the notice says what the person can do now, not only what waits', () => {
+    const w = setupWords(setup(), NOW)
+    expect(w.body).toMatch(/^You can carry on: write and submit the intent, or ask trace for work, and trace queues it and starts it once the agent is ready\./)
+    expect(w.body).not.toMatch(/can't start work/)
   })
 })

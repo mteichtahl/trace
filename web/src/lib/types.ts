@@ -579,10 +579,10 @@ export interface Journey {
   resign?: { requirements: string[]; edits: string; gates: { gate: string; name: string; stage: string; state: 'agree' | 'kept' | 'redo' | 'signed'; why: string }[] }
   /**
    * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
-   * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
+   * submitted with the drafting queued until the project's agent is set up (waiting), trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
    * again, `why` says what happened), drafted (waiting in a change) or done
    */
-  drafting?: { state: 'intent' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
+  drafting?: { state: 'intent' | 'waiting' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
   /** small summaries for the side column (assumed) */
   summary?: {
     requirements?: { accepted: number; verified: number; failing: number; untested: number }

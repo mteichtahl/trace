@@ -16,6 +16,8 @@ export const PROJECTS: ProjectRef[] = [
   { repo: 'acme/soil-sensor', role: 'write', part: 'contributor' },
   { repo: 'acme/motor-driver', role: 'write', part: 'contributor' },
   { repo: 'acme/panel-controller', role: 'write', part: 'contributor' },
+  // VITE_MOCK_AGENT=setting_up: a project just created in the app, its agent still being set up (mock/small.ts)
+  ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [{ repo: 'acme/flasher', role: 'write' as const, part: 'contributor' as const }] : []),
 ]
 
 const BOARD = ['Define', 'Architect', 'Capture', 'Prove', 'Layout', 'Sign-off', 'Release', 'Fabricate', 'Bring up']
@@ -144,6 +146,35 @@ export const JOURNEYS: Record<string, Journey> = {
     jobs: [{ id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45 }],
     recent: [],
   },
+}
+
+// VITE_MOCK_AGENT=setting_up: Flasher was just created in the app and its agent is still being set up. Its intent is
+// submitted, and drafting the requirements is queued until the agent is ready (src/api/agent-queue.ts)
+if (import.meta.env.VITE_MOCK_AGENT === 'setting_up') {
+  const st = stages(BOARD, 0, 0, 4)
+  JOURNEYS['acme/flasher'] = {
+    repo: 'acme/flasher',
+    name: 'Flasher',
+    description: 'A 20 × 20 mm board where a TLC555 flashes a red LED every 2 seconds.',
+    template: 'board',
+    revision: 'Rev A',
+    stages: st,
+    gates: gates(st, false),
+    current: 'define',
+    next: {
+      kind: 'working',
+      owner: 'trace',
+      short: 'drafting is queued until the agent is ready',
+      summary: 'Your intent is submitted. trace drafts the requirements from it once this project\'s agent is set up.',
+      action: { label: 'Watch', to: '/p/acme~flasher/jobs' },
+      jobId: 'queued~acme~flasher~3f2a9c1d0e4b',
+    },
+    drafting: { state: 'waiting', jobId: 'queued~acme~flasher~3f2a9c1d0e4b', jobState: 'queued' },
+    questions: [],
+    waivers: [],
+    jobs: [],
+    recent: [{ id: 'f1', who: 'Marc', text: 'Intent submitted: 11 statements', at: ago(3 * MIN) }],
+  }
 }
 
 export const INBOX: InboxItem[] = [

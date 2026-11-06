@@ -4,6 +4,8 @@
  * the record, where that stands decides the project's next step (journey.get), and the Requirements page's empty state:
  *
  *   intent        the intent is not submitted yet: the next step is to write it in the Intent builder
+ *   waiting       the intent is submitted and the drafting job is queued until the project's agent is set up (a
+ *                 project created in the web app: src/api/agent-queue.ts); it starts by itself once the agent is there
  *   drafting      the drafting job is queued, running or paused (or was started a moment ago and is not listed yet)
  *   stopped       the intent is submitted, there are no requirements, and no drafting job is under way: it was lost,
  *                 failed or cancelled, or none was started. requirements.draft starts it again
@@ -23,6 +25,9 @@ import { type Context, label, withRecordDb } from './action-kit.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { requirementEvidence } from './record-read.js'
 import { recordRework } from './process-metrics.js'
+import { type QueueFile, queuedHandle, titleOf } from './agent-queue.js'
+
+const NO_QUEUE: QueueFile = { queued: [], started: [] }
 
 /** The job Intent builder's Submit starts: the candidate requirements, drafted from the intent as the people decided it. */
 export const REQUIREMENTS_FROM_INTENT = [
@@ -39,7 +44,7 @@ export const STARTING_S = 120
 /** The decision requirements.draft logs for each retry, with its attempt (detail.attempt) and when it was asked. */
 export const DRAFT_AGAIN_KIND = 'requirements.draft'
 
-export type DraftingState = 'intent' | 'drafting' | 'stopped' | 'drafted' | 'done'
+export type DraftingState = 'intent' | 'waiting' | 'drafting' | 'stopped' | 'drafted' | 'done'
 export interface Drafting {
   state: DraftingState
   /** the latest drafting job (the API's id), and how it ended: lost, failed, aborted; null when none was listed */
@@ -94,15 +99,25 @@ export function needsCount(r: Pick<JourneyRecord, 'journey' | 'decisions'>, rows
   return submittedAt(r) !== null || draftingJobs(rows).length > 0
 }
 
-/** Where the drafting stands, from the record, the job index and how many requirements the record holds. Pure. */
-export function draftingOf(repo: string, r: Pick<JourneyRecord, 'decisions'>, rows: readonly JobRow[], requirements: number, at: number): Drafting {
+/**
+ * Where the drafting stands, from the record, the job index, how many requirements the record holds and the work
+ * queued until the project's agent is set up (`queue`, src/api/agent-queue.ts). Pure.
+ */
+export function draftingOf(repo: string, r: Pick<JourneyRecord, 'decisions'>, rows: readonly JobRow[], requirements: number, at: number, queue: QueueFile = NO_QUEUE): Drafting {
   const jobs = draftingJobs(rows)
   const last = jobs[0]
   const job: Drafting['job'] = last ? { id: indexedHandle(repo, last.session, last.id), state: last.state === 'running' && !isLive(last, at) ? 'lost' : last.state, error: last.error } : null
   const base = { job, attempts: lastAttempt(r, rows) }
   if (requirements > 0) return { state: 'done', ...base }
-  const sent = askedAt(r)
-  if (sent === null) return { state: 'intent', ...base }
+  const asked = askedAt(r)
+  if (asked === null) return { state: 'intent', ...base }
+  // Submit while the project's agent was being set up: the drafting job waits for it, queued
+  const title = titleOf(REQUIREMENTS_FROM_INTENT)
+  const queued = queue.queued.find((q) => q.title === title)
+  if (queued) return { state: 'waiting', ...base, job: { id: queuedHandle(repo, queued.id), state: 'queued', error: null } }
+  // and once it started from the queue, the grace counts from then: it is not in the index straight away
+  const fromQueue = Math.max(0, ...queue.started.filter((s) => s.title === title && s.job).map((s) => Date.parse(s.started_at) / 1000))
+  const sent = Math.max(asked, fromQueue)
   if (job && (job.state === 'queued' || job.state === 'running' || job.state === 'paused')) return { state: 'drafting', ...base }
   // asked for (Submit, or a retry) after the last job listed, or none listed: just started, not in the index yet
   const lastAt = last ? last.queuedAt ?? last.startedAt ?? last.updatedAt : null
@@ -141,6 +156,12 @@ export function draftingStep(next: NextStep, r: Pick<JourneyRecord, 'journey'>, 
       recommendation: null, button: mine ? 'Open the Intent builder' : 'Read the stage', stage: 'define', ref: { kind: 'skill', id: 'intent-builder' }, step: null,
       after: 'Once you submit it, the Verification specialist drafts the requirements, and you accept or strike each in Requirements review.',
     }
+    case 'waiting': return {
+      kind: 'working', belongs_to: 'trace', yours: false, summary: 'Your intent is submitted. trace drafts the requirements from it once this project\'s agent is set up.',
+      why: 'Drafting needs the project\'s own agent, which trace is still setting up. The drafting is queued and starts by itself; you need not submit again.',
+      recommendation: null, button: 'Watch', stage: 'define', ref: null, step: null,
+      after: 'When they are drafted, you accept or strike each in Requirements review.', ...(d.job ? { job_id: d.job.id } : {}),
+    }
     case 'drafting': return {
       kind: 'working', belongs_to: 'trace', yours: false, summary: 'trace is drafting the requirements from your intent.',
       why: 'There is nothing to accept yet: the Verification specialist turns each intent line into a requirement with a measurable criterion.',
@@ -176,13 +197,13 @@ async function requirementCount(ctx: Context, repo: string, r: JourneyRecord, ve
  * record's requirements cannot be read (nothing is said rather than a guess). Before the intent is submitted, with no
  * drafting job listed, it is 'intent' without a read. `why`: stoppedWords.
  */
-export async function draftingNow(ctx: Context, repo: string, r: JourneyRecord, rows: readonly JobRow[], o: { at?: number; next?: Pick<NextStep, 'kind'>; version?: number } = {}): Promise<(Drafting & { why: string }) | null> {
+export async function draftingNow(ctx: Context, repo: string, r: JourneyRecord, rows: readonly JobRow[], o: { at?: number; next?: Pick<NextStep, 'kind'>; version?: number; queue?: QueueFile } = {}): Promise<(Drafting & { why: string }) | null> {
   const at = o.at ?? Date.now() / 1000
   if (r.journey.currentStage !== 'define' || (o.next && o.next.kind !== 'task' && o.next.kind !== 'working')) return null
-  if (!needsCount(r, rows, o.next)) return { ...draftingOf(repo, r, rows, 0, at), why: '' }
+  if (!needsCount(r, rows, o.next)) return { ...draftingOf(repo, r, rows, 0, at, o.queue), why: '' }
   const n = await requirementCount(ctx, repo, r, o.version ?? 0).catch(() => null)
   if (n === null) return null
-  const d = draftingOf(repo, r, rows, n, at)
+  const d = draftingOf(repo, r, rows, n, at, o.queue)
   return { ...d, why: d.state === 'stopped' ? stoppedWords(d, rows, at) : '' }
 }
 
@@ -191,7 +212,7 @@ export async function draftingNow(ctx: Context, repo: string, r: JourneyRecord, 
  * its session only (src/api/workers.ts taskSession); the worker is sent the task as Submit sends it, and the attempt is
  * kept in the record by logRetry.
  */
-export async function draftRequirements(ctx: Context, repo: string, attempt = 1): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }> {
+export async function draftRequirements(ctx: Context, repo: string, attempt = 1): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined; queued?: boolean | undefined }> {
   const r = await (await ctx.deps.jobs()).startJob({
     kind: 'task', repository: repo, request: REQUIREMENTS_FROM_INTENT, agent: 'verify', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub,
     ...(attempt > 1 ? { attempt } : {}),
