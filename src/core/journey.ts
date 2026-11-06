@@ -1665,7 +1665,14 @@ export interface OpenChange { number: number; title: string; from: string; crite
  * is a task or trace working, and a change is open and ready, the next step becomes `review` of the oldest ready one.
  * The current stage's now and next, and the next step's place and what follows, are worked out again.
  */
-export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer, changes: readonly OpenChange[]): JourneyView {
+export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer, changes: readonly OpenChange[], o: {
+  /**
+   * Whether a job of trace's is running on the criterion now (journey.get: from the job index). A step that says trace
+   * "goes on" with it meanwhile needs one: with nothing running, the review is all that is left, and the step says what
+   * follows it (test-esp32 #204: "Meanwhile, trace goes on with …" while trace was doing nothing). Left out: assumed.
+   */
+  workingOn?: ((criterion: string) => boolean) | undefined
+} = {}): JourneyView {
   if (!changes.length) return view
   const r = withoutDismissed(r0)
   const cur = r.journey.currentStage
@@ -1702,7 +1709,7 @@ export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer
   here.steps = markSteps(here.steps, next.ref)
   // trace was working on a criterion the change under review does not meet: it goes on with it meanwhile, so that
   // step is trace's alongside the review, not after it
-  const working = view.next.kind === 'working' && view.next.ref?.kind === 'criterion' ? view.next.ref.id : null
+  const working = view.next.kind === 'working' && view.next.ref?.kind === 'criterion' && (o.workingOn?.(view.next.ref.id) ?? true) ? view.next.ref.id : null
   const reviewed = next.kind === 'review' ? changes.find((c) => String(c.number) === next.ref?.id) : undefined
   const along = working && reviewed && !reviewed.criteria.includes(working) ? here.steps.find((s) => pending(s) && s.ref?.kind === 'criterion' && s.ref.id === working) : undefined
   if (along) along.alongside = true

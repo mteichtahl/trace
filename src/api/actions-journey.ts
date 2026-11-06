@@ -89,7 +89,7 @@ import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, ha
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
 import { dueRetry, stuckFor, stuckLook } from './stuck-checks.js'
-import { waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
+import { runningOn, waitsOn, waitsOnSteps, workingNow } from './waits-on.js'
 import { OWNED_REFUSED, OWNED_STARTED, type OwnedDue, ownedDue, ownedStep, reviewWaits, stageSince } from './owned-work.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
@@ -686,7 +686,7 @@ export const JOURNEY_ACTIONS = {
     const changed = withChanges(r, seen ? journeyView(seen, viewer) : journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
-    })))
+    })), { workingOn: jobs.error ? undefined : (id) => runningOn(jobs.rows, id) }) // "Meanwhile, trace goes on with" only over a job running on it (#204)
     // a stage is reviewed and signed only once its work is settled: its gate is locked while a change of it (or an
     // earlier stage) is open or an agent is still working, and the gates into Fabricate while anything is changing
     // a question waiting on a change that is no longer open is out of date (test-esp32 #108); only when the open
