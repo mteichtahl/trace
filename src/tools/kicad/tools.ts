@@ -19,7 +19,7 @@ import { buildHardware, hardwareCsv, readCaseRecords, type Hardware } from './ha
 import { boardFacts } from '../mech/board.js'
 import { drc, erc, type CheckReport } from './checks.js'
 import { boardHoles, checkFab, type Drawing, EXPORT_KINDS, FAB_TECH_LAYERS, drawingArtifacts, exportOne, type FabSettings, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
-import { describeLayer, designRules, layerOf, loadBoard, Net, netNames, stackupKnown, type Board } from './pcb.js'
+import { describeLayer, designRules, LENGTH_DEFINITION, loadBoard, Net, netNames, signalLength, stackupKnown, type Board, type SignalLength } from './pcb.js'
 import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, kicadWhere, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
 import { netlist, parts, powerNets, readSchematic, symbolSummary, type Symbol } from './schematic.js'
 import { cap, recorded, type RunHandle } from './record.js'
@@ -149,7 +149,7 @@ const netlistTool = defineTool({
 
 const net = defineTool({
   name: 'kicad.net',
-  description: 'One net in full: every pin on it (ref, pin, pin function, pin type, the part\'s value) from kicad-cli\'s netlist, and, when the project has a routed board, its routed length per layer, vias and unreached pads.',
+  description: 'One net in full: every pin on it (ref, pin, pin function, pin type, the part\'s value) from kicad-cli\'s netlist, and, when the project has a routed board, its routed length as kicad.net_length gives it (pad to pad along its longest run, per layer, via barrels included), vias and unreached pads.',
   input: z.object({ project, name: z.string().min(1).describe('net name, e.g. "GND", "/SPI_MOSI", "Net-(R4-Pad2)"'), limit: limit(200) }),
   run: async (a) => {
     const p = await resolveProject(a.project)
@@ -172,10 +172,7 @@ const net = defineTool({
         const b = loadBoard(p.pcb)
         if (netNames(b).includes(name)) {
           const n = new Net(b, name)
-          routed = {
-            length_mm: round(n.length_m * 1e3), by_layer_mm: Object.fromEntries([...n.byLayer()].map(([k, v]) => [k, round(v * 1e3)])),
-            segments: n.segs.length, vias: n.vias.length, pads: n.pads.length, unreached_pads: n.unreached().slice(0, 50), note: POUR_NOTE,
-          }
+          routed = { ...lengthRow(signalLength(b, name)), segments: n.segs.length, vias_on_net: n.vias.length, length_definition: LENGTH_DEFINITION, note: POUR_NOTE }
         } else routed = { note: 'net not present on the board' }
       }
       return {
@@ -478,9 +475,17 @@ const board = defineTool({
   },
 })
 
+/** A net's length as kicad.net_length and kicad.net show it (signalLength, rounded). */
+function lengthRow(s: SignalLength): { from: string | null; to: string | null; length_mm: number; trace_mm: number; by_layer_mm: Record<string, number>; vias: number; via_barrel_mm: number | null; copper_mm: number; pads: number; unreached_pads: string[] } {
+  return {
+    from: s.from, to: s.to, length_mm: round(s.length_mm), trace_mm: round(s.trace_mm), by_layer_mm: s.by_layer_mm, vias: s.vias,
+    via_barrel_mm: s.via_barrel_mm === null ? null : round(s.via_barrel_mm), copper_mm: round(s.copper_mm), pads: s.pads, unreached_pads: s.unreached.slice(0, 50),
+  }
+}
+
 const netLength = defineTool({
   name: 'kicad.net_length',
-  description: 'Routed copper of nets on the board: total length and per layer, vias, unreached pads; with from/to pads ("R4.2", "U1.7"), the shortest routed path between them with its layers, vias, delay and Z0 (analytic stackup model); with tree, the net as branches between pads and forks.',
+  description: 'Routed length of nets on the board, the one measure pcb.length_match and emc.precheck use too: pad to pad along each net\'s longest run (which pads, per layer, vias and their barrel length from the stackup, included), every track of the net as copper_mm, unreached pads; with from/to pads ("R4.2", "U1.7"), the shortest routed path between them with its layers, vias, delay and Z0 (analytic stackup model); with tree, the net as branches between pads and forks.',
   input: z.object({
     project,
     nets: z.array(z.string().min(1)).min(1).max(200).describe('net names as on the board'),
@@ -495,16 +500,12 @@ const netLength = defineTool({
       const rows = a.nets.map((name) => {
         const n = new Net(b, name)
         const cF = n.capacitance()
-        run.measure(`${name}.length`, round(n.length_m * 1e3), 'mm')
-        return {
-          net: name, length_mm: round(n.length_m * 1e3),
-          by_layer_mm: Object.fromEntries([...n.byLayer()].sort((x, y) => layerOf(b, x[0]).index - layerOf(b, y[0]).index).map(([k, v]) => [k, round(v * 1e3)])),
-          segments: n.segs.length, vias: n.vias.length, pads: n.pads.length,
-          capacitance_pf: cF !== null ? round(cF * 1e12, 3) : null, unreached_pads: n.unreached().slice(0, 50),
-        }
+        const row = lengthRow(signalLength(b, name))
+        run.measure(`${name}.length`, row.length_mm, 'mm')
+        return { net: name, ...row, segments: n.segs.length, vias_on_net: n.vias.length, capacitance_pf: cF !== null ? round(cF * 1e12, 3) : null }
       })
       const first = new Net(b, a.nets[0] as string)
-      const out: Record<string, unknown> = { project: p.name, nets: rows, model: stackupKnown(b) ? 'analytic' : 'no stackup: delays and Z0 unavailable', note: POUR_NOTE }
+      const out: Record<string, unknown> = { project: p.name, nets: rows, length_definition: LENGTH_DEFINITION, model: stackupKnown(b) ? 'analytic' : 'no stackup: delays and Z0 unavailable', note: POUR_NOTE }
       if (a.from || a.to) {
         if (!a.from || !a.to) throw new ToolError('from and to go together')
         out.path = first.path(a.from, a.to).toJSON(b)

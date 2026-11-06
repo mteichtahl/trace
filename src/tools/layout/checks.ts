@@ -14,7 +14,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import * as sx from '../kicad/sexpr.js'
-import { Net, viaLength, type Board, type Pad } from '../kicad/pcb.js'
+import { signalLength, type Board, type Pad } from '../kicad/pcb.js'
 import { onSide, type Layout, type PlacedFootprint } from './board.js'
 import { area, bbox, gapToSegments, inside, overlapArea, overlaps, rectPoly, type Poly, type Pt } from './geom.js'
 import type { DruItem, DruRule } from './dru.js'
@@ -261,22 +261,24 @@ export function diffPairs(nets: readonly string[]): { p: string; n: string }[] {
   return out.sort((a, b) => a.p.localeCompare(b.p))
 }
 
-export interface NetLength { net: string; length_mm: number; delay_ps: number | null; method: 'pad-to-pad' | 'total'; vias: number; unreached: string[]; routed: boolean }
+export interface NetLength { net: string; length_mm: number; delay_ps: number | null; from: string | null; to: string | null; trace_mm: number; via_barrel_mm: number | null; vias: number; unreached: string[]; routed: boolean }
 
+/**
+ * A net's length for matching: signalLength's, the same figure kicad.net_length and emc.precheck report (pad to pad
+ * along the net's longest run, both layers, via barrels from the stackup). Summing every track of a multi-pad net, as
+ * this did before, counted stubs and let a via-less net's detour match another net's barrels (test-esp32 #159).
+ * include_vias false leaves the barrels out.
+ */
 export function netLength(b: Board, name: string, includeVias: boolean): NetLength {
-  const n = new Net(b, name)
-  const unreached = n.unreached()
-  if (n.pads.length === 2 && !unreached.length) {
-    const br = n.path(`${n.pads[0]?.ref}.${n.pads[0]?.num}`, `${n.pads[1]?.ref}.${n.pads[1]?.num}`).toJSON(b)
-    return { net: name, length_mm: includeVias ? br.length_mm : br.trace_mm, delay_ps: br.delay_ps, method: 'pad-to-pad', vias: br.vias, unreached, routed: n.segs.length > 0 }
+  const s = signalLength(b, name)
+  return {
+    net: name, length_mm: r3(includeVias ? s.length_mm : s.trace_mm), delay_ps: s.delay_ps, from: s.from, to: s.to,
+    trace_mm: r3(s.trace_mm), via_barrel_mm: s.via_barrel_mm === null ? null : r3(s.via_barrel_mm), vias: s.vias, unreached: s.unreached, routed: s.routed,
   }
-  let L = n.length_m * 1e3
-  if (includeVias) {
-    // barrel lengths from the stackup, as the board reader computes them (m); an unknown stackup adds nothing
-    for (const [, , , , top, bot] of n.vias) L += (viaLength(b, top, bot) ?? 0) * 1e3
-  }
-  return { net: name, length_mm: r3(L), delay_ps: null, method: 'total', vias: n.vias.length, unreached, routed: n.segs.length > 0 }
 }
+
+/** Where a measured length runs, "U2.5 to J1.B6", for the reader to check against the board. */
+const ends = (l: NetLength): string | null => (l.from && l.to ? `${l.from} to ${l.to}` : null)
 
 export interface LengthOptions {
   pairs?: { p: string; n: string; max_skew_mm?: number | undefined }[] | undefined
@@ -311,7 +313,7 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
     if (status === 'fail' || status === 'unrouted') failures++
     if (status === 'no_tolerance') unknown++
     return {
-      p: pr.p, n: pr.n, net_class: cls, p_mm: a.length_mm, n_mm: c.length_mm, skew_mm: skew,
+      p: pr.p, n: pr.n, net_class: cls, p_mm: a.length_mm, n_mm: c.length_mm, skew_mm: skew, p_path: ends(a), n_path: ends(c),
       ...(a.delay_ps !== null && c.delay_ps !== null ? { skew_ps: r3(Math.abs(a.delay_ps - c.delay_ps)) } : {}),
       tolerance_mm: tol?.v ?? null, tolerance_from: tol?.from ?? null, status,
     }
@@ -332,7 +334,7 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
     if (status === 'fail' || status === 'unrouted') failures++
     if (status === 'no_tolerance') unknown++
     return {
-      name: g.name, nets: rows.map((r) => ({ net: r.net, length_mm: r.length_mm, delta_mm: r3(r.length_mm - ref) })),
+      name: g.name, nets: rows.map((r) => ({ net: r.net, length_mm: r.length_mm, delta_mm: r3(r.length_mm - ref), path: ends(r) })),
       longest_mm: longest, shortest_mm: vals.length ? Math.min(...vals) : 0, spread_mm: vals.length ? r3(longest - Math.min(...vals)) : 0,
       reference_mm: ref, reference: g.target_mm !== undefined ? 'target' : 'longest', tolerance_mm: tol,
       ...(rule ? { rule: rule.name, rule_length_mm: rule.length } : {}), status, out_of_tolerance: bad.map((r) => r.net),
