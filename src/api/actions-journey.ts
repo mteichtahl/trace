@@ -69,7 +69,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
-  confirmCriterion, dismissStuck, guardsFabricate, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
+  confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -790,14 +790,23 @@ export const JOURNEY_ACTIONS = {
 
   'journey.criterion.open': def('read', Repo.extend({ criterion: Id.optional(), waiver: Id.optional() }).refine((a) => Boolean(a.criterion) !== Boolean(a.waiver), 'name a criterion or a waiver'), async (a, ctx) => {
     const who = hashOf(ctx.principal)
+    const viewer = { hash: who, also: hashesOf(ctx.principal) }
     const item = a.criterion ? { criterion: a.criterion } : { waiver: a.waiver as string }
+    // the agents' checks move a criterion's checkedAt, and an open from before it does not count (openedBy): read them
+    // to tell whether this person's open still counts. Unreadable, the open is written anyway
+    const facts = await agentFacts(ctx, a.repo).catch(() => null)
     return journeyWrite(ctx, a.repo, (db) => {
       const before = loadJourney(db)
       const key = a.criterion ?? `waiver:${a.waiver}`
-      const seen = before?.opens.some((o) => o.item === key && o.who === who) ?? false
+      // opening it again while the earlier open still counts changes nothing: no write. An earlier open that no longer
+      // counts (from before the gate was last signed or returned, or before the criterion was checked again) is no
+      // reason to skip it: that skipped the write and answered the old version, and the gate stayed at "opened 0 of 3"
+      // however often the person opened the evidence (test-esp32-e2e, the Architect gate after #320)
+      const counted = before ? openedBy(facts ? mergeAgentFacts(before, facts) : before, viewer).has(key) : false
+      const kept = counted ? before?.opens.find((o) => o.item === key && isViewer(viewer, o.who)) : undefined
+      if (kept) return { result: { repo: a.repo, opened: key, at: new Date(kept.at * 1000).toISOString() }, changed: false }
       const opened = recordOpen(db, item, who)
-      // opening it again changes nothing worth a commit
-      return { result: { repo: a.repo, opened: opened.item, at: opened.at }, changed: !seen }
+      return { result: { repo: a.repo, opened: opened.item, at: opened.at } }
     })
   }),
 
