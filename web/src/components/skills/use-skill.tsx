@@ -82,8 +82,9 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
       const result = await (run ? run() : import('@/lib/api').then(({ call }) => call('skill.submit', { repo, skill: def.id, draft: draft.data })))
       draft.discard()
       // what the submission changed (the journey, the gate's criteria, the inbox, the skill's own view) is read again,
-      // so the page the person returns to shows it at once
-      for (const k of [['journey.get', repo], ['skill.get', repo], ['skill.drafts', repo], ['design.get', repo], ['requirements.trace', repo], ['inbox']]) void qc.invalidateQueries({ queryKey: k })
+      // so the page the person returns to shows it at once (lib/after-write.ts reads them again for every act; here
+      // for a submission made some other way too, without starting again a refetch already on its way)
+      for (const k of [['journey.get', repo], ['skill.get', repo], ['skill.drafts', repo], ['design.get', repo], ['requirements.trace', repo], ['inbox']]) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
       toast(typeof done === 'function' ? done(result) : done)
       close()
     } catch (e) {

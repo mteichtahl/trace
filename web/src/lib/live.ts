@@ -46,7 +46,9 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
         // specialists are agents' facts (an answer) or the record (a decline)
         // and the changes: a change that waited on a person's approval (layout.renders) is settled by it, whether a
         // person signed it in the record or a specialist recorded it in its facts (both publish 'journey')
-        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r], ['jobs.list', r], ['change.get', r], ['changes.list', r]],
+        // and what trace is doing: an answer, a gate signed or a skill submitted starts a specialist's job (test-esp32
+        // log #153: the Overview said "trace is doing (0)" while the top bar said it was working)
+        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r], ['jobs.list', r], ['change.get', r], ['changes.list', r], ['tools.waits', r], ['activity.list']],
         settings: [['settings.get', r], ['journey.get', r]],
         memory: [['memory.list', r], ['memory.recall', r]],
         chats: [['chats.list', r], ['chats.get', r], ['chats.recall', r]],
@@ -58,6 +60,10 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
         agent: [['project.agent', r], ['journey.get', r]],
         // a project paused, resumed, retired or restored: the lists, its banner and lifecycle, and what needs people
         projects: [['projects'], ['project.lifecycle', r], ['projects.retired'], ['journey.get', r], ['inbox'], ['activity.list']],
+        // a task asked for or a job paused, resumed, moved up or cancelled (src/web/events.ts: task, job.control): the
+        // lists of what trace is doing, and the journey whose next step names them. Without its own entry it refreshed
+        // the journey alone
+        jobs: r ? [['jobs.list', r], ['journey.get', r], ['tools.waits', r], ['activity.list'], ['job']] : [['jobs.list'], ['journey.get'], ['activity.list'], ['job']],
       }
       return byWhat[e.what] ?? [['journey.get', r]]
     }
