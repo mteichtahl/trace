@@ -279,6 +279,24 @@ describe('cost', () => {
     void signGate
   })
 
+  it('keeps the build budget and the cloud-work allowance apart: cloud work counts against the allowance only (test-esp32 run 2, #91, #151)', async () => {
+    // the build budget alone: the cloud work (US$3.45) never comes off it, and no allowance means no stage warning
+    const before = await run(ADMIN, 'cost.get', { repo: REPO })
+    expect(before).toMatchObject({ budget: 300 })
+    expect(before.cloudBudget).toBeUndefined()
+    expect(before.warning).toBeUndefined()
+    expect(before.notes.join(' ')).toMatch(/No cloud-work allowance is set/)
+    // an allowance smaller than the cloud work so far: the warning is against it, with nothing of the build's in it;
+    // and the build budget, saved before, is kept (one field saved no longer resets the others)
+    await run(ADMIN, 'project.update', { repo: REPO, build: { cloud_budget: 3 } })
+    const after = await run(ADMIN, 'cost.get', { repo: REPO })
+    expect(after).toMatchObject({ budget: 300, cloudBudget: 3, quantity: 2, unit_cost: 20 })
+    expect(after.warning).toMatchObject({ level: 'spent', left: 3 })
+    const m = await run(ADMIN, 'usage.month', {})
+    expect(m.projects.find((p: { repo: string }) => p.repo === REPO)).toMatchObject({ budget: 300, cloudBudget: 3 })
+    await run(ADMIN, 'project.update', { repo: REPO, build: { cloud_budget: null } })
+  })
+
   it('counts the build once against the budget: forecast until Fabricate, then committed, then neither once ordered', () => {
     expect(buildCost({ planned: 80, placed: false, atFabricate: false })).toEqual({ committed: 0, forecast: 80 })
     expect(buildCost({ planned: 80, placed: false, atFabricate: true })).toEqual({ committed: 80, forecast: 0 })

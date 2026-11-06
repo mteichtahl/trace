@@ -52,16 +52,19 @@ describe('spend by job', () => {
 describe('the warning before a stage overruns', () => {
   const w: SpendWarning = { level: 'near', stage: 'Architect', spent: 2, share: 2.3, left: 18.41, stagesLeft: 8, top: [] }
   it('says where the stage is against its share, and where the share comes from', () => {
+    // the cloud-work allowance alone: the build budget's forecast is not in it (test-esp32 run 2, #151)
     expect(warningText(w, 'USD')).toEqual({
-      title: 'Architect is near its share of the budget',
-      body: 'US$2 of cloud work so far, of about US$2.30 a stage: US$18.41 was left for cloud work when it started, after the build\'s forecast, split across it and the 7 stages after it.',
+      title: 'Architect is near its share of the cloud-work allowance',
+      body: 'US$2 of cloud work so far, of about US$2.30 a stage: US$18.41 of the cloud-work allowance was left when it started, split across it and the 7 stages after it.',
     })
-    expect(warningText({ ...w, level: 'over', spent: 5 }, 'USD').title).toBe('Architect is past its share of the budget')
-    // run 2's Architect: all that was left for cloud work, and more
+    expect(warningText({ ...w, level: 'over', spent: 5 }, 'USD').title).toBe('Architect is past its share of the cloud-work allowance')
+    // run 2's Architect: all that was left of the allowance, and more
     expect(warningText({ ...w, level: 'spent', spent: 19.69 }, 'USD')).toEqual({
-      title: 'Architect has used all the budget left for cloud work',
-      body: 'US$19.69 so far, of US$18.41 left for cloud work when it started, for it and the 7 stages after it. Raise the budget in Settings, or cut work done again.',
+      title: 'Architect has used all the cloud-work allowance left',
+      body: 'US$19.69 so far, of US$18.41 left of the allowance when it started, for it and the 7 stages after it. Raise the cloud-work allowance in Settings (the build budget stays as it is), or cut work done again.',
     })
-    expect(warningText({ ...w, level: 'spent', left: -1.28, share: 0, stage: 'Capture' }, 'USD').title).toBe('The budget has nothing left for cloud work')
+    const gone = warningText({ ...w, level: 'spent', left: -1.28, share: 0, stage: 'Capture' }, 'USD')
+    expect(gone.title).toBe('The cloud-work allowance is used up')
+    expect(gone.body).not.toMatch(/forecast for the build/)
   })
 })

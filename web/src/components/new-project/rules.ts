@@ -61,7 +61,7 @@ export function checks(d: NewProjectDraft, o: CheckContext): Check[] {
     { id: 'template', step: 'start', text: 'Template chosen', ok: !!d.template && !!d.start },
     { id: 'repo', step: 'repository', text: d.repository.mode === 'new' ? 'Repository name free on GitHub' : 'Repository reachable', ok: repoOk(d, o.repo) },
     { id: 'parts', step: 'people', text: 'Everyone has a part', ok: d.people.every((p) => p.part === 'reviewer' || p.class !== 'guest') },
-    { id: 'quantity', step: 'build', text: 'Build quantity set', ok: Number.isInteger(d.build.quantity) && d.build.quantity >= 1 && (d.build.budget === undefined || d.build.budget >= 0) },
+    { id: 'quantity', step: 'build', text: 'Build quantity set', ok: Number.isInteger(d.build.quantity) && d.build.quantity >= 1 && (d.build.budget === undefined || d.build.budget >= 0) && (d.build.cloudBudget === undefined || d.build.cloudBudget >= 0) },
   ]
 }
 

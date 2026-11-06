@@ -475,13 +475,39 @@ export const EvidenceSchema = z.object({ kind: z.string().min(1).max(40), ref: z
 export const BuildSchema = z.object({
   quantity: z.number().int().min(1).max(1_000_000).default(10),
   unit_cost: z.number().min(0).nullable().default(null),
+  /**
+   * The build budget for a revision: what the boards, parts and case may cost (the order), in the build's currency. It is
+   * the project's money for the hardware, as its budget requirement states it, and trace's own cloud work never counts
+   * against it (test-esp32 run 2, #91 and #151: one number for both let the agents' spend use up the build's money).
+   */
   budget: z.number().min(0).nullable().default(null),
+  /**
+   * The cloud-work allowance for a revision, in US$: what trace's own agents and jobs may spend (estimated) before the
+   * stage warnings say so. Apart from the build budget; null: none set (projects made before it had one keep null, so
+   * their build budget is never reread as an allowance).
+   */
+  cloud_budget: z.number().min(0).nullable().default(null),
   currency: z.string().regex(/^[A-Z]{3}$/).default('USD'),
   fab: z.string().min(1).max(60).default('JLCPCB'),
   /** also prepare the panel and mounting hardware list (the case parts, screws, knobs…), kept apart from the parts list */
   hardware: z.boolean().default(false),
 })
 export type Build = z.output<typeof BuildSchema>
+
+/**
+ * A change to the build plan: only the fields given, with no defaults. BuildSchema.partial() keeps each field's default
+ * in zod 4, so saving one field in Settings (the cloud-work allowance, say) set every other one back to its default:
+ * the build budget to none, the boards to 10.
+ */
+export const BuildPatchSchema = z.object({
+  quantity: z.number().int().min(1).max(1_000_000).optional(),
+  unit_cost: z.number().min(0).nullable().optional(),
+  budget: z.number().min(0).nullable().optional(),
+  cloud_budget: z.number().min(0).nullable().optional(),
+  currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+  fab: z.string().min(1).max(60).optional(),
+  hardware: z.boolean().optional(),
+})
 
 export const SEVERITIES = ['cosmetic', 'degraded', 'failure', 'safety'] as const
 export type Severity = (typeof SEVERITIES)[number]
@@ -1692,13 +1718,30 @@ export function startJourney(db: DatabaseSync, o: StartOptions): JourneyRecord {
   return loadJourney(db) as JourneyRecord
 }
 
+const amount = (n: number | null, currency: string): string => (n === null ? 'none' : `${currency === 'USD' ? 'US$' : `${currency} `}${n}`)
+
+/**
+ * A build plan's change in words, each budget by its own name (the build budget and the cloud-work allowance are two
+ * things: test-esp32 run 2, #151, #152 recorded raising one as "changed the build plan"). Pure.
+ */
+export function buildChanges(was: Build, now: Build): string[] {
+  const out: string[] = []
+  const moved = (label: string, a: number | null, b: number | null, currency: string): string =>
+    a === null ? `set the ${label} to ${amount(b, currency)}` : b === null ? `removed the ${label} (was ${amount(a, currency)})` : `${b > a ? 'raised' : 'lowered'} the ${label} from ${amount(a, currency)} to ${amount(b, currency)}`
+  if (was.budget !== now.budget) out.push(moved('build budget per revision', was.budget, now.budget, now.currency))
+  if (was.cloud_budget !== now.cloud_budget) out.push(moved('cloud-work allowance per revision', was.cloud_budget, now.cloud_budget, 'USD'))
+  const rest = (b: Build) => JSON.stringify({ ...b, budget: null, cloud_budget: null })
+  if (rest(was) !== rest(now)) out.push('changed the build plan')
+  return out
+}
+
 /** What an admin may change about a project after it is made (Settings › About, Build and budget, Later stages). */
 export const AboutSchema = z.object({
   name: z.string().trim().min(2).max(120).optional(),
   description: z.string().trim().max(500).optional(),
   /** the icon's JSON (glyph and colour), as projects.create keeps it */
   icon: z.string().trim().max(200).optional(),
-  build: BuildSchema.partial().optional(),
+  build: BuildPatchSchema.optional(),
   later: z.array(z.enum(LATER_STAGES)).max(3).optional(),
 }).strict()
 export type AboutPatch = z.input<typeof AboutSchema>
@@ -1728,10 +1771,11 @@ export function updateAbout(db: DatabaseSync, patch: AboutPatch, by: string): Jo
       changes.push('changed its icon')
     }
     if (p.build) {
-      const next = BuildSchema.parse({ ...j.build, ...p.build })
+      const given = Object.fromEntries(Object.entries(p.build).filter(([, v]) => v !== undefined))
+      const next = BuildSchema.parse({ ...j.build, ...given })
       if (JSON.stringify(next) !== JSON.stringify(j.build)) {
         db.prepare("UPDATE journey SET build=?, updated=?, by=? WHERE id='current'").run(JSON.stringify(next), t, by)
-        changes.push('changed the build plan')
+        changes.push(...buildChanges(j.build, next))
       }
     }
     if (p.later) {

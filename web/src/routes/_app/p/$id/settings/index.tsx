@@ -1,7 +1,7 @@
 /**
  * Settings (/p/:id/settings): what the project is and who works on it. The template and repository are shown
  * read-only with the reason (the record depends on them). Name, description, icon, the people and their parts, the
- * build quantity, the budget and the later stages, and the logo on the project's documents (project-logo.tsx), are editable by admins: each change is written to the journey
+ * build quantity, the build budget (the order's), the cloud-work allowance (trace's own spend) and the later stages, and the logo on the project's documents (project-logo.tsx), are editable by admins: each change is written to the journey
  * record with project.update (they are what the project is, not repository settings) or, for people, assign — and
  * says "Saved" when it lands. Everyone else reads. The project's rules (project-rules.tsx) list the answers made rules and
  * where each stands. Agent instructions for this project are one link away.
@@ -68,7 +68,7 @@ function Settings() {
   if (!s.data || !j.data) return <TabSkeleton loading={s.isLoading || j.isLoading} />
   const jm = j.data as JourneyMore
   const icon: ProjectIcon = jm.icon ?? { glyph: 'board', colour: 'blue' }
-  const build = jm.build ?? { quantity: 10, unit_cost: null, budget: null, hardware: false }
+  const build = jm.build ?? { quantity: 10, unit_cost: null, budget: null, cloud_budget: null, hardware: false }
   const later = new Set(jm.later ?? [])
 
   return (
@@ -140,8 +140,9 @@ function Settings() {
       <Section label="Build and budget">
         <div className="grid gap-5 rounded-xl border p-5 sm:grid-cols-2">
           <NumberSetting label="Boards per build" value={build.quantity} disabled={!admin} saving={pending === 'quantity'} saved={saved === 'quantity'} onSave={(x) => save('quantity', { build: { quantity: Math.round(x) } })} min={1} />
-          <NumberSetting label="Budget per revision (US$)" value={build.budget ?? undefined} placeholder="No budget" disabled={!admin} saving={pending === 'budget'} saved={saved === 'budget'} onSave={(x) => save('budget', { build: { budget: x } })} min={0} />
-          <NumberSetting label="Target unit cost (US$)" value={build.unit_cost ?? undefined} placeholder="None" disabled={!admin} saving={pending === 'unit_cost'} saved={saved === 'unit_cost'} onSave={(x) => save('unit_cost', { build: { unit_cost: x } })} min={0} />
+          <NumberSetting label="Build budget per revision (US$)" hint="Boards, parts and case: what the order may cost. Keep it in step with the project's budget requirement. trace's cloud work does not count against it." value={build.budget ?? undefined} placeholder="No budget" disabled={!admin} saving={pending === 'budget'} saved={saved === 'budget'} onSave={(x) => save('budget', { build: { budget: x } })} min={0} />
+          <NumberSetting label="Target unit cost (US$)" hint="With the boards per build, the order's forecast against the build budget." value={build.unit_cost ?? undefined} placeholder="None" disabled={!admin} saving={pending === 'unit_cost'} saved={saved === 'unit_cost'} onSave={(x) => save('unit_cost', { build: { unit_cost: x } })} min={0} />
+          <NumberSetting label="Cloud-work allowance per revision (US$)" hint="What trace's own agents and jobs may spend (estimated). trace warns as each stage nears its share. Raising it does not change the build budget." value={build.cloud_budget ?? undefined} placeholder="No allowance" disabled={!admin} saving={pending === 'cloud_budget'} saved={saved === 'cloud_budget'} onSave={(x) => save('cloud_budget', { build: { cloud_budget: x } })} min={0} />
           <div className="flex items-start gap-3 border-t pt-4 sm:col-span-2">
             <span className="flex-1">
               <span className="block text-sm font-medium" id="hw-label">Include panel and mounting hardware</span>
@@ -173,7 +174,7 @@ function Settings() {
   )
 }
 
-type Field = 'name' | 'description' | 'icon' | 'quantity' | 'budget' | 'unit_cost' | 'hardware' | 'later'
+type Field = 'name' | 'description' | 'icon' | 'quantity' | 'budget' | 'cloud_budget' | 'unit_cost' | 'hardware' | 'later'
 
 function Status({ saving, saved }: { saving?: boolean; saved?: boolean }) {
   if (saving) return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />Saving</span>
@@ -203,7 +204,7 @@ function TextSetting({ label, hint, value, onSave, disabled, saving, saved, mult
   )
 }
 
-function NumberSetting({ label, value, onSave, disabled, saving, saved, min, placeholder }: { label: string; value?: number; onSave: (v: number) => void; disabled?: boolean; saving?: boolean; saved?: boolean; min: number; placeholder?: string }) {
+function NumberSetting({ label, hint, value, onSave, disabled, saving, saved, min, placeholder }: { label: string; hint?: string; value?: number; onSave: (v: number) => void; disabled?: boolean; saving?: boolean; saved?: boolean; min: number; placeholder?: string }) {
   const [v, setV] = useState(value === undefined ? '' : String(value))
   useEffect(() => setV(value === undefined ? '' : String(value)), [value])
   const id = `set-${label.toLowerCase().replace(/\W+/g, '-')}`
@@ -211,7 +212,7 @@ function NumberSetting({ label, value, onSave, disabled, saving, saved, min, pla
   const ok = v !== '' && Number.isFinite(n) && n >= min
   const commit = () => { if (ok && n !== value) onSave(n) }
   return (
-    <Field label={label} status={<Status saving={saving} saved={saved} />} htmlFor={id}>
+    <Field label={label} hint={hint} status={<Status saving={saving} saved={saved} />} htmlFor={id}>
       <Input id={id} inputMode="decimal" value={v} placeholder={placeholder} disabled={disabled} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && commit()} />
       {v !== '' && !ok && <StatusBadge plain status="not_met" label={`A number, ${min} or more`} />}
     </Field>

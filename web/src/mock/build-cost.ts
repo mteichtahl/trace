@@ -111,13 +111,16 @@ const SOIL_COST: CostView = {
   money: true,
   // the build is forecast, not committed, before Fabricate
   committed: 0,
+  // two budgets: the build's for the order (US$120 forecast of US$200) and the cloud-work allowance for trace's work
   budget: 200,
+  cloudBudget: 60,
   quantity: 10,
   unit_cost: 12,
   jobs: SOIL_SPEND,
   stages: COST.stages.map((x) => (x.stage === 'Capture' ? { ...x, cloud: 21.12 } : x)),
-  // US$200 less the build's US$120 and Define's and Architect's US$17: US$63 for Capture and the 6 stages after it
-  warning: { level: 'over', stage: 'Capture', spent: 21.12, share: 9, left: 63, stagesLeft: 7, top: [SOIL_JOBS[5]!, SOIL_JOBS[2]!, SOIL_JOBS[0]!] },
+  // the US$60 allowance less Define's and Architect's US$17: US$43 for Capture and the 2 stages after it (the build's
+  // forecast never comes off it)
+  warning: { level: 'over', stage: 'Capture', spent: 21.12, share: 14.33, left: 43, stagesLeft: 3, top: [SOIL_JOBS[5]!, SOIL_JOBS[2]!, SOIL_JOBS[0]!] },
   spent: { cloud: 38.12, orders: 0, detail: { estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: { total: 9.86, byService: { 'Amazon Bedrock AgentCore': 7.2, 'AWS CodeBuild': 1.9, 'AWS Secrets Manager': 0.76 }, through: ago(DAY).slice(0, 10), estimatedDays: 1 }, basis: 'estimate' } },
   lines: COST.lines.map((l) => ({ ...l, estimate: true })),
   explorer: { checkedAt: ago(3 * HOUR), nextAt: ahead(21 * HOUR), ok: true, tag: 'active', text: `Read from Cost Explorer by the trace:project cost allocation tag. A day's figures settle about 24 hours later, so the latest days may still change. Read ${ago(3 * HOUR).slice(0, 16).replace('T', ' ')} UTC; next read ${ahead(21 * HOUR).slice(0, 16).replace('T', ' ')} UTC.` },
@@ -132,9 +135,9 @@ const SOIL_COST: CostView = {
 const MONTH = (): UsageMonth => ({
   month: new Date().toISOString().slice(0, 7), currency: 'USD',
   projects: [
-    { repo: SOIL, estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: 9.86, orders: 0, orderCurrency: 'USD', budget: 200, started: true },
-    { repo: 'acme/motor-driver', estimated: { agents: 12.1, gpu: 0, cpu: 0.6, total: 12.7 }, actual: 3.1, orders: 0, orderCurrency: 'USD', budget: null, started: true },
-    { repo: PANEL, estimated: { agents: 22.9, gpu: 6.8, cpu: 1.2, total: 30.9 }, actual: 7.4, orders: 131.4, orderCurrency: 'USD', budget: 250, started: true },
+    { repo: SOIL, estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: 9.86, orders: 0, orderCurrency: 'USD', budget: 200, cloudBudget: 60, started: true },
+    { repo: 'acme/motor-driver', estimated: { agents: 12.1, gpu: 0, cpu: 0.6, total: 12.7 }, actual: 3.1, orders: 0, orderCurrency: 'USD', budget: null, cloudBudget: null, started: true },
+    { repo: PANEL, estimated: { agents: 22.9, gpu: 6.8, cpu: 1.2, total: 30.9 }, actual: 7.4, orders: 131.4, orderCurrency: 'USD', budget: 250, cloudBudget: null, started: true },
   ],
   totals: { estimated: 81.72, actual: 32.86, orders: 131.4 },
   shared: { total: 12.5, byService: { 'AWS Batch': 8.1, 'AWS Lambda': 2.2, 'Amazon CloudFront': 2.2 }, text: 'This installation\'s spend that carries no project tag: the shared job queues, the web app, the API.' },

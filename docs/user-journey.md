@@ -205,7 +205,7 @@ The design record carries a running view of what the project has spent, what it 
 - **Spent:** orders paid (recorded by Order submit), lab fees (Certify), and cloud use: GPU and CPU jobs and agent model use, attributed to the project through its AWS cost-allocation tags.
 - **Committed:** signed orders not yet paid, booked lab time.
 - **Forecast:** the BOM at the build quantity from today's prices, the next order's quote, and the cloud use of the remaining stages at this project's own past rate.
-- **Budget:** an optional budget per revision; a gate whose next step would exceed it says so before it is signed.
+- **Budgets:** two, each optional and per revision, never added together. The build budget is what the order may cost (boards, parts, case; the project's budget requirement): orders paid, committed and the order's forecast count against it. The cloud-work allowance is what trace's own cloud work may cost: the Overview warns as the current stage nears its share of it. Raising one never raises the other.
 
 **Schedule**, by stage:
 

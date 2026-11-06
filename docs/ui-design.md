@@ -117,7 +117,7 @@ A person is never more than two steps from Home: an area from the rail, then an 
 | Evidence | The coverage matrix, every run with its plots, waivers | Prove |
 | Build | Releases, orders, boards by serial, the bench | Release |
 | Decisions | Gate records, change requests, answered questions, the decision log | First gate signed |
-| Cost and time | Spent, committed and forecast cost, the stage timeline, and spend by job grouped by stage with work done again (sent back, redone, asked twice) and lost jobs marked; the Overview warns when the current stage nears its share of the budget | Always, for admins |
+| Cost and time | Spent, committed and forecast cost against the project's two budgets (the build budget for the order; the cloud-work allowance for trace's own work), the stage timeline, and spend by job grouped by stage with work done again (sent back, redone, asked twice) and lost jobs marked; the Overview shows both budgets and warns when the current stage nears its share of the cloud-work allowance | Always, for admins |
 | Settings | Template, build quantity, budget, people on the project, rules | Always |
 | Memory | What the agents remember: long-term memories to switch off and on, recent activity, the change log | The first agent session |
 
@@ -269,7 +269,7 @@ New project is a six-step Focus mode flow for admins, and it ends with a working
 | 2. How it starts | From an idea (opens Intent builder) or from an existing KiCad design (opens Design import); the template: Board, FPGA, Firmware or Mixed | trace recommends a template from the answer and the repository's contents, with why ("Found a KiCad project and firmware: Mixed") | Yes |
 | 3. Repository | A new repository (owner and name) or an existing one; its default branch | A new private repository named from the project; `main` | Yes |
 | 4. People | Who is on the project and what each may do | The creator and every admin, shown locked; others added by name or invited by email | No |
-| 5. Build and budget | Build quantity per run; target unit cost; budget per revision; optional later stages (Certify, Produce, Sustain); the fab and assembler | 10 boards; no budget; later stages off; JLCPCB | No |
+| 5. Build and budget | Build quantity per run; target unit cost; build budget per revision (the order: boards, parts, case); cloud-work allowance per revision (trace's own agents and jobs); optional later stages (Certify, Produce, Sustain); the fab and assembler | 10 boards; no budget; no allowance; later stages off; JLCPCB | No |
 | 6. Review | Nothing | The whole set in plain words, what will happen, and how long it takes | – |
 
 **People and their permissions (step 4).** A table of people with an Add person field that searches existing people and accepts a new email. For each person:

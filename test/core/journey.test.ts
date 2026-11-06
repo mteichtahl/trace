@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type Viewer, addWaiver, answerQuestion, askQuestion, gateView, inboxItems, journeyView, loadJourney, nextStep, recordOpen,
   returnGate, setCriterion, signBlockers, signGate, sortInbox, startJourney, templateStages, applyJourneySchema, copyJourneyTables, getDraft, loadOrders, putDraft,
-  recordOrder, dismissStuck, JOURNEY_TABLES, updateAbout, reviewWaitsOn,
+  recordOrder, dismissStuck, JOURNEY_TABLES, updateAbout, buildChanges, reviewWaitsOn,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { merge } from '../../src/core/dbmerge.js'
@@ -408,6 +408,28 @@ describe('changing what a project is (Settings)', () => {
     const off = updateAbout(db, { later: [] }, 'Ada')
     expect(off.stages.some((s) => s.id === 'certify')).toBe(false)
     expect(off.gates.some((g) => g.stage === 'certify')).toBe(false)
+  })
+
+  it('keeps the build budget and the cloud-work allowance apart, each logged by its own name (test-esp32 run 2, #151, #152)', () => {
+    updateAbout(db, { build: { budget: 100 } }, 'Ada')
+    // raising the allowance to keep trace working leaves what the build may cost as it is
+    const r = updateAbout(db, { build: { cloud_budget: 150 } }, 'Ada')
+    expect(r.journey.build).toMatchObject({ budget: 100, cloud_budget: 150 })
+    expect(r.decisions[0]!.summary).toBe('Ada set the cloud-work allowance per revision to US$150.')
+    const up = updateAbout(db, { build: { budget: 275, quantity: 12 } }, 'Ada')
+    expect(up.decisions[0]!.summary).toBe('Ada raised the build budget per revision from US$100 to US$275, changed the build plan.')
+    expect(up.journey.build).toMatchObject({ budget: 275, cloud_budget: 150, quantity: 12 })
+  })
+
+  it('reads a build plan of before the allowance as having none, never its build budget as one', () => {
+    // a project made before: its stored build JSON has one budget and no allowance
+    db.prepare("UPDATE journey SET build=? WHERE id='current'").run(JSON.stringify({ quantity: 10, unit_cost: 8, budget: 100, currency: 'USD', fab: 'JLCPCB', hardware: false }))
+    expect(loadJourney(db)!.journey.build).toMatchObject({ budget: 100, cloud_budget: null })
+    // nothing changed, nothing written: the stored row is left as it was
+    const before = loadJourney(db)!.decisions.length
+    updateAbout(db, { build: { budget: 100 } }, 'Ada')
+    expect(loadJourney(db)!.decisions.length).toBe(before)
+    expect(buildChanges(loadJourney(db)!.journey.build, { ...loadJourney(db)!.journey.build, budget: null })).toEqual(['removed the build budget per revision (was US$100)'])
   })
 
   it('refuses a name too short and writes nothing when nothing changed', () => {

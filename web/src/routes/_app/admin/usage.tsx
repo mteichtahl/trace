@@ -2,7 +2,7 @@
  * Admin › Usage and cost (docs/ui-design.md, "Admin"): spend across projects for the month, by project, against
  * budgets. Data: usage.month (admins only): each project's estimated cloud use from the cost ledger (agents, graphics
  * card and CPU jobs, priced from the dated price table), what AWS billed with its tag (Cost Explorer, a day behind),
- * the orders paid this month, and the budget; and the installation's spend no project tag covers.
+ * the orders paid this month against the build budget, the cloud work against the cloud-work allowance; and the installation's spend no project tag covers.
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useState } from 'react'
@@ -42,7 +42,7 @@ function Usage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Usage and cost</h1>
-          <p className="mt-1 text-[15px] text-muted-foreground">Spend across projects for {monthName(month)}: cloud use and recorded orders, by project, against each budget.</p>
+          <p className="mt-1 text-[15px] text-muted-foreground">Spend across projects for {monthName(month)}: cloud use and recorded orders, by project, against each project's build budget and cloud-work allowance.</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setMonth(shift(month, -1))}>Previous month</Button>
@@ -71,18 +71,19 @@ function Usage() {
               <div className="overflow-x-auto rounded-xl border">
                 <table className="w-full text-sm">
                   <thead className="text-left text-xs text-muted-foreground">
-                    <tr className="border-b"><th className="px-4 py-2.5 font-medium">Project</th><th className="px-4 py-2.5 text-right font-medium">Cloud, estimated</th><th className="px-4 py-2.5 text-right font-medium">Billed by AWS</th><th className="px-4 py-2.5 text-right font-medium">Orders</th><th className="px-4 py-2.5 font-medium">Budget</th><th className="sr-only">Open</th></tr>
+                    <tr className="border-b"><th className="px-4 py-2.5 font-medium">Project</th><th className="px-4 py-2.5 text-right font-medium">Cloud, estimated</th><th className="px-4 py-2.5 text-right font-medium">Billed by AWS</th><th className="px-4 py-2.5 text-right font-medium">Orders</th><th className="px-4 py-2.5 font-medium">Build budget</th><th className="px-4 py-2.5 font-medium">Cloud-work allowance</th><th className="sr-only">Open</th></tr>
                   </thead>
                   <tbody className="divide-y">
                     {d.projects.map((p) => {
-                      const spent = p.estimated.total + p.orders
                       return (
                         <tr key={p.repo}>
                           <td className="px-4 py-3 font-medium">{projectName(p.repo)}</td>
                           <td className="px-4 py-3 text-right" title={`Agents ${money(p.estimated.agents, d.currency)}, graphics card ${money(p.estimated.gpu, d.currency)}, CPU ${money(p.estimated.cpu, d.currency)}, tools function ${money(p.estimated.tools ?? 0, d.currency)}`}>{money(p.estimated.total, d.currency)}</td>
                           <td className="px-4 py-3 text-right">{p.actual === null ? <span className="text-muted-foreground">not yet</span> : money(p.actual, d.currency)}</td>
                           <td className="px-4 py-3 text-right">{money(p.orders, p.orderCurrency)}</td>
-                          <td className="px-4 py-3">{p.budget === null ? <span className="text-muted-foreground">No budget set</span> : <StatusBadge plain status={spent <= p.budget ? 'met' : 'failing'} label={`${money(spent, d.currency)} of ${money(p.budget, p.orderCurrency)}`} />}</td>
+                          {/* two budgets: orders against the build budget, cloud work against its allowance (never one sum of both) */}
+                          <td className="px-4 py-3">{p.budget === null ? <span className="text-muted-foreground">None set</span> : <StatusBadge plain status={p.orders <= p.budget ? 'met' : 'failing'} label={`${money(p.orders, p.orderCurrency)} of ${money(p.budget, p.orderCurrency)} in orders`} />}</td>
+                          <td className="px-4 py-3">{p.cloudBudget == null ? <span className="text-muted-foreground">None set</span> : <StatusBadge plain status={p.estimated.total <= p.cloudBudget ? 'met' : 'failing'} label={`${money(p.estimated.total, d.currency)} of ${money(p.cloudBudget, d.currency)}`} />}</td>
                           <td className="px-4 py-3 text-right"><Button asChild variant="link" size="sm" className="h-auto px-0"><Link to={`/p/${projectId(p.repo)}/cost` as string}>Cost and time</Link></Button></td>
                         </tr>
                       )

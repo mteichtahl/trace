@@ -47,7 +47,8 @@ export interface JourneyMore extends Journey {
   decisions?: DecisionEntry[]
   /** what the project is (Settings): its icon, build plan and the later stages it has */
   icon?: ProjectIcon
-  build?: { quantity: number; unit_cost: number | null; budget: number | null; currency: string; fab: string; hardware?: boolean }
+  /** budget: the build budget (the order: boards, parts, case); cloud_budget: the cloud-work allowance (trace's own spend) */
+  build?: { quantity: number; unit_cost: number | null; budget: number | null; cloud_budget?: number | null; currency: string; fab: string; hardware?: boolean }
   later?: ('certify' | 'produce' | 'sustain')[]
 }
 
@@ -543,14 +544,17 @@ export interface CostView {
   committed: number | null
   /** the build: quantity × unit cost; null without a unit cost */
   forecast: number | null
+  /** the build budget: what the order (boards, parts, case) may cost; cloud work never counts against it */
   budget?: number
+  /** the cloud-work allowance: what trace's own cloud work may cost (US$); absent while none is set */
+  cloudBudget?: number
   quantity?: number
   unit_cost?: number | null
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
   lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'tools' | 'order'; amount: number; estimate?: boolean }[]
   /** spend by job, grouped by stage, work done again marked (admins; null when nothing is recorded) */
   jobs?: SpendByJobView | null
-  /** the current stage near or past its share of what the budget leaves for cloud work */
+  /** the current stage near or past its share of what the cloud-work allowance has left */
   warning?: SpendWarning
   notes?: string[]
 }
@@ -603,7 +607,7 @@ export interface SpendWarning {
 export interface UsageMonth {
   month: string
   currency: string
-  projects: { repo: string; estimated: { agents: number; gpu: number; cpu: number; tools?: number; total: number }; actual: number | null; orders: number; orderCurrency: string; budget: number | null; started: boolean }[]
+  projects: { repo: string; estimated: { agents: number; gpu: number; cpu: number; tools?: number; total: number }; actual: number | null; orders: number; orderCurrency: string; budget: number | null; cloudBudget?: number | null; started: boolean }[]
   totals: { estimated: number; actual: number | null; orders: number }
   shared?: { total: number; byService: Record<string, number>; text: string }
   explorer: ExplorerView
@@ -630,5 +634,5 @@ export interface NewProjectDraft {
   repository: { mode: 'new' | 'existing'; owner: string; name: string; branch: string }
   advanced: { ownToken: boolean; memoryDays: number; onboardingPr: boolean; applySettings: boolean }
   people: { who: string; name?: string; email: string; class: 'admin' | 'user' | 'guest' | 'new'; part: Part; notify: 'normal' | 'gates_spend' }[]
-  build: { quantity: number; unitCost?: number; budget?: number; later: { certify: boolean; produce: boolean; sustain: boolean }; fab: string }
+  build: { quantity: number; unitCost?: number; budget?: number; cloudBudget?: number; later: { certify: boolean; produce: boolean; sustain: boolean }; fab: string }
 }

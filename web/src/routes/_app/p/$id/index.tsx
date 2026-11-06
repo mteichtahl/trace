@@ -5,8 +5,9 @@
  * to be reviewed, the build when it is failing (with "Ask trace to fix something"), and what is happening around it (Waiting on people, trace is doing, Queued, and Recently as a short timeline). Any stage on
  * the rail, and "What happens in <Stage>", opens the stage sheet. A job one specialist asked another for reads "Asked by the …
  * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
- * summaries. For admins, a warning under the next step when the current stage nears or passes its share of the budget,
- * with its biggest jobs (cost.get warning).
+ * summaries; for admins, the cost summary is the project's two budgets (the build budget for the order, the cloud-work
+ * allowance for trace's own work: budgets.tsx), and a warning under the next step when the current stage nears or
+ * passes its share of the cloud-work allowance, with its biggest jobs (cost.get warning).
  * Reference screen for a project tab.
  */
 import { useQuery } from '@tanstack/react-query'
@@ -45,11 +46,13 @@ import { call, repoOf } from '@/lib/api'
 import { ago, money, plural, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
+import type { CostView } from '@/lib/types-s1'
 import { SKILLS } from '@/components/skills/definitions'
 import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
 import { BuildHealth } from '@/components/project/build-health'
 import { SpendWarningCard } from '@/components/project/spend-by-job'
+import { Budgets } from '@/components/project/budgets'
 import { ResignGates } from '@/components/project/resign-gates'
 
 export const Route = createFileRoute('/_app/p/$id/')({
@@ -75,7 +78,7 @@ function Overview() {
   // the change the next step is about: whether this person may accept it straight from the card
   const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
   const change = useQuery({ ...q('change.get', { repo, number: changeNo ?? 0 }), enabled: !!changeNo && part !== 'reviewer' })
-  // the current stage near or past its share of the budget (admins only: cost.get carries no money for anyone else)
+  // the budgets, and the current stage near or past its share of the cloud-work allowance (admins only: cost.get carries no money for anyone else)
   const cost = useQuery(q('cost.get', { repo }, { enabled: admin }))
   const now = useNow(30_000)
   const phone = useMediaQuery('(max-width: 767px)')
@@ -206,6 +209,8 @@ function Overview() {
       ))}
     </div>
   ) : null
+  // the two budgets, the build's and the cloud-work allowance, each with what counts against it (admins)
+  const budgets = admin && cost.data?.money ? cost.data : undefined
   const spendWarning = admin && cost.data?.money && cost.data.warning
     ? <SpendWarningCard warning={cost.data.warning} currency={cost.data.currency} id={id} className="mt-4" />
     : null
@@ -264,9 +269,9 @@ function Overview() {
             {recentList}
             <Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="mt-3 inline-block text-sm text-primary hover:underline">Full history</Link>
           </FoldRow>
-          {(r || c) && (
-            <FoldRow label="Requirements and cost" count={[r && `${r.accepted}`, c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
-              <div className="space-y-4"><SideSummary j={d} id={id} /></div>
+          {(r || c || budgets) && (
+            <FoldRow label="Requirements and cost" count={[r && `${r.accepted}`, budgets ? money(budgets.spent.cloud ?? 0, budgets.currency) : c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
+              <div className="space-y-4"><SideSummary j={d} id={id} budgets={budgets} /></div>
             </FoldRow>
           )}
         </FoldRows>
@@ -323,14 +328,14 @@ function Overview() {
         </div>
 
         <aside className="space-y-4">
-          <SideSummary j={d} id={id} />
+          <SideSummary j={d} id={id} budgets={budgets} />
         </aside>
       </div>
     </div>
   )
 }
 
-function SideSummary({ j, id }: { j: Journey; id: string }) {
+function SideSummary({ j, id, budgets }: { j: Journey; id: string; budgets?: CostView | undefined }) {
   const r = j.summary?.requirements
   const c = j.summary?.cost
   return (
@@ -358,7 +363,15 @@ function SideSummary({ j, id }: { j: Journey; id: string }) {
           </div>
         </div>
       )}
-      {c && (
+      {budgets ? (
+        <div>
+          <div className="mb-2 flex items-baseline justify-between">
+            <h2 className="font-semibold">Budgets</h2>
+            <Link to="/p/$id/cost" params={{ id }} className="text-sm text-primary hover:underline">Cost and time</Link>
+          </div>
+          <Budgets cost={budgets} id={id} compact />
+        </div>
+      ) : c && (
         <div className="rounded-xl border p-5">
           <h2 className="font-semibold">Cost so far</h2>
           <dl className="mt-3 space-y-2 text-sm">
