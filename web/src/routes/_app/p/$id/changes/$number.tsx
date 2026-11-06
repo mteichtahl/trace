@@ -44,7 +44,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { repoOf } from '@/lib/api'
 import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
-import { KIND_TAG, changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
+import { KIND_TAG, changeOf, checksHeading, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
 import type { ChangeDetail, ChangeFile, ChangeSummary, CheckJob } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -243,7 +243,7 @@ function ChecksLine({ d, onOpen }: { d: ChangeDetail; onOpen: () => void }) {
   return (
     <button type="button" onClick={onOpen} className="mt-2 -ml-1 flex min-h-11 items-center gap-2 rounded-md px-1 text-left text-[15px] font-medium active:bg-muted">
       {I ? <I.icon className={cn('size-4 shrink-0', I.cls)} aria-hidden /> : <CircleDashed className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
-      <span>{checksLine(d.checks_list, d.checks)}</span>
+      <span>{d.stuck && d.state === 'open' ? 'Checks cannot start' : checksLine(d.checks_list, d.checks)}</span>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <span className="sr-only">: open the checks</span>
     </button>
@@ -299,7 +299,7 @@ function Checks({ d, onOpen }: { d: ChangeDetail; onOpen: (i: number) => void })
   const rest = list.length - shown.length
   return (
     <section className="rounded-xl border bg-card p-5" aria-labelledby="checks">
-      <h3 id="checks" className="section-label">Checks · {checksWords(d.checks)}</h3>
+      <h3 id="checks" className="section-label">Checks · {checksHeading(d)}</h3>
       {list.length === 0 ? (
         <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><CircleDashed className="size-4" aria-hidden />{d.checks === null ? 'trace could not read the checks.' : 'No checks have run yet.'}</p>
       ) : (

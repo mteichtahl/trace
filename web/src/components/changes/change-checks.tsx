@@ -9,7 +9,7 @@
 import { CircleCheck, CircleDashed, CircleMinus, CircleX, Clock, Loader2, SquareTerminal } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { checksWords } from '@/lib/guided'
+import { checksHeading } from '@/lib/guided'
 import { duration } from '@/lib/format'
 import type { ChangeCheck, ChangeDetail, CheckJob } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -137,7 +137,7 @@ export function ChangeChecks({ d, jobs, repo, onOpenCheck }: { d: ChangeDetail; 
   const rest = list.length - shown.length
   return (
     <section className="rounded-xl border bg-card p-5" aria-labelledby="checks">
-      <h3 id="checks" className="section-label">Checks · <span className="font-normal normal-case tracking-normal">{withJobs ? jobsWords(jobs) : checksWords(d.checks)}</span></h3>
+      <h3 id="checks" className="section-label">Checks · <span className="font-normal normal-case tracking-normal">{withJobs ? jobsWords(jobs) : checksHeading(d)}</span></h3>
       {withJobs && (
         <ul className="mt-1 divide-y">
           {jobs.map((j) => {

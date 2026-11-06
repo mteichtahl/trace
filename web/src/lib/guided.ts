@@ -5,7 +5,7 @@
  * criterion is done, the first unmet one is now, the next is next, then the gate's signature) and the screens still
  * show where the project is.
  */
-import type { ChangeDetail, ChangeSummary, ChangeVerdict, Gate, Journey, NextStep, PendingAnswer, Stage, StageStep } from './types'
+import type { ChangeDetail, ChangeSummary, ChangeVerdict, Gate, Journey, NextStep, PendingAnswer, Stage, StageStep, StuckChecks } from './types'
 
 /** The stage the project is in (current or reopened), with its place among the visible stages. */
 export function currentStage(j: Pick<Journey, 'stages'>): { stage: Stage; index: number; total: number } | null {
@@ -125,6 +125,10 @@ export function checksWords(c: ChangeSummary['checks']): string {
   return `${c.passed === counted ? (c.passed === 1 ? '1 check' : `${c.passed} checks`) : `${c.passed} of ${counted} checks`} passed`
 }
 
+/** The checks' heading on a change's page: "Cannot start: no runner picks them up" while stuck, else checksWords. */
+export const checksHeading = (d: Pick<ChangeSummary, 'checks' | 'stuck' | 'state'>): string =>
+  (d.stuck && d.state === 'open' ? 'Cannot start: no runner picks them up' : checksWords(d.checks))
+
 /** "your answer to "…"": the questions a change still waits on, the first few by their words. */
 const answersOf = (xs: readonly PendingAnswer[]): string =>
   `your ${xs.length === 1 ? 'answer' : 'answers'} to ${xs.slice(0, 2).map((a) => `"${a.text.replace(/\s+/g, ' ').trim().slice(0, 100)}"`).join(' and ')}${xs.length > 2 ? ` and ${xs.length - 2} more` : ''}`
@@ -139,9 +143,18 @@ export function answersLine(xs: readonly PendingAnswer[]): string {
   return `Waiting for trace to apply ${answersOf(xs)}. Once it has, this updates by itself.`
 }
 
+/**
+ * "Checks cannot start: the CodeBuild runner cannot …. An admin re-authorizes the GitHub connection; the change says
+ * how." (test-esp32 log #146): short enough for a card; the change's page and the next step carry the steps in full.
+ */
+export const stuckLine = (s: StuckChecks): string =>
+  `Checks cannot start: ${s.why}. An admin ${s.connection ? 're-authorizes the GitHub connection' : 'fixes the runner'}; the change says how.`
+
 /** One line under a change's title: what it waits for, in plain words. */
 export function changeLine(c: ChangeSummary): string {
   if (c.checks_denied) return 'trace may not read its checks: an admin gives trace\'s GitHub token "Actions: read" and "Commit statuses: read".'
+  // no runner picks its checks up: never "checks running" over checks that cannot start
+  if (c.stuck && c.state === 'open' && !c.working) return stuckLine(c.stuck)
   // a stacked change whose own checks are fine: it waits for the one below it
   // its job is still at it: passed checks say nothing yet about what it pushes next
   if (c.working && c.state === 'open') return 'trace is still working on this change. Ready to review when its job finishes.'

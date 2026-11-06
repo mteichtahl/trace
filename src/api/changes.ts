@@ -42,6 +42,7 @@ import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, t
 import type { CheckRunDetail, PullFile, PullStatus, PullSummary } from './github.js'
 import type { RequirementEditsView } from './requirement-edits.js'
 import type { PendingAnswer } from '../core/answer-followups.js'
+import { type StuckChecks, stuckWords } from './stuck-checks.js'
 
 export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
 /** 'work': a specialist's change (docs/guided-flow.md); otherwise an edit a person made in the app (docs/stay-in-trace.md) */
@@ -78,6 +79,8 @@ export interface ChangeSummary {
   built_on_by?: StackLink[]
   /** the job behind it is still working (ChangeFacts.working): what is reviewed may still change */
   working?: boolean
+  /** its checks cannot start: no runner picks them up (ChangeFacts.stuck, src/api/stuck-checks.ts) */
+  stuck?: StuckChecks
 }
 /** One change of a stack, as another change names it. */
 export interface StackLink { number: number; title: string }
@@ -218,6 +221,11 @@ export interface ChangeFacts {
   answers?: PendingAnswer[]
   /** every check that failed, failed for a reason outside the work (infraReason): it is run again, not sent back */
   infra?: InfraFailure
+  /**
+   * Its checks cannot start: its workflow runs have been queued for a long while and no runner picks them up
+   * (src/api/stuck-checks.ts, test-esp32 log #146). Waiting fixes nothing: an admin fixes the runner, then they run again.
+   */
+  stuck?: StuckChecks
 }
 
 /**
@@ -498,6 +506,8 @@ function verdictOfOwn(f: ChangeFacts): Verdict {
   // a check that did not run properly says nothing about the work: it waits to be run again, it is not failing
   if (infraOnly(f)) return 'blocked'
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
+  // checks no runner picks up: they are not running, and waiting will not finish them (test-esp32 log #146)
+  if (f.stuck) return 'blocked'
   // the specialist says it is not finished, or an answer is still to be applied to it: that, not the checks, is what a
   // person should hear first
   if (f.unfinished || f.answers?.length) return 'unfinished'
@@ -523,7 +533,7 @@ const list = (xs: readonly string[]): string => (xs.length <= 1 ? xs.join('') : 
  * What trace recommends, and why, from the facts only. `passed`: the names of the checks that passed, when known (the
  * review page has them; a list only has counts). `requirements`: the ids the change names.
  */
-export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]; requirements?: readonly string[]; from?: string } = {}): Recommendation {
+export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]; requirements?: readonly string[]; from?: string; at?: number } = {}): Recommendation {
   if (f.state === 'merged') return { verdict: 'none', why: 'It is already accepted into the design.' }
   if (f.state === 'closed') return { verdict: 'none', why: 'It was discarded.' }
   if (f.draft) return { verdict: 'wait', why: 'It is a draft: trace has not finished it yet.' }
@@ -552,6 +562,8 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
     const named = failing.length ? `The ${list(failing.slice(0, 3))} ${failing.length === 1 ? 'check' : 'checks'} failed${failing.length > 3 ? `, with ${plural(failing.length - 3, 'more')}` : ''}` : 'A check failed'
     return { verdict: 'ask', why: `${named}. Ask trace to fix ${failing.length > 1 ? 'them' : 'it'} before accepting.` }
   }
+  // never "still running" over checks that cannot start: say why, and who fixes it (test-esp32 log #146)
+  if (f.stuck) return { verdict: 'wait', why: stuckWords(f.stuck, o.at ?? Date.now() / 1000) }
   if ((f.checks?.running ?? 0) > 0) return { verdict: 'wait', why: `${plural(f.checks?.running ?? 0, 'check is', 'checks are')} still running. Wait for ${f.checks?.running === 1 ? 'it' : 'them'} to finish.` }
   if (f.mergeable === 'unknown') return { verdict: 'wait', why: 'GitHub is still working out whether it can be merged. Look again in a minute.' }
   if (f.mergeable === 'behind') return { verdict: 'none', why: 'It is behind changes accepted since it was made. trace will bring it up to date.' }
@@ -590,7 +602,9 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
     if (infraOnly(f) && f.infra) out.push(`${infraNamed(f.infra).replace(/^t/, 'T')} did not run properly: ${f.infra.why}. Run ${f.infra.checks.length === 1 ? 'it' : 'them'} again.`)
     else if ((f.checks?.failed ?? 0) > 0) out.push(failing.length ? `The ${list(failing.slice(0, 3))} ${failing.length === 1 ? 'check' : 'checks'} failed.` : 'A check failed.')
     else if (f.mergeable === 'unstable') out.push('A check failed.')
-    if ((f.checks?.running ?? 0) > 0) out.push(`${plural(f.checks?.running ?? 0, 'check is', 'checks are')} still running.`)
+    // the reason only: the recommendation beside it says what an admin does
+    if (f.stuck) out.push(`Its checks cannot start: ${f.stuck.why}.`)
+    else if ((f.checks?.running ?? 0) > 0) out.push(`${plural(f.checks?.running ?? 0, 'check is', 'checks are')} still running.`)
     else if (f.mergeable === 'unknown') out.push('GitHub is still working out whether it can be merged.')
     if (f.checks === null) out.push(f.checks_denied ? CHECKS_DENIED : 'trace could not read its checks.')
     else if (f.checks.total === 0) out.push('No checks have run on it yet.')
@@ -815,10 +829,13 @@ export function changeSummary(o: {
   at?: number | undefined
   /** the answers trace has not applied to its branch yet (pendingAnswers) */
   answers?: readonly PendingAnswer[] | undefined
+  /** its checks cannot start (src/api/stuck-checks.ts stuckFor) */
+  stuck?: StuckChecks | null | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
   if (o.stack?.stacked) facts.stacked = o.stack.stacked
+  if (o.stuck && facts.state === 'open') facts.stuck = o.stuck
   if (jobWorking(o.job, o.at)) facts.working = true
   if (o.answers?.length) facts.answers = [...o.answers]
   const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary, request: jobRequest(o.job) })
@@ -835,5 +852,6 @@ export function changeSummary(o: {
     ...(o.stack?.stacked?.on ? { builds_on: o.stack.stacked.on } : {}),
     ...(o.stack?.built_on_by.length ? { built_on_by: o.stack.built_on_by } : {}),
     ...(facts.working ? { working: true } : {}),
+    ...(facts.stuck ? { stuck: facts.stuck } : {}),
   }
 }

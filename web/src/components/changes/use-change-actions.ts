@@ -97,7 +97,10 @@ export function useChangeActions(repo: string) {
   })
   const rerun = useMutation({
     mutationFn: (a: { number: number; title: string }) => call('change.rerun', { repo, number: a.number }),
-    onSuccess: (r, a) => toast.success(r.checks.length === 1 ? 'Running the check again' : 'Running the checks again', { description: `"${a.title}": ${r.checks.join(' and ')} ${r.checks.length === 1 ? 'runs' : 'run'} again now. This page updates when ${r.checks.length === 1 ? 'it finishes' : 'they finish'}.` }),
+    onSuccess: (r, a) => (r.summary
+      // checks no runner picked up: cancelled and run again, in the API's words
+      ? toast.success('Running the checks again', { description: `"${a.title}": ${r.summary}` })
+      : toast.success(r.checks.length === 1 ? 'Running the check again' : 'Running the checks again', { description: `"${a.title}": ${r.checks.join(' and ')} ${r.checks.length === 1 ? 'runs' : 'run'} again now. This page updates when ${r.checks.length === 1 ? 'it finishes' : 'they finish'}.` })),
     onError: (e) => toast.error('Could not run the check again', { description: `${e instanceof Error ? e.message : String(e)}` }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })

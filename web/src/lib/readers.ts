@@ -8,7 +8,7 @@
  */
 import type {
   AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeLink, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
-  HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RequirementEdits, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, Waiver,
+  HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RequirementEdits, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, StuckChecks, Waiver,
 } from './types'
 import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
 import { CRITERION_SKILLS } from './step-skills'
@@ -143,7 +143,14 @@ export function readChangeSummary(c: Obj): ChangeSummary {
     ...(readLink(c.builds_on) ? { builds_on: readLink(c.builds_on)! } : {}),
     ...(arr(c.built_on_by).length ? { built_on_by: arr(c.built_on_by).map(readLink).filter((l): l is ChangeLink => l !== null) } : {}),
     ...(c.working === true ? { working: true } : {}),
+    ...(readStuck(c.stuck) ? { stuck: readStuck(c.stuck)! } : {}),
   }
+}
+
+/** A change's checks that cannot start (src/api/stuck-checks.ts StuckChecks), or nothing: without its words it says nothing. */
+export function readStuck(v: unknown): StuckChecks | null {
+  if (!isObj(v) || !str(v.why) || !str(v.fix)) return null
+  return { runs: Number(v.runs ?? 1) || 1, since: str(v.since) ?? '', runner: str(v.runner) ?? null, why: String(v.why), connection: v.connection === true, fix: String(v.fix) }
 }
 
 /** One change of a stack (builds_on, built_on_by): a number and a title, or nothing. */

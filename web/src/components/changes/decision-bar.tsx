@@ -11,6 +11,8 @@
  *   Accept is not offered beside it: a change in conflict cannot be accepted until it is brought up to date.
  * - A change whose checks failed only because GitHub was busy or the runner was lost (infra_failed) leads with "Run the
  *   check again" (change.rerun): that failure says nothing about the work, so it is not a reason to ask for changes.
+ *   So does one whose checks no runner picks up (stuck, test-esp32 log #146): once an admin has fixed the runner, they
+ *   are cancelled and run again.
  * - An edit a person made in the app (docs/stay-in-trace.md) has no specialist to ask, so no Ask for changes; its author
  *   or an admin may discard it; one trace applies by itself (an admin's own edit, a hand-in) has no Accept: the bar says
  *   trace applies it once its checks pass.
@@ -30,6 +32,7 @@ export interface DecisionBarProps {
     may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
     recommendation?: ChangeDetail['recommendation'] | undefined
     infra_failed?: ChangeDetail['infra_failed']
+    stuck?: ChangeDetail['stuck']
     discarded?: ChangeDetail['discarded']
   }
   part?: Part
@@ -95,9 +98,12 @@ export function discardedWords(d: ChangeDetail['discarded']): string {
 export const offersResolve = (mode: DecisionMode, c: Pick<ChangeDetail, 'state'> & { verdict?: ChangeDetail['verdict'] }): boolean =>
   c.state === 'open' && c.verdict === 'conflict' && mode !== 'read-only' && mode !== 'closed'
 
-/** Whether the bar offers "Run the check again": an open change whose only failures were GitHub's or the runner's. */
-export const offersRerun = (mode: DecisionMode, c: Pick<ChangeDetail, 'state'> & { infra_failed?: ChangeDetail['infra_failed'] }): boolean =>
-  c.state === 'open' && !!c.infra_failed?.checks.length && mode !== 'read-only' && mode !== 'closed'
+/**
+ * Whether the bar offers "Run the check again": an open change whose only failures were GitHub's or the runner's, or
+ * whose checks no runner picked up (stuck: once an admin fixed the runner, they are cancelled and run again).
+ */
+export const offersRerun = (mode: DecisionMode, c: Pick<ChangeDetail, 'state'> & { infra_failed?: ChangeDetail['infra_failed']; stuck?: ChangeDetail['stuck'] }): boolean =>
+  c.state === 'open' && (!!c.infra_failed?.checks.length || !!c.stuck) && mode !== 'read-only' && mode !== 'closed'
 
 export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept, onAsk, onDiscard, onResolve, onRerun, busy, className }: DecisionBarProps) {
   const mode = decisionMode(change, part)
@@ -121,7 +127,7 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
   const resolvable = !!onResolve && offersResolve(mode, change)
   // a check that did not run properly: running it again is the step to take, so it leads
   const rerunnable = !!onRerun && offersRerun(mode, change)
-  const several = (change.infra_failed?.checks.length ?? 0) > 1
+  const several = (change.infra_failed?.checks.length ?? 0) > 1 || (change.stuck?.runs ?? 0) > 1
 
   return (
     <div role="region" aria-label="Your decision" className={cn('sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6 max-md:bottom-16', className)}>

@@ -8,7 +8,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { CircleCheck, CircleX, Loader2 } from 'lucide-react'
+import { CircleCheck, CircleX, Loader2, OctagonPause } from 'lucide-react'
 import { Section } from '@/components/shell/app-shell'
 import { KIND_TAG, changeLine, checksWords, VERDICT_WORDS } from '@/lib/guided'
 import { projectId } from '@/lib/api'
@@ -32,8 +32,19 @@ export function ChangePill({ verdict, className }: { verdict: ChangeVerdict; cla
   return <span className={cn('inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-xs font-medium', PILL_TONE[v.tone], className)}>{v.pill}</span>
 }
 
-/** The checks as a small badge: passed (green), running (spinner), failing (red). */
-export function ChecksBadge({ c }: { c: ChangeSummary['checks'] }) {
+/**
+ * The checks as a small badge: passed (green), running (spinner), failing (red), or cannot start (no runner picks them
+ * up: never a spinner, test-esp32 log #146).
+ */
+export function ChecksBadge({ c, stuck }: { c: ChangeSummary['checks']; stuck?: ChangeSummary['stuck'] }) {
+  if (stuck && !c?.failed) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-warning/15 px-1.5 py-0.5 text-xs font-medium text-warning-foreground">
+        <OctagonPause className="size-3.5" aria-hidden />
+        Cannot start
+      </span>
+    )
+  }
   if (c === null) return <span className="text-xs text-muted-foreground">Not readable</span>
   if (!c?.total) return <span className="text-xs text-muted-foreground">No checks yet</span>
   const Icon = c.failed ? CircleX : c.running ? Loader2 : CircleCheck
@@ -84,7 +95,7 @@ export function ChangesFromTrace({ repo, unavailable, className }: { repo: strin
                 </p>
                 <p className="text-sm text-muted-foreground sm:truncate">{changeMeta(c)}</p>
               </div>
-              <span className="max-sm:hidden"><ChecksBadge c={c.checks} /></span>
+              <span className="max-sm:hidden"><ChecksBadge c={c.checks} stuck={c.stuck} /></span>
             </Link>
           </li>
         ))}

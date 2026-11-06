@@ -38,7 +38,7 @@ export const changeColumns: ColumnDef<ChangeSummary, any>[] = [
   },
   { id: 'kind', accessorFn: (c) => (c.kind && KIND_TAG[c.kind]) || 'Specialist\'s work', header: 'Kind', size: 140, meta: { label: 'Kind', kind: 'enum' } },
   { id: 'verdict', accessorFn: (c) => VERDICT_WORDS[c.verdict].pill, header: 'Where it is', size: 130, meta: { label: 'Where it is', kind: 'enum', options: Object.values(VERDICT_WORDS).map((v) => v.pill) }, cell: ({ row }) => <ChangePill verdict={row.original.verdict} /> },
-  { id: 'checks', accessorFn: (c) => (c.checks ? c.checks.passed : -1), header: 'Checks', size: 170, meta: { label: 'Checks', kind: 'number' }, cell: ({ row }) => <ChecksBadge c={row.original.checks} /> },
+  { id: 'checks', accessorFn: (c) => (c.checks ? c.checks.passed : -1), header: 'Checks', size: 170, meta: { label: 'Checks', kind: 'number' }, cell: ({ row }) => <ChecksBadge c={row.original.checks} stuck={row.original.stuck} /> },
   { accessorKey: 'from', header: 'Made by', size: 200, meta: { label: 'Made by', kind: 'enum' } },
   { id: 'stage', accessorFn: (c) => stageName(c.stage), header: 'Stage', size: 110, meta: { label: 'Stage', kind: 'enum' } },
   { id: 'opened', accessorFn: (c) => c.opened_at, header: 'Made', size: 120, meta: { label: 'Made', kind: 'date' }, cell: ({ row }) => ago(row.original.opened_at) },
