@@ -242,10 +242,12 @@ const CHANGES: Record<string, ChangeDetail[]> = {
     // #47, #105, #152)
     summary(27, {
       title: 'Sensor board placed and routed (48 x 30 mm, 2 layers)', from: 'the Implementation specialist', stage: 'layout', opened_at: ago(6 * MIN), updated_at: ago(4 * MIN),
-      checks: { total: 3, passed: 3, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
+      // its counts are of the checks it lists, skipped ones too: one count on the card, the heading and the recommendation
+      // (test-esp32 #201)
+      checks: { total: 5, passed: 3, failed: 0, running: 0, skipped: 2, failing: [] }, verdict: 'ready',
       summary: ['Placed every part and routed the board on two layers, 48 × 30 mm.', 'The design rule check passes with no violations.'],
       files: [{ path: 'docs/renders/front.svg', status: 'modified', additions: 2, deletions: 2, kind: 'image' }],
-      checks_list: [{ name: 'Design rule check', state: 'passed', summary: 'No violations' }, { name: 'build', state: 'passed', summary: 'Built.' }, { name: 'trace-prs', state: 'passed', summary: null }],
+      checks_list: [{ name: 'Design rule check', state: 'passed', summary: 'No violations' }, { name: 'build', state: 'passed', summary: 'Built.' }, { name: 'trace-prs', state: 'passed', summary: null }, { name: 'open-pr', state: 'skipped', summary: null }, { name: 'rerun', state: 'skipped', summary: null }],
       requirements: ['R-008'], requirements_unknown: ['R-012'],
       recommendation: { verdict: 'accept', why: 'All 3 checks passed (Design rule check, build and trace-prs), and it can be merged. It covers R-008.' },
       may_accept: true,

@@ -25,7 +25,7 @@ import { FakeCognito, FakeGitHub } from './fixtures.js'
 const REPO = 'acme/scoped-reopen'
 const ADMIN = { sub: 'sr-admin', email: 'sr-admin@example.com', groups: ['trace-admins'] }
 const github = new FakeGitHub([REPO])
-const started: { request: string; agent?: string }[] = []
+const started: { request: string; agent?: string; headline?: string }[] = []
 const scratch = mkdtempSync(join(tmpdir(), 'trace-scoped-reopen-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-scoped-reopen-bucket-'))
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
@@ -33,7 +33,7 @@ const deps: ActionDeps = {
   github: async () => github, cognito: () => new FakeCognito(), tools: () => new Registry([]), scratch,
   jobs: async () => ({
     repositoryOf: () => null,
-    startJob: async (p) => { started.push({ request: p.request, ...(p.agent ? { agent: p.agent } : {}) }); return { accepted: true, jobId: `job-${started.length}` } },
+    startJob: async (p) => { started.push({ request: p.request, ...(p.agent ? { agent: p.agent } : {}), ...(p.headline ? { headline: p.headline } : {}) }); return { accepted: true, jobId: `job-${started.length}` } },
     jobStatus: async () => [],
   }),
   store: (p) => backendFor(join(bucket, p)),
@@ -165,6 +165,8 @@ describe('a requirement whose acceptance limit changed after Prove (test-esp32 #
     expect(s.reopen).toMatchObject({ stage: 'prove', kept: false })
     expect(started.slice(n).map((x) => x.agent)).toEqual(['verify'])
     const q = started.at(-1)!.request
+    // named by what it does, not by its request's opening cut short (test-esp32 #196)
+    expect(started.at(-1)!.headline).toBe('Prove: redo what the requirement change reaches')
     expect(q).toMatch(/^Prove is open again because requirements changed after the baseline \(REQ-39855b changed only its acceptance criterion\)/)
     expect(q).toMatch(/Redo only what it reaches \(TST-008, TST-009\)/)
     expect(q).toMatch(/say in your result what you kept and why/)

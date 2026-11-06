@@ -646,7 +646,7 @@ Quality bar:
 - The expected cost for the build quantity is stated.
 - The decision is made: release, or return to a stage with a note saying what has to change. A return needs only that: the release gate is returned with the note, and the stage it names is reopened.
 
-Produces: the approved release report, which the Release stage stores with the package.
+Produces: the approved release report, which the Release stage stores with the package. The report is the `report.md` of the Verification agent's newest `verify.report` run, read from the record: coverage, the interference prechecks and estimates, the parts list check against the build quantity, and every waiver still open. Its open items say "None" only when nothing is open. The review's evidence names that run.
 
 ### Order submit
 

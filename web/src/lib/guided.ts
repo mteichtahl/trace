@@ -115,14 +115,19 @@ export const KIND_TAG: Record<NonNullable<ChangeSummary['kind']>, string | null>
   work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in', rule: 'Project rule',
 }
 
-/** The checks in a few words: "7 checks passed", "Checks running, 4 of 7 done", "1 check failing: ERC". */
+/**
+ * The checks in a few words: "7 checks passed", "3 checks passed, 2 skipped", "Checks running, 4 of 7 done", "1 check
+ * failing: ERC". change.get counts the checks its page lists, so the Overview's card, the page's heading and the
+ * recommendation say one count.
+ */
 export function checksWords(c: ChangeSummary['checks']): string {
   if (c === null) return 'Checks not readable'
   if (!c?.total) return 'No checks yet'
   const counted = c.total - c.skipped
   if (c.failed) return `${c.failed} ${c.failed === 1 ? 'check' : 'checks'} failing${c.failing.length ? `: ${c.failing.slice(0, 2).join(', ')}${c.failing.length > 2 ? ', …' : ''}` : ''}`
   if (c.running) return `Checks running, ${c.passed} of ${counted} done`
-  return `${c.passed === counted ? (c.passed === 1 ? '1 check' : `${c.passed} checks`) : `${c.passed} of ${counted} checks`} passed`
+  // the skipped ones said too, so the count adds up to the checks the change's page lists (test-esp32 #201)
+  return `${c.passed === counted ? (c.passed === 1 ? '1 check' : `${c.passed} checks`) : `${c.passed} of ${counted} checks`} passed${c.skipped ? `, ${c.skipped} skipped` : ''}`
 }
 
 /** The checks' heading on a change's page: "Cannot start: no runner picks them up" while stuck, else checksWords. */

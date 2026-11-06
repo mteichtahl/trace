@@ -52,6 +52,8 @@ export interface JobsApi {
   repositoryOf(jobId: string): string | null
   startJob(payload: {
     kind: 'task'; repository: string; request: string; requestedBy: string; requestedBySub?: string; agent?: (typeof TASK_AGENTS)[number]
+    /** the job's title for a person, when its request is a prompt that does not lead with one (runtime TaskPayload) */
+    headline?: string
     /** a resumed task: the paused job's branch, and which paused job it carries on (job.control resume) */
     branch?: string; resume?: { job: string; by: string }
     /** a lost task started again (job.control restart): which lost job, and who started it again */

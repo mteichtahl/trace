@@ -20,6 +20,7 @@
  *   resignPlan          pure: each gate to sign again after the reopen, and whether its evidence stands (the
  *                       Overview's list, journey.get `resign`)
  *   scopedRequest       a stage's work request led by what stands and what to redo
+ *   reopenHeadline      that job's title, what it does in a line (never the request's opening, cut short)
  *
  * The design stages are traced to requirements (architecture blocks, schematic sheets), so a change of a
  * requirement's words reaches the ones that name it. A change of its acceptance criterion alone reaches none of them:
@@ -234,6 +235,16 @@ export function scopedRequest(request: string, s: StageScope, ids: readonly stri
     '',
     request,
   ].join('\n')
+}
+
+/**
+ * The job's headline for a stage opened again after a change of requirements (its request leads with why it is open
+ * again, not with what it does: test-esp32 #196, "Sign-off is open again because … only par" on the gate page and the
+ * Overview). `kept`: its work stands and it finishes what is left (finishRequest); else it redoes what the change
+ * reaches (scopedRequest). Pure.
+ */
+export function reopenHeadline(stage: StageId, kept: boolean): string {
+  return `${STAGE_NAMES[stage]}: ${kept ? 'finish what is left after the requirement change' : 'redo what the requirement change reaches'}`
 }
 
 /** The request for a stage whose work stands but still has criteria to meet (it was in progress when the change came). */
