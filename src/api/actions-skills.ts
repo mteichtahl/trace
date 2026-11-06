@@ -35,7 +35,7 @@ import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
   type AgentFacts, type Evidence, type JourneyRecord, type OptionWaiver, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
-  STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
+  STAGE_IDS, applyChange, changeReason, changeWords, outOfDate, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { isAdmin } from '../core/access.js'
@@ -111,7 +111,7 @@ const currentGate = (r: JourneyRecord | null): string | null => {
 }
 
 /** Everything the checks read, from the record database (repository + live journey), for this person and skill. */
-async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[] }> {
+async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>, o: { question?: string | undefined } = {}): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[] }> {
   const viewer: Viewer = await viewerOf(ctx.principal, repo)
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
@@ -160,7 +160,10 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     const tests = hasTable(db, 'test_items') ? (db.prepare('SELECT id, method, status FROM test_items').all() as Record<string, unknown>[]).map((t) => ({ id: String(t.id), method: String(t.method), status: String(t.status) })) : []
     // an agent's question first: a stuck report is dismissed with a reason (stuck.dismiss), it has nothing to choose
     const open = r?.questions.filter((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? []
-    const question = open.find((q) => q.kind !== 'stuck') ?? open[0] ?? null
+    // the question asked for (an "Answer it" link names it: test-esp32 #107, where both links opened the oldest), else
+    // the one the draft was written for, else the oldest; one asked for that is not open for this person falls through
+    const want = o.question ?? (typeof draft?.question === 'string' ? draft.question : undefined)
+    const question = (want ? open.find((q) => q.id === want) : undefined) ?? open.find((q) => q.kind !== 'stuck') ?? open[0] ?? null
     const fab = latestRun(db, 'kicad.fab')
     const fabResult = fab ? runResult(db, fab.id) : null
     const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
@@ -357,8 +360,11 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       const q = i.question
       if (!q) return {}
       const rec = q.options.find((o) => o.recommended)
+      // what it asks about has moved on since (test-esp32 #108): the page says so above the question
+      const stale = i.r ? outOfDate(q, i.r) : null
       return {
         question: {
+          ...(stale ? { outOfDate: stale } : {}),
           id: q.id, to: q.askedOf || q.askedOfSub ? 'you' : q.askedPart === 'admins' ? 'the admins' : 'the contributors', text: q.text, askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: q.blocks } : {}),
           ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}), ...(o.waives ? { waiver: optionWaiverWords(o.waives) } : {}), ...(o.needs ? { needs: o.needs } : {}) })),
           sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ?? s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
@@ -468,9 +474,9 @@ function waiverTarget(d: Record<string, unknown>): { kind: 'criterion' | 'requir
 }
 
 export const SKILL_ACTIONS = {
-  'skill.get': def('read', Repo.extend({ skill: SkillId }), async (a, ctx) => {
+  'skill.get': def('read', Repo.extend({ skill: SkillId, question: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional() }), async (a, ctx) => {
     const sk = skillDef(a.skill)!
-    const i = await inputFor(ctx, a.repo, a.skill)
+    const i = await inputFor(ctx, a.repo, a.skill, undefined, { question: a.question })
     const checks = checkSkill(a.skill, i) ?? []
     return {
       repo: a.repo, skill: sk.id, name: sk.name, stage: sk.stage,

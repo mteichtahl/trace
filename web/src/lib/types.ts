@@ -465,6 +465,11 @@ export interface Question {
    * only the person has that the option's answer needs (the app asks for it before sending) */
   options?: { id: string; label: string; detail?: string; waiver?: string; needs?: string }[]
   sources?: EvidenceRef[]
+  /** a stuck agent's report: `text` is the plain summary, `detail` the agent's own words behind "Show detail" */
+  stuck?: boolean
+  detail?: string
+  /** what it asks about has moved on since it was asked (the criterion met, the change no longer open): why */
+  outOfDate?: string
 }
 
 export interface RunSummary {
@@ -472,6 +477,8 @@ export interface RunSummary {
   repo?: string
   /** "checking timing on the FPGA" */
   title: string
+  /** the job's own words when `title` is a plain line made from them (a prompt: test-esp32 #25) */
+  request?: string
   state: 'running' | 'queued' | 'paused' | 'done' | 'failed' | 'cancelled' | 'lost'
   step?: string
   stepIndex?: number

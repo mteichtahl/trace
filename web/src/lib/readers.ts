@@ -62,7 +62,8 @@ function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): stri
   const id = String(ref.id ?? '')
   switch (ref.kind) {
     case 'gate': return `/p/${pid(repo)}/gates/${id}`
-    case 'question': return `/p/${pid(repo)}/do/question-answer`
+    // the question itself, by id: the skill opens that one, not the oldest (test-esp32 #107)
+    case 'question': return id ? `/p/${pid(repo)}/do/question-answer?question=${encodeURIComponent(id)}` : `/p/${pid(repo)}/do/question-answer`
     case 'criterion': {
       if (CRITERION_SKILLS[id]) return `/p/${pid(repo)}/do/${CRITERION_SKILLS[id]}`
       const g = criteria?.get(id)
@@ -319,7 +320,10 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
   const questions: Question[] = arr(raw.questions).filter((q) => !q.answered).map((q) => {
     const rec = isObj(q.recommended) ? q.recommended : null
     return {
-      id: String(q.id), to: q.for === 'you' ? 'you' : q.for === 'contributors' ? 'the contributors' : q.for === 'admins' ? 'the admins' : 'a person on the project', text: String(q.text),
+      id: String(q.id), to: q.for === 'you' ? 'you' : q.for === 'contributors' ? 'the contributors' : q.for === 'admins' ? 'the admins' : 'a person on the project',
+      // a stuck report in plain words, the agent's own behind "Show detail" (test-esp32 #35)
+      text: str(q.summary) ?? String(q.text), ...(str(q.summary) && q.summary !== q.text ? { detail: String(q.text) } : {}),
+      ...(q.kind === 'stuck' ? { stuck: true } : {}), ...(str(q.out_of_date) ? { outOfDate: String(q.out_of_date) } : {}),
       askedAt: String(q.asked_at), ...(str(q.blocks) ? { blocks: String(q.blocks) } : {}),
       ...(rec ? { recommended: { id: String(rec.id), label: String(rec.label) } } : {}),
       options: arr(q.options).map((o) => ({ id: String(o.id), label: String(o.label), ...(isObj(o.waives) ? { waiver: waiverWords(o.waives) } : {}), ...(str(o.needs) ? { needs: String(o.needs) } : {}) })),
@@ -381,7 +385,8 @@ export function readJob(j: Obj): RunSummary {
   const state = RUN_STATE[String(j.state)] ?? 'running'
   const step = str(j.step)
   return {
-    id: String(j.id), title: String(j.title), state, repo: str(j.repository),
+    // the plain line when the title is a prompt (test-esp32 #25); the prompt itself stays, for Watch
+    id: String(j.id), title: str(j.headline) ?? String(j.title), ...(str(j.headline) ? { request: String(j.title) } : {}), state, repo: str(j.repository),
     ...(step && state !== 'queued' ? { step } : {}),
     ...(str(j.startedAt) ? { startedAt: String(j.startedAt) } : {}),
     ...(typeof j.typicalS === 'number' ? { typicalS: j.typicalS } : {}),

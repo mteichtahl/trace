@@ -48,6 +48,29 @@ describe('reading the API\'s answers', () => {
     ])
   })
 
+  // test-esp32 #35, #108: a stuck report in plain words with its own behind them; a question out of date says why
+  it('journey.get: a stuck report reads in plain words, and a question out of date says why', () => {
+    const a = answers['journey.get'] as { args: Record<string, unknown>; result: Record<string, unknown> }
+    const result = structuredClone(a.result) as { questions: Record<string, unknown>[] }
+    const base = { for: 'you', asked_at: '2026-11-05T00:00:00Z', answered: null, recommended: null, options: [], sources: [] }
+    result.questions = [
+      { ...base, id: 'st1', kind: 'stuck', text: 'docs_publish failed in job-mw2lhy11-952f6819. The PDF could not be made.', summary: 'The PDF could not be made.' },
+      { ...base, id: 'aq1', kind: 'question', text: 'Write the documents now? #6 is not merged.', out_of_date: 'Change #6 is no longer open (accepted or discarded since this was asked), so this may no longer need an answer.' },
+    ]
+    const j = READERS['journey.get']!(result, a.args) as Journey
+    expect(j.questions[0]).toMatchObject({ id: 'st1', stuck: true, text: 'The PDF could not be made.', detail: 'docs_publish failed in job-mw2lhy11-952f6819. The PDF could not be made.' })
+    expect(j.questions[1]).toMatchObject({ id: 'aq1', text: 'Write the documents now? #6 is not merged.', outOfDate: expect.stringMatching(/^Change #6 is no longer open/) })
+    expect(j.questions[1]).not.toHaveProperty('detail')
+  })
+
+  // test-esp32 #25: the drafting job's card showed its prompt, cut off mid-word
+  it('a job whose title is a prompt reads as its plain line, the prompt kept for Watch', () => {
+    const prompt = 'The intent was submitted in the Intent builder. Draft the candidate requirements from it for Requirements review. Read the intent statements with the people\'s decisions (design.intent list): use the a'
+    const r = readJob({ id: 'j1', workerJobId: 'w1', title: prompt, headline: 'Drafting the requirements from your intent', state: 'running', controls: [] })
+    expect(r).toMatchObject({ title: 'Drafting the requirements from your intent', request: prompt })
+    expect(readJob({ id: 'j2', workerJobId: 'w2', title: 'Check the ERC', state: 'running', controls: [] })).not.toHaveProperty('request')
+  })
+
   it('journey.get: stages, gates with criteria and evidence, waivers, the next step, questions and decisions', () => {
     const j = read<JourneyMore>('journey.get')
     expect(j).toMatchObject({ repo: 'acme/answers', name: 'Answers', template: 'board', revision: 'Rev A', current: 'define', hasMemory: false })
@@ -62,7 +85,8 @@ describe('reading the API\'s answers', () => {
     expect(g.waivers).toEqual([expect.objectContaining({ risk: 'degraded', caught: 'Bring up', reason: 'Two criteria wait for the bench.' })])
     expect(g.criteria.every((c) => c.findings === undefined)).toBe(true)
     expect(j.gates.find((x) => x.id === 'capture')?.state).toBe('locked')
-    expect(j.next).toMatchObject({ kind: 'task', owner: 'you', action: { label: 'Use 2.7 to 3.6 V', to: '/p/acme~answers/do/question-answer' } })
+    // the question itself, by id (test-esp32 #107)
+    expect(j.next).toMatchObject({ kind: 'task', owner: 'you', action: { label: 'Use 2.7 to 3.6 V', to: `/p/acme~answers/do/question-answer?question=${j.questions[0]!.id}` } })
     expect(j.next.summary).toMatch(/\*\*trace recommends 2\.7 to 3\.6 V/)
     expect(j.questions).toEqual([expect.objectContaining({ text: 'What is the supply range?', recommended: { id: 'a', label: '2.7 to 3.6 V' }, blocks: 'sizing the regulator' })])
     expect(j.decisions?.[0]).toMatchObject({ kind: 'waiver', state: 'active' })
@@ -148,7 +172,7 @@ describe('reading the API\'s answers', () => {
 
   it('inbox: the items, with an address and the question to answer', () => {
     const items = read<InboxItem[]>('inbox')
-    expect(items).toEqual([expect.objectContaining({ kind: 'question', repo: 'acme/answers', project: 'Answers', action: { label: 'Answer', to: '/p/acme~answers/do/question-answer' }, recommended: { id: 'a', label: '2.7 to 3.6 V' }, questionId: expect.any(String) })])
+    expect(items).toEqual([expect.objectContaining({ kind: 'question', repo: 'acme/answers', project: 'Answers', action: { label: 'Answer', to: expect.stringMatching(/^\/p\/acme~answers\/do\/question-answer\?question=[0-9a-z]+$/) }, recommended: { id: 'a', label: '2.7 to 3.6 V' }, questionId: expect.any(String) })])
     expect(items[0]!.createdAt).toMatch(/^2026-/)
   })
 
