@@ -22,6 +22,7 @@ import { DecisionCard } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { StatusBadge } from '@/components/status-badge'
+import { RATINGS } from '@/components/waiver-rating'
 import { QueryError } from '@/components/states'
 import { call } from '@/lib/api'
 import { useJourney } from '@/lib/queries'
@@ -87,12 +88,8 @@ export function waiverChecks(d: WaiverDraft): Record<string, CriterionStatus> {
   }
 }
 
-const SEVERITIES: { id: Severity; label: string; detail: string }[] = [
-  { id: 'cosmetic', label: 'Cosmetic', detail: 'Looks wrong, works right' },
-  { id: 'degraded', label: 'Degraded', detail: 'Works, but worse than required' },
-  { id: 'failure', label: 'Failure', detail: 'A function stops working' },
-  { id: 'safety', label: 'Safety', detail: 'Someone or something could be harmed' },
-]
+// the same words wherever a waiver's rating is shown (components/waiver-rating.tsx)
+const SEVERITIES = RATINGS
 
 export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def: SkillDef; about?: string | undefined; replaces?: string | undefined }) {
   const s = useSkill<WaiverDraft>(repo, def, { done: [], what: about, reason: '', risk: '', caught: '', where: '', scope: '', condition: '' })

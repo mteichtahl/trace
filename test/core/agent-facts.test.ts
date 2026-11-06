@@ -5,7 +5,7 @@ import {
 } from '../../src/core/agent-facts.js'
 import { S3Backend } from '../../src/core/central.js'
 import {
-  type AgentFacts, type JourneyRecord, type Viewer, answerQuestion, gateView, inboxItems, journeyView, loadJourney, mergeAgentFacts, returnGate, setCriterion,
+  type AgentFacts, type JourneyRecord, type Viewer, answerQuestion, gateView, inboxItems, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, outOfDate, returnGate, setCriterion,
   signGate, recordOpen, startJourney,
 } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
@@ -195,6 +195,26 @@ describe('merging the agents\' facts into the journey views', () => {
     expect(again.id).not.toBe(first.id)
   })
 
+  // test-esp32 #158: the Verification and the EMC & Simulation specialists both asked to waive signoff.emc, in their own
+  // words, and the person answered both
+  it('a question about a criterion an open question is about is folded into it, whichever agent asks', async () => {
+    const s = await started()
+    const r = await s.record()
+    const EMC = { agent: 'emc', label: 'the EMC & Simulation specialist', jobId: 'job-2' }
+    const waive = (id: string) => ({ id: 'waive', label: 'Waive it for revision A', recommended: true, why: 'The estimate is within 4 dB of the target.', waives: { targets: [{ kind: 'criterion', id }], risk: 'The cable may emit over the limit.', severity: 'degraded', scope: 'this revision only' } })
+    const first = (await s.facts.update((db) => ({ result: askAgentQuestion(db, VERIFY, { text: 'signoff.emc is not met: the cable estimate is 3.5 dB over. Waive signoff.emc for revision A, or have trace length-match USB D+/D- now?', options: [waive('signoff.emc') as never, opts[1]!] }, r) }))).result
+    expect(first.repeat).toBe(false)
+    // another agent, other words, the same criterion (named only in what it blocks, and in its waiver)
+    const second = (await s.facts.update((db) => ({ result: askAgentQuestion(db, EMC, { text: 'The interference precheck estimates the USB cable emission over the reference. Should trace accept it for this revision?', blocks: 'signing release approval (signoff.emc)', options: [waive('signoff.emc') as never, opts[1]!] }, r) }))).result
+    expect(second).toEqual({ id: first.id, repeat: true, askedBy: 'the Verification specialist', criteria: ['signoff.emc'] })
+    expect((await s.read()).questions).toHaveLength(1)
+    // a question on another criterion is its own, and a word that only looks like an id is not one
+    const other = (await s.facts.update((db) => ({ result: askAgentQuestion(db, EMC, { text: 'signoff.bom is not met: two lines are out of stock. Order the alternates?', options: opts }, r) }))).result
+    expect(other.repeat).toBe(false)
+    const near = (await s.facts.update((db) => ({ result: askAgentQuestion(db, EMC, { text: 'Is the presignoff.emcx run worth keeping for the report?', options: opts }, r) }))).result
+    expect(near.repeat).toBe(false)
+  })
+
   it('an agent\'s checks move the criteria trace owns; when all are met the gate is ready, and only an admin\'s own acts sign it', async () => {
     const s = await started('firmware')
     // Define is people's: met by their acts (here, as the record's own rows), then signed
@@ -281,5 +301,58 @@ describe('merging the agents\' facts into the journey views', () => {
     await s.facts.update((db) => ({ result: resolveStuck(db, { jobId: 'job-1', resolution: 'moved on' }) }))
     f = await s.read()
     expect(inboxItems('acme/board', r, CONTRIB, undefined, f)).toEqual([])
+  })
+
+  // test-esp32 #35: the stuck question was the agent's own report, run ids, a stack frame and tool names
+  it('a stuck agent\'s report is shown in plain words, its own words kept behind them', async () => {
+    const s = await started()
+    const r = await s.record()
+    const why = [
+      'trace could not make the PDF of the design document because its diagram tool failed.',
+      'docs_publish failed on diagram 1 in run 3f2a9c1d-0e4b (job-mw2lhy11-952f6819):',
+      '    at TCP.<anonymous> (node:net:347:12)',
+      'docs_check passed. The written document is committed.',
+    ].join('\n')
+    await s.facts.update((db) => ({ result: addStuck(db, VERIFY, { why, recommendation: 'Carry on without the PDF.' }, r) }))
+    const f = await s.read()
+    const v = journeyView(r, CONTRIB, undefined, f)
+    const plain = 'trace could not make the PDF of the design document because its diagram tool failed. The written document is committed.'
+    expect(v.questions[0]).toMatchObject({ kind: 'stuck', text: why, summary: plain })
+    expect(v.next.summary).toBe(`the Verification specialist is stuck: ${plain}`)
+    for (const said of [v.next.summary, inboxItems('acme/board', r, CONTRIB, undefined, f)[0]!.summary]) expect(said).not.toMatch(/docs_|job-mw2|node:net|3f2a9c1d/)
+    // a report already plain has nothing behind it
+    const s2 = await started()
+    const r2 = await s2.record()
+    await s2.facts.update((db) => ({ result: addStuck(db, VERIFY, { why: 'The simulator is not installed here.', recommendation: 'Run it on the GPU queue.' }, r2) }))
+    expect(journeyView(r2, CONTRIB, undefined, await s2.read()).questions[0]).not.toHaveProperty('summary')
+  })
+
+  // test-esp32 #108: "#6 is not merged" was still asked 40 minutes after #6 merged
+  it('a question whose premise has changed is marked out of date, says why, and is no longer the next step', async () => {
+    const s = await started()
+    const r = await s.record()
+    const EMC = { agent: 'emc', label: 'the EMC & Simulation specialist', jobId: 'job-2' }
+    const id = (await s.facts.update((db) => ({ result: addAgentQuestion(db, EMC, { text: 'signoff.emc is not met: the cable estimate is 3.5 dB over. Waive it, or length-match USB D+/D- now?', blocks: 'release approval', options: opts }, r) }))).result
+    let f = await s.read()
+    expect(journeyView(r, CONTRIB, undefined, f).questions[0]).not.toHaveProperty('out_of_date')
+    expect(journeyView(r, CONTRIB, undefined, f).next).toMatchObject({ kind: 'answer', ref: { kind: 'question', id } })
+    // the criterion it is about is met since: out of date, and the next step moves on
+    await s.facts.update((db) => ({ result: addCriterionCheck(db, VERIFY, { criterion: 'signoff.emc', status: 'met', evidence: [{ kind: 'run', ref: 'run-emc' }] }, r) }))
+    f = await s.read()
+    const v = journeyView(r, CONTRIB, undefined, f)
+    expect(v.questions[0]).toMatchObject({ id, out_of_date: 'signoff.emc is met now, so this may no longer need an answer.' })
+    expect(v.next.ref).not.toEqual({ kind: 'question', id })
+
+    // a change it waits on: out of date once that change is no longer open (known only to journey.get, which lists them)
+    const docs = (await s.facts.update((db) => ({ result: addAgentQuestion(db, VERIFY, { text: 'The documents wait on the schematic: #6 is not merged. Write them from the branch, or wait?', blocks: 'the design document', options: opts }, r) }))).result
+    const pin = (await s.facts.update((db) => ({ result: addAgentQuestion(db, VERIFY, { text: 'Pin #3 of J2 is open in the schematic: tie it to ground, or leave it?', blocks: 'the schematic', options: opts }, r) }))).result
+    const rec = mergeAgentFacts(r, await s.read())
+    const view = journeyView(r, CONTRIB, undefined, await s.read())
+    const of = (x: ReturnType<typeof markOutOfDate>, q: string) => x.questions.find((y) => y.id === q)
+    expect(of(markOutOfDate(view, rec, [6]), docs)).not.toHaveProperty('out_of_date')
+    expect(of(markOutOfDate(view, rec, [7]), docs)?.out_of_date).toBe('Change #6 is no longer open (accepted or discarded since this was asked), so this may no longer need an answer.')
+    // "pin #3" is not a change
+    expect(of(markOutOfDate(view, rec, []), pin)).not.toHaveProperty('out_of_date')
+    expect(outOfDate(rec.questions.find((q) => q.id === docs)!, rec)).toBeNull()
   })
 })

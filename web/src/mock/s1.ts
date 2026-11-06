@@ -6,7 +6,7 @@
 import { JOURNEYS, MEMBERS } from './fixtures'
 import { OPS_RUNS } from './fixtures-admin'
 import {
-  BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, PANEL_GATE, QUESTIONS, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
+  BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, PANEL_GATE, QUESTIONS, QUESTIONS_BY_ID, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
 } from './fixtures-s1'
 import type { Gate } from '@/lib/types'
 import type { GateMore, JourneyMore } from '@/lib/types-s1'
@@ -127,7 +127,8 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       return repo === 'acme/soil-sensor' ? ok(COST) : fail('cost.get: no record yet')
     case 'skill.get': {
       const v = SKILL_VIEWS[String(a.skill)] ?? {}
-      const question = String(a.skill) === 'question-answer' ? QUESTIONS[repo] : undefined
+      // the question its link names (test-esp32 #107), else the project's first
+      const question = String(a.skill) === 'question-answer' ? (a.question ? QUESTIONS_BY_ID[String(a.question)] : undefined) ?? QUESTIONS[repo] : undefined
       const d = drafts[`${repo}|${String(a.skill)}`]
       return ok({ skill: a.skill, ...v, ...(question ? { question } : {}), ...(d ? { draft: d.data, step: d.step, saved: d.saved } : {}) })
     }
@@ -153,7 +154,7 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'waiver.add': {
       const j = JOURNEYS[repo]
       const id = `W-${(j?.waivers.length ?? 0) + 4}`
-      j?.waivers.push({ id, title: String(a.finding ?? 'Waiver'), reason: String(a.reason), risk: (a.severity as 'degraded') ?? 'minor', caught: String(a.caught) })
+      j?.waivers.push({ id, title: String(a.finding ?? 'Waiver'), reason: String(a.reason), risk: (a.severity as 'degraded') ?? 'degraded', caught: String(a.caught) })
       return later(ok({ id }))
     }
     case 'task':

@@ -4,7 +4,34 @@
  * waived, every piece of evidence has been opened and every waiver acknowledged, and only an admin signs. Pure, so the
  * screen and its tests share it.
  */
-import type { Criterion, Gate } from '@/lib/types'
+import type { Criterion, Gate, Waiver } from '@/lib/types'
+
+/**
+ * The criterion a waiver counts for: the one it names, or the one its finding is of (a shape's finding
+ * `layout.fit@…`, a rule check's `drc:…` or `erc:…`); null for a requirement's or a test's waiver, the stage's only.
+ * journey.get says (`criterion`); this reads it from the target when it does not.
+ */
+export function waiverCriterion(w: Pick<Waiver, 'criterion' | 'target'>): string | null {
+  if (w.criterion !== undefined) return w.criterion
+  const t = w.target
+  if (!t) return null
+  if (t.kind === 'criterion') return t.id
+  if (t.kind !== 'finding') return null
+  const shape = /^([a-z][a-z.]*\.[a-z]+)@/.exec(t.id)
+  if (shape) return shape[1]!
+  return t.id.startsWith('erc:') ? 'capture.erc' : t.id.startsWith('drc:') ? 'layout.drc' : null
+}
+
+/** The waivers in force on criterion `id` alone, not the stage's others (test-esp32 #156). */
+export const criterionWaivers = (gate: Pick<Gate, 'waivers'>, id: string): Waiver[] => gate.waivers.filter((w) => !w.closed && waiverCriterion(w) === id)
+
+/** A criterion's status in words: "Met (2 waived)" counts its own waivers only. */
+export function criterionStatusLabel(c: Pick<Criterion, 'id' | 'status'>, gate: Pick<Gate, 'waivers'>): string {
+  if (c.status === 'waived') return 'Met (waived)'
+  if (c.status !== 'met') return 'Not met'
+  const n = criterionWaivers(gate, c.id).length
+  return n ? `Met (${n} waived)` : 'Met'
+}
 
 export interface SignState {
   /** criterion ids whose evidence this person opened (from the record, plus this session) */

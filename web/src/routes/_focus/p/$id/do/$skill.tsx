@@ -3,7 +3,8 @@
  * (components/skills/definitions.ts). The variant picks the screen: conversational (Intent builder, Question
  * answer), checklist on a picture (Bench setup, Bring-up run, Incoming inspection), the KiCad skills (Schematic
  * finish, Placement adjust, Board setup), the form skills (Waiver, Change request), and the rest stepped from the
- * table alone. `?about=<id>` names what a Waiver or Change request is about; `?replaces=<waiver>` takes a waiver again
+ * table alone. `?about=<id>` names what a Waiver or Change request is about; `?question=<id>` the question Question
+ * answer opens (an "Answer it" link names it; without it, the oldest open one); `?replaces=<waiver>` takes a waiver again
  * (its "Take it again"): the Waiver skill opens filled in from it, and taking the new one withdraws it.
  *
  * While the project's agent is being set up (a new project's arrives with the next installation update), the notice
@@ -24,13 +25,13 @@ import { ApiError, repoOf } from '@/lib/api'
 import { useJourney } from '@/lib/queries'
 
 export const Route = createFileRoute('/_focus/p/$id/do/$skill')({
-  validateSearch: z.object({ about: z.string().optional(), replaces: z.string().optional() }),
+  validateSearch: z.object({ about: z.string().optional(), replaces: z.string().optional(), question: z.string().optional() }),
   component: Skill,
 })
 
 function Skill() {
   const { id, skill } = Route.useParams()
-  const { about, replaces } = Route.useSearch()
+  const { about, replaces, question } = Route.useSearch()
   const repo = repoOf(id)
   const j = useJourney(repo)
   const def = SKILL_BY_ID[skill]
@@ -45,15 +46,15 @@ function Skill() {
     )
   return (
     <FocusNotice.Provider value={<AgentSetupNotice repo={repo} />}>
-      <SkillScreen repo={repo} def={def} about={about} replaces={replaces} />
+      <SkillScreen repo={repo} def={def} about={about} replaces={replaces} question={question} />
     </FocusNotice.Provider>
   )
 }
 
-function SkillScreen({ repo, def, about, replaces }: { repo: string; def: NonNullable<(typeof SKILL_BY_ID)[string]>; about?: string | undefined; replaces?: string | undefined }) {
+function SkillScreen({ repo, def, about, replaces, question }: { repo: string; def: NonNullable<(typeof SKILL_BY_ID)[string]>; about?: string | undefined; replaces?: string | undefined; question?: string | undefined }) {
   switch (def.id) {
     case 'intent-builder': return <IntentBuilder repo={repo} def={def} />
-    case 'question-answer': return <QuestionAnswer repo={repo} def={def} />
+    case 'question-answer': return <QuestionAnswer repo={repo} def={def} question={question} />
     case 'waiver': return <WaiverSkill repo={repo} def={def} about={about} replaces={replaces} />
     case 'change-request': return <ChangeSkill repo={repo} def={def} about={about} />
   }

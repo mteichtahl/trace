@@ -17,7 +17,7 @@
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
 import { type Discarded, afterBranch, discardedBranch, discardedChange, followsOf } from '../core/discarded.js'
-import { changeTitle, recordTitle } from '../core/change-contents.js'
+import { changeTitle, plumbingTitle } from '../core/change-contents.js'
 import { commentOnce, globMatch } from './util.js'
 import { resolveDbConflict } from './db-conflict.js'
 import { settle } from './mergeable.js'
@@ -106,18 +106,18 @@ export function followsLine(d: Discarded): string {
 }
 
 /**
- * A push to a branch whose pull request is open: its title, when it is still a specialist's record title (as opened:
- * a person who renamed it is left alone), is named again by the work its commits now hold. In the test run a "docs
- * specialist's record" change came to carry a whole case design, a schematic field and board text under that title
- * (test-esp32 log #144).
+ * A push to a branch whose pull request is open: its title, when it is still a specialist's record title or a merge
+ * commit's (as opened: a person who renamed it is left alone), is named again by the work its commits now hold. In the
+ * test run a "docs specialist's record" change came to carry a whole case design, a schematic field and board text
+ * under that title (test-esp32 log #144), and record changes brought up to date were titled by the merge (log #154).
  */
 async function retitle(github: GitHub, o: { owner: string; repo: string; pr: { number: number; title: string; base: { ref: string } }; ownToken: boolean }, say: (s: string) => Promise<void>): Promise<void> {
   const { owner, repo, pr } = o
   const already = `#${pr.number} is already open for its branch.`
-  if (!recordTitle(pr.title)) return say(already)
+  if (!plumbingTitle(pr.title)) return say(already)
   const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number: pr.number, per_page: 100 }).catch(() => null)
   const title = commits ? changeTitle(commits.map((c) => c.commit.message)) : ''
-  if (!title || recordTitle(title) || title === pr.title) return say(already)
+  if (!title || plumbingTitle(title) || title === pr.title) return say(already)
   if (!o.ownToken) return say(`${already} It holds more than a record now; with a TRACE_TOKEN secret it would be retitled "${title}".`)
   await github.rest.pulls.update({ owner, repo, pull_number: pr.number, title: title.slice(0, 250) })
   return say(`${already} It holds more than a specialist's record now: retitled "${title}".`)

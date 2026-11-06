@@ -36,6 +36,7 @@
  */
 import { SPECIALIST_KINDS } from '../agents/kinds.js'
 import { type AppEdit, EDIT_WORDS, type EditKind } from '../core/app-edits.js'
+import { plumbingTitle } from '../core/change-contents.js'
 import type { JobRow } from '../core/job-index.js'
 import { indexedHandle, isLive } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
@@ -694,17 +695,20 @@ const spelled = (line: string): string => line.replace(RANGE, (all, p: string, a
  * The requirements a change names (its title, description and commit messages), against the project's own ids
  * (`known`: every requirement in its record). `ids`: the project's ids it names, in order, each as the project writes
  * it ("REQ-9" finds REQ-009; a local name the text gives one, "R3 (REQ-9b1b96)", finds it too). `unknown`: what it
- * cites as a requirement that the project has no such requirement for: a word in the project's own id form
- * (REQ-abc123 when its ids are REQ-…), or a designator-shaped word (R3, R1-R7) on a line that says it names
- * requirements. Elsewhere R3 is a resistor: in test-esp32 the schematic change's net table ("EN = … R3") read as
- * "covers R3", and a layout's "R1/R2 sit beside the CC pins" as "covers R1, R2" (log #47, #105), in a project whose
- * requirements are REQ-xxxxxx. Case matters for the designator shape: "r4" is not one.
+ * cites as a requirement that the project has no such requirement for: only a word in the project's own id form
+ * (REQ-abc123 when its ids are REQ-…; R9, on a line that says it names requirements, when they are R1, R2). Elsewhere a
+ * designator-shaped word (R3, R1-R7) is a part on the board, even on a line that says it names requirements: in test-esp32 the schematic change's net table ("EN = … R3") read as "covers R3", a
+ * layout's "R1/R2 sit beside the CC pins" as "covers R1, R2" (log #47, #105), and a layout change's fit findings
+ * "Q1/R4/R5" as naming the requirements R4 and R5 (log #152), in a project whose requirements are REQ-xxxxxx. Case
+ * matters for the designator shape: "r4" is not one.
  */
 export function requirementsNamed(known: Iterable<string>, ...texts: readonly string[]): { ids: string[]; unknown: string[] } {
   const byKey = new Map<string, string>()
   for (const id of known) byKey.set(reqKey(id), id)
   // the project's id forms: "REQ-" for REQ-9b1b96, REQ-PWR-001
   const prefixes = new Set([...byKey.values()].map((id) => /^([A-Za-z]+-)/.exec(id)?.[1]?.toUpperCase()).filter((p): p is string => Boolean(p)))
+  // and its designator-shaped ones: "R" for R1, R2
+  const letters = new Set([...byKey.values()].filter((id) => DESIGNATOR.test(id)).map((id) => /^[A-Z]+/.exec(id)![0]))
   const lines = texts.flatMap((t) => t.split(/\r?\n/))
   const alias = new Map<string, string>()
   for (const l of lines) for (const m of l.matchAll(ALIAS)) { const id = byKey.get(reqKey(m[2]!)); if (id) alias.set(m[1]!, id) }
@@ -720,8 +724,11 @@ export function requirementsNamed(known: Iterable<string>, ...texts: readonly st
       // a project whose ids look like designators (R1): read as one only where the line says so
       if (id && (!DESIGNATOR.test(id) || (says && tok === id))) { push(ids, id); continue }
       if (id) continue
+      // only an id in the project's own form: "R4" near the word "requirements" was still a resistor in a project
+      // whose ids are REQ-… (log #152). A project that numbers its requirements R1, R2 has that form, where a line
+      // says it names requirements
       const ours = [...prefixes].some((p) => tok.toUpperCase().startsWith(p) && /\d/.test(tok.slice(p.length)))
-      if (ours || (says && DESIGNATOR.test(tok) && /^(?:R|REQ)\d/.test(tok))) push(unknown, tok)
+      if (ours || (says && DESIGNATOR.test(tok) && letters.has(/^[A-Z]+/.exec(tok)![0]))) push(unknown, tok)
     }
   }
   return { ids, unknown }
@@ -775,12 +782,16 @@ export function firstList(text: string): string[] {
  * request body's first list (trace's own pull requests list their commits: their short ids are dropped), else the
  * commit subjects.
  */
-export function summaryBullets(o: { jobSummary: string | null; body: string; commits: readonly string[] }): string[] {
-  const clean = (xs: readonly string[]): string[] => xs.map((x) => x.replace(/^[0-9a-f]{7,40}\s+/, '').replace(/<!--[\s\S]*?-->/g, '').trim()).filter(Boolean).slice(0, 12)
-  const job = o.jobSummary?.trim() ?? ''
-  if (job) {
-    const l = firstList(job)
-    return clean(l.length ? l : job.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, '')).filter((x) => x.trim()))
+export function summaryBullets(o: { jobSummary: string | null; body: string; commits: readonly string[]; earlier?: readonly (string | null)[] }): string[] {
+  // a record's or a merge commit's subject says nothing of the work: never a bullet (test-esp32 log #59, #154)
+  const clean = (xs: readonly string[]): string[] => [...new Set(xs.map((x) => x.replace(/^[0-9a-f]{7,40}\s+/, '').replace(/<!--[\s\S]*?-->/g, '').trim()).filter((x) => x && !plumbingTitle(x)))].slice(0, 12)
+  // every job's on the branch, oldest first: a change two jobs made is not said by the second one's alone (log #18)
+  const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => s?.trim() ?? '').filter(Boolean)
+  if (jobs.length) {
+    return clean(jobs.flatMap((job) => {
+      const l = firstList(job)
+      return l.length ? l : job.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, '')).filter((x) => x.trim())
+    }))
   }
   const fromBody = clean(firstList(o.body))
   if (fromBody.length) return fromBody
