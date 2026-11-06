@@ -75,6 +75,15 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(acceptance(facts(), true)).toEqual({ may_accept: true, blockers: [] })
   })
 
+  it('counts what it names, and says "and others" for checks counted but not named (test-esp32 log #153)', () => {
+    // GitHub's status counted 2; the check list named 3
+    expect(recommendationOf(facts(), { passed: ['check', 'tests pass', 'open-pr'] }).why).toBe('All 3 checks passed (check, tests pass and open-pr), and it can be merged.')
+    // a name listed twice is one check
+    expect(recommendationOf(facts(), { passed: ['build', 'build', 'trace-prs'] }).why).toBe('All 2 checks passed (build and trace-prs), and it can be merged.')
+    // more counted than named
+    expect(recommendationOf(facts({ checks: checks({ passed: 4 }) }), { passed: ['build'] }).why).toBe('All 4 checks passed (build and others), and it can be merged.')
+  })
+
   it('a check failing → ask, naming it; it may not be accepted', () => {
     const f = facts({ mergeable: 'unstable', checks: checks({ passed: 1, failed: 1, failing: ['kicad-erc'] }) })
     expect(verdictOf(f)).toBe('failing')
@@ -1050,6 +1059,37 @@ describe('GitHub\'s allowance: the cache and the budget', () => {
     expect(github.reads.get(`runs ${sha(1)}`)).toBe(1)
     await perform('change.accept', { repo: REPO, number: 1, head_sha: sha(1) }, c)
     expect(github.reads.get(`runs ${sha(1)}`)).toBe(2)
+  })
+
+  it('a change accepted or discarded here is not open, while GitHub\'s list still says it is (test-esp32 log #17)', async () => {
+    let t = 1_000_000
+    const c = withCache(new GitHubCache({ now: () => t }))
+    // GitHub's list of open pull requests catches up with a merge or a close a moment later
+    const real = github.openPulls.bind(github)
+    const lagging = new Set<number>()
+    github.openPulls = async () => {
+      // the lagging ones read as open for the list only
+      const was = [...lagging].map((n) => [n, github.pulls.get(n)!.detail.state] as const)
+      for (const [n] of was) github.pulls.get(n)!.detail.state = 'open'
+      try { return await real() } finally { for (const [n, st] of was) github.pulls.get(n)!.detail.state = st }
+    }
+    try {
+      await perform('change.accept', { repo: REPO, number: 1, head_sha: sha(1) }, c)
+      await perform('change.discard', { repo: REPO, number: 2, reason: 'Not needed.' }, c)
+      lagging.add(1)
+      lagging.add(2)
+      const open = async () => ((await perform('changes.list', { repo: REPO }, c)).result as { changes: { number: number }[] }).changes.map((x) => x.number)
+      expect(await open()).not.toContain(1)
+      expect(await open()).not.toContain(2)
+      // the journey's steps are made from the same list: no "Review the change" for the one just accepted
+      expect(JSON.stringify(((await perform('journey.get', { repo: REPO }, c)).result as { next: unknown }).next)).not.toMatch(/Project purpose and requirements/)
+      // once GitHub has long caught up, the list is GitHub's again
+      t += 3 * 60_000
+      lagging.clear()
+      expect(await open()).not.toContain(1)
+    } finally {
+      github.openPulls = real
+    }
   })
 
   it('a principal over the budget is told in plain words when to try again', async () => {

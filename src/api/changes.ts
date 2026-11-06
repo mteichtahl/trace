@@ -562,8 +562,12 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
   if (f.stacked) return { verdict: 'wait', why: `${stackedWords(f.stacked)} Its checks passed: it follows that change into the design once it is accepted.` }
   const reqs = o.requirements?.length ? ` It covers ${list([...o.requirements].slice(0, 8))}${o.requirements.length > 8 ? ` and ${plural(o.requirements.length - 8, 'more requirement')}` : ''}.` : ''
-  const total = f.checks.passed
-  const checks = o.passed?.length ? `${total === 1 ? 'Its check' : `All ${total} checks`} passed (${list(o.passed.slice(0, 5))}${o.passed.length > 5 ? ' and others' : ''}), and it can be merged.`
+  // the count is of what is named: GitHub's status counts its checks one way and the check list names them another
+  // ("All 2 checks passed (check, tests pass and open-pr)", test-esp32 log #153), so the larger of the two is said,
+  // and "and others" whenever fewer are named than counted
+  const names = [...new Set(o.passed ?? [])]
+  const total = Math.max(f.checks.passed, names.length)
+  const checks = names.length ? `${total === 1 ? 'Its check' : `All ${total} checks`} passed (${list(names.slice(0, 5))}${names.length > 5 || names.length < total ? ' and others' : ''}), and it can be merged.`
     : `${total === 1 ? 'Its check' : `All ${total} checks`} passed, and it can be merged.`
   const waited = f.awaiting?.length ? ` It waited for ${list(f.awaiting)} to be approved, and ${f.awaiting.length === 1 ? 'it is' : 'they are'} now.` : ''
   return { verdict: 'accept', why: `${checks[0]?.toUpperCase() ?? ''}${checks.slice(1)}${waited}${reqs}` }
