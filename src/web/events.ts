@@ -45,6 +45,7 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['stuck.dismiss', 'journey'],
   ['handoff.decline', 'journey'],
   ['waiver.add', 'journey'],
+  ['waiver.withdraw', 'journey'],
   ['journey.criterion.open', 'journey'],
   ['chats.append', 'chats'],
   ['chats.reply', 'chats'],

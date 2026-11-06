@@ -19,7 +19,7 @@ import { useHumanInTheLoop, useRenderTool } from '@copilotkit/react-core/v2'
 import { createContext, useContext, useState } from 'react'
 import { z } from 'zod'
 import { DecisionCard, type Decision } from '@/components/decision-card'
-import { agentBlocked, useAgentSetup } from '@/components/project/agent-setup'
+import { agentQueueNote, useAgentSetup } from '@/components/project/agent-setup'
 import { call } from '@/lib/api'
 import { usePrefs } from '@/lib/prefs'
 import {
@@ -143,7 +143,7 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
   const [busy, setBusy] = useState(false)
   const live = useContext(LiveCall)
   // the conversation's own project: what the notice on the screen already knows of its agent (nothing asked from
-  // here); another project's is asked for, so Confirm waits for that project's agent too
+  // here); another project's is asked for, so the card says that project's work is queued too
   const chatRepo = useContext(ChatRepo)
   // locked to the conversation's project: another one the model named is refused on the card (a conversation on no
   // project, the app's own, has none to lock to: the card names the project the model gave)
@@ -151,7 +151,7 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
   const other = !!repo && repo.toLowerCase() !== (chatRepo ?? '').toLowerCase()
   // asked only while Confirm is offered (a finished or past offer needs no answer)
   const offered = status === 'executing' && !!respond
-  const blocked = agentBlocked(useAgentSetup(repo, { fetch: other && offered && !refused }).data)
+  const note = agentQueueNote(useAgentSetup(repo, { fetch: other && offered && !refused }).data)
   if (status === 'complete') return <TaskConfirmCard task={args} answer={parseResult<TaskAnswer>(result)} />
   if (!live && status !== 'executing') return <TaskConfirmCard task={args} answer={{ confirmed: false, reason: 'not confirmed' }} />
   if (status !== 'executing' || !respond) return <TaskConfirmCard task={args} readOnly={readOnly} busy />
@@ -161,14 +161,14 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
     setBusy(true)
     try {
       const r = await call('task', { repo, request: args.request, ...(args.agent ? { agent: args.agent } : {}), ...(args.branch ? { branch: args.branch } : {}) })
-      respond({ confirmed: true, accepted: r.accepted, jobId: r.jobId, ...(r.reason ? { reason: r.reason } : {}) } satisfies TaskAnswer)
+      respond({ confirmed: true, accepted: r.accepted, jobId: r.jobId, ...(r.reason ? { reason: r.reason } : {}), ...(r.queued ? { queued: true } : {}) } satisfies TaskAnswer)
     } catch (e) {
       respond({ confirmed: true, accepted: false, reason: e instanceof Error ? e.message : 'the task could not be started' } satisfies TaskAnswer)
     } finally {
       setBusy(false)
     }
   }
-  return <TaskConfirmCard task={args} busy={busy} readOnly={readOnly} blocked={blocked} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies TaskAnswer)} />
+  return <TaskConfirmCard task={args} busy={busy} readOnly={readOnly} note={note} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies TaskAnswer)} />
 }
 
 const Remember = z.object({ repo: z.string(), text: z.string(), scope: z.enum(['personal', 'project']) })

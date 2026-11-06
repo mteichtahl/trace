@@ -25,7 +25,7 @@ import { signBlockers } from '../core/journey.js'
 import { type SkillCheckDef, skillDef } from '../core/skills.js'
 import { type DesignDecision, standing } from '../tools/design/decisions.js'
 import { type DesignRows, TOPIC_NAMES, INTENT_TOPICS } from '../tools/design/db.js'
-import { type PinFinding, architectureView, intentView, linksView, pinCheck } from '../tools/design/record.js'
+import { type PinFinding, architectureView, intentView, linksView, missingFields, pinCheck } from '../tools/design/record.js'
 import type { Finding, TraceRequirement } from './record-read.js'
 import { staleSentence } from '../tools/mech/stale.js'
 
@@ -99,6 +99,8 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const VAGUE = /^(not needed|n\/?a|none|no need|unnecessary|not required|later|tbd|it depends|you decide|whatever|-+)\.?$/i
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+/** "a", "a and b", "a, b and c". */
+const andList = (xs: readonly string[]): string => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`
 const ids = (xs: { id: string }[], n = 5): string => `${xs.slice(0, n).map((x) => x.id).join(', ')}${xs.length > n ? ` and ${xs.length - n} more` : ''}`
 
 /** A gate criterion of the journey, as a check: met, waived (an open waiver on it), or not met with its words. */
@@ -201,7 +203,9 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const live = v.filter((s) => s.state !== 'rejected' && s.topic === 'interfaces' && s.kind !== 'question')
     if (!live.length) return notMet('interfaces', 'No interface is stated, nor is the topic marked "don\'t care".')
     const open = live.filter((s) => s.flags.includes('interface_incomplete'))
-    return open.length ? notMet('interfaces', `${plural(open.length, 'interface')} without all of type, connector, protocol, rate and direction: ${ids(open)}.`) : met('interfaces')
+    // which field each one lacks, so the person knows what to add (test-esp32 #20)
+    const lacks = open.map((s) => `${s.id} lacks ${andList(missingFields(s.interface))}`)
+    return open.length ? notMet('interfaces', `${plural(open.length, 'interface')} not fully given: ${lacks.slice(0, 4).join('; ')}${open.length > 4 ? `; and ${open.length - 4} more` : ''}.`) : met('interfaces')
   }),
   'intent-builder/conflicts': (i) => flagged(i, 'conflicts', 'conflict', 'in conflict with another, neither given way'),
   'intent-builder/testable': (i) => flagged(i, 'testable', 'not_testable', 'that cannot become a testable requirement as worded', 'As the agents judged each statement.'),

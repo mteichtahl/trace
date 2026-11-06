@@ -23,6 +23,14 @@ for (const g of JOURNEYS['acme/panel-controller']!.gates as GateMore[]) if (g.st
 for (const g of JOURNEYS['acme/motor-driver']!.gates as GateMore[])
   if (g.state === 'signed') Object.assign(g, { criteria: SOIL_GATES.requirements!.criteria })
 
+/** Withdraw a waiver in the mock's memory: closed in the journey and off its gate, with the log's entry. */
+function withdrawMock(j: JourneyMore, id: string, reason: string, replacedBy: string | null): void {
+  const at = new Date().toISOString()
+  for (const w of j.waivers.filter((x) => x.id === id)) Object.assign(w, { closed: true, mayWithdraw: false, withdrawn: { by: 'Marc Teichtahl', at, reason, replacedBy } })
+  for (const g of j.gates) g.waivers = g.waivers.filter((x) => x.id !== id)
+  j.decisions?.unshift({ id: `d-w-${id}-${at}`, kind: 'waiver', ref: id, title: `The waiver ${id} was ${replacedBy ? 'taken again' : 'withdrawn'} by Marc Teichtahl: ${reason}`, by: 'Marc Teichtahl', at, state: 'withdrawn' })
+}
+
 const gateOf = (repo: string, id: string): GateMore | undefined => JOURNEYS[repo]?.gates.find((g: Gate) => g.id === id) as GateMore | undefined
 let settings: Record<string, unknown> = { ...SETTINGS }
 const drafts: Record<string, { step: number; data: unknown; saved: string } | undefined> = {}
@@ -123,8 +131,25 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       const d = drafts[`${repo}|${String(a.skill)}`]
       return ok({ skill: a.skill, ...v, ...(question ? { question } : {}), ...(d ? { draft: d.data, step: d.step, saved: d.saved } : {}) })
     }
-    case 'skill.submit':
-      return later(ok({ ok: true, id: `rec_${Math.random().toString(16).slice(2, 6)}` }))
+    case 'skill.submit': {
+      // VITE_MOCK_AGENT=setting_up: the Intent builder's drafting is queued until the project's agent is set up
+      if (import.meta.env.VITE_MOCK_AGENT === 'setting_up' && a.skill === 'intent-builder') return later(ok({ ok: true, id: `rec_${Math.random().toString(16).slice(2, 6)}`, queued: true, jobId: `queued~${repo.replace('/', '~')}~3f2a9c1d0e4b` }))
+      // a waiver taken again withdraws the one it replaces
+      const draft = (a.draft ?? {}) as { replaces?: string }
+      const j = JOURNEYS[repo] as JourneyMore | undefined
+      const id = `rec_${Math.random().toString(16).slice(2, 6)}`
+      if (a.skill === 'waiver' && draft.replaces && j) withdrawMock(j, draft.replaces, `taken again as waiver ${id}`, id)
+      return later(ok({ ok: true, id }))
+    }
+    case 'waiver.withdraw': {
+      const j = JOURNEYS[repo] as JourneyMore | undefined
+      const w = j?.waivers.find((x) => x.id === a.waiver)
+      if (!j || !w) return fail(`There is no waiver called ${String(a.waiver)} in this project.`)
+      if (!w.mayWithdraw) return fail(w.withdrawBlocked ?? 'This waiver is already withdrawn.')
+      if (String(a.reason ?? '').trim().length < 5) return fail('Say in a sentence why the waiver is withdrawn; it is kept in the record.')
+      withdrawMock(j, w.id, String(a.reason).trim(), null)
+      return later(ok({ repo, waiver: { id: w.id, closed: true }, summary: `Withdrawn. ${w.target?.kind === 'criterion' ? 'The criterion counts again: it is not met until it is met or waived again.' : `The ${w.target?.kind ?? 'finding'} counts again.`}` }), 400)
+    }
     case 'waiver.add': {
       const j = JOURNEYS[repo]
       const id = `W-${(j?.waivers.length ?? 0) + 4}`

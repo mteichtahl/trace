@@ -99,7 +99,7 @@
  * The web app's actions are in their own files, each spread into ACTIONS (src/api/action-kit.ts holds what they share):
  *
  *   actions-projects.ts  project.members, projects.create
- *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, inbox
+ *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, waiver.withdraw, inbox
  *   actions-chats.ts     chats.list, chats.get, chats.append, chats.reply, chats.rename, chats.recall
  *   actions-me.ts        me.get, me.set
  *   actions-push.ts      push.subscribe, push.unsubscribe, push.devices
@@ -176,6 +176,7 @@ import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
 import { LOGO_ACTIONS } from './actions-logo.js'
+import { RULE_ANSWER_ACTIONS } from './rule-answers.js'
 import { DOCUMENT_ACTIONS } from './actions-documents.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
@@ -904,6 +905,7 @@ export const ACTIONS = {
   ...DESIGN_ACTIONS,
   ...HANDIN_ACTIONS,
   ...LOGO_ACTIONS,
+  ...RULE_ANSWER_ACTIONS,
   ...DOCUMENT_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,

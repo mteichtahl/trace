@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS waivers (
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY,
   at REAL NOT NULL,
-  kind TEXT NOT NULL,             -- journey.started | gate.signed | gate.returned | stage.reopened | question.answered | waiver.added
+  kind TEXT NOT NULL,             -- journey.started | gate.signed | gate.returned | stage.reopened | question.answered | waiver.added | waiver.withdrawn
   stage TEXT,
   ref TEXT,                       -- the gate, question or waiver
   summary TEXT NOT NULL,          -- one sentence, plain words

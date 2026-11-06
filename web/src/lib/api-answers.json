@@ -1192,7 +1192,10 @@
           "at": "2026-10-27T00:00:00.000Z",
           "acknowledged": null,
           "closed": false,
-          "opened_by_you": false
+          "opened_by_you": false,
+          "withdrawn": null,
+          "may_withdraw": false,
+          "withdraw_blocked": "Only admin@example.com, who took it, or an admin can withdraw this waiver."
         }
       ],
       "decisions": [

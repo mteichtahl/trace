@@ -20,6 +20,10 @@ const JOBS: Record<string, RunSummary[]> = {
     { id: 'job_d1', title: 'Update the user guide with the new renders', state: 'running', agent: 'docs', agentName: 'Documentation', step: 'Writing the assembly chapter', stepIndex: 3, stepCount: 4, startedAt: ago(12 * MIN), typicalS: 1500, controls: ['pause', 'cancel'], startedBy: 'trace' },
     { id: 'job_h1', title: 'Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C with a 500 mA load?', state: 'queued', agent: 'ams', agentName: 'Analog and mixed-signal', position: 1, startsWhen: 'starts when it is its turn', controls: ['pause', 'cancel'], startedBy: 'the Thermal specialist (job job_th1)', handoff: { id: 'ho_mock_1', from: 'thermal', fromName: 'Thermal' } },
   ],
+  // VITE_MOCK_AGENT=setting_up: Flasher's drafting, queued until its agent is set up (src/api/agent-queue.ts)
+  ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? { 'acme/flasher': [
+    { id: 'queued~acme~flasher~3f2a9c1d0e4b', title: 'Draft the candidate requirements from the intent', state: 'queued' as const, agent: 'verify', agentName: 'Verification', position: 1, startsWhen: 'starts once this project\'s agent is set up', controls: ['cancel' as const], startedBy: 'marc@example.com', yours: true },
+  ] } : {}),
   'acme/panel-controller': [
     { id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', agent: 'impl', agentName: 'Implementation', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45, controls: ['cancel'] },
     { id: 'job_w1', title: 'Asked by the Implementation specialist: Move the LED driver pins to bank 2', state: 'running', agent: 'worker', agentName: 'Worker', step: 'Editing the pin constraints', stepIndex: 1, stepCount: 3, startedAt: ago(2 * MIN), typicalS: 300, controls: ['pause', 'cancel'], startedBy: 'the Implementation specialist (job job_t1)', handoff: { id: 'ho_mock_2', from: 'impl', fromName: 'Implementation' } },

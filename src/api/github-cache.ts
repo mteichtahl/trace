@@ -55,7 +55,29 @@ export class GitHubCache {
     const pre = `${repo.toLowerCase()}\u0000`
     for (const k of [...this.entries.keys()]) if (k.startsWith(pre)) this.entries.delete(k)
   }
+
+  private readonly gone = new Map<string, number>()
+
+  /**
+   * A pull request this container just merged or closed (accepting, discarding): left out of the open ones read for
+   * CLOSED_MS, whatever GitHub's list says. GitHub's list of open pull requests catches up with a merge a moment
+   * later, and the look right after an accept read it before it had, kept it TTL_MS, and the Overview offered
+   * "Accept now" on the merged change for 20 s (test-esp32 log #17). A bust does not forget it.
+   */
+  closed(repo: string, number: number): void {
+    this.gone.set(`${repo.toLowerCase()}\u0000${number}`, this.now())
+    for (const [k, at] of this.gone) if (this.now() - at >= CLOSED_MS) this.gone.delete(k)
+  }
+
+  /** Whether `number` was merged or closed here in the last CLOSED_MS. */
+  isClosed(repo: string, number: number): boolean {
+    const at = this.gone.get(`${repo.toLowerCase()}\u0000${number}`)
+    return at !== undefined && this.now() - at < CLOSED_MS
+  }
 }
+
+/** How long a pull request merged or closed here stays out of the open ones (GitHubCache.closed). */
+export const CLOSED_MS = 2 * 60_000
 
 /** A call through `cache` when there is one, else straight to GitHub (tests, and a runtime made without one). */
 export const cached = <T>(cache: GitHubCache | undefined, repo: string, key: string, fn: () => Promise<T>, ttlMs?: number): Promise<T> =>

@@ -3,15 +3,16 @@
  * (components/skills/definitions.ts). The variant picks the screen: conversational (Intent builder, Question
  * answer), checklist on a picture (Bench setup, Bring-up run, Incoming inspection), the KiCad skills (Schematic
  * finish, Placement adjust, Board setup), the form skills (Waiver, Change request), and the rest stepped from the
- * table alone. `?about=<id>` names what a Waiver or Change request is about.
+ * table alone. `?about=<id>` names what a Waiver or Change request is about; `?replaces=<waiver>` takes a waiver again
+ * (its "Take it again"): the Waiver skill opens filled in from it, and taking the new one withdraws it.
  *
  * While the project's agent is being set up (a new project's arrives with the next installation update), the notice
- * says so under the header, and the skills whose Submit is for the agent (NEEDS_AGENT) keep it disabled with the reason.
+ * says so under the header. Submit is not held for it: the work it starts is queued until the agent is there.
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
-import { AgentSetupNotice, FocusBlocked, FocusNotice, NEEDS_AGENT, agentBlocked, useAgentSetup } from '@/components/project/agent-setup'
+import { AgentSetupNotice, FocusNotice } from '@/components/project/agent-setup'
 import { ChecklistSkill } from '@/components/skills/checklist-skill'
 import { IntentBuilder, QuestionAnswer } from '@/components/skills/conversation-skills'
 import { SKILL_BY_ID, SKILLS } from '@/components/skills/definitions'
@@ -23,18 +24,16 @@ import { ApiError, repoOf } from '@/lib/api'
 import { useJourney } from '@/lib/queries'
 
 export const Route = createFileRoute('/_focus/p/$id/do/$skill')({
-  validateSearch: z.object({ about: z.string().optional() }),
+  validateSearch: z.object({ about: z.string().optional(), replaces: z.string().optional() }),
   component: Skill,
 })
 
 function Skill() {
   const { id, skill } = Route.useParams()
-  const { about } = Route.useSearch()
+  const { about, replaces } = Route.useSearch()
   const repo = repoOf(id)
   const j = useJourney(repo)
   const def = SKILL_BY_ID[skill]
-  const setup = useAgentSetup(repo)
-  const blocked = def && NEEDS_AGENT.has(def.id) ? agentBlocked(setup.data) : null
   if (j.isError && j.error instanceof ApiError && j.error.noAccess) return <NotShared />
   if (!def)
     return (
@@ -46,18 +45,16 @@ function Skill() {
     )
   return (
     <FocusNotice.Provider value={<AgentSetupNotice repo={repo} />}>
-      <FocusBlocked.Provider value={blocked}>
-        <SkillScreen repo={repo} def={def} about={about} />
-      </FocusBlocked.Provider>
+      <SkillScreen repo={repo} def={def} about={about} replaces={replaces} />
     </FocusNotice.Provider>
   )
 }
 
-function SkillScreen({ repo, def, about }: { repo: string; def: NonNullable<(typeof SKILL_BY_ID)[string]>; about?: string }) {
+function SkillScreen({ repo, def, about, replaces }: { repo: string; def: NonNullable<(typeof SKILL_BY_ID)[string]>; about?: string | undefined; replaces?: string | undefined }) {
   switch (def.id) {
     case 'intent-builder': return <IntentBuilder repo={repo} def={def} />
     case 'question-answer': return <QuestionAnswer repo={repo} def={def} />
-    case 'waiver': return <WaiverSkill repo={repo} def={def} about={about} />
+    case 'waiver': return <WaiverSkill repo={repo} def={def} about={about} replaces={replaces} />
     case 'change-request': return <ChangeSkill repo={repo} def={def} about={about} />
   }
   if (def.variant === 'checklist') return <ChecklistSkill repo={repo} def={def} />

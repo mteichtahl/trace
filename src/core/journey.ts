@@ -194,7 +194,7 @@ ensureProjectSchema({ table: 'decisions', sql: `
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY,
   at REAL NOT NULL,
-  kind TEXT NOT NULL,             -- journey.started | gate.signed | gate.returned | stage.reopened | question.answered | waiver.added
+  kind TEXT NOT NULL,             -- journey.started | gate.signed | gate.returned | stage.reopened | question.answered | waiver.added | waiver.withdrawn
   stage TEXT,
   ref TEXT,                       -- the gate, question or waiver
   summary TEXT NOT NULL,          -- one sentence, plain words
@@ -714,6 +714,11 @@ export interface QuestionView {
 export interface WaiverView {
   id: string; stage: StageId; gate: string | null; target: { kind: string; id: string }; reason: string; risk: string; severity: Severity
   caught_where: string | null; scope: string; by: string; at: string; acknowledged: { by: string | null; at: string } | null; closed: boolean; opened_by_you: boolean
+  /** withdrawn by its author or an admin (withdrawWaiver): who, when, why, and the waiver taken again in its place */
+  withdrawn: { by: string | null; at: string; reason: string; replaced_by: string | null } | null
+  /** whether this person may withdraw it or take it again now; when not, why (null once it is closed) */
+  may_withdraw: boolean
+  withdraw_blocked: string | null
 }
 export interface JourneyView {
   template: Template; template_name: string; revision: string; current_stage: StageId; later: LaterStage[]; start: 'idea' | 'import'
@@ -1439,11 +1444,7 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
     later: r.journey.later, start: r.journey.start, name: r.journey.name, description: r.journey.description, icon: r.journey.icon, build: r.journey.build,
     stages, gates, next,
     questions: r.questions.map((q) => questionView(q, viewer)),
-    waivers: r.waivers.map((w) => ({
-      id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: w.reason, risk: w.risk, severity: w.severity,
-      caught_where: w.caughtWhere, scope: w.scope, by: w.by, at: isoN(w.at), acknowledged: w.acknowledgedAt !== null ? { by: w.acknowledgedBy, at: isoN(w.acknowledgedAt) } : null,
-      closed: w.closedAt !== null, opened_by_you: opened.has(`waiver:${w.id}`),
-    })),
+    waivers: r.waivers.map((w) => waiverView(r, w, viewer, opened)),
     decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: d.summary, by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
   }
@@ -1935,11 +1936,97 @@ export interface WaiverInput {
   scope: string
 }
 
-/** Take a waiver (the Waiver skill's quality bar is checked here). */
-export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer, o: { facts?: AgentFacts | null | undefined } = {}): WaiverView {
+/** A waiver as the API shows it to `viewer`: with its withdrawal, if any, and whether this person may withdraw it. */
+function waiverView(r: JourneyRecord, w: WaiverRow, viewer: Viewer, opened: ReadonlySet<string>): WaiverView {
+  const out = withdrawalOf(r, w.id)
+  const blocked = w.closedAt === null ? withdrawProblem(r, w, viewer) : null
+  return {
+    id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: w.reason, risk: w.risk, severity: w.severity,
+    caught_where: w.caughtWhere, scope: w.scope, by: w.by, at: isoN(w.at), acknowledged: w.acknowledgedAt !== null ? { by: w.acknowledgedBy, at: isoN(w.acknowledgedAt) } : null,
+    closed: w.closedAt !== null, opened_by_you: opened.has(`waiver:${w.id}`),
+    withdrawn: out ? { by: out.by, at: isoN(out.at), reason: out.reason, replaced_by: out.replacedBy } : null,
+    may_withdraw: w.closedAt === null && blocked === null, withdraw_blocked: blocked,
+  }
+}
+
+/** A waiver's withdrawal, from the decisions log (the record keeps it there, with its reason), or null. */
+function withdrawalOf(r: JourneyRecord, id: string): { by: string | null; at: number; reason: string; replacedBy: string | null } | null {
+  const d = r.decisions.filter((x) => x.kind === 'waiver.withdrawn' && x.ref === id).sort((a, b) => b.at - a.at)[0]
+  if (!d) return null
+  const detail = (d.detail && typeof d.detail === 'object' ? d.detail : {}) as { reason?: unknown; replaced_by?: unknown }
+  return { by: d.by, at: d.at, reason: typeof detail.reason === 'string' ? detail.reason : d.summary, replacedBy: typeof detail.replaced_by === 'string' ? detail.replaced_by : null }
+}
+
+/** Whether `who` (a record's name for a person, their email) is this person. */
+const sameLabel = (v: Pick<Viewer, 'label'>, who: string): boolean => v.label.trim().toLowerCase() === who.trim().toLowerCase()
+
+/**
+ * Why `viewer` cannot withdraw waiver `w` (or take it again) now, in words, or null. Only its author or an admin may
+ * (test-esp32 #149). A waiver a live signature acknowledged stays: the signed gate stands on it, and a signature is
+ * never edited. To change it, the stage is reopened first (an admin returns the current gate and reopens that
+ * stage), which takes the signature back; the gate is then signed again on what the record holds by then.
+ */
+export function withdrawProblem(r: JourneyRecord, w: WaiverRow, viewer: Pick<Viewer, 'label' | 'admin'>): string | null {
+  if (w.closedAt !== null) return withdrawalOf(r, w.id) ? 'This waiver is already withdrawn.' : 'This waiver is closed already.'
+  if (!viewer.admin && !sameLabel(viewer, w.by)) return `Only ${w.by}, who took it, or an admin can withdraw this waiver.`
+  const sig = r.signatures.find((s) => s.supersededAt === null && s.revision === r.journey.revision && s.waivers.includes(w.id))
+  if (sig) {
+    const gate = r.gates.find((g) => g.id === sig.gate)
+    const title = gate ? gateTitle(gate) : `the ${sig.gate} gate`
+    const stage = gate ? STAGE_NAMES[gate.stage] : 'its stage'
+    return `${cap(title)} was signed by ${sig.by} with this waiver acknowledged, so the signature stands on it. To withdraw it, an admin reopens ${stage} first (return the current gate and reopen ${stage}); ${title} is then signed again without it.`
+  }
+  return null
+}
+
+/** Close waiver `w` and log why, in the caller's transaction. */
+function closeWaiver(db: DatabaseSync, w: WaiverRow, reason: string, by: Signer, replacedBy: string | null): void {
+  const t = now()
+  db.prepare('UPDATE waivers SET closed_at=?, updated=? WHERE id=?').run(t, t, w.id)
+  decide(db, {
+    kind: 'waiver.withdrawn', stage: w.stage, ref: w.id, by: by.label,
+    summary: `The waiver on ${w.targetKind} ${w.target} was ${replacedBy ? 'taken again' : 'withdrawn'} by ${by.label}: ${reason}`,
+    detail: { reason, replaced_by: replacedBy, target: { kind: w.targetKind, id: w.target } },
+  })
+}
+
+/**
+ * Withdraw a waiver in force, with a reason (kept in the decisions log): its author or an admin, and not while a
+ * signed gate stands on it (withdrawProblem). What it waived counts again: a criterion it covered is not met again
+ * unless another waiver covers it, and a finding is open again where the rule check is read.
+ */
+export function withdrawWaiver(db: DatabaseSync, id: string, by: Signer & { admin: boolean }, reason: string, o: { facts?: AgentFacts | null | undefined } = {}): WaiverView {
   const r = withFacts(need(db), o.facts)
-  const id = transaction(db, () => insertWaiver(db, r, w, by))
-  const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
+  const w = r.waivers.find((x) => x.id === id)
+  if (!w) throw new JourneyError(`There is no waiver called ${id} in this project.`)
+  const problem = withdrawProblem(r, w, by)
+  if (problem) throw new JourneyError(problem)
+  const why = reason.trim()
+  if (why.length < 5 || VAGUE.test(why)) throw new JourneyError('Say in a sentence why the waiver is withdrawn; it is kept in the record.')
+  transaction(db, () => closeWaiver(db, w, why, by, null))
+  const after = need(db)
+  const viewer: Viewer = { hash: by.hash, label: by.label, also: by.also, admin: by.admin, part: 'contributor' }
+  return waiverView(after, after.waivers.find((x) => x.id === id) as WaiverRow, viewer, new Set())
+}
+
+/** Take a waiver (the Waiver skill's quality bar is checked here). */
+export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer & { admin?: boolean | undefined }, o: { facts?: AgentFacts | null | undefined; replaces?: string | undefined } = {}): WaiverView {
+  const r = withFacts(need(db), o.facts)
+  // taken again (test-esp32 #149): the new one is recorded and the old one withdrawn with it, by the same rules
+  const old = o.replaces ? r.waivers.find((x) => x.id === o.replaces) : undefined
+  if (o.replaces && !old) throw new JourneyError(`There is no waiver called ${o.replaces} in this project.`)
+  if (old) {
+    const problem = withdrawProblem(r, old, { label: by.label, admin: by.admin ?? false })
+    if (problem) throw new JourneyError(problem)
+  }
+  const id = transaction(db, () => {
+    // the new one is checked as if the old one were gone already: it may waive the same thing
+    const rest = old ? { ...r, waivers: r.waivers.map((x) => (x.id === old.id ? { ...x, closedAt: now() } : x)) } : r
+    const added = insertWaiver(db, rest, w, by)
+    if (old) closeWaiver(db, old, `taken again as waiver ${added}`, by, added)
+    return added
+  })
+  const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: by.admin ?? false, part: 'contributor' })
   return v.waivers.find((x) => x.id === id) as WaiverView
 }
 

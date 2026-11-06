@@ -63,9 +63,14 @@ export function decisionRows(j: JourneyMore): DecisionEntry[] {
     if (out.some((d) => d.kind === 'gate' && d.to?.endsWith(`/gates/${g.id}`)) || have.has(title)) continue
     out.push({ id: `gate-${g.id}`, kind: 'gate', title, by: g.signature?.by ?? 'An admin', at: g.signature?.at ?? new Date().toISOString(), state: g.state, to: `/p/${projectId(j.repo)}/gates/${g.id}`, ...(g.signature?.at ? {} : { undated: true }) })
   }
+  // each waiver once (test-esp32 #150): on the log's entry for it, matched by its id, which then carries the waiver as
+  // it stands now (in force or withdrawn, and whether this person may withdraw it); a waiver the log does not name is
+  // listed at the time it was taken, and only one with no time at all sits apart
   for (const w of j.waivers) {
-    if (out.some((d) => d.kind === 'waiver' && d.title.startsWith(w.id))) continue
-    out.push({ id: `waiver-${w.id}`, kind: 'waiver', title: `${w.id}: ${w.title}`, by: '—', at: new Date().toISOString(), reason: w.reason, state: 'active', undated: true })
+    const state = w.withdrawn ? 'withdrawn' as const : w.closed ? 'closed' as const : 'active' as const
+    const i = out.findIndex((d) => d.kind === 'waiver' && d.state !== 'withdrawn' && (d.ref === w.id || d.title.startsWith(`${w.id}:`)))
+    if (i >= 0) { out[i] = { ...out[i]!, waiver: w, state }; continue }
+    out.push({ id: `waiver-${w.id}`, kind: 'waiver', title: `${w.id}: ${w.title}`, by: w.by ?? '—', at: w.at ?? new Date().toISOString(), reason: w.reason, state, waiver: w, ...(w.at ? {} : { undated: true }) })
   }
   return out.sort((a, b) => b.at.localeCompare(a.at))
 }
@@ -118,7 +123,7 @@ function Decisions() {
         {rows.length === 0 ? (
           <EmptyState>No decisions yet. Gate records, answered questions, waivers and change requests collect here.</EmptyState>
         ) : view === 'timeline' ? (
-          <DecisionTimeline rows={rows} onOpen={open} />
+          <DecisionTimeline rows={rows} onOpen={open} repo={repo} />
         ) : (
           <DataTable id="decisions" url={url} data={rows} columns={columns} getRowId={(r) => r.id} noun="decisions" onRowClick={open} defaultView={{ sorting: [{ id: 'at', desc: true }] }} />
         )}
