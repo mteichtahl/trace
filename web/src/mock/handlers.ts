@@ -75,7 +75,7 @@ function action(name: string, a: Record<string, unknown>): Response {
       if (typeof a.name === 'string') j.name = a.name
       if (typeof a.description === 'string') j.description = a.description
       if (typeof a.icon === 'string') j.icon = JSON.parse(a.icon) as unknown
-      if (a.build && typeof a.build === 'object') j.build = { quantity: 10, unit_cost: null, budget: null, currency: 'USD', fab: 'JLCPCB', ...(j.build as object | undefined), ...(a.build as object) }
+      if (a.build && typeof a.build === 'object') j.build = { quantity: 10, unit_cost: null, budget: null, cloud_budget: null, currency: 'USD', fab: 'JLCPCB', ...(j.build as object | undefined), ...(a.build as object) }
       if (Array.isArray(a.later)) j.later = a.later
       return ok({ repo, version: 1 })
     }

@@ -263,3 +263,7 @@ export const THREAD_MESSAGES: Record<string, ChatMessage[]> = {
 }
 
 export const RECALL = ['Why is R-006 failing?', 'Show me the power sheet', 'What does the LDO need on its output?']
+
+// the soil sensor's build plan (Settings › Build and budget): the build budget for the order and, apart from it, the
+// cloud-work allowance for trace's own work, as cost.get's mock counts them (build-cost.ts)
+;(JOURNEYS['acme/soil-sensor'] as import('@/lib/types-s1').JourneyMore).build = { quantity: 10, unit_cost: 12, budget: 200, cloud_budget: 60, currency: 'USD', fab: 'JLCPCB', hardware: false }

@@ -71,7 +71,7 @@ export interface Actions {
     args: {
       repo: string; name: string; description?: string; icon?: string; start?: 'idea' | 'import'; template: 'board' | 'fpga' | 'firmware' | 'mixed'
       new?: { private: boolean; scaffold?: 'empty' | 'python' | 'kicad' | 'rust' }; people?: { who: string; part?: Part; class?: 'user' | 'guest' }[]
-      build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; currency?: string; fab?: string }; later?: ('certify' | 'produce' | 'sustain')[]; apply?: boolean
+      build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; cloud_budget?: number | null; currency?: string; fab?: string }; later?: ('certify' | 'produce' | 'sustain')[]; apply?: boolean
     }
     /** read from the API's steps (lib/readers.ts readCreated): what was done, what failed, what waits */
     result: { repo: string; ok: boolean; done: string[]; failed: string[]; waits: Wait[] }
@@ -81,7 +81,7 @@ export interface Actions {
   'projects.repo_check': { args: Repo; result: import('@/components/new-project/rules').RepoCheck }
   /** admin: what the project is (Settings): written to the journey record, not the repository */
   'project.update': {
-    args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; hardware?: boolean }; later?: ('certify' | 'produce' | 'sustain')[] }
+    args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null; cloud_budget?: number | null; hardware?: boolean }; later?: ('certify' | 'produce' | 'sustain')[] }
     result: { repo: string; version: number }
   }
   // a project's lifecycle (src/api/actions-lifecycle.ts): paused holds it as it is; retired hides it until an admin restores it

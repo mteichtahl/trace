@@ -354,7 +354,8 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     ...readIcon(raw.icon),
     ...(isObj(raw.build) ? { build: {
       quantity: Number(raw.build.quantity ?? 10), unit_cost: typeof raw.build.unit_cost === 'number' ? raw.build.unit_cost : null,
-      budget: typeof raw.build.budget === 'number' ? raw.build.budget : null, currency: str(raw.build.currency) ?? 'USD', fab: str(raw.build.fab) ?? 'JLCPCB',
+      budget: typeof raw.build.budget === 'number' ? raw.build.budget : null,
+      cloud_budget: typeof raw.build.cloud_budget === 'number' ? raw.build.cloud_budget : null, currency: str(raw.build.currency) ?? 'USD', fab: str(raw.build.fab) ?? 'JLCPCB',
     } } : {}),
     ...(Array.isArray(raw.later) ? { later: raw.later.map(String).filter((s): s is 'certify' | 'produce' | 'sustain' => ['certify', 'produce', 'sustain'].includes(s)) } : {}),
     decisions: decisions.map((d) => ({

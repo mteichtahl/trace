@@ -1,7 +1,8 @@
 /**
- * Cost and time (/p/:id/cost, admins): spent, committed and forecast cost against the budget, the stage timeline
+ * Cost and time (/p/:id/cost, admins): spent, committed and forecast cost against the project's two budgets (the build
+ * budget for the order, the cloud-work allowance for trace's own work: budgets.tsx), the stage timeline
  * (days and cloud use per stage, forecasts for what is queued), spend by job grouped by stage with work done again
- * marked (and the warning when the current stage nears its share of the budget), and the spend lines as a Data table. The chart is
+ * marked (and the warning when the current stage nears its share of the cloud-work allowance), and the spend lines as a Data table. The chart is
  * Recharts, loaded lazily. Data: cost.get, from the cost ledger: cloud use is an estimate (each run's tokens and each
  * job's running time, priced from a dated table), with what AWS billed beside it from Cost Explorer, a day behind,
  * and when it reads next. What the record does not hold (forecast days) is null and shown as "not recorded", with the
@@ -16,7 +17,6 @@ import { useTraceContext } from '@/components/chat/context'
 import { DataTable, Highlight } from '@/components/data-table'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
 import { Section } from '@/components/shell/app-shell'
-import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, NotShared, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -25,6 +25,8 @@ import { useAction } from '@/lib/queries'
 import type { CostView } from '@/lib/types-s1'
 import { CloudBreakdown } from '@/components/project/cloud-cost'
 import { SpendByJob, SpendWarningCard } from '@/components/project/spend-by-job'
+import { Budgets } from '@/components/project/budgets'
+import { forecastSource } from '@/components/project/gate-spend'
 import { cn } from '@/lib/utils'
 
 const StageChart = lazy(() => import('@/components/project/stage-chart'))
@@ -58,9 +60,6 @@ function Cost() {
   const d = c.data
   /** a sum or an amount the record may not hold: "not recorded" */
   const m = (v: number | null | undefined) => (v === null || v === undefined ? 'not recorded' : money(v, d.currency))
-  const z = (v: number | null | undefined) => v ?? 0
-  const spent = z(d.spent.cloud) + z(d.spent.orders)
-  const total = spent + z(d.committed) + z(d.forecast)
   const columns: ColumnDef<Line, any>[] = [
     { accessorKey: 'what', header: 'What', size: 340, meta: { label: 'What', kind: 'text' }, cell: ({ row }) => <Highlight text={row.original.what} /> },
     { id: 'kind', accessorFn: (l) => KIND[l.kind], header: 'Kind', size: 140, meta: { label: 'Kind', kind: 'enum' } },
@@ -70,34 +69,16 @@ function Cost() {
   return (
     <div className="pb-12">
       <p className="mt-6 text-[15px]">
-        <span className="font-semibold">{money(spent, d.currency)} spent so far{d.spent.cloud === null ? ' on orders' : d.spent.detail ? ' (cloud use estimated)' : ''},</span> {m(d.committed)} committed and {m(d.forecast)} forecast for the build.
-        {d.budget !== undefined && <> Budget {money(d.budget, d.currency)}: {total <= d.budget ? 'within budget.' : 'over budget.'}</>}
+        <span className="font-semibold">{m(d.spent.cloud)} of cloud work so far{d.spent.detail ? ' (estimated)' : ''}.</span> The order: {m(d.spent.orders)} paid, {m(d.committed)} committed and {m(d.forecast)} forecast. Each counts against its own budget.
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile label="Cloud use to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate · ${money(d.spent.detail.actual.total, d.currency)} billed by AWS` : 'Estimate · AWS has billed nothing tagged yet') : undefined} />
+        <Tile label="Cloud work to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate · ${money(d.spent.detail.actual.total, d.currency)} billed by AWS` : 'Estimate · AWS has billed nothing tagged yet') : undefined} />
         <Tile label="Orders paid" value={m(d.spent.orders)} />
         <Tile label="Committed" value={m(d.committed)} hint="Orders ready to place" />
-        <Tile label="Forecast for the build" value={m(d.forecast)} hint={d.quantity ? `${d.quantity} boards at the planned unit cost` : 'Quantity × unit cost'} />
+        <Tile label="Forecast for the order" value={m(d.forecast)} hint={forecastSource(d, d.orderCurrency ?? d.currency) ?? 'Boards × the target unit cost'} />
       </div>
       {d.warning && <SpendWarningCard warning={d.warning} currency={d.currency} id={id} link={false} className="mt-4" />}
-      {d.budget !== undefined && (
-        <div className="mt-4 rounded-xl border p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-            <span>Against the budget of {money(d.budget, d.currency)}</span>
-            <StatusBadge status={total <= d.budget ? 'met' : 'failing'} label={total <= d.budget ? `${money(d.budget - total, d.currency)} to spare` : `${money(total - d.budget, d.currency)} over`} />
-          </div>
-          <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={`Spent ${money(spent, d.currency)}, committed ${m(d.committed)}, forecast ${m(d.forecast)} of ${money(d.budget, d.currency)}`}>
-            <div className="bg-foreground/80" style={{ width: `${(spent / d.budget) * 100}%` }} />
-            <div className="bg-foreground/45" style={{ width: `${(z(d.committed) / d.budget) * 100}%` }} />
-            <div className="bg-foreground/20" style={{ width: `${(z(d.forecast) / d.budget) * 100}%` }} />
-          </div>
-          <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><span className="size-2 rounded-sm bg-foreground/80" />Spent</span>
-            <span className="flex items-center gap-1.5"><span className="size-2 rounded-sm bg-foreground/45" />Committed</span>
-            <span className="flex items-center gap-1.5"><span className="size-2 rounded-sm bg-foreground/20" />Forecast</span>
-          </div>
-        </div>
-      )}
+      <Budgets cost={d} id={id} className="mt-4" />
 
       {d.spent.detail && <CloudBreakdown detail={d.spent.detail} currency={d.currency} explorer={d.explorer} prices={d.prices} />}
 

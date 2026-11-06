@@ -72,7 +72,7 @@ export function createArgs(d: NewProjectDraft) {
     icon: JSON.stringify({ glyph: d.icon.glyph, colour: d.icon.colour }),
     ...(d.repository.mode === 'new' ? { new: { private: true } } : {}),
     people: d.people.filter((p) => p.class !== 'admin').map((p) => ({ who: p.class === 'new' ? p.email : p.who, part: p.part, ...(p.class === 'new' ? { class: p.part === 'reviewer' ? 'guest' as const : 'user' as const } : {}) })),
-    build: { quantity: d.build.quantity, ...(d.build.unitCost !== undefined ? { unit_cost: d.build.unitCost } : {}), ...(d.build.budget !== undefined ? { budget: d.build.budget } : {}), fab: d.build.fab },
+    build: { quantity: d.build.quantity, ...(d.build.unitCost !== undefined ? { unit_cost: d.build.unitCost } : {}), ...(d.build.budget !== undefined ? { budget: d.build.budget } : {}), ...(d.build.cloudBudget !== undefined ? { cloud_budget: d.build.cloudBudget } : {}), fab: d.build.fab },
     later, apply: d.advanced.applySettings,
   }
 }
@@ -232,7 +232,12 @@ function NewProject() {
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1.5"><Label htmlFor="np-qty">Boards per build</Label><Input id="np-qty" type="number" min={1} value={d.build.quantity} onChange={(e) => set({ build: { ...d.build, quantity: Math.max(0, Math.floor(Number(e.target.value))) } })} /></div>
             <div className="space-y-1.5"><Label htmlFor="np-unit">Target unit cost (US$)</Label><Input id="np-unit" inputMode="decimal" placeholder="None" value={d.build.unitCost ?? ''} onChange={(e) => set({ build: { ...d.build, unitCost: e.target.value === '' ? undefined : Number(e.target.value) } })} /></div>
-            <div className="space-y-1.5"><Label htmlFor="np-budget">Budget per revision (US$)</Label><Input id="np-budget" inputMode="decimal" placeholder="No budget" value={d.build.budget ?? ''} onChange={(e) => set({ build: { ...d.build, budget: e.target.value === '' ? undefined : Number(e.target.value) } })} /></div>
+            <div className="space-y-1.5"><Label htmlFor="np-budget">Build budget per revision (US$)</Label><Input id="np-budget" inputMode="decimal" placeholder="No budget" value={d.build.budget ?? ''} onChange={(e) => set({ build: { ...d.build, budget: e.target.value === '' ? undefined : Number(e.target.value) } })} /><p className="text-xs text-muted-foreground">Boards, parts and case: what the order may cost.</p></div>
+          </div>
+          <div className="max-w-xs space-y-1.5">
+            <Label htmlFor="np-cloud">Cloud-work allowance per revision (US$)</Label>
+            <Input id="np-cloud" inputMode="decimal" placeholder="No allowance" value={d.build.cloudBudget ?? ''} onChange={(e) => set({ build: { ...d.build, cloudBudget: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+            <p className="text-xs text-muted-foreground">What trace's own agents and jobs may spend. Apart from the build budget: trace warns as each stage nears its share.</p>
           </div>
           <fieldset className="space-y-3 rounded-xl border p-4">
             <legend className="px-1 text-sm font-medium">Later stages, after the board is accepted</legend>
@@ -255,7 +260,7 @@ function NewProject() {
             <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : 'from an existing KiCad design'}.</li>
             <li>{d.repository.mode === 'new' ? 'A new private repository' : 'The existing repository'} <span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> on <span className="font-mono">{d.repository.branch}</span>{d.advanced.onboardingPr ? ', with an onboarding change' : ''}.</li>
             <li>{d.people.length ? `${d.people.length} ${d.people.length === 1 ? 'person' : 'people'} added` : 'Nobody added yet'}{d.people.some((p) => p.class === 'new') ? `, ${d.people.filter((p) => p.class === 'new').length} to invite by email` : ''}; admins reach it without being added.</li>
-            <li>{d.build.quantity} boards per build{d.build.budget !== undefined ? `, ${money(d.build.budget)} per revision` : ', no budget'}{Object.entries(d.build.later).filter(([, on]) => on).length ? `, with ${Object.entries(d.build.later).filter(([, on]) => on).map(([k]) => k).join(' and ')}` : ''}; {d.build.fab}.</li>
+            <li>{d.build.quantity} boards per build{d.build.budget !== undefined ? `, a build budget of ${money(d.build.budget)} per revision` : ', no build budget'}{d.build.cloudBudget !== undefined ? `, a cloud-work allowance of ${money(d.build.cloudBudget)}` : ', no cloud-work allowance'}{Object.entries(d.build.later).filter(([, on]) => on).length ? `, with ${Object.entries(d.build.later).filter(([, on]) => on).map(([k]) => k).join(' and ')}` : ''}; {d.build.fab}.</li>
           </ul>
           <div className="rounded-xl border p-4 text-sm">
             <p className="font-medium">What happens when you press Create</p>
@@ -292,7 +297,7 @@ function Summary({ d, onEdit }: { d: NewProjectDraft; onEdit: () => void }) {
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{d.name || 'Untitled'}</span><span className="rounded border px-1.5 text-xs">{TEMPLATES.find((t) => t.id === d.template)?.label} template</span><span className="rounded border px-1.5 text-xs">{d.start === 'idea' ? 'Start from an idea' : 'Start from a design'}</span></p>
         {d.description && <p className="mt-1 text-sm">{d.description}</p>}
-        <p className="mt-1 text-xs text-muted-foreground"><span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> · {d.build.quantity} boards per run · {d.build.fab} · {d.build.budget !== undefined ? money(d.build.budget) : 'no budget set'}</p>
+        <p className="mt-1 text-xs text-muted-foreground"><span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> · {d.build.quantity} boards per run · {d.build.fab} · {d.build.budget !== undefined ? `build budget ${money(d.build.budget)}` : 'no build budget set'}</p>
       </div>
       <Button variant="link" size="sm" onClick={onEdit}>Edit basics</Button>
     </div>
@@ -392,7 +397,7 @@ function TraceTip({ step, d }: { step: StepId; d: NewProjectDraft }) {
     start: d.start === 'design' ? 'Design import reads the KiCad project and proposes where it enters the journey.' : 'The Intent builder takes about 20 minutes; you can stop and come back.',
     repository: 'A new private repository named from the project is the simplest start. The template and repository cannot change later: the record depends on them.',
     people: 'Give the project a second person who can answer questions while you are away. Inviting someone sends one email; they sign in with a passkey and land on this project.',
-    build: '10 boards is JLCPCB\'s usual minimum. A budget makes trace warn before an order goes over it.',
+    build: '10 boards is JLCPCB\'s usual minimum. The build budget is the order\'s (boards, parts, case); the cloud-work allowance is trace\'s own spend, and trace warns before a stage uses its share.',
     review: 'Nothing is created until you press Create.',
   }
   return <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm"><span className="rounded-sm bg-primary/10 px-1.5 text-xs text-primary">trace recommends</span><p className="mt-2">{tips[step]}</p></div>

@@ -24,6 +24,7 @@
         "quantity": 10,
         "unit_cost": null,
         "budget": null,
+        "cloud_budget": null,
         "currency": "USD",
         "fab": "JLCPCB",
         "hardware": false
@@ -5182,7 +5183,8 @@
       "notes": [
         "Forecast days per stage are not computed yet: there is no history of how long each stage takes.",
         "No unit cost is set in the build plan, so the build's forecast is unknown.",
-        "Cloud estimates (agents, graphics card and CPU jobs) are computed from each run's tokens and each job's running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project)."
+        "Cloud estimates (agents, graphics card and CPU jobs) are computed from each run's tokens and each job's running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project).",
+        "No cloud-work allowance is set, so nothing warns before trace's cloud work runs long. Set one in Settings › Build and budget; the build budget is the order's and does not cover cloud work."
       ]
     }
   },
@@ -5207,6 +5209,7 @@
           "orders": 40,
           "orderCurrency": "USD",
           "budget": null,
+          "cloudBudget": null,
           "started": true
         }
       ],

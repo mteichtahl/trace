@@ -1,7 +1,7 @@
 /**
  * Spend by job (cost.get jobs and warning, admins): what each job cost, grouped by the stage it ran in, with work done
  * again (sent back, redone, duplicated) and jobs that ended without finishing marked, so the spend a person can cut is
- * plain to see; and the warning before a stage overruns its share of the budget, with its biggest jobs. Run 2 of the
+ * plain to see; and the warning before a stage overruns its share of the cloud-work allowance, with its biggest jobs. Run 2 of the
  * test-esp32 project spent most of US$100 on reworks, duplicate jobs and repeated docs runs before any board, and
  * nothing showed it (issue log #72, #100, #113). The words are pure functions, tested on their own.
  */
@@ -40,25 +40,29 @@ export function jobMeta(j: JobSpendView): string {
   ].filter(Boolean).join(' · ')
 }
 
-/** The warning in words: where the stage is against its share, and why the share is what it is. */
+/**
+ * The warning in words: where the stage is against its share of the cloud-work allowance, and why the share is what it
+ * is. The allowance is trace's own spend, apart from the build budget (the order's), so raising it never raises what
+ * the build may cost (test-esp32 run 2, #151).
+ */
 export function warningText(w: SpendWarning, currency: string): { title: string; body: string } {
   const m = (n: number) => money(n, currency)
   if (w.left <= 0) {
     return {
-      title: 'The budget has nothing left for cloud work',
-      body: `What is spent, committed and forecast for the build already takes the whole budget (${m(-w.left)} over when ${w.stage} started). ${w.stage} has used ${m(w.spent)} so far. Raise the budget in Settings, or cut work done again.`,
+      title: 'The cloud-work allowance is used up',
+      body: `The cloud work before ${w.stage} took all of it (${m(-w.left)} over when ${w.stage} started). ${w.stage} has used ${m(w.spent)} so far. Raise the cloud-work allowance in Settings (the build budget stays as it is), or cut work done again.`,
     }
   }
   if (w.level === 'spent') {
     return {
-      title: `${w.stage} has used all the budget left for cloud work`,
-      body: `${m(w.spent)} so far, of ${m(w.left)} left for cloud work when it started, for it and the ${plural(w.stagesLeft - 1, 'stage')} after it. Raise the budget in Settings, or cut work done again.`,
+      title: `${w.stage} has used all the cloud-work allowance left`,
+      body: `${m(w.spent)} so far, of ${m(w.left)} left of the allowance when it started, for it and the ${plural(w.stagesLeft - 1, 'stage')} after it. Raise the cloud-work allowance in Settings (the build budget stays as it is), or cut work done again.`,
     }
   }
-  const share = `about ${m(w.share)} a stage: ${m(w.left)} was left for cloud work when it started, after the build's forecast, split across it and the ${plural(w.stagesLeft - 1, 'stage')} after it`
+  const share = `about ${m(w.share)} a stage: ${m(w.left)} of the cloud-work allowance was left when it started, split across it and the ${plural(w.stagesLeft - 1, 'stage')} after it`
   return w.level === 'over'
-    ? { title: `${w.stage} is past its share of the budget`, body: `${m(w.spent)} of cloud work so far, of ${share}.` }
-    : { title: `${w.stage} is near its share of the budget`, body: `${m(w.spent)} of cloud work so far, of ${share}.` }
+    ? { title: `${w.stage} is past its share of the cloud-work allowance`, body: `${m(w.spent)} of cloud work so far, of ${share}.` }
+    : { title: `${w.stage} is near its share of the cloud-work allowance`, body: `${m(w.spent)} of cloud work so far, of ${share}.` }
 }
 
 /** The warning card (Overview, Cost and time): the words, and the stage's biggest jobs. */
@@ -84,7 +88,7 @@ export function SpendWarningCard({ warning, currency, id, link = true, className
       {link && (
         <div className="mt-3 flex flex-wrap gap-4 pl-6">
           <Link to="/p/$id/cost" params={{ id }} className="text-primary hover:underline">See what each job cost</Link>
-          <Link to="/p/$id/settings" params={{ id }} className="text-primary hover:underline">Budget in Settings</Link>
+          <Link to="/p/$id/settings" params={{ id }} className="text-primary hover:underline">Cloud-work allowance in Settings</Link>
         </div>
       )}
     </div>

@@ -239,7 +239,8 @@ export const NEAR_SHARE = 0.75
 /**
  * A warning before the current stage overruns: when its cloud spend passes NEAR_SHARE of its share of the budget (what
  * the budget has left for cloud work when it started, split evenly across it and the stages after), or the budget has
- * nothing left for cloud work. Null without a budget, or while the stage is within NEAR_SHARE of its share.
+ * nothing left for cloud work. Null without a budget, or while the stage is within NEAR_SHARE of its share. cost.get
+ * gives it the cloud-work allowance with nothing else against it (`other` 0): the build budget is the order's.
  */
 export function stageWarning(o: {
   budget: number | null | undefined; other: number; cloud: number; stage: StageId; stagesLeft: number; spend: SpendByJob; top?: number

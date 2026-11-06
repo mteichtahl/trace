@@ -22,9 +22,14 @@
  *                                                               estimated cost, work done again marked (sent back,
  *                                                               redone, duplicated); per stage what was done again or
  *                                                               lost
+ *                                         budget                the build budget: what the order (boards, parts, case)
+ *                                                               may cost; spent orders, committed and forecast count
+ *                                                               against it, cloud work never does
+ *                                         cloudBudget           the cloud-work allowance: what trace's own cloud work
+ *                                                               may cost; absent while none is set
  *                                         warning               the current stage near or past its share of what the
- *                                                               budget leaves for cloud work, with its biggest jobs
- *                                                               (stageWarning); absent while within it
+ *                                                               cloud-work allowance has left, with its biggest jobs
+ *                                                               (stageWarning); absent while within it or without one
  *                                         lines                 the spend lines: orders, and each run and job (marked
  *                                                               estimate)
  *                                         explorer              the daily read's status: when it read, when it reads
@@ -34,7 +39,8 @@
  *                                                               whether it is old, the admin's overrides, and which
  *                                                               source priced this project's rows
  *   usage.month  admin                  every project the admin sees: this month's estimated and actual cloud spend,
- *                                       orders paid, and the budget, for Admin › Usage and cost
+ *                                       orders paid, the build budget and the cloud-work allowance, for Admin › Usage
+ *                                       and cost
  */
 import { z } from 'zod'
 import { isAdmin, projectsFor } from '../core/access.js'
@@ -156,7 +162,7 @@ export function pricesView(p: PricesInUse, o: { now?: number; by?: PricedBySourc
 }
 
 /**
- * The build's cost against the budget: committed once the project is at Fabricate with its order not placed yet, else
+ * The build's cost against the build budget: committed once the project is at Fabricate with its order not placed yet, else
  * forecast until it is placed; never both (counted twice, the budget showed the order's cost twice from Fabricate on).
  * Pure.
  */
@@ -239,12 +245,14 @@ export const COST_ACTIONS = {
       if (e.unpriced) notes.push(`${e.unpriced} run${e.unpriced === 1 ? '' : 's'} could not be priced: the price table has no entry for its model and the Agent SDK gave no figure.`)
       notes.push('Cloud estimates (agents, graphics card and CPU jobs) are computed from each run\'s tokens and each job\'s running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project).')
       const pv = prices ? pricesView(prices, { by: e.bySource }) : null
-      // what the budget leaves for cloud work, split across the stages still to do (the build's forecast, or its
-      // committed order, and the orders paid come off first)
+      // the cloud-work allowance, split across the stages still to do. Only cloud work counts against it: the build
+      // budget is the order's (boards, parts, case), so the orders, the committed order and the build's forecast never
+      // come off it (test-esp32 run 2, #91, #151: one budget for both said "nothing left for cloud work" at Layout)
       const curStage = r.stages.find((s) => s.ord === cur)
-      const warning = byJob && curStage && b.budget !== null
-        ? stageWarning({ budget: b.budget, other: paid + committed + (forecast ?? 0), cloud: e.total, stage: curStage.id, stagesLeft: r.stages.filter((s) => s.ord >= cur).length, spend: byJob })
+      const warning = byJob && curStage && b.cloud_budget !== null
+        ? stageWarning({ budget: b.cloud_budget, other: 0, cloud: e.total, stage: curStage.id, stagesLeft: r.stages.filter((s) => s.ord >= cur).length, spend: byJob })
         : null
+      if (b.cloud_budget === null) notes.push('No cloud-work allowance is set, so nothing warns before trace\'s cloud work runs long. Set one in Settings › Build and budget; the build budget is the order\'s and does not cover cloud work.')
       if (byJob && !jobs.rows.length && byJob.jobs.length) notes.push('The job index has none of these jobs (it could not be read, or they are older than it keeps), so they are shown without their requests.')
       if (pv?.notes.length) notes.push(...pv.notes.map((n) => `Price list: ${n}`))
       const cloud = {
@@ -258,7 +266,9 @@ export const COST_ACTIONS = {
         spent: { cloud: cents(e.total), orders: Math.round(paid * 100) / 100, detail: cloud },
         committed,
         forecast,
+        // two budgets: the build's (the order: boards, parts, case) and the cloud-work allowance (trace's own spend)
         ...(b.budget !== null ? { budget: b.budget } : {}),
+        ...(b.cloud_budget !== null ? { cloudBudget: b.cloud_budget } : {}),
         quantity: b.quantity, unit_cost: b.unit_cost,
         stages,
         lines: [
@@ -293,7 +303,7 @@ export const COST_ACTIONS = {
       return {
         bySource: e.bySource,
         repo: p.repo, estimated: { ...e.byKind, total: e.total }, actual: act.lastDay ? act.total : null, orders: cents(orders),
-        orderCurrency: j.r?.journey.build.currency ?? 'USD', budget: j.r?.journey.build.budget ?? null, started: Boolean(j.r),
+        orderCurrency: j.r?.journey.build.currency ?? 'USD', budget: j.r?.journey.build.budget ?? null, cloudBudget: j.r?.journey.build.cloud_budget ?? null, started: Boolean(j.r),
       }
     }))
     const untagged = actualTotals(inMonth.filter((x) => x.repo === ''))
