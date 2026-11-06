@@ -1,10 +1,19 @@
 /** Reviewing trace's changes inside the app, and the gate staying locked while work is pending. */
-import { live, projectPath, writes } from './env'
-import { expect, test } from './fixtures'
+import { live, projectPath, reviewer, writes } from './env'
+import { type App, expect, test } from './fixtures'
+
+const NO_OPEN_CHANGE = 'the smoke project has no open change right now, so no review page was opened'
+
+/** The changes table's first row, or false when the project has no open change (its empty state says so). */
+async function firstChange(app: App) {
+  await app.open(projectPath('/changes'))
+  const none = app.page.getByText(/^Nothing waits for review\./)
+  return (await app.hasData(app.rows(), none, NO_OPEN_CHANGE)) && app.tableHasRows()
+}
 
 test('the changes table lists changes and one opens for review @phone', async ({ app, page }) => {
-  await app.open(projectPath('/changes'))
-  const first = await app.tableHasRows()
+  const first = await firstChange(app)
+  if (!first) return test.skip(true, `live: ${NO_OPEN_CHANGE}`)
   // a change whose checks cannot start offers "Run the checks again" in place of Accept: open one that can be reviewed
   const row = first.locator('xpath=../*').filter({ visible: true }).filter({ hasNotText: /cannot start/i }).first()
   await row.click()
@@ -12,13 +21,21 @@ test('the changes table lists changes and one opens for review @phone', async ({
   await expect(page.getByRole('heading', { name: 'What trace did' })).toBeVisible()
   // desktop shows a Checks section; a phone folds it into one line ("1 of 1 check passed")
   await expect(page.getByText(/\bchecks? (passed|failing|running)|^Checks/i).filter({ visible: true }).first()).toBeVisible()
+  const decision = page.getByRole('region', { name: 'Your decision' })
+  if (reviewer) {
+    // the live smoke user is a Reviewer: it reads the change, and the bar says why it cannot decide
+    await expect(decision).toContainText('You are a reviewer on this project')
+    await expect(decision.getByRole('button', { name: 'Accept into the design' })).toHaveCount(0)
+    return
+  }
   await expect(page.getByRole('button', { name: 'Accept into the design' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Ask for changes' })).toBeVisible()
 })
 
 test('a changed file shows its before and after', async ({ app, page }) => {
-  await app.open(projectPath('/changes'))
-  await (await app.tableHasRows()).click()
+  const first = await firstChange(app)
+  if (!first) return test.skip(true, `live: ${NO_OPEN_CHANGE}`)
+  await first.click()
   const files = page.getByRole('region', { name: 'Files' })
   await files.getByRole('button').first().click()
   await expect(files.locator('pre, table, svg, canvas, [data-diff]').filter({ visible: true }).first()).toBeVisible()

@@ -19,6 +19,12 @@ export const writes = !live || process.env.TRACE_SMOKE_WRITES === '1'
  */
 export const admin = !live || process.env.TRACE_SMOKE_ADMIN === '1'
 
+/**
+ * Whether the signed-in person is a Reviewer of the smoke project: the installer's smoke user is (it reads, and decides
+ * nothing), so a change's review page shows it the sentence saying why, not Accept. The mock's person is a Contributor.
+ */
+export const reviewer = live && !admin
+
 /** The outside-system credentials for the external API and MCP checks; absent → those checks are skipped. */
 export const external = {
   tokenUrl: process.env.TRACE_SMOKE_TOKEN_URL,

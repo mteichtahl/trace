@@ -365,3 +365,12 @@ export function statusWord(s: NodeStatus | undefined): string {
     default: return ''
   }
 }
+
+/**
+ * Where the graph's empty state suggests starting: a few of the project's own requirements (verify.coverage), failing
+ * ones first, as their chains are the ones worth following. Struck requirements are left out. Pure.
+ */
+export function startingPoints(rows: readonly { id: string; status?: string; verdict?: string }[], n = 4): string[] {
+  const kept = rows.filter((r) => r.status !== 'struck')
+  return [...kept.filter((r) => r.verdict === 'failing'), ...kept.filter((r) => r.verdict !== 'failing')].slice(0, n).map((r) => r.id)
+}

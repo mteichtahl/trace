@@ -3,6 +3,7 @@
  * (the TanStack tables, the project's section tabs, Ask trace).
  */
 import { test as base, expect, type Locator, type Page } from '@playwright/test'
+import { live } from './env'
 
 export { expect }
 
@@ -25,17 +26,41 @@ export class App {
     await expect(this.page.locator('h1, h2').first()).toBeVisible()
   }
 
+  /** The rows of the first trace table in scope: on a phone the tables become lists, so list items there. */
+  rows(scope: Locator | Page = this.page.locator('#main').or(this.page.locator('body')).first()): Locator {
+    // decided by the screen, not by whichever appears first: a desktop page can show a list while its table loads
+    const phone = (this.page.viewportSize()?.width ?? 1440) < 768
+    return scope.locator(phone ? 'ul > li' : 'table tbody tr').filter({ visible: true }).first()
+  }
+
   /**
    * The first trace table in scope has at least one data row; returns that row. On a phone the tables become lists,
    * so a list item counts as a row there.
    */
   async tableHasRows(scope: Locator | Page = this.page.locator('#main').or(this.page.locator('body')).first()): Promise<Locator> {
-    // decided by the screen, not by whichever appears first: a desktop page can show a list while its table loads
-    const phone = (this.page.viewportSize()?.width ?? 1440) < 768
-    const row = scope.locator(phone ? 'ul > li' : 'table tbody tr').filter({ visible: true }).first()
+    const row = this.rows(scope)
     await expect(row).toBeVisible()
     await expect(row).not.toHaveText(/^\s*(No results|Nothing)/i)
     return row
+  }
+
+  /**
+   * Whether the screen shows its data (true) or says, in its own empty state, that the project has none yet (false).
+   * The mock always has the data, so there it must show. A live project may truly have none (no open change, no run
+   * before its baseline is signed, trace idle): then its empty state must show instead, and the check notes what it
+   * could not exercise (`not exercised` in results.json) so that a green run never hides it. A screen that shows
+   * neither still fails.
+   */
+  async hasData(data: Locator, empty: Locator, none: string): Promise<boolean> {
+    await expect(data.first().or(empty.first()).first()).toBeVisible()
+    if (!live) {
+      await expect(data.first(), 'the mock has this data').toBeVisible()
+      return true
+    }
+    if (await data.first().isVisible()) return true
+    await expect(empty.first()).toBeVisible()
+    base.info().annotations.push({ type: 'not exercised', description: `live: ${none}` })
+    return false
   }
 
   /** Type into a table's search box and see the rows narrow to the text (TanStack Table's global filter). */
