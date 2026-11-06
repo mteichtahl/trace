@@ -712,7 +712,7 @@ Steps:
 1. **See the context:** what the agent is doing, what the question blocks, and the sources it already searched.
 2. **Pick or write:** the agent offers its options with the one it recommends and why; choose one, or write an answer.
 3. **Make it specific:** a quantity gets a number and unit; a choice names the option; a fact names its source.
-4. **Say whether it lasts:** a one-off answer, or a rule for the project (added to `.trace/rules.md` or the requirements).
+4. **Say whether it lasts:** a one-off answer, a rule for the project, or a requirement change. trace adds a rule to `.trace/rules.md` through a change of its own, saying who decided it and which question it answers; every agent follows it from the default branch once the change is accepted, and Settings lists each rule and where it stands. A requirement change goes through Requirements review.
 
 Quality bar:
 

@@ -154,6 +154,17 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'accept', why: 'Its check passed, and it can be merged. Alex L. made it in trace; accepting applies it.' },
       may_accept: true, may_ask: false, may_discard: true, rule_blocks: false,
     }),
+    // a question answered as "A rule for the project", added to .trace/rules.md (src/api/rule-answers.ts; log #109)
+    summary(41, {
+      title: 'Project rule: Design to modem sleep: no continuous transmit', kind: 'rule', by_name: 'Priya S.', mine: false, applies: 'review', from: 'a project rule by Priya S.',
+      job_id: null, stage: null, opened_at: ago(12 * MIN), updated_at: ago(12 * MIN), head: { ref: 'trace/rule-aq-thermal-m1', sha: HEAD },
+      checks: { total: 1, passed: 1, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
+      summary: ['Project rule: Design to modem sleep: no continuous transmit.', 'Made in trace by Priya S. as a project rule.'],
+      files: [{ path: '.trace/rules.md', status: 'added', additions: 7, deletions: 0, kind: 'text' }],
+      checks_list: [{ name: 'build', state: 'passed', summary: 'Built.' }],
+      recommendation: { verdict: 'accept', why: 'Its check passed, and it can be merged. Priya S. made it in trace; accepting applies it.' },
+      may_accept: true, may_ask: false, may_discard: true, rule_blocks: false,
+    }),
     // a stacked change (docs/stacked-changes.md): built on change 12, which is accepted first
     summary(15, {
       title: 'Bring-up test points on the power sheet', opened_at: ago(6 * MIN), updated_at: ago(4 * MIN),

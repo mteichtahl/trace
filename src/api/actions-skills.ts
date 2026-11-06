@@ -35,9 +35,12 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
-import { type Lasts, askedBy, carryOn, designBefore, viewerOf, waivedWords } from './actions-journey.js'
+import { type Lasts, askedBy, carryOn, designBefore, ruleFromAnswer, viewerOf, waivedWords } from './actions-journey.js'
 import { docsAfterDesign } from './docs-follow.js'
 import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
+
+/** What Intent builder's Submit says when the project's agent is still being set up (src/api/agent-queue.ts). */
+export const QUEUED_DRAFTING = 'This project\'s agent is still being set up, so the drafting is queued: the Verification agent drafts the candidate requirements for Requirements review by itself once the agent is ready. You need not submit again.'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
@@ -453,6 +456,7 @@ export const SKILL_ACTIONS = {
     const by = { hash: hashOf(ctx.principal), label: label(ctx.principal) }
     let started: string[] = []
     let jobId: string | undefined
+    let queued = false
     if (a.skill === 'change-request') {
       const d = a.draft
       const request = `Change request (${String(d.what)}): ${String(d.change)}\n\nWhy: ${String(d.why)}\nScope: ${d.revision === 'next' ? 'the next revision' : 'this revision'}, ${d.covers === 'firmware' ? 'firmware only' : 'hardware and firmware'}.\nRaise it for approval at a gate; change nothing before it is approved.`
@@ -530,7 +534,10 @@ export const SKILL_ACTIONS = {
         const d = a.draft
         const opt = typeof d.option === 'string' && d.option !== 'other' ? d.option : undefined
         const text = opt ? undefined : [d.value ? String(d.value) : '', String(d.answer ?? '')].filter((x) => x.trim()).join(': ') + (d.source ? ` (source: ${String(d.source)})` : '')
-        answered = answerQuestion(db, i.question.id, by, { option: opt, answer: text, reason: typeof d.reason === 'string' ? d.reason : undefined }, { facts: i.facts })
+        // what the person said it lasts as goes on the record, as question.answer records it: a rule's answer is then
+        // found for the rules file (src/api/rule-answers.ts), a requirement change's backs the agent's edit of one
+        const lasts = (['once', 'rule', 'requirement'] as const).find((x) => x === d.lasts)
+        answered = answerQuestion(db, i.question.id, by, { option: opt, answer: text, reason: typeof d.reason === 'string' ? d.reason : undefined, lasts }, { facts: i.facts })
         ref = i.question.id
       }
       const id = decide(db, {
@@ -555,6 +562,9 @@ export const SKILL_ACTIONS = {
         if (carried.jobId) { jobId = carried.jobId; started = [...started, ...(carried.started ?? [])] }
       }
     }
+    // an answer made a rule for the project goes into .trace/rules.md, where every agent reads its rules (log #109)
+    const rule = a.skill === 'question-answer' && i.question && a.draft.lasts === 'rule' ? await ruleFromAnswer(ctx, a.repo, i.question.id) : {}
+    if (rule.started) started = [...started, ...rule.started]
     // Intent builder: the intent is now decided, so the Verification agent drafts the candidate requirements from it,
     // which open Requirements review (docs/user-journey.md, Intent builder: "What it produces"). Started after the
     // decisions are recorded, so the agent reads them; the submission stands even when the job cannot start
@@ -562,7 +572,12 @@ export const SKILL_ACTIONS = {
     if (a.skill === 'intent-builder') {
       try {
         const r = await draftRequirements(ctx, a.repo)
-        if (r.accepted) { jobId = r.jobId; started = ['The Verification agent drafts the candidate requirements for Requirements review.'] } else jobError = r.reason ?? 'trace did not accept the job.'
+        // a project whose agent is still being set up: the drafting is queued and starts by itself (src/api/agent-queue.ts)
+        if (r.accepted) {
+          jobId = r.jobId
+          queued = Boolean(r.queued)
+          started = [queued ? QUEUED_DRAFTING : 'The Verification agent drafts the candidate requirements for Requirements review.']
+        } else jobError = r.reason ?? 'trace did not accept the job.'
       } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
     }
     if (carried.jobError) jobError = carried.jobError
@@ -572,7 +587,7 @@ export const SKILL_ACTIONS = {
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     if (docs.started) started = [...started, docs.started]
     if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
-    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
+    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(queued ? { queued } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), ...(rule.rule ? { rule: rule.rule } : {}), ...(rule.rule_error ? { rule_error: rule.rule_error } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),
 }
 

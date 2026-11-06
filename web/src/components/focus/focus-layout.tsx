@@ -18,7 +18,7 @@ import { Check, ListOrdered, MessageSquare, PanelRightClose, Sparkles, X, Octago
 import { type ReactNode, useContext, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
-import { FocusBlocked, FocusNotice } from '@/components/project/agent-setup'
+import { FocusNotice } from '@/components/project/agent-setup'
 import { QualityBar, type QualityCheck } from '@/components/quality-bar'
 import { useNow } from '@/components/use-now'
 import { ago } from '@/lib/format'
@@ -66,7 +66,6 @@ export function FocusLayout({
 }: FocusLayoutProps) {
   const now = useNow(5000)
   const notice = useContext(FocusNotice)
-  const waits = useContext(FocusBlocked)
   const [traceOpen, setTraceOpen] = useState(true)
   const [stepsDrawer, setStepsDrawer] = useState(false)
   const [traceDrawer, setTraceDrawer] = useState(false)
@@ -185,7 +184,7 @@ export function FocusLayout({
         )}
       </div>
 
-      <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked ?? waits} />
+      <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked} />
 
       {stop?.visible && (
         <Button size="lg" variant="destructive" className="fixed bottom-20 right-6 z-30 h-14 px-8 text-base shadow-lg" onClick={stop.onStop}>

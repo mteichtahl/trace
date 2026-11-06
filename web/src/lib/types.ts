@@ -244,7 +244,7 @@ export interface NextStep {
 
 export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
 /** 'work': a specialist's change; otherwise an edit a person made in the app (docs/stay-in-trace.md) */
-export type ChangeKind = 'work' | 'setting' | 'prompt' | 'release' | 'join' | 'workflows' | 'handin'
+export type ChangeKind = 'work' | 'setting' | 'prompt' | 'release' | 'join' | 'workflows' | 'handin' | 'rule'
 export type ChangeFileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
 
 /** A pull request a trace job opened, or an edit a person made in the app, as people read it: a change. */
@@ -588,10 +588,10 @@ export interface Journey {
   resign?: { requirements: string[]; edits: string; gates: { gate: string; name: string; stage: string; state: 'agree' | 'kept' | 'redo' | 'signed'; why: string }[] }
   /**
    * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
-   * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
+   * submitted with the drafting queued until the project's agent is set up (waiting), trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
    * again, `why` says what happened), drafted (waiting in a change) or done
    */
-  drafting?: { state: 'intent' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
+  drafting?: { state: 'intent' | 'waiting' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
   /** small summaries for the side column (assumed) */
   summary?: {
     requirements?: { accepted: number; verified: number; failing: number; untested: number }
@@ -748,7 +748,7 @@ export interface SpeechMark { time: number; type: 'word' | 'sentence'; start: nu
 // ------------------------------------------------------------------ live events
 
 export type LiveEvent =
-  | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'projects' | 'agent'; at: string }
+  | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb' | 'projects' | 'agent' | 'jobs'; at: string }
   | { type: 'job.updated'; repo: string; jobId: string; state: string; at: string }
   | { type: 'notification'; id: string; kind: InboxKind; repo: string; summary: string; at: string }
   /** a run's log grew (docs/progress-and-logs.md, decision C): a count, never the text */

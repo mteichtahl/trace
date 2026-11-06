@@ -187,7 +187,10 @@ export const jobRows = async (ctx: Context, repo: string): Promise<JobRow[]> => 
 /** The repository's open pull requests, kept a short while (src/api/github-cache.ts). */
 export const openPulls = async (ctx: Context, repo: string): Promise<PullSummary[]> => {
   const gh = await ctx.deps.github()
-  return cached(ctx.deps.githubCache, repo, 'pulls', () => gh.openPulls(repo))
+  const open = await cached(ctx.deps.githubCache, repo, 'pulls', () => gh.openPulls(repo))
+  // one merged or closed here a moment ago is not open, whatever GitHub's list says yet (src/api/github-cache.ts closed)
+  const cache = ctx.deps.githubCache
+  return cache ? open.filter((p) => !cache.isClosed(repo, p.number)) : open
 }
 
 /** One pull request's status, kept a short while per head commit (`sha`: the head the list gave; unknown, per number). */
@@ -854,6 +857,7 @@ export const CHANGE_ACTIONS = {
     let sha: string
     try {
       sha = await mergeWhenReady(ctx, () => gh.mergePull(repo, number, { method, sha: looked }))
+      ctx.deps.githubCache?.closed(repo, number)
     } catch (e) {
       throw mergeRefusal(e) ?? e
     } finally {
@@ -973,6 +977,7 @@ export const CHANGE_ACTIONS = {
     // it is discarded, nor post a reason on a change that stays open
     try {
       await gh.closePull(repo, number)
+      ctx.deps.githubCache?.closed(repo, number)
     } finally {
       bust(ctx, repo)
     }

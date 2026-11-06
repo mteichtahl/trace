@@ -60,7 +60,11 @@ export interface JobsApi {
     stackOn?: string
     /** the same request asked again after its job was lost or failed (2 and up): a new session for it (workers.ts taskSession) */
     attempt?: number
-  }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
+  }): Promise<{
+    accepted: boolean; jobId: string; reason?: string | undefined
+    /** kept until the project's agent is set up, and started then (src/api/agent-queue.ts): jobId is its queued handle */
+    queued?: boolean | undefined
+  }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
   /**
    * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker

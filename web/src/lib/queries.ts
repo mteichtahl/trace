@@ -25,13 +25,17 @@ export const useInbox = () => useAction('inbox', {})
 export const useJourney = (repo: string) => useAction('journey.get', { repo })
 export const useWaits = (repo: string, enabled = true) => useAction('tools.waits', { repo }, { enabled })
 
-/** A mutation for one action; invalidates the given key prefixes when it settles. */
+/**
+ * A mutation for one action; invalidates the given key prefixes when it settles. What an ok answer changed is read
+ * again by lib/after-write.ts for every act, wherever it is taken; these are the screen's own extras (and a failed
+ * act's), and a refetch already on its way for them is not started again.
+ */
 export function useCall<A extends ActionName>(action: A, invalidate: (args: ArgsOf<A>) => readonly unknown[][] = () => []) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (args: ArgsOf<A>) => call(action, args),
     onSettled: (_d, _e, args) => {
-      for (const k of invalidate(args)) void qc.invalidateQueries({ queryKey: k })
+      for (const k of invalidate(args)) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
     },
   })
 }

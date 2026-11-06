@@ -78,7 +78,11 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'project.members': return ok(MEMBERS[repo] ?? MEMBERS['acme/soil-sensor'])
     case 'tools.waits': return ok({ repo, version: 1, waits: WAITS[repo] ?? [] })
     case 'tools.check_now': case 'job.check_now': return new Promise<Response>((r) => setTimeout(() => r(ok({ ok: true })), 900)) as unknown as Response
-    case 'question.answer': inbox = inbox.filter((i) => i.questionId !== a.question); return ok({ ok: true })
+    case 'question.answer': inbox = inbox.filter((i) => i.questionId !== a.question); return ok({
+      ok: true, summary: 'Answered. The agent carries on.',
+      // a rule for the project goes into .trace/rules.md through a change (src/api/rule-answers.ts)
+      ...(a.lasts === 'rule' ? { rule: { state: 'proposed', change: 41, words: 'The rule goes into the project\'s rules (.trace/rules.md) in change #41: it applies once an admin accepts it, and every agent follows it from then on.' } } : {}),
+    })
     case 'me.get': return ok(me)
     case 'me.set': me = setPath(me, String(a.key), a.value); return ok({ ok: true })
     case 'push.subscribe': return ok({ subscribed: true, devices: 1 })

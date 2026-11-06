@@ -29,7 +29,7 @@ import { Rich } from '@/components/rich'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { call } from '@/lib/api'
+import { type ResultOf, call } from '@/lib/api'
 import { useCall } from '@/lib/queries'
 import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement } from '@/lib/types-s1'
@@ -202,8 +202,10 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
       submitLabel={def.submit}
       onSubmit={() => s.submit(async () => {
         // Submit starts the Verification agent drafting the candidate requirements (skill.submit); say whether it did
-        const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string }
+        const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string; queued?: boolean }
         if (r.jobError) toast.warning('trace could not start drafting the requirements.', { description: `${r.jobError} Ask trace to draft them from the intent.` })
+        // a new project whose agent is still being set up: the drafting is queued and starts by itself (log #2, #80)
+        else if (r.queued) toast('Your intent is submitted. Drafting the requirements is queued.', { description: 'It starts by itself once this project\'s agent is ready; you need not submit again.' })
         else toast('trace is drafting the candidate requirements for Requirements review.')
       }, 'Intent submitted.')}
       onClose={s.close}
@@ -250,6 +252,17 @@ export interface AnswerDraft extends SkillDraftBase {
   value: string
   source: string
   lasts: 'once' | 'rule' | 'requirement' | ''
+}
+
+/**
+ * What the person is told once an answer is in: the answer's summary (whether the agent carried on), and for a rule,
+ * the change that adds it to the project's rules, or that it could not be added yet and where to add it. Pure.
+ */
+export function answeredWords(r: Pick<ResultOf<'question.answer'>, 'summary' | 'rule' | 'rule_error'> | undefined): string {
+  const said = r?.summary ?? 'Answered. The agent continues.'
+  if (r?.rule?.words) return `${said} ${r.rule.words}`
+  if (r?.rule_error) return `${said} The rule could not be added to the project's rules yet: add it from Settings, under Project rules.`
+  return said
 }
 
 /** The question-answer bar, from the draft. Pure. */
@@ -329,7 +342,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
               <legend className="mb-2 font-medium">Does it last?</legend>
               <RadioGroup value={d.lasts} onValueChange={(x) => set({ lasts: x as AnswerDraft['lasts'] })} className="gap-1.5">
                 <Label className="flex items-center gap-2 font-normal"><RadioGroupItem value="once" /> Just this once</Label>
-                <Label className="flex items-center gap-2 font-normal"><RadioGroupItem value="rule" /> A rule for the project</Label>
+                <Label className="flex items-center gap-2 font-normal"><RadioGroupItem value="rule" /> A rule for the project <span className="text-muted-foreground">(added to the project's rules, which every agent follows)</span></Label>
                 <Label className="flex items-center gap-2 font-normal"><RadioGroupItem value="requirement" /> It changes a requirement (goes through review)</Label>
               </RadioGroup>
             </fieldset>
@@ -362,12 +375,8 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
         ...(chosen ? { option: d.option, ...(needs ? { answer: (d.detail ?? '').trim() } : {}) } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
         ...(d.reason ? { reason: d.reason } : {}),
         ...(d.lasts ? { lasts: d.lasts } : {}),
-      }).then(async (r) => {
-        // the specialist carried on with the answer (and what it lasts as) when its job had ended; else a rule still
-        // gets its own task, as before
-        if (!r.jobId && d.lasts === 'rule') await call('task', { repo, request: `Add a project rule from the answer to "${q!.text}".` })
-        return r
-      }), (r) => (r as { summary?: string } | undefined)?.summary ?? 'Answered. The agent continues.')}
+        // a rule for the project: trace itself adds it to .trace/rules.md through a change (src/api/rule-answers.ts)
+      }), (r) => answeredWords(r as ResultOf<'question.answer'> | undefined))}
     >
       <StepHeader def={def} index={s.stepIndex} />
       {s.view.isError && <div className="mt-4"><QueryError error={s.view.error} what="the question" onRetry={() => void s.view.refetch()} /></div>}

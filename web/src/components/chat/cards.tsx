@@ -133,7 +133,7 @@ export interface TaskRequest {
 }
 
 /** What a confirm card answers trace with (the start_task tool's result). */
-export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string } | { confirmed: false; reason: string }
+export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string; queued?: boolean } | { confirmed: false; reason: string }
 
 /** The job a confirmed card started, as the project's job list has it now (queued until the list knows it). */
 function StartedRun({ jobId, repo, title }: { jobId: string; repo?: string; title: string }) {
@@ -148,12 +148,12 @@ const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Imp
  * trace offers to start work: the exact request and agent, and nothing starts until the person presses Confirm (then
  * `onConfirm` calls `task` as them). Done: the run, or what happened instead.
  */
-export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, blocked, refused }: {
+export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, note, refused }: {
   task: Partial<TaskRequest>
   /** why this offer cannot be confirmed at all (it names another project than the conversation's), or null */
   refused?: string | null
-  /** why Confirm waits (the project's agent is not set up yet), or null */
-  blocked?: string | null
+  /** what happens to the work once confirmed, when it is not the usual (queued until the project's agent is set up), or null */
+  note?: string | null
   answer?: TaskAnswer
   onConfirm?: () => void
   onCancel?: () => void
@@ -182,12 +182,12 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
       ) : (
         <>
           <div className="mt-3 flex gap-2">
-            <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !task.repo || !task.request || !!blocked} aria-describedby={blocked ? 'task-blocked' : undefined} onClick={onConfirm}>
+            <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !task.repo || !task.request} aria-describedby={note ? 'task-note' : undefined} onClick={onConfirm}>
               {busy ? <Loader2 className="inline size-3 animate-spin" aria-hidden /> : null} Confirm and start
             </button>
             <button type="button" className="rounded-md border px-3 py-1.5 text-xs" disabled={busy} onClick={onCancel}>Cancel</button>
           </div>
-          {blocked && <p id="task-blocked" className="mt-1.5 text-xs text-muted-foreground">{blocked}</p>}
+          {note && <p id="task-note" className="mt-1.5 text-xs text-muted-foreground">{note}</p>}
         </>
       )}
     </Frame>

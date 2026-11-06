@@ -52,7 +52,7 @@ export function useAcceptFromInbox() {
       .catch((e: unknown) => toast.error('Could not accept the change', { description: `${e instanceof Error ? e.message : String(e)} Nothing changed.` }))
       .finally(() => {
         setBusy(null)
-        for (const k of [['inbox'], ['journey.get', repo], ['changes.list', repo], ['change.get', repo]]) void qc.invalidateQueries({ queryKey: k })
+        for (const k of [['inbox'], ['journey.get', repo], ['changes.list', repo], ['change.get', repo]]) void qc.invalidateQueries({ queryKey: k }, { cancelRefetch: false })
       })
   }
   return { run, busy }
@@ -60,11 +60,14 @@ export function useAcceptFromInbox() {
 
 export function useChangeActions(repo: string) {
   const qc = useQueryClient()
+  // what an ok answer changed is read again by lib/after-write.ts; this covers a failed act too, without starting
+  // again a refetch already on its way
   const refresh = (number?: number) => {
-    void qc.invalidateQueries({ queryKey: ['changes.list', repo] })
-    if (number !== undefined) void qc.invalidateQueries({ queryKey: ['change.get', repo] })
-    void qc.invalidateQueries({ queryKey: ['journey.get', repo] })
-    void qc.invalidateQueries({ queryKey: ['inbox'] })
+    const again = { cancelRefetch: false }
+    void qc.invalidateQueries({ queryKey: ['changes.list', repo] }, again)
+    if (number !== undefined) void qc.invalidateQueries({ queryKey: ['change.get', repo] }, again)
+    void qc.invalidateQueries({ queryKey: ['journey.get', repo] }, again)
+    void qc.invalidateQueries({ queryKey: ['inbox'] }, again)
   }
   const accept = useMutation({
     /** `head`: the head commit the person was shown (change.get's head.sha) */
