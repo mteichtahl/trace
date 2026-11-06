@@ -59,8 +59,10 @@ import { z } from 'zod'
 import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
+import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
+import { waiverCriterion, waiverTargetWords } from './waiver-words.js'
 import { TemplateDoc, addedCriteria, catalogTemplate, docGuide, docStages, templateProblems } from './templates.js'
 
 // ------------------------------------------------------------------ templates (src/core/journey-catalog.ts)
@@ -661,6 +663,35 @@ export interface Viewer {
 /** Is `who` (a recorded hash) this viewer? */
 export const isViewer = (v: Pick<Viewer, 'hash' | 'also'>, who: string | null): boolean => who !== null && (who === v.hash || (v.also?.includes(who) ?? false))
 
+/**
+ * The criteria and waivers `viewer` has opened for the signing at hand: an open counts only if it came after the gate
+ * was last signed or returned, and (a criterion's) after it was last checked. Opening the evidence for one signing
+ * does not carry over to the next, nor to evidence that changed since (test-esp32 #70: re-signing a reopened stage
+ * showed "Opened" from the first signing although a requirement's limit had changed).
+ */
+export function openedBy(r: JourneyRecord, viewer: Pick<Viewer, 'hash' | 'also'>): Set<string> {
+  const lastSigned = new Map<string, number>()
+  for (const s of r.signatures) lastSigned.set(s.gate, Math.max(lastSigned.get(s.gate) ?? 0, s.at))
+  const since = (gate: string | null): number => {
+    const g = gate ? r.gates.find((x) => x.id === gate) : undefined
+    return Math.max(gate ? (lastSigned.get(gate) ?? 0) : 0, g?.returnedAt ?? 0)
+  }
+  const criteria = new Map(r.criteria.map((c) => [c.id, c]))
+  const waivers = new Map(r.waivers.map((w) => [w.id, w]))
+  // a waiver's stage's gates: one signed since it was opened is a new signing
+  const stageSince = (stage: StageId): number => Math.max(0, ...r.gates.filter((g) => g.stage === stage).map((g) => since(g.id)))
+  const out = new Set<string>()
+  for (const o of r.opens) {
+    if (!isViewer(viewer, o.who)) continue
+    const c = criteria.get(o.item)
+    if (c && o.at < Math.max(since(c.gate), c.checkedAt ?? 0)) continue
+    const w = o.item.startsWith('waiver:') ? waivers.get(o.item.slice(7)) : undefined
+    if (w && o.at < Math.max(stageSince(w.stage), w.at)) continue
+    out.add(o.item)
+  }
+  return out
+}
+
 export type StageState = 'done' | 'current' | 'queued' | 'reopened'
 export type CriterionState = 'met' | 'not_met' | 'waived'
 export type GateState = 'signed' | 'ready' | 'open' | 'queued'
@@ -734,11 +765,19 @@ export interface QuestionView {
   answered: { answer: string; option_id: string | null; reason: string | null; by: string | null; at: string } | null
   /** a stuck agent's recommendation, in its words (agent facts) */
   recommendation?: string | undefined
+  /** a stuck agent's report in plain words, when `text` (kept, for "Show detail") names its internals: ids, a stack
+   * frame, tool names (test-esp32 #35) */
+  summary?: string | undefined
   /** answered just now with an option that waives: the waivers recorded in the person's name */
   waivers?: string[] | undefined
+  /** what it asks about has changed since it was asked (the criterion it is about is met, the change it waits on is
+   * no longer open): why, in words. The question stays, for the agent to withdraw or ask again */
+  out_of_date?: string | undefined
 }
 export interface WaiverView {
   id: string; stage: StageId; gate: string | null; target: { kind: string; id: string }; reason: string; risk: string; severity: Severity
+  /** what it is on, in words (src/core/waiver-words.ts), and the gate criterion it counts for (null: the stage's only) */
+  about: string; criterion: string | null
   caught_where: string | null; scope: string; by: string; at: string; acknowledged: { by: string | null; at: string } | null; closed: boolean; opened_by_you: boolean
   /** withdrawn by its author or an admin (withdrawWaiver): who, when, why, and the waiver taken again in its place */
   withdrawn: { by: string | null; at: string; reason: string; replaced_by: string | null } | null
@@ -1078,7 +1117,7 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
   const earlier = r.gates.filter((g) => g.stage === gate.stage && g.ord < gate.ord && !liveSignature(r, g.id))
   for (const g of earlier) out.push(`Sign ${gateTitle(g)} first.`)
   const waived = waiverFor(r)
-  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const opened = openedBy(r, viewer)
   const criteria = r.criteria.filter((c) => c.gate === id)
   const notMet = criteria.filter((c) => c.status !== 'met' && !waived.has(c.id))
   if (notMet.length) out.push(`${plural(notMet.length, 'criterion is', 'criteria are')} not met or waived: ${notMet.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`)
@@ -1094,7 +1133,7 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
 
 function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): CriterionView[] {
   const waived = waiverFor(r)
-  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const opened = openedBy(r, viewer)
   const added = addedCriteria(r.definition?.doc ?? null)
   return r.criteria.filter((c) => c.gate === gate).map((c) => {
     const w = waived.get(c.id)
@@ -1209,14 +1248,85 @@ export const questionIsFor = (q: QuestionRow, v: Viewer): boolean => questionFor
 const questionForWhom = (q: QuestionRow, v: Viewer): QuestionView['for'] =>
   q.askedOfSub || q.askedOf ? (questionFor(q, v) ? 'you' : 'person') : q.askedPart === 'admins' ? 'admins' : 'contributors'
 
-function questionView(q: QuestionRow, v: Viewer): QuestionView {
+/**
+ * The criteria a question is about: the ones it names (in its words or what it blocks: "signoff.emc is not met") and
+ * the ones an option waives. Ids are the project's own criteria, so a word that only looks like one is not counted.
+ */
+export function criteriaOf(r: Pick<JourneyRecord, 'criteria'>, q: { text: string; blocks: string | null; options: readonly OptionRow[] }): string[] {
+  const words = `${q.text} ${q.blocks ?? ''}`
+  const named = r.criteria.map((c) => c.id).filter((id) => new RegExp(`(?<![\\w.])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`).test(words))
+  const waived = q.options.flatMap((o) => o.waives?.targets ?? []).filter((t) => t.kind === 'criterion').map((t) => t.id)
+  return [...new Set([...named, ...waived])]
+}
+
+/**
+ * The changes a question waits on: a "#6" it names as a change ("change #6", "pull request #6", "PR #6") or as one
+ * merged or open ("#6 is not merged", "until #6 is accepted"). A bare "#3" (a pin, a step) is not one.
+ */
+const CHANGE_NAMED = /\b(?:changes?|pull requests?|PRs?)\s+#(\d{1,6})\b|(?<![\w&])#(\d{1,6})\s+(?:is\s+|was\s+|has\s+|gets\s+)?(?:not\s+|still\s+|yet\s+|been\s+)*(?:merged|unmerged|open|accepted|in review)\b/gi
+const changesOf = (q: Pick<QuestionRow, 'text' | 'blocks'>): number[] =>
+  [...new Set([...`${q.text} ${q.blocks ?? ''}`.matchAll(CHANGE_NAMED)].map((m) => Number(m[1] ?? m[2])))]
+
+/**
+ * Why an open question is out of date, or null (test-esp32 #108: "#6 is not merged" was still asked 40 minutes after #6
+ * merged): every criterion it is about is met or waived now, or, with `open` (the numbers of the changes open now; leave
+ * it out when they are not known), every change it names is no longer open. Answered questions are never out of date.
+ */
+export function outOfDate(q: QuestionRow, r: JourneyRecord, open?: readonly number[] | null): string | null {
+  if (q.answeredAt !== null) return null
+  const about = criteriaOf(r, q)
+  if (about.length) {
+    const waived = waiverFor(r)
+    // met or waived since it was asked: one asked about a criterion already met is a question about something else
+    const state = about.map((id) => {
+      const c = r.criteria.find((x) => x.id === id)
+      if (c?.status === 'met' && (c.checkedAt ?? 0) >= q.askedAt) return 'met'
+      const w = waived.get(id)
+      return w && w.at >= q.askedAt ? 'waived' : null
+    })
+    if (state.every((x) => x !== null)) {
+      const how = state.every((x) => x === 'met') ? 'met' : state.every((x) => x === 'waived') ? 'waived' : 'met or waived'
+      return `${about.join(', ')} ${about.length === 1 ? 'is' : 'are'} ${how} now, so this may no longer need an answer.`
+    }
+  }
+  const named = changesOf(q)
+  if (open && named.length && named.every((n) => !open.includes(n))) {
+    const list = named.map((n) => `#${n}`).join(', ')
+    return `${named.length === 1 ? `Change ${list} is` : `Changes ${list} are`} no longer open (accepted or discarded since this was asked), so this may no longer need an answer.`
+  }
+  return null
+}
+
+/** The view's questions marked out of date against the changes open now (journey.get, which knows them). */
+export function markOutOfDate(view: JourneyView, r: JourneyRecord, open: readonly number[]): JourneyView {
+  const rows = new Map(r.questions.map((q) => [q.id, q]))
+  return {
+    ...view,
+    questions: view.questions.map((v) => {
+      const q = rows.get(v.id)
+      const why = q ? outOfDate(q, r, open) : null
+      return why ? { ...v, out_of_date: why } : v
+    }),
+  }
+}
+
+function questionView(q: QuestionRow, v: Viewer, r?: JourneyRecord): QuestionView {
+  const stale = r ? outOfDate(q, r) : null
   return {
     id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: questionForWhom(q, v),
     stage: q.stage, text: q.text, blocks: q.blocks, options: q.options, recommended: q.options.find((o) => o.recommended) ?? null,
     sources: q.sources, job_id: q.jobId, asked_at: isoN(q.askedAt),
     answered: q.answeredAt !== null ? { answer: q.answer ?? '', option_id: q.optionId, reason: q.answerReason, by: q.answeredBy, at: isoN(q.answeredAt) } : null,
     ...(q.recommendation ? { recommendation: q.recommendation } : {}),
+    ...(stale ? { out_of_date: stale } : {}),
+    ...(q.kind === 'stuck' ? plainOf(q) : {}),
   }
+}
+
+/** A stuck agent's report in plain words for its card, when its own words name its internals (test-esp32 #35). */
+const plainOf = (q: Pick<QuestionRow, 'text'>): { summary?: string } => {
+  const p = plainSummary(q.text)
+  return p.same ? {} : { summary: p.summary }
 }
 
 /** Open questions and stuck agents that block work, oldest first. */
@@ -1361,22 +1471,24 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
       why: 'A failure reopens the earliest stage it touches, and work starts again from there.', recommendation: null, button: 'See what failed', stage: stageId, ref: { kind: 'stage', id: stageId },
     }
   }
-  // A question blocks work.
-  const q = blocking[0]
+  // A question blocks work (one out of date is passed over: what it asked about has moved on, test-esp32 #108)
+  const q = blocking.find((x) => !outOfDate(x, r))
   if (q) {
     const rec = q.options.find((o) => o.recommended)
     const forYou = questionFor(q, viewer)
     const verb = q.kind === 'stuck' ? `${q.askedBy} is stuck` : `${q.askedBy} asks`
+    // a stuck report in plain words: its own (ids, stack frames, tool names) stays behind the question's detail
+    const words = q.kind === 'stuck' ? plainSummary(q.text).summary : q.text
     if (forYou) {
       return {
-        kind: 'answer', belongs_to: 'you', yours: true, summary: `${verb}: ${q.text}`, why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.',
+        kind: 'answer', belongs_to: 'you', yours: true, summary: `${verb}: ${words}`, why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.',
         recommendation: rec ? `trace recommends ${rec.label}${rec.why ? `: ${rec.why}` : ''}` : q.recommendation ? `${q.askedBy} recommends: ${q.recommendation}` : null,
         button: rec ? `Use ${rec.label}` : 'Answer', stage: q.stage, ref: { kind: 'question', id: q.id },
       }
     }
     return {
       kind: 'waiting_person', belongs_to: q.askedOf || q.askedOfSub ? 'person' : q.askedPart === 'admins' ? 'admins' : 'contributors', yours: false,
-      summary: `Waiting for ${q.askedOf || q.askedOfSub ? 'a person on the project' : q.askedPart === 'admins' ? 'an admin' : 'a contributor'} to answer: ${q.text} Asked ${ago(q.askedAt, at)}.`,
+      summary: `Waiting for ${q.askedOf || q.askedOfSub ? 'a person on the project' : q.askedPart === 'admins' ? 'an admin' : 'a contributor'} to answer: ${words} Asked ${ago(q.askedAt, at)}.`,
       why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.', recommendation: null,
       button: viewer.admin ? 'Answer it for them' : 'Read the question', stage: q.stage, ref: { kind: 'question', id: q.id },
     }
@@ -1464,12 +1576,12 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
       steps: s.id === r.journey.currentStage ? markSteps(stageSteps(r, s.id, viewer), next.ref) : stageSteps(r, s.id, viewer),
     }
   })
-  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
+  const opened = openedBy(r, viewer)
   return {
     template: r.journey.template, template_name: TEMPLATE_NAMES[r.journey.template], revision: r.journey.revision, current_stage: r.journey.currentStage,
     later: r.journey.later, start: r.journey.start, name: r.journey.name, description: r.journey.description, icon: r.journey.icon, build: r.journey.build,
     stages, gates, next,
-    questions: r.questions.map((q) => questionView(q, viewer)),
+    questions: r.questions.map((q) => questionView(q, viewer, r)),
     waivers: r.waivers.map((w) => waiverView(r, w, viewer, opened)),
     decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: d.summary, by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
@@ -1986,12 +2098,16 @@ function waiverView(r: JourneyRecord, w: WaiverRow, viewer: Viewer, opened: Read
   const blocked = w.closedAt === null ? withdrawProblem(r, w, viewer) : null
   return {
     id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: w.reason, risk: w.risk, severity: w.severity,
+    about: targetWords(r, w.targetKind, w.target), criterion: waiverCriterion({ kind: w.targetKind, id: w.target }),
     caught_where: w.caughtWhere, scope: w.scope, by: w.by, at: isoN(w.at), acknowledged: w.acknowledgedAt !== null ? { by: w.acknowledgedBy, at: isoN(w.acknowledgedAt) } : null,
     closed: w.closedAt !== null, opened_by_you: opened.has(`waiver:${w.id}`),
     withdrawn: out ? { by: out.by, at: isoN(out.at), reason: out.reason, replaced_by: out.replacedBy } : null,
     may_withdraw: w.closedAt === null && blocked === null, withdraw_blocked: blocked,
   }
 }
+
+/** What a waiver on `kind` `id` is on, in words, with the record's criteria named by their text. */
+const targetWords = (r: JourneyRecord, kind: string, id: string): string => waiverTargetWords({ kind, id }, (c) => r.criteria.find((x) => x.id === c)?.text)
 
 /** A waiver's withdrawal, from the decisions log (the record keeps it there, with its reason), or null. */
 function withdrawalOf(r: JourneyRecord, id: string): { by: string | null; at: number; reason: string; replacedBy: string | null } | null {
@@ -2024,12 +2140,12 @@ export function withdrawProblem(r: JourneyRecord, w: WaiverRow, viewer: Pick<Vie
 }
 
 /** Close waiver `w` and log why, in the caller's transaction. */
-function closeWaiver(db: DatabaseSync, w: WaiverRow, reason: string, by: Signer, replacedBy: string | null): void {
+function closeWaiver(db: DatabaseSync, r: JourneyRecord, w: WaiverRow, reason: string, by: Signer, replacedBy: string | null): void {
   const t = now()
   db.prepare('UPDATE waivers SET closed_at=?, updated=? WHERE id=?').run(t, t, w.id)
   decide(db, {
     kind: 'waiver.withdrawn', stage: w.stage, ref: w.id, by: by.label,
-    summary: `The waiver on ${w.targetKind} ${w.target} was ${replacedBy ? 'taken again' : 'withdrawn'} by ${by.label}: ${reason}`,
+    summary: `The waiver on ${targetWords(r, w.targetKind, w.target)} was ${replacedBy ? 'taken again' : 'withdrawn'} by ${by.label}: ${reason}`,
     detail: { reason, replaced_by: replacedBy, target: { kind: w.targetKind, id: w.target } },
   })
 }
@@ -2047,7 +2163,7 @@ export function withdrawWaiver(db: DatabaseSync, id: string, by: Signer & { admi
   if (problem) throw new JourneyError(problem)
   const why = reason.trim()
   if (why.length < 5 || VAGUE.test(why)) throw new JourneyError('Say in a sentence why the waiver is withdrawn; it is kept in the record.')
-  transaction(db, () => closeWaiver(db, w, why, by, null))
+  transaction(db, () => closeWaiver(db, r, w, why, by, null))
   const after = need(db)
   const viewer: Viewer = { hash: by.hash, label: by.label, also: by.also, admin: by.admin, part: 'contributor' }
   return waiverView(after, after.waivers.find((x) => x.id === id) as WaiverRow, viewer, new Set())
@@ -2067,7 +2183,7 @@ export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer & { admin
     // the new one is checked as if the old one were gone already: it may waive the same thing
     const rest = old ? { ...r, waivers: r.waivers.map((x) => (x.id === old.id ? { ...x, closedAt: now() } : x)) } : r
     const added = insertWaiver(db, rest, w, by)
-    if (old) closeWaiver(db, old, `taken again as waiver ${added}`, by, added)
+    if (old) closeWaiver(db, r, old, `taken again as waiver ${added}`, by, added)
     return added
   })
   const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: by.admin ?? false, part: 'contributor' })
@@ -2110,7 +2226,7 @@ function insertWaiver(db: DatabaseSync, r: JourneyRecord, w: WaiverInput, by: Si
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, stage, gate, w.target.kind, w.target.id, reason, w.risk.trim(), w.severity, w.caught_where?.trim() || null, w.scope.trim(), by.label, t, t)
   decide(db, {
     kind: 'waiver.added', stage, ref: id, by: by.label,
-    summary: `A waiver was taken on ${w.target.kind} ${w.target.id} (rated ${w.severity}): ${reason}${o.question ? ` (in answer to question ${o.question})` : ''}`,
+    summary: `A waiver was taken on ${targetWords(r, w.target.kind, w.target.id)} (rated ${w.severity}): ${reason}${o.question ? ` (in answer to question ${o.question})` : ''}`,
     ...(o.question ? { detail: { question: o.question } } : {}),
   })
   return id
@@ -2275,7 +2391,7 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
     const rec = q.options.find((o) => o.recommended)
     out.push({
       id: `question:${q.id}`, kind: q.kind === 'stuck' ? 'stuck' : 'question', repo, project, stage: q.stage ?? stage,
-      summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ` : `${q.askedBy} asks: `}${q.text}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
+      summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ${plainSummary(q.text).summary}` : `${q.askedBy} asks: ${q.text}`}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
       since: isoN(q.askedAt), waited: ago(q.askedAt, at), blocking: q.kind === 'stuck' || Boolean(q.blocks?.trim()), action: q.kind === 'stuck' ? 'See options' : 'Answer',
       // no one-tap answer for an option that needs a detail from the person: they give it in Question answer
       ref: { kind: 'question', id: q.id }, ...(rec && !rec.needs ? { recommended: { id: rec.id, label: rec.label } } : {}),

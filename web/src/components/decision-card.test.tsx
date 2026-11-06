@@ -78,3 +78,22 @@ describe('DecisionCard', () => {
     expect(canSubmit(decision, 'waive', 'cheaper')).toBe(true)
   })
 })
+
+describe('DecisionCard: an option another one outscores (test-esp32 #96)', () => {
+  const outscored: Decision = { ...decision, reasonNeeded: { c22: 'Option waive scores higher (44 against 42.5)' } }
+  it('asks for a reason before the recommendation itself is taken, and sends it', async () => {
+    const onChoose = vi.fn()
+    render(<DecisionCard decision={outscored} onChoose={onChoose} />)
+    expect(screen.getByText(/Option waive scores higher \(44 against 42\.5\): say why you take this one/)).toBeInTheDocument()
+    const take = screen.getByRole('button', { name: 'Change C2 to 2.2 µF' })
+    expect(take).toBeDisabled()
+    await userEvent.type(screen.getByLabelText('Your reason'), 'The regulator needs it.')
+    await userEvent.click(take)
+    expect(onChoose).toHaveBeenCalledWith({ option: 'c22', recommended: true, reason: 'The regulator needs it.' })
+  })
+  it('canSubmit: the recommendation needs no reason unless another option scores higher', () => {
+    expect(canSubmit(decision, 'c22', '')).toBe(true)
+    expect(canSubmit(outscored, 'c22', '')).toBe(false)
+    expect(canSubmit(outscored, 'c22', 'Needed.')).toBe(true)
+  })
+})

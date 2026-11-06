@@ -14,6 +14,7 @@ import type { JourneyRecord } from '../core/journey.js'
 import { artifactMime, unpackArtifact } from '../core/store.js'
 import { type DesignDecision, loadDesignDecisions } from '../tools/design/decisions.js'
 import { type DesignRows, readDesignRows } from '../tools/design/db.js'
+import type { StockLine } from '../tools/design/key-parts.js'
 import { parseNets, requirementDecisions, requirementsNow } from '../tools/design/record.js'
 import type { Drawing } from '../tools/kicad/export.js'
 import { type CheckReport, parseDrc, parseErc } from '../tools/kicad/checks.js'
@@ -242,4 +243,26 @@ export function placeOn(f: { x_mm: number | null; y_mm: number | null }, d: { wi
   const x = (f.x_mm - (d.origin_mm?.x_mm ?? 0)) / d.width_mm
   const y = (f.y_mm - (d.origin_mm?.y_mm ?? 0)) / d.height_mm
   return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x: Math.round(x * 10000) / 10000, y: Math.round(y * 10000) / 10000 } : null
+}
+
+/**
+ * Every line of every parts check that did not error (parts.bom_check's parts_list_lines), with its run's start and the
+ * boards it was checked for: the key parts' stock and price (src/tools/design/key-parts.ts). Empty when none is.
+ */
+export function stockLines(db: DatabaseSync): StockLine[] {
+  if (!hasTable(db, 'parts_list_lines') || !hasTable(db, 'runs')) return []
+  const rows = db.prepare(`SELECT l.*, r.started AS started,
+      (SELECT m.value FROM measurements m WHERE m.run_id = l.run_id AND m.name = 'boards') AS boards
+    FROM parts_list_lines l JOIN runs r ON r.id = l.run_id
+    WHERE r.kind = 'parts.bom_check' AND r.status != 'error'`).all() as Record<string, unknown>[]
+  const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v))
+  const txt = (v: unknown): string | null => (v === null || v === undefined ? null : String(v))
+  return rows.map((r) => {
+    let flags: string[] = []
+    try { const f: unknown = JSON.parse(String(r.flags ?? '[]')); if (Array.isArray(f)) flags = f.filter((x): x is string => typeof x === 'string') } catch { /* unreadable flags: none */ }
+    return {
+      run: String(r.run_id), started: Number(r.started), boards: num(r.boards), mpn: txt(r.mpn), part_key: txt(r.part_key), order_code: txt(r.order_code),
+      need: Number(r.need), status: String(r.status), flags, stock: num(r.stock), unit_price: num(r.unit_price), currency: txt(r.currency), note: txt(r.note),
+    }
+  })
 }

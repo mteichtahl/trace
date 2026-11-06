@@ -16,6 +16,7 @@ import { Section } from '@/components/shell/app-shell'
 import { TabSkeleton, VERDICT, useCoverage } from '@/components/project/shared'
 import { useCommands } from '@/components/shell/command-menu'
 import { StatusBadge } from '@/components/status-badge'
+import { WaiverRating } from '@/components/waiver-rating'
 import { EmptyState, Partial, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { ago, duration } from '@/lib/format'
@@ -121,7 +122,7 @@ function Evidence() {
               <li key={w.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5 text-sm">
                 <span className="rounded border bg-muted px-1.5 font-mono text-xs">{w.id}</span>
                 <span className="min-w-0 flex-1">{w.title}</span>
-                <StatusBadge status={w.risk === 'major' ? 'failing' : 'warning'} label={`Risk: ${w.risk}`} />
+                <WaiverRating rating={w.risk} />
                 <span className="text-xs text-muted-foreground">Caught: {w.caught}</span>
               </li>
             ))}

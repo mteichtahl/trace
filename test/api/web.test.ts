@@ -422,6 +422,27 @@ describe('the agents\' facts in the journey', () => {
     expect(startedJobs.slice(before)).toEqual([expect.objectContaining({ agent: 'ams', branch: 'claude/task-flash', request: expect.stringMatching(/changes a requirement[\s\S]*Requirements review/) })])
   })
 
+  // test-esp32 #107: both "Answer it" links opened the oldest question, not the one clicked
+  it('the guided Question answer opens the question it is asked for by id, else the oldest', async () => {
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const by = { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-oled' }
+    const [older, newer] = (await facts().update((db) => ({
+      result: [
+        addAgentQuestion(db, by, { text: 'Should the docs PDF wait for the diagram tool to be fixed?', blocks: 'the design document', options: opts }, r),
+        addAgentQuestion(db, by, { text: 'Which pin order does the OLED header J2 need?', blocks: 'the schematic', options: opts }, r),
+      ],
+    }))).result
+    type Got = { question?: { id: string; text: string } }
+    const oldest = (await run(USER, 'skill.get', { repo: 'acme/other', skill: 'question-answer' }) as Got).question
+    expect(oldest?.id).not.toBe(newer)
+    expect((await run(USER, 'skill.get', { repo: 'acme/other', skill: 'question-answer', question: newer }) as Got).question).toMatchObject({ id: newer, text: expect.stringMatching(/OLED header J2/) })
+    expect((await run(USER, 'skill.get', { repo: 'acme/other', skill: 'question-answer', question: older }) as Got).question?.id).toBe(older)
+    // one that is not open falls back to the oldest rather than to nothing
+    expect((await run(USER, 'skill.get', { repo: 'acme/other', skill: 'question-answer', question: 'aq0000000000000000' }) as Got).question?.id).toBe(oldest?.id)
+    // answered, so the next tests start from the same open questions
+    for (const id of [older, newer]) await run(USER, 'question.answer', { repo: 'acme/other', question: id, option: 'a' })
+  })
+
   it('an agent\'s check of a criterion trace owns moves journey.get; a person\'s criterion is refused', async () => {
     const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
     const by = { agent: 'verify', label: 'the Verification specialist', jobId: 'job-10' }

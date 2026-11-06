@@ -77,6 +77,12 @@ const meet = (db: DatabaseSync, gate: string): void => {
     recordOpen(db, { criterion: c.id }, signer.hash)
   }
 }
+/** The signer opens a gate's evidence again: each signing needs it opened for itself (test-esp32 #70). */
+const openGate = (db: DatabaseSync, gate: string): void => {
+  const r = loadJourney(db)!
+  for (const c of r.criteria.filter((x) => x.gate === gate)) recordOpen(db, { criterion: c.id }, signer.hash)
+  for (const w of r.waivers.filter((x) => x.stage === gate && x.closedAt === null)) recordOpen(db, { waiver: w.id }, signer.hash)
+}
 const agree = (db: DatabaseSync, acceptance: string, text = RAIL): void => {
   recordDesignDecision(db, { kind: 'requirement', target: 'REQ-39855b', choice: 'accepted', detail: { text, acceptance } }, signer)
   recordDesignDecision(db, { kind: 'requirement', target: 'REQ-0a1b2c', choice: 'accepted', detail: { text: 'The display shows the reading.', acceptance: 'Reading shown within 1 s.' } }, signer)
@@ -140,6 +146,9 @@ describe('a requirement whose acceptance limit changed after Prove (test-esp32 #
       ['architect.blocks', 'met', 'run-architect.blocks'], ['architect.mapped', 'met', 'run-architect.mapped'], ['architect.stock', 'met', 'run-architect.stock'],
     ])
     expect(r.decisions.find((d) => d.kind === 'stage.kept')).toMatchObject({ stage: 'architect', summary: expect.stringMatching(/^Architect keeps its work after the change of requirements/), detail: { requirements: ['REQ-39855b'] } })
+    // ready but for the signer: the evidence opened for the first signing does not count for this one (#70)
+    expect((await journey()).gates.find((g: any) => g.id === 'architect')).toMatchObject({ may_sign: false, missing: [expect.stringMatching(/^Open the evidence for 3 more criteria/)] })
+    await update((db) => openGate(db, 'architect'))
     const j = await journey()
     expect(j.gates.find((g: any) => g.id === 'architect')).toMatchObject({ may_sign: true })
     expect(j.resign.gates.find((g: any) => g.gate === 'define').state).toBe('signed')
@@ -150,6 +159,7 @@ describe('a requirement whose acceptance limit changed after Prove (test-esp32 #
     expect((await sign('architect')).advanced_to).toBe('capture')
     expect(started.slice(n)).toEqual([])
     n = started.length
+    await update((db) => openGate(db, 'capture'))
     const s = await sign('capture')
     expect(s.advanced_to).toBe('prove')
     expect(s.reopen).toMatchObject({ stage: 'prove', kept: false })

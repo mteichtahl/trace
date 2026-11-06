@@ -34,7 +34,7 @@ import { z } from 'zod'
 import { type Backend, backendFor } from './central.js'
 import {
   type AgentFacts, type AgentQuestion, type AskedPart, type CriterionCheck, type Evidence, EvidenceSchema, type JourneyRecord, type OptionRow, OptionWaiverSchema, STAGE_IDS,
-  type StageId, type StuckFact,
+  type StageId, type StuckFact, criteriaOf,
 } from './journey.js'
 import { BucketDb, type JourneyStoreOptions } from './journey-store.js'
 import { loadHandoffs } from './handoffs.js'
@@ -229,12 +229,21 @@ export function addAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, 
 const QUESTION_ID = /\baq[0-9a-f]{14}\b/g
 const sameWords = (a: string): string => a.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 
+/** What asking came to: the question's id, and when it was folded into an open one, whose it is and what they share. */
+export interface Asked {
+  id: string; repeat: boolean
+  /** folded: the agent that asked the open question (in words), and the criteria both questions are about */
+  askedBy?: string | undefined; criteria?: string[] | undefined
+}
+
 /**
  * Record an agent's question, or, when it asks again what an open question already asks, keep that one: a question that
- * names an open question by id ("as asked in aq…"), or asks it in the same words, is not opened twice (test-esp32 #143:
- * two near-identical questions open at once). `repeat`: the id is the open question's.
+ * names an open question by id ("as asked in aq…"), asks it in the same words (test-esp32 #143: two near-identical
+ * questions open at once), or is about a criterion an open question is about, whichever agent asked it (#158: the
+ * Verification and the EMC & Simulation specialists both asked to waive signoff.emc, and the person answered twice), is
+ * not opened twice. `repeat`: the id is the open question's, and the asking agent waits on its answer.
  */
-export function askAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, record: JourneyRecord | null): { id: string; repeat: boolean } {
+export function askAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, record: JourneyRecord | null): Asked {
   if (!record) throw new AgentFactError('This project has no journey yet: there is nowhere for a person to answer. Escalate in your report instead.')
   const options = checkOptions(q.options, { min: 2 })
   const text = q.text.trim()
@@ -242,8 +251,8 @@ export function askAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, 
   for (const t of options.flatMap((o) => o.waives?.targets ?? [])) {
     if (t.kind === 'criterion' && !record.criteria.some((c) => c.id === t.id)) throw new AgentFactError(`An option waives criterion ${t.id}, which this project does not have (journey.status lists them).`)
   }
-  const repeat = openRepeat(db, record, text, q.blocks ?? null)
-  if (repeat) return { id: repeat, repeat: true }
+  const repeat = openRepeat(db, record, text, q.blocks ?? null, options)
+  if (repeat) return { id: repeat.id, repeat: true, ...(repeat.criteria.length ? { askedBy: repeat.askedBy, criteria: repeat.criteria } : {}) }
   const id = newId('aq')
   db.prepare(`INSERT INTO agent_questions (id, asked_by, agent, asked_of_sub, asked_part, stage, text, blocks, options, sources, job_id, asked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(id, by.label, by.agent, q.askedOfSub ?? null, q.askedOfSub ? 'contributors' : q.askedPart ?? 'contributors', q.stage ?? record.journey.currentStage, text,
@@ -251,23 +260,49 @@ export function askAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, 
   return { id, repeat: false }
 }
 
-/** The open agent question (not answered in the record) that `text` names by id or asks in the same words, or null. */
-function openRepeat(db: DatabaseSync, record: JourneyRecord, text: string, blocks: string | null): string | null {
+/**
+ * The open agent question (not answered in the record) that this one repeats: one it names by id, asks in the same
+ * words, or shares a criterion with (`criteria`: the shared ones, empty for the other two), or null.
+ */
+function openRepeat(db: DatabaseSync, record: JourneyRecord, text: string, blocks: string | null, options: readonly OptionRow[]): { id: string; askedBy: string; criteria: string[] } | null {
   const answered = new Set(record.questions.filter((x) => x.answeredAt !== null).map((x) => x.id))
-  const open = (db.prepare('SELECT id, text FROM agent_questions ORDER BY asked_at, rowid').all() as { id: string; text: string }[]).filter((x) => !answered.has(x.id))
+  const open = (db.prepare('SELECT id, asked_by, text, blocks, options FROM agent_questions ORDER BY asked_at, rowid').all() as { id: string; asked_by: string; text: string; blocks: string | null; options: string }[])
+    .filter((x) => !answered.has(x.id))
   if (!open.length) return null
   const named = new Set([...`${text} ${blocks ?? ''}`.matchAll(QUESTION_ID)].map((m) => m[0]))
   const words = sameWords(text)
-  return open.find((x) => named.has(x.id))?.id ?? open.find((x) => sameWords(x.text) === words)?.id ?? null
+  const same = open.find((x) => named.has(x.id)) ?? open.find((x) => sameWords(x.text) === words)
+  if (same) return { id: same.id, askedBy: same.asked_by, criteria: [] }
+  // about a criterion an open question is about, from whichever agent
+  const mine = criteriaOf(record, { text, blocks, options })
+  if (!mine.length) return null
+  for (const x of open) {
+    const theirs = criteriaOf(record, { text: x.text, blocks: x.blocks, options: json<OptionRow[]>(x.options, []) })
+    const shared = mine.filter((c) => theirs.includes(c))
+    if (shared.length) return { id: x.id, askedBy: x.asked_by, criteria: shared }
+  }
+  return null
 }
 
 /** Record an agent's check of a criterion trace owns; refuses a person-owned or unknown criterion, and a met one without evidence. */
+/** Criteria met only on evidence of a kind: what the signer opens has to show the very thing checked. */
+const EVIDENCE_NEEDED: Readonly<Record<string, { kind: string; say: string }>> = {
+  'capture.datasheets': {
+    kind: 'datasheet',
+    say: 'capture.datasheets is met on the datasheets compared: give one evidence of kind datasheet per part checked (ref its MPN or datasheet, label the part, the page and the result, such as "U1 AMS1117-3.3 p.2: input 5 V within the 15 V maximum, 160 mA within 1 A"), beside any run.',
+  },
+}
+
 export function addCriterionCheck(db: DatabaseSync, by: Asker, c: { criterion: string; status: 'met' | 'not_met'; evidence: readonly Evidence[]; note?: string | undefined }, record: JourneyRecord | null): CriterionCheck {
   if (!record) throw new AgentFactError('This project has no journey yet, so it has no criteria to check.')
   const def = record.criteria.find((x) => x.id === c.criterion)
   if (!def) throw new AgentFactError(`There is no criterion called ${c.criterion} in this project (journey.status lists them).`)
   if (def.owner !== 'trace') throw new AgentFactError(`${c.criterion} is a person's to meet (${def.text}) — only their own act meets it. Ask them (journey.ask) if it blocks you.`)
   if (c.status === 'met' && !c.evidence.length) throw new AgentFactError('A met criterion needs its evidence: the run id, artifact or file that shows it.')
+  // the evidence must be what the criterion is about: a netlist run ("54 nets, 23 components") says nothing of which
+  // datasheets were compared, or what came of it (test-esp32 #52)
+  const needs = EVIDENCE_NEEDED[c.criterion]
+  if (c.status === 'met' && needs && !c.evidence.some((e) => e.kind === needs.kind)) throw new AgentFactError(needs.say)
   const id = newId('cc')
   const t = now()
   db.prepare('INSERT INTO criterion_checks (id, criterion, status, evidence, note, checked_at, by, job_id, revision) VALUES (?,?,?,?,?,?,?,?,?)')
