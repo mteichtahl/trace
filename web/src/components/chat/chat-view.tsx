@@ -48,10 +48,17 @@ export interface ChatViewProps {
   placeholder?: string
   /** shown when there are no messages yet (trace's summary of the step, in Focus mode) */
   intro?: React.ReactNode
+  /**
+   * the intro stays, as trace's opening question: first in a new conversation, and after what was said in one kept
+   * from an earlier visit, so the conversation picks up there (the Intent builder, test-esp32 #8)
+   */
+  pinIntro?: boolean
+  /** the conversation got its thread (its first message was kept): the screen keeps it, to open it again next time */
+  onThread?: (id: string) => void
   className?: string
 }
 
-export function ChatView({ agentId, repo, threadId, placeholder, intro, className }: ChatViewProps) {
+export function ChatView({ agentId, repo, threadId, placeholder, intro, pinIntro = false, onThread, className }: ChatViewProps) {
   const { agent } = useAgent({ agentId })
   const { copilotkit } = useCopilotKit()
   const renderToolCall = useRenderToolCall()
@@ -82,12 +89,17 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   const [loaded, setLoaded] = useState<string | undefined>()
   /** messages by other people on the project, shown but never sent to trace as the viewer's */
   const [foreign, setForeign] = useState<Map<string, string>>(new Map())
+  /** a stored thread that could not be opened (gone): the person starts a new conversation instead */
+  const [failed, setFailed] = useState<string | undefined>()
+  /** how many messages the conversation held when it was opened (the intro, pinned, stands after them) */
+  const [resumeAt, setResumeAt] = useState(0)
   /** a stored thread still loading: sending now would be overwritten when it lands (it was read before the message) */
-  const opening = !!repo && !!threadId && loaded !== threadId
+  const opening = !!repo && !!threadId && loaded !== threadId && failed !== threadId
 
   // open a stored thread: the viewer's own turns (and trace's replies to them) are the conversation; other people's
   // are quoted to trace as data, and make the thread read-only for trace
   useEffect(() => {
+    if (failed === threadId) return
     thread.current = threadId
     if (!repo || !threadId || loaded === threadId) return
     let live = true
@@ -99,13 +111,23 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
         resetWire(agentId, { repo, thread: threadId, foreign: replay.foreign, ...(replay.after ? { after: replay.after } : {}) })
         agent.setMessages(replay.messages)
         setForeign(replay.foreign)
+        setResumeAt(replay.messages.length)
         setLoaded(threadId)
       })
-      .catch(() => toast.error('Could not load that conversation.'))
+      .catch(() => {
+        if (!live) return
+        toast.error('Could not load that conversation.')
+        // not stuck on "Opening the conversation…": the next message starts a new one
+        thread.current = undefined
+        agent.setMessages([])
+        resetWire(agentId, { repo })
+        setResumeAt(0)
+        setFailed(threadId)
+      })
     return () => {
       live = false
     }
-  }, [agent, agentId, repo, threadId, loaded])
+  }, [agent, agentId, repo, threadId, loaded, failed])
 
   // a new conversation (no thread chosen): start clean
   useEffect(() => {
@@ -113,6 +135,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
     agent.setMessages([])
     resetWire(agentId, repo ? { repo } : {})
     setForeign(new Map())
+    setResumeAt(0)
     setLoaded(undefined)
   }, [agent, agentId, repo, threadId])
 
@@ -127,13 +150,14 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
         agent.threadId = r.id
         setLoaded(r.id)
         threadCreated(repo, r.id)
+        onThread?.(r.id)
       }
       return true
     } catch (e) {
       toast.error('Your message could not be kept', { description: e instanceof Error ? e.message : String(e) })
       return false
     }
-  }, [agent, agentId, repo])
+  }, [agent, agentId, repo, onThread])
 
   const run = useCallback(async () => {
     try {
@@ -223,79 +247,85 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   // a tool call after the person's last turn is the one being answered now; earlier ones were moved on from
   const lastTurn = messages.map((m) => m.role).lastIndexOf('user')
 
+  const renderMessage = (m: AnyMsg, i: number): React.ReactNode => {
+    if (m.role === 'user') {
+      const by = foreign.get(m.id)
+      if (by !== undefined)
+        return (
+          <div key={m.id} className="flex justify-start">
+            <div className="max-w-[85%] rounded-2xl border px-3.5 py-2">
+              <p className="mb-0.5 text-xs text-muted-foreground">{by.split(': ')[0]}</p>
+              <Markdown text={textOf(m)} />
+            </div>
+          </div>
+        )
+      return (
+        <div key={m.id} className="flex justify-end">
+          <div className="max-w-[85%] rounded-2xl bg-muted px-3.5 py-2">
+            <Markdown text={textOf(m)} />
+          </div>
+        </div>
+      )
+    }
+    if (m.role === 'reasoning') {
+      if (prefs.chat.reasoning === 'hidden') return null
+      return (
+        <Collapsible key={m.id}>
+          <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground">
+            <ChevronRight className="size-3 transition-transform group-data-[state=open]:rotate-90" /> Show reasoning
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-1 whitespace-pre-wrap border-l pl-3 text-xs text-muted-foreground">{textOf(m)}</CollapsibleContent>
+        </Collapsible>
+      )
+    }
+    if (m.role !== 'assistant') return null
+    const text = textOf(m)
+    const streaming = running && i === messages.length - 1
+    return (
+      <div key={m.id} className="group/msg">
+        {i === 0 || messages[i - 1]?.role !== 'assistant' ? (
+          <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="flex size-4 items-center justify-center rounded bg-foreground font-mono text-[10px] font-semibold text-background">t</span> trace
+          </p>
+        ) : null}
+        {text && <Markdown text={text} streaming={streaming} />}
+        {speaking.messageId === m.id && <SpokenText text={text} />}
+        {m.toolCalls?.map((tc) => (
+          <LiveCall.Provider key={tc.id} value={i > lastTurn}>
+            <ChatRepo.Provider value={repo}>
+              <ChatThread.Provider value={threadId ?? loaded}>
+                <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+              </ChatThread.Provider>
+            </ChatRepo.Provider>
+          </LiveCall.Provider>
+        ))}
+        {text && !streaming && (
+          <MessageActions
+            canSpeak={prefs.voice.speech !== false}
+            speaking={speaking.messageId === m.id}
+            onSpeak={() => (speaking.messageId === m.id ? stopSpeaking() : void speak(m.id, text).catch(() => toast.error('Could not read that aloud.')))}
+            onCopy={() => void navigator.clipboard?.writeText(text).then(() => toast('Copied as markdown'))}
+            onRetry={m.id === lastAssistant ? retry : undefined}
+            onFeedback={(reason) => {
+              // kept with the person's own preferences (the latest one; never as a message in the shared thread)
+              void call('me.set', { key: 'feedback.chat.last', value: { down: true, messageId: m.id, reason: reason.slice(0, 500), thread: thread.current ?? null, at: new Date().toISOString() } })
+              toast('Thanks. That helps trace improve.')
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+  // where the intro stands: first in a new conversation; in one kept from an earlier visit, after what was said then,
+  // so trace picks up where the person left (pinIntro); otherwise only while there are no messages
+  const introAt = pinIntro ? Math.min(resumeAt, messages.length) : messages.length === 0 ? 0 : -1
+
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col', className)}>
       <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 [overflow-anchor:none]" aria-live="polite" aria-busy={running || opening}>
-        {messages.length === 0 && intro}
-        {messages.map((m, i) => {
-          if (m.role === 'user') {
-            const by = foreign.get(m.id)
-            if (by !== undefined)
-              return (
-                <div key={m.id} className="flex justify-start">
-                  <div className="max-w-[85%] rounded-2xl border px-3.5 py-2">
-                    <p className="mb-0.5 text-xs text-muted-foreground">{by.split(': ')[0]}</p>
-                    <Markdown text={textOf(m)} />
-                  </div>
-                </div>
-              )
-            return (
-              <div key={m.id} className="flex justify-end">
-                <div className="max-w-[85%] rounded-2xl bg-muted px-3.5 py-2">
-                  <Markdown text={textOf(m)} />
-                </div>
-              </div>
-            )
-          }
-          if (m.role === 'reasoning') {
-            if (prefs.chat.reasoning === 'hidden') return null
-            return (
-              <Collapsible key={m.id}>
-                <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground">
-                  <ChevronRight className="size-3 transition-transform group-data-[state=open]:rotate-90" /> Show reasoning
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-1 whitespace-pre-wrap border-l pl-3 text-xs text-muted-foreground">{textOf(m)}</CollapsibleContent>
-              </Collapsible>
-            )
-          }
-          if (m.role !== 'assistant') return null
-          const text = textOf(m)
-          const streaming = running && i === messages.length - 1
-          return (
-            <div key={m.id} className="group/msg">
-              {i === 0 || messages[i - 1]?.role !== 'assistant' ? (
-                <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span className="flex size-4 items-center justify-center rounded bg-foreground font-mono text-[10px] font-semibold text-background">t</span> trace
-                </p>
-              ) : null}
-              {text && <Markdown text={text} streaming={streaming} />}
-              {speaking.messageId === m.id && <SpokenText text={text} />}
-              {m.toolCalls?.map((tc) => (
-                <LiveCall.Provider key={tc.id} value={i > lastTurn}>
-                  <ChatRepo.Provider value={repo}>
-                    <ChatThread.Provider value={threadId ?? loaded}>
-                      <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
-                    </ChatThread.Provider>
-                  </ChatRepo.Provider>
-                </LiveCall.Provider>
-              ))}
-              {text && !streaming && (
-                <MessageActions
-                  canSpeak={prefs.voice.speech !== false}
-                  speaking={speaking.messageId === m.id}
-                  onSpeak={() => (speaking.messageId === m.id ? stopSpeaking() : void speak(m.id, text).catch(() => toast.error('Could not read that aloud.')))}
-                  onCopy={() => void navigator.clipboard?.writeText(text).then(() => toast('Copied as markdown'))}
-                  onRetry={m.id === lastAssistant ? retry : undefined}
-                  onFeedback={(reason) => {
-                    // kept with the person's own preferences (the latest one; never as a message in the shared thread)
-                    void call('me.set', { key: 'feedback.chat.last', value: { down: true, messageId: m.id, reason: reason.slice(0, 500), thread: thread.current ?? null, at: new Date().toISOString() } })
-                    toast('Thanks. That helps trace improve.')
-                  }}
-                />
-              )}
-            </div>
-          )
-        })}
+        {messages.slice(0, introAt < 0 ? messages.length : introAt).map((m, i) => renderMessage(m, i))}
+        {introAt >= 0 && intro}
+        {introAt >= 0 && messages.slice(introAt).map((m, j) => renderMessage(m, introAt + j))}
         {running && messages[messages.length - 1]?.role === 'user' && (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <span className="flex gap-1" aria-hidden>

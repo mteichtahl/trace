@@ -6,7 +6,7 @@
  */
 import { DESIGN, TRACE } from './fixtures-s1'
 import { s1Action } from './s1'
-import type { ArchOption, ArchitectureRecord, DesignView, SkillView, TraceView } from '@/lib/types-s1'
+import type { ArchOption, ArchitectureRecord, DesignView, SkillItem, SkillView, TraceView } from '@/lib/types-s1'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const ok = (result: unknown) => json({ ok: true, result })
@@ -121,8 +121,8 @@ function reviewChecks(d: ReviewDraft = {}): SkillView['checks'] {
   return [
     undecided.length ? { id: 'criterion', status: 'not_met', detail: `${undecided.length} requirement${undecided.length > 1 ? 's' : ''} neither accepted nor under an open question: ${undecided.join(', ')}.` } : { id: 'criterion', status: 'met' },
     duplicate ? { id: 'conflicts', status: 'not_met', detail: 'Duplicates: R-017 and R-022.' }
-      : d.no_conflicts ? { id: 'conflicts', status: 'met', detail: 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other.' }
-      : { id: 'conflicts', status: 'not_met', detail: 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.' },
+      : d.no_conflicts ? { id: 'conflicts', status: 'met', detail: 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other.', by_draft: 'no_conflicts' }
+      : { id: 'conflicts', status: 'not_met', detail: 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.', by_draft: 'no_conflicts' },
     { id: 'sources', status: 'met' },
     d.uncovered?.some((x) => x.statement === 'I-6') ? { id: 'covered', status: 'met' } : { id: 'covered', status: 'not_met', detail: '1 intent statement no requirement covers, and not left out with a reason: I-6.' },
     { id: 'struck', status: 'met', detail: struck.length ? undefined : 'No requirement is struck.' },
@@ -180,12 +180,16 @@ const SKILLS: Record<string, (draft?: ReviewDraft) => Partial<SkillView>> = {
     }
   },
   'requirements-review': (d) => {
-    const rq = (id: string, title: string, detail: string) => ({ id: `requirement:${id}`, title: `${id}: ${title}`, detail, status: 'open' as const })
+    const rq = (id: string, title: string, detail: string, criterion: string | null = null, was?: SkillItem['was']) => ({ id: `requirement:${id}`, title: `${id}: ${title}`, detail, status: 'open' as const, criterion, ...(was ? { was } : {}) })
     return {
-      summary: 'Two requirements are still proposed (R-017 waits on an open question about its test house), and one intent line has no requirement yet.',
+      summary: 'Three requirements are still proposed (R-017 waits on an open question about its test house; R-011 came back after an answer changed its acceptance limit), and one intent line has no requirement yet.',
       items: [
-        rq('R-017', 'Meets CISPR 32 class B radiated emissions', 'From Sold in Australia: CISPR 32 class B. An open question asks which test house measures it.'),
+        rq('R-017', 'Meets CISPR 32 class B radiated emissions', 'From Sold in Australia: CISPR 32 class B. An open question asks which test house measures it.', 'Below the class B limit lines, 30 MHz to 1 GHz'),
         rq('R-019', 'Has a two-line display', 'From the brief.'),
+        // an answer that changed a requirement brought it back: its criterion changed, its words did not (test-esp32 #63)
+        rq('R-011', 'The 3.3 V rail is rated for at least 600 mA', 'From Runs from one 3.7 V lithium cell. Reopened: an answer changed its acceptance limit.', '3.1-3.6 V at every load, at up to 600 mA', {
+          choice: 'accepted', by: 'marc@example.com', at: '2026-11-05T09:40:00.000Z', changes: [{ field: 'criterion', before: '3.3 V ± 3 % at up to 600 mA', after: '3.1-3.6 V at every load, at up to 600 mA' }],
+        }),
         ...(review.duplicate ? [rq('R-022', 'Meets CISPR 32 class B radiated emissions', 'Added by the Verification agent from the EMC test plan, after you opened this review.')] : []),
         { id: 'intent:I-6', title: 'Not covered: Fits a 50 × 30 mm board in the IP67 probe housing.', detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' },
       ],

@@ -347,8 +347,16 @@ describe('the guided skills read the design record', () => {
       decisions: [{ requirement: 'REQ-1', choice: 'accept' }, { requirement: 'REQ-2', choice: 'accept' }, { requirement: 'REQ-3', choice: 'strike', reason: 'The farm manager reads it on the phone app.' }],
       uncovered: [{ statement: 'INT-purpose', reason: 'The purpose is covered by the requirements as a whole.' }, { statement: 'INT-board', reason: 'Checked by Board setup against the outline.' }],
     }
+    const listed = async (): Promise<string[]> => ((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' })) as { items?: { id: string }[] }).items?.map((x) => x.id) ?? []
+    const open = await listed()
+    expect(open).toContain('requirement:REQ-2')
     await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 4, data: draft })
+    // what the draft decides stays listed, with its decision on screen and Undo, rather than dropping out once saved
+    // (test-esp32 #28)
+    expect(await listed()).toEqual(open)
     let c = await checks('requirements-review')
+    // nothing in the record holds it back: the person's tick decides it, and the screen counts it at once (#64)
+    expect(c.conflicts).toMatchObject({ by_draft: 'no_conflicts' })
     // duplicates and conflicting intent are checked; the numbers are the person's to confirm, so it is not met, and
     // says what to do, rather than "cannot be checked yet" for ever
     expect(c.conflicts).toMatchObject({ status: 'not_met', detail: expect.stringMatching(/Confirm in Resolve conflicts/) })
@@ -394,6 +402,10 @@ describe('the guided skills read the design record', () => {
     rmSync(dir, { recursive: true, force: true })
     expect(await req1()).toMatchObject({ status: 'proposed', text: 'Range of 1.5 km line of sight' })
     expect(await items()).toContain('requirement:REQ-1')
+    // the review says what changed since the person accepted it, before and after (test-esp32 #63)
+    type Item = { id: string; criterion?: string | null; was?: { choice: string; changes: { field: string; before: string | null; after: string | null }[] } }
+    const item1 = async (): Promise<Item | undefined> => ((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' })) as { items?: Item[] }).items?.find((x) => x.id === 'requirement:REQ-1')
+    expect(await item1()).toMatchObject({ was: { choice: 'accepted', changes: [{ field: 'words', before: 'Range of 2 km line of sight', after: 'Range of 1.5 km line of sight' }] } })
     // accepted again, it stands on the new words
     await run(USER, 'design.decide', { repo: REPO, decision: { kind: 'requirement', requirement: 'REQ-1', choice: 'accept' } })
     expect(await req1()).toMatchObject({ status: 'accepted' })
@@ -408,6 +420,8 @@ describe('the guided skills read the design record', () => {
     rmSync(dir2, { recursive: true, force: true })
     expect(await req1()).toMatchObject({ status: 'proposed' })
     expect(await items()).toContain('requirement:REQ-1')
+    // the words are as accepted; the criterion is what changed, and it is shown
+    expect(await item1()).toMatchObject({ criterion: 'at least 1.5 km at 1% packet loss', was: { changes: [{ field: 'criterion', before: 'at least 2 km at 1% packet loss', after: 'at least 1.5 km at 1% packet loss' }] } })
   })
 })
 

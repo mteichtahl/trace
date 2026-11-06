@@ -55,6 +55,8 @@ export interface FocusLayoutProps {
   onClose: () => void
   /** epoch ms of the last draft save */
   draftSavedAt?: number | null
+  /** the draft's last change is still being saved: Submit waits for it */
+  draftSaving?: boolean
   /** checklist on a picture: a large Stop while powered */
   stop?: { visible: boolean; onStop: () => void }
   /** 'fill': the centre is not padded or scrolled, so a chat can take its full height (conversational skills) */
@@ -64,7 +66,7 @@ export interface FocusLayoutProps {
 }
 
 export function FocusLayout({
-  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, stop, centre = 'padded', outcome,
+  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, draftSaving = false, stop, centre = 'padded', outcome,
 }: FocusLayoutProps) {
   const now = useNow(5000)
   const notice = useContext(FocusNotice)
@@ -122,7 +124,9 @@ export function FocusLayout({
   )
 
   const right = variant === 'conversational' ? aside : trace
-  const draft = draftSavedAt ? (
+  const draft = draftSaving ? (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">Saving your draft…</span>
+  ) : draftSavedAt ? (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
       <Check className="size-3.5" aria-hidden /> Draft saved {ago(Math.min(draftSavedAt, now), now)}
     </span>
@@ -188,7 +192,7 @@ export function FocusLayout({
 
       {outcome && <div className="max-h-[45dvh] shrink-0 overflow-y-auto border-t px-4 py-3 md:px-6">{outcome}</div>}
 
-      <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked} />
+      <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked} saving={draftSaving} />
 
       {stop?.visible && (
         <Button size="lg" variant="destructive" className="fixed bottom-20 right-6 z-30 h-14 px-8 text-base shadow-lg" onClick={stop.onStop}>

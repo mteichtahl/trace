@@ -91,6 +91,10 @@ export interface SkillItem {
   /** the badge's word, when the status's own word does not fit (a case design not offered) */
   label?: string
   evidence?: EvidenceRef
+  /** Requirements review: the requirement's acceptance criterion */
+  criterion?: string | null
+  /** Requirements review: a person decided it before an agent changed it, and what changed since (before and after) */
+  was?: { choice: 'accepted' | 'struck'; by: string; at: string; changes: { field: 'words' | 'criterion'; before: string | null; after: string | null }[] }
 }
 
 export interface IntentStatement {
@@ -136,6 +140,8 @@ export interface SkillCheckView {
   confirmable?: boolean
   /** met because the person confirmed it */
   confirmed?: boolean
+  /** nothing in the record holds it back: the draft's field of this name, true, meets it (counted on screen at once) */
+  by_draft?: string
 }
 
 export interface SkillView {

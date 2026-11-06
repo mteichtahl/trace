@@ -19,9 +19,9 @@ import { projectId } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
-import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft } from './design-steps'
+import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, decidedByReview } from './design-steps'
 import { StepPicture } from './step-picture'
-import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
+import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
 
 interface Draft extends SkillDraftBase, DesignDraft {
   resolved: string[]
@@ -40,9 +40,13 @@ export function needsReason(choice: Draft['choice'], rec: { recommended: string;
 export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const s = useSkill<Draft>(repo, def, { done: [], resolved: [] })
   const v = s.view.data
-  const items = v?.items ?? []
+  const all = v?.items ?? []
+  // what the skill's own steps decide (Requirements review's requirements and uncovered intent lines) is decided
+  // there, with its reason: here a requirement shows with its decision and a way to Decide, never a bare Resolve
+  const items = all.filter((it) => !decidedByReview(def.id, it) || (it.id.startsWith('requirement:') && s.step.id !== 'decide'))
+  const decisionOf = (it: { id: string }) => s.draft.data.decisions?.find((x) => `requirement:${x.requirement}` === it.id)
   const last = s.stepIndex === def.steps.length - 1
-  const checks = qualityChecks(def, v, needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' } : {}, s.goTo)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
   const gate = def.id === 'gate-signing'
 
   return (
@@ -57,6 +61,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       onClose={s.close}
       outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
+      draftSaving={s.draft.saving}
       trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >
       <StepHeader def={def} index={s.stepIndex} />
@@ -89,13 +94,23 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
 
       {/* Gate signing has no items of its own: they live on the gate's screen, so an empty "nothing open" here misleads;
           Architecture choice's key parts are their own list (design-steps.tsx KeyParts) */}
-      {!gate && !(def.id === 'architecture-choice' && s.step.id === 'parts' && v?.key_parts) && <section className="mt-6" aria-labelledby="items">
+      {!gate && !(def.id === 'architecture-choice' && s.step.id === 'parts' && v?.key_parts) && !(all.length > 0 && items.length === 0) && <section className="mt-6" aria-labelledby="items">
         <h2 id="items" className="text-base font-semibold">For this step</h2>
         {items.length === 0 ? (
           <EmptyState className="mt-2">{s.view.isLoading ? 'Loading what trace prepared…' : `trace has nothing open for “${s.step.title.toLowerCase()}”. ${s.step.detail}`}</EmptyState>
         ) : (
           <ul className="mt-2 divide-y rounded-xl border">
             {items.map((it) => {
+              if (decidedByReview(def.id, it)) {
+                const d = decisionOf(it)
+                return (
+                  <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <StatusBadge status={d ? (d.choice === 'accept' ? 'met' : 'waived') : 'yours'} label={d ? (d.choice === 'accept' ? 'Accepted' : 'Struck') : 'Undecided'} />
+                    <span className="min-w-0 flex-1 text-sm">{it.title}{it.criterion !== undefined && <span className="block text-xs">Criterion: {it.criterion ?? 'none given'}</span>}{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
+                    {!d && <Button size="sm" variant="outline" onClick={() => s.goTo('decide')}>Decide <ArrowRight /></Button>}
+                  </li>
+                )
+              }
               const done = it.status !== 'open' || s.draft.data.resolved.includes(it.id)
               return (
                 <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
