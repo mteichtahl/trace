@@ -103,7 +103,49 @@ function trace(): TraceView {
   return { ...TRACE, intent, summary: { requirements: 14, verified: 8, failing: 1, untested: 4, waived: 1, intent: intent.length, accepted: intent.filter((i) => i.state !== 'proposed').length, uncovered: 1, unlinked: 6 } }
 }
 
-const SKILLS: Record<string, () => Partial<SkillView>> = {
+/**
+ * Requirements review on the soil sensor, as skill.submit answers it (src/api/actions-skills.ts), so its outcomes can
+ * be seen (test-esp32 #89): the bar from the draft; R-017 waits on an open question, so the bar lets it through
+ * undecided, and a review submitted without it is recorded with the baseline gate's criteria still not met (partly
+ * refused). Accepting R-017 is refused the first time: the Verification agent has just added R-022, a duplicate of
+ * it, so the record's check of conflicts is not met when Submit checks it again; striking one of the two clears it.
+ */
+type ReviewDraft = { decisions?: { requirement: string; choice: string; reason?: string }[]; uncovered?: { statement: string }[]; no_conflicts?: boolean }
+const review = { duplicate: false }
+const REVIEW_CHECKS: Record<string, string> = { criterion: 'One testable criterion each', conflicts: 'No conflicts or duplicates', sources: 'Every requirement cites its source', covered: 'Every intent statement covered', struck: 'Struck requirements keep their reason' }
+const choiceOf = (d: ReviewDraft, id: string): string | undefined => d.decisions?.find((x) => x.requirement === id)?.choice
+function reviewChecks(d: ReviewDraft = {}): SkillView['checks'] {
+  const undecided = ['R-019', ...(review.duplicate ? ['R-022'] : [])].filter((id) => !choiceOf(d, id))
+  const duplicate = review.duplicate && choiceOf(d, 'R-017') !== 'strike' && choiceOf(d, 'R-022') !== 'strike'
+  const struck = (d.decisions ?? []).filter((x) => x.choice === 'strike')
+  return [
+    undecided.length ? { id: 'criterion', status: 'not_met', detail: `${undecided.length} requirement${undecided.length > 1 ? 's' : ''} neither accepted nor under an open question: ${undecided.join(', ')}.` } : { id: 'criterion', status: 'met' },
+    duplicate ? { id: 'conflicts', status: 'not_met', detail: 'Duplicates: R-017 and R-022.' }
+      : d.no_conflicts ? { id: 'conflicts', status: 'met', detail: 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other.' }
+      : { id: 'conflicts', status: 'not_met', detail: 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.' },
+    { id: 'sources', status: 'met' },
+    d.uncovered?.some((x) => x.statement === 'I-6') ? { id: 'covered', status: 'met' } : { id: 'covered', status: 'not_met', detail: '1 intent statement no requirement covers, and not left out with a reason: I-6.' },
+    { id: 'struck', status: 'met', detail: struck.length ? undefined : 'No requirement is struck.' },
+  ]
+}
+function submitReview(d: ReviewDraft): Response {
+  // the Verification agent's duplicate lands while the person reviews: Submit checks the record again and finds it
+  if (choiceOf(d, 'R-017') === 'accept' && !review.duplicate) review.duplicate = true
+  const missing = (reviewChecks(d) ?? []).filter((c) => c.status === 'not_met')
+  if (missing.length) return fail(`Requirements review cannot be submitted yet. Not met: ${missing.map((c) => `${REVIEW_CHECKS[c.id]}${c.detail ? ` (${c.detail})` : ''}`).join('; ')}.`)
+  const n = (choice: string) => (d.decisions ?? []).filter((x) => x.choice === choice).length
+  const recorded = [n('accept') ? `${n('accept')} requirement${n('accept') > 1 ? 's' : ''} accepted` : '', n('strike') ? `${n('strike')} requirement${n('strike') > 1 ? 's' : ''} struck` : '', d.uncovered?.length ? `${d.uncovered.length} intent line${d.uncovered.length > 1 ? 's' : ''} left out` : ''].filter(Boolean).join(', ')
+  const waits = !choiceOf(d, 'R-017')
+  const why = 'R-017 waits on an open question: answer it, then accept or strike it here.'
+  const criteria = [
+    { id: 'define.accepted', text: 'Every requirement is accepted or struck.', ...(waits ? { status: 'not_met', why, step: 'decide' } : { status: 'met' }) },
+    { id: 'define.measurable', text: 'Every requirement has a criterion that can be measured, with a number and a unit.', ...(waits ? { status: 'not_met', why: 'It is checked once every requirement is accepted or struck.', step: 'decide' } : { status: 'met' }) },
+    { id: 'define.firmware', text: 'The firmware requirements are accepted with the rest.', ...(waits ? { status: 'not_met', why, step: 'decide' } : { status: 'met' }) },
+  ]
+  return ok({ ok: true, repo: SOIL, skill: 'requirements-review', id: `rec_${Math.random().toString(16).slice(2, 6)}`, started: [], ...(recorded ? { recorded } : {}), criteria, ...(waits ? { draft_kept: true } : {}) })
+}
+
+const SKILLS: Record<string, (draft?: ReviewDraft) => Partial<SkillView>> = {
   'architecture-choice': () => {
     const a = architecture()
     return {
@@ -117,18 +159,19 @@ const SKILLS: Record<string, () => Partial<SkillView>> = {
       ],
     }
   },
-  'requirements-review': () => ({
-    summary: 'Six requirements are still proposed, and one intent line has no requirement yet.',
-    items: [
-      { id: 'requirement:R-017', title: 'R-017: Meets CISPR 32 class B radiated emissions', detail: 'From Sold in Australia: CISPR 32 class B.', status: 'open' },
-      { id: 'requirement:R-019', title: 'R-019: Has a two-line display', detail: 'From the brief.', status: 'open' },
-      { id: 'intent:I-6', title: 'Not covered: Fits a 50 × 30 mm board in the IP67 probe housing.', detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' },
-    ],
-    checks: [
-      { id: 'criterion', status: 'not_met', detail: '2 requirements neither accepted nor under an open question: R-017, R-019.' }, { id: 'conflicts', status: 'not_met', unavailable: 'a conflict check between requirements (duplicates are checked and there are none; no tool checks that two requirements can both hold)' },
-      { id: 'sources', status: 'met' }, { id: 'covered', status: 'not_met', detail: '1 intent statement no requirement covers, and not left out with a reason: I-6.' }, { id: 'struck', status: 'met', detail: 'No requirement is struck.' },
-    ],
-  }),
+  'requirements-review': (d) => {
+    const rq = (id: string, title: string, detail: string) => ({ id: `requirement:${id}`, title: `${id}: ${title}`, detail, status: 'open' as const })
+    return {
+      summary: 'Two requirements are still proposed (R-017 waits on an open question about its test house), and one intent line has no requirement yet.',
+      items: [
+        rq('R-017', 'Meets CISPR 32 class B radiated emissions', 'From Sold in Australia: CISPR 32 class B. An open question asks which test house measures it.'),
+        rq('R-019', 'Has a two-line display', 'From the brief.'),
+        ...(review.duplicate ? [rq('R-022', 'Meets CISPR 32 class B radiated emissions', 'Added by the Verification agent from the EMC test plan, after you opened this review.')] : []),
+        { id: 'intent:I-6', title: 'Not covered: Fits a 50 × 30 mm board in the IP67 probe housing.', detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' },
+      ],
+      checks: reviewChecks(d),
+    }
+  },
   'case-design': () => ({
     summary: 'Six case designs could work for this board; trace recommends a **DIN rail enclosure** printed in MJF PA12-HP, because the requirements ask for a rail mount.',
     recommendation: {
@@ -169,9 +212,11 @@ export function designAction(name: string, a: Record<string, unknown>): Response
       return (async () => {
         const r = base ? await base.json() as { result?: Record<string, unknown> } : {}
         const { draft, step, saved } = r.result ?? {}
-        return ok({ skill: a.skill, ...v(), ...(draft ? { draft, step, saved } : {}) })
+        return ok({ skill: a.skill, ...v(draft as ReviewDraft | undefined), ...(draft ? { draft, step, saved } : {}) })
       })() as unknown as Response
     }
+    case 'skill.submit':
+      return a.skill === 'requirements-review' ? (new Promise<Response>((res) => setTimeout(() => res(submitReview((a.draft ?? {}) as ReviewDraft)), 700)) as unknown as Response) : undefined
     case 'design.decide': {
       const d = a.decision as { kind: string; [k: string]: unknown }
       const by = 'marc@example.com'

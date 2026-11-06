@@ -40,7 +40,8 @@ const isProject = (repo: string): boolean => /^[^/]+\/[^/]+$/.test(repo) && !rep
 
 /**
  * A skill's draft: starts from the saved one (once it loads) or `initial`, saves 800 ms after each change. Returns
- * the data, a setter, the step, a step setter, when it was last saved, and `discard` (after a successful submit).
+ * the data, a setter, the step, a step setter, when it was last saved, `discard` (after a successful submit), `hold`
+ * (no save while a submission is on its way) and `keep` (save now: a refused submission keeps the draft).
  */
 export function useSkillDraft<T>(repo: string, skill: string, meta: { name: string; steps: number }, initial: T) {
   const project = isProject(repo)
@@ -111,6 +112,17 @@ export function useSkillDraft<T>(repo: string, skill: string, meta: { name: stri
     if (timer.current) clearTimeout(timer.current)
     save(null)
   }, [save])
+  // Submit: no save may land after the submission (it would bring back a draft Submit discarded: "your draft is
+  // kept" on the Overview, test-esp32 #89), so the one waiting is held; a refused submission keeps it at once
+  const hold = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = undefined
+  }, [])
+  const keep = useCallback(() => {
+    hold()
+    save({ step: latest.current.step, data: latest.current.data })
+    setSavedAt(Date.now())
+  }, [hold, save])
 
-  return { data, setData, step, setStep, savedAt, discard, loaded: loadedNow }
+  return { data, setData, step, setStep, savedAt, discard, hold, keep, loaded: loadedNow }
 }

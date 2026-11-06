@@ -86,6 +86,7 @@ export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef;
       checks={checks}
       submitLabel={def.submit}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       onSubmit={() => s.submit(() => call('skill.submit', { repo, skill: def.id, draft: d }), 'Waiver taken. It is listed at every later gate until it closes.')}
       trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
@@ -225,6 +226,7 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
       checks={checks}
       submitLabel={def.submit}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       onSubmit={() => s.submit(async () => { const r = await call('task', { repo, request }); if (!r.accepted) throw new Error(r.reason ?? 'trace did not accept the request') }, 'Change request submitted. An admin approves or rejects it at a gate.')}
       trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}

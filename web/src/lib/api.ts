@@ -152,7 +152,9 @@ export interface Actions {
   'skill.drafts': { args: Repo; result: { drafts: { skill: string; name: string; step: number; steps: number; saved: string }[] } }
   /** submit a skill's result: refused with what is missing unless every check is met or waived */
   'requirements.draft': { args: Repo; result: { repo: string; jobId: string; attempt: number; started: string[] } }
-  'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[]; rule?: RuleProposed; rule_error?: string } }
+  // recorded: the decisions it recorded, in words; criteria: every gate criterion it set (one not met with why and the
+  // skill's step that fixes it); draft_kept: one is still not met, so the draft was kept (src/api/actions-skills.ts)
+  'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[]; rule?: RuleProposed; rule_error?: string; recorded?: string; criteria?: SubmitCriterion[]; draft_kept?: boolean } }
   /** each requirement's evidence status and the intent lines it is derived from */
   'requirements.trace': { args: Repo; result: import('./types-s1').TraceView }
   /** the architecture, the sheets with their drawings and requirements, the pin plan, the board; what is not recorded, in notes */
@@ -260,6 +262,8 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
 
 /** Call one API action. */
 /** A rule from an answer, as trace added it (src/api/rule-answers.ts ProposedRule): proposed now, or already there. */
+/** A gate criterion a skill's Submit set: not met, with why and the skill's step that fixes it (skill.submit `criteria`). */
+export interface SubmitCriterion { id: string; text: string; status: 'met' | 'not_met'; why?: string; step?: string }
 export interface RuleProposed { state: 'proposed' | 'in_rules' | 'waiting'; change: number | null; branch?: string; applies?: 'auto' | 'review'; words?: string }
 /** One answer made a rule for the project (src/api/rule-answers.ts RuleAnswerView). */
 export interface RuleAnswer {

@@ -205,8 +205,10 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
         const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string }
         if (r.jobError) toast.warning('trace could not start drafting the requirements.', { description: `${r.jobError} Ask trace to draft them from the intent.` })
         else toast('trace is drafting the candidate requirements for Requirements review.')
+        return r
       }, 'Intent submitted.')}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       aside={aside}
     >
@@ -366,6 +368,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
       checks={checks}
       submitLabel={def.submit}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       aside={wide ? aside : undefined}
       onSubmit={() => s.submit(() => answer.mutateAsync({

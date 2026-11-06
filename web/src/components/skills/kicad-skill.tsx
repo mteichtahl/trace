@@ -92,6 +92,7 @@ export function KicadSkill({ repo, def }: { repo: string; def: SkillDef }) {
       checks={checks}
       onSubmit={() => s.submit()}
       onClose={s.close}
+      outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       trace={
         <EmbeddedChat

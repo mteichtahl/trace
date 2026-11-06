@@ -24,7 +24,11 @@
  *                         (Waiver → waiver.add, Question answer → question.answer, Change request → a task for the
  *                         agents; Intent builder, Requirements review, Architecture choice and Pin plan review → their
  *                         design decisions, as design.decide records them: src/api/actions-design.ts), a decision
- *                         logged for every skill, and the draft discarded
+ *                         logged for every skill, and the draft discarded. The answer says what it recorded
+ *                         (`recorded`, the decisions in words) and every gate criterion it set (`criteria`: id, text,
+ *                         met or not_met, and for one not met `why` and the skill's `step` that fixes it). When one
+ *                         it set is still not met the draft is kept instead (`draft_kept`), so the skill's page says
+ *                         what is left and the person carries on (test-esp32 #89)
  */
 import { filesRead } from '../ontology/lineage.js'
 import { z } from 'zod'
@@ -207,6 +211,56 @@ export function baselineCriteria(requirements: readonly { status: string; accept
   const accepted = requirements.length > 0 && requirements.every((q) => q.status === 'accepted')
   const measurable = accepted && requirements.every((q) => NUMBER_WITH_UNIT.test(q.acceptance ?? ''))
   return [['define.accepted', accepted], ['define.measurable', measurable], ['define.firmware', accepted]]
+}
+
+/**
+ * The design decisions a submission recorded, counted in words ("2 requirements accepted, 1 struck, 1 intent line
+ * left out"), or undefined when it recorded none. Pure.
+ */
+export function recordedWords(decisions: readonly { kind: string; choice: string }[]): string | undefined {
+  const n = (kind: string, choice?: string): number => decisions.filter((d) => d.kind === kind && (choice === undefined || d.choice === choice)).length
+  const count = (k: number, one: string, many = `${one}s`): string => `${k} ${k === 1 ? one : many}`
+  const words = [
+    n('requirement', 'accepted') ? `${count(n('requirement', 'accepted'), 'requirement')} accepted` : '',
+    n('requirement', 'struck') ? `${count(n('requirement', 'struck'), 'requirement')} struck` : '',
+    n('intent.uncovered') ? `${count(n('intent.uncovered'), 'intent line')} left out` : '',
+    n('intent') ? `${count(n('intent'), 'intent statement')} decided` : '',
+    n('architecture.choice') ? 'the architecture chosen' : '',
+    n('pins.agreed') ? `${count(n('pins.agreed'), "part's pin plan", "parts' pin plans")} agreed` : '',
+  ].filter(Boolean)
+  return words.length ? words.join(', ') : undefined
+}
+
+/** A gate criterion a submission set, as Submit's answer says it (`criteria`): not met with why and the step to fix it. */
+export interface CriterionSet { id: string; text: string; status: 'met' | 'not_met'; why?: string; step?: string }
+
+/**
+ * Why each of the requirements baseline gate's criteria Requirements review sets is not met, naming the requirements
+ * and what to do (test-esp32 #89: the review was submitted, the gate still said "Every requirement is accepted or
+ * struck: not met" and nothing said which one). `asked`: the requirement ids an open question names, which the bar
+ * lets through undecided. Pure.
+ */
+export function baselineWhy(requirements: readonly { id: string; status: string; acceptance?: string | null }[], asked: (id: string) => boolean): Record<string, { why: string; step: string }> {
+  if (!requirements.length) return Object.fromEntries(['define.accepted', 'define.measurable', 'define.firmware'].map((id) => [id, { why: 'No requirements are recorded yet.', step: 'source' }]))
+  const open = requirements.filter((q) => q.status !== 'accepted')
+  const waiting = open.filter((q) => asked(q.id))
+  const undecided = open.filter((q) => !asked(q.id))
+  const names = (xs: readonly { id: string }[]): string => xs.map((q) => q.id).join(', ')
+  const parts = [
+    waiting.length ? `${names(waiting)} ${waiting.length === 1 ? 'waits' : 'wait'} on an open question: answer it, then accept or strike ${waiting.length === 1 ? 'it' : 'them'} here` : '',
+    undecided.length ? `${names(undecided)} ${undecided.length === 1 ? 'is' : 'are'} not accepted or struck yet: decide ${undecided.length === 1 ? 'it' : 'each'} in Decide` : '',
+  ].filter(Boolean)
+  const out: Record<string, { why: string; step: string }> = {}
+  if (open.length) {
+    const why = `${parts.join('; ')}.`
+    out['define.accepted'] = { why, step: 'decide' }
+    out['define.firmware'] = { why, step: 'decide' }
+    out['define.measurable'] = { why: 'It is checked once every requirement is accepted or struck.', step: 'decide' }
+  } else {
+    const vague = requirements.filter((q) => !NUMBER_WITH_UNIT.test(q.acceptance ?? ''))
+    if (vague.length) out['define.measurable'] = { why: `${names(vague)} ${vague.length === 1 ? 'has' : 'have'} no number with a unit in ${vague.length === 1 ? 'its' : 'their'} acceptance criterion: give one in Make it testable.`, step: 'testable' }
+  }
+  return out
 }
 
 /**
@@ -471,10 +525,19 @@ export const SKILL_ACTIONS = {
       // the design decisions the skill makes (Intent builder, Requirements review, Architecture choice, Pin plan
       // review), recorded as design.decide would, each logged
       const changes: { stage: StageId; summary: string }[] = []
+      // what Submit's answer says it recorded: each decision, and each gate criterion it set (met or not, and why)
+      const recorded: { kind: string; choice: string }[] = []
+      const set: CriterionSet[] = []
+      const move = (id: string, ok: boolean, evidence: Evidence[], why?: { why: string; step: string }): void => {
+        setCriterion(db, id, ok ? 'met' : 'not_met', evidence, by.label)
+        const text = loadJourney(db)?.criteria.find((c) => c.id === id)?.text ?? id
+        set.push({ id, text, status: ok ? 'met' : 'not_met', ...(ok || !why ? {} : why) })
+      }
       for (const d of DESIGN_SKILLS.has(a.skill) ? pendingDecisions(a.skill, a.draft, designRows, loadDesignDecisions(db)) : []) {
         const prior = loadDesignDecisions(db)
         const p = prepare(d, designRows, reqIds, prior)
         const rec = recordDesignDecision(db, p, by)
+        recorded.push({ kind: p.kind, choice: p.choice })
         decide(db, { kind: `design.${p.kind}`, stage: loadJourney(db)?.journey.currentStage ?? null, ref: p.target, by: by.label, summary: p.summary, detail: { decision: rec.id, skill: a.skill } })
         const stage = changesStage(p, prior)
         if (stage) changes.push({ stage, summary: p.summary.replace(/\.$/, '') })
@@ -491,18 +554,20 @@ export const SKILL_ACTIONS = {
       if (a.skill === 'requirements-review') {
         const have = new Set((loadJourney(db)?.criteria ?? []).map((c) => c.id))
         const evidence = baselineEvidence(i.requirements, i.struck, by.label)
-        for (const [id, ok] of baselineCriteria(i.requirements)) if (have.has(id)) setCriterion(db, id, ok ? 'met' : 'not_met', evidence, by.label)
+        const asked = (id: string): boolean => Boolean(i.r?.questions.some((q) => q.answeredAt === null && q.text.includes(id)))
+        const why = baselineWhy(i.requirements, asked)
+        for (const [id, ok] of baselineCriteria(i.requirements)) if (have.has(id)) move(id, ok, evidence, why[id])
       }
       // Architecture choice is the person's approval of the blocks and key parts the architecture gate waits for
       if (a.skill === 'architecture-choice' && (loadJourney(db)?.criteria ?? []).some((c) => c.id === 'architect.blocks')) {
         const chosen = architectureView(designRows, loadDesignDecisions(db)).chosen
-        if (chosen) setCriterion(db, 'architect.blocks', 'met', [{ kind: 'skill', ref: 'architecture-choice', label: `Architecture choice: option ${chosen.option}, submitted by ${by.label}` }], by.label)
+        if (chosen) move('architect.blocks', true, [{ kind: 'skill', ref: 'architecture-choice', label: `Architecture choice: option ${chosen.option}, submitted by ${by.label}` }])
       }
       // Pin plan review is the person's agreement the schematic review waits for: it submits only when the plan
       // matches the schematic (its match check), so its submission meets capture.pins
       if (a.skill === 'pin-plan-review' && (loadJourney(db)?.criteria ?? []).some((c) => c.id === 'capture.pins')) {
         const parts = [...new Set((designRows?.pins ?? []).filter((x) => x.status !== 'withdrawn').map((x) => x.part))]
-        setCriterion(db, 'capture.pins', 'met', [{ kind: 'skill', ref: 'pin-plan-review', label: `Pin plan review: ${parts.length ? parts.join(', ') : 'the plan'} agreed, submitted by ${by.label}` }], by.label)
+        move('capture.pins', true, [{ kind: 'skill', ref: 'pin-plan-review', label: `Pin plan review: ${parts.length ? parts.join(', ') : 'the plan'} agreed, submitted by ${by.label}` }])
       }
       // Release review is the person's review of the release report the release approval gate waits for: submitted,
       // it meets signoff.report, once the coverage, interference and parts list work it reviews is met or waived.
@@ -514,10 +579,10 @@ export const SKILL_ACTIONS = {
       if (a.skill === 'release-review' && rec?.criteria.some((c) => c.id === 'signoff.report')) {
         const waits = reviewWaitsOn(rec, 'signoff.report')
         if (waits.length) throw new ActionError(`The release report can't be approved yet: ${waits.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}. trace is still working on ${waits.length === 1 ? 'it' : 'them'}.`)
-        setCriterion(db, 'signoff.report', 'met', [
+        move('signoff.report', true, [
           { kind: 'skill', ref: 'release-review', label: `Release review, submitted by ${by.label}` },
           { kind: 'file', ref: 'docs/release-report.md', label: 'the release report' },
-        ], by.label)
+        ])
       }
       if (a.skill === 'waiver') {
         const d = a.draft
@@ -541,8 +606,11 @@ export const SKILL_ACTIONS = {
         summary: `${sk.name} was submitted with every check of its quality bar met or waived${jobId ? '; the agents raise the change' : ''}.`,
         detail: { skill: a.skill, checks: checks.map((c) => ({ id: c.id, status: c.status })), ...(jobId ? { job: jobId } : {}) },
       })
-      putDraft(db, by.hash, a.skill, null)
-      return { result: { id, ref, answered, backTo } }
+      // a criterion it set is still not met: the draft is kept, so the person carries on from it on the skill's page
+      // (what was decided is recorded; deciding it again on the next Submit records it again, superseding)
+      const partly = set.some((c) => c.status === 'not_met')
+      if (!partly) putDraft(db, by.hash, a.skill, null)
+      return { result: { id, ref, answered, backTo, recorded: recordedWords(recorded), criteria: set, kept: partly } }
     }))
     // saved: the wait from asked to answered, as question.answer records it (src/api/process-metrics.ts)
     if (out.answered) recordAnswered(a.repo, out.answered)
@@ -578,7 +646,7 @@ export const SKILL_ACTIONS = {
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     if (docs.started) started = [...started, docs.started]
     if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
-    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), ...(rule.rule ? { rule: rule.rule } : {}), ...(rule.rule_error ? { rule_error: rule.rule_error } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
+    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), ...(rule.rule ? { rule: rule.rule } : {}), ...(rule.rule_error ? { rule_error: rule.rule_error } : {}), started, ...(out.recorded ? { recorded: out.recorded } : {}), criteria: out.criteria, ...(out.kept ? { draft_kept: true } : {}), ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),
 }
 

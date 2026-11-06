@@ -59,10 +59,12 @@ export interface FocusLayoutProps {
   stop?: { visible: boolean; onStop: () => void }
   /** 'fill': the centre is not padded or scrolled, so a chat can take its full height (conversational skills) */
   centre?: 'padded' | 'fill'
+  /** what the last Submit came to while the person is still here (refused, or partly): drawn just above Submit */
+  outcome?: ReactNode
 }
 
 export function FocusLayout({
-  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, stop, centre = 'padded',
+  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, stop, centre = 'padded', outcome,
 }: FocusLayoutProps) {
   const now = useNow(5000)
   const notice = useContext(FocusNotice)
@@ -184,6 +186,8 @@ export function FocusLayout({
           </aside>
         )}
       </div>
+
+      {outcome && <div className="max-h-[45dvh] shrink-0 overflow-y-auto border-t px-4 py-3 md:px-6">{outcome}</div>}
 
       <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked ?? waits} />
 
