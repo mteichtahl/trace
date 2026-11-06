@@ -151,7 +151,11 @@ export interface SkillView {
   /** trace's summary of where the person is ("You're on step 3. The Power sheet has two findings left…") */
   summary?: string
   /** a recommendation where there is a choice */
-  recommendation?: { question?: string; recommended: string; options: { id: string; label: string; detail?: string }[]; why?: string; evidence?: EvidenceRef[]; givesUp?: string }
+  recommendation?: {
+    question?: string; recommended: string; options: { id: string; label: string; detail?: string }[]; why?: string; evidence?: EvidenceRef[]; givesUp?: string
+    /** the options another one outscores (the recommendation may be one), each with why choosing it asks for a reason */
+    reasonNeeded?: Record<string, string>
+  }
   /** the checker's verdict for each check id in the skill definition */
   checks?: SkillCheckView[]
   /** the person's step, as the record has it */
@@ -166,6 +170,9 @@ export interface SkillView {
   intent?: IntentDraft
   /** Architecture choice: every option with its blocks and scores, the criteria, trace's recommendation */
   architecture?: Omit<ArchitectureRecord, 'option' | 'blocks' | 'connections'> & { options: ArchOption[]; current: string | null }
+  /** Architecture choice: the key parts of the option going ahead, with their newest stock check and exception
+   * (src/tools/design/key-parts.ts) */
+  key_parts?: KeyPartsView
   /** decisions in the draft that Submit could not record (they name nothing, or lack their reason) */
   pending_errors?: string[]
   question?: Question & { quantity?: { unit: string }; context?: string; searched?: EvidenceRef[] }
@@ -275,6 +282,15 @@ export interface ArchOption {
   blocks: Block[]
   connections: BlockConnection[]
 }
+/** A key part of the option going ahead (src/tools/design/key-parts.ts KeyPartView). */
+export interface KeyPartView {
+  block: string; block_name: string; mpn: string; role: string | null; off_board: boolean
+  check: { run: string; at: string; boards: number | null; order_code: string | null; need: number; status: string; flags: string[]; stock: number | null; unit_price: number | null; currency: string | null; note: string | null } | null
+  standing: 'ok' | 'problem' | 'unchecked'
+  why: string | null
+  exception: { reason: string; by: string; scope: 'part' | 'criterion' } | null
+}
+export interface KeyPartsView { option: string; quantity: number | null; parts: KeyPartView[] }
 export interface ArchitectureRecord {
   /** "Option B: STM32WL", the option drawn */
   option: string

@@ -26,7 +26,7 @@ import { z } from 'zod'
 import { CHANGE_STAGE, type StageId, applyChange, changeReason, changeWords, decide, loadJourney } from '../core/journey.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import { InterfaceSchema, readDesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, decidedFields, intentView, pinPlanPrint } from '../tools/design/record.js'
+import { type RequirementWords, architectureView, decidedFields, intentView, outscoredBy, outscoredWords, pinPlanPrint } from '../tools/design/record.js'
 import { ActionError, type Context, Repo, def, hashOf, label, openProjectDb, plainly, withProjectDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(64)
@@ -106,6 +106,9 @@ export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRo
       const o = a.options.find((x) => x.id === d.option)
       if (!o) throw new ActionError(`There is no architecture option ${d.option} in this project.`)
       if (a.recommended && d.option !== a.recommended && d.reason.length < 10) throw new ActionError(`Option ${a.recommended} is trace's recommendation: say in a line why you chose ${d.option} instead.`)
+      // an option another outscores needs a reason too, even trace's recommendation (test-esp32 #96)
+      const higher = outscoredBy(a, d.option, d.scores ?? [])
+      if (higher && d.reason.trim().length < 10) throw new ActionError(`${outscoredWords(higher)}: say in a line why you chose ${d.option}.`)
       const known = new Set(a.criteria.map((c) => c.id))
       const unknown = [...d.deciding, ...(d.scores ?? []).map((s) => s.criterion)].filter((c) => !known.has(c))
       if (unknown.length) throw new ActionError(`Not one of the criteria: ${[...new Set(unknown)].join(', ')}.`)
