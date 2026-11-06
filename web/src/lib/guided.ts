@@ -112,7 +112,7 @@ export const VERDICT_WORDS: Record<ChangeVerdict, { pill: string; tone: 'primary
 
 /** The words for an edit's kind, as a tag beside its title: "Setting", "Hand-in". */
 export const KIND_TAG: Record<NonNullable<ChangeSummary['kind']>, string | null> = {
-  work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in',
+  work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in', rule: 'Project rule',
 }
 
 /** The checks in a few words: "7 checks passed", "Checks running, 4 of 7 done", "1 check failing: ERC". */

@@ -95,7 +95,7 @@ export interface Actions {
   'journey.criterion.open': { args: Repo & { gate?: string; criterion?: string; waiver?: string }; result: { repo: string; opened: string; at: string; version: number } }
   'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[]; time_zone?: string }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }
   'gate.return': { args: Repo & { gate: string; reason: string; reopen?: string }; result: { repo: string; reopened: string | null; summary: string } }
-  'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string } }
+  'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string; started?: string[]; rule?: RuleProposed; rule_error?: string } }
   /** `job`: the stuck agent's job id, or the stuck item's own id (an inbox item's questionId) */
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
   'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }
@@ -126,6 +126,9 @@ export interface Actions {
   /** KiCad files handed in: one change of the ones that differ from the design */
   'design.handin': { args: Repo & { files: { path: string; base64: string }[]; note?: string }; result: { repo: string; change: number | null; changed: string[]; same: string[]; branch: string; commit: string } }
   /** The project logo (src/api/actions-logo.ts): each variant kept beside the documents, checked before it is saved */
+  /** The project's rules (src/api/rule-answers.ts): .trace/rules.md on the default branch, and each answer made a rule */
+  'project.rules': { args: Repo; result: ProjectRules }
+  'project.rule_from_answer': { args: Repo & { question: string }; result: RuleProposed & { repo: string; question: string; summary: string } }
   'project.logo': { args: Repo; result: { repo: string; light: StoredLogo | null; dark: StoredLogo | null } }
   'project.logo_check': { args: Repo & { base64: string }; result: LogoCheck & { repo: string } }
   'project.logo_set': { args: Repo & { light?: { base64: string } | null; dark?: { base64: string } | null }; result: { repo: string; change: number | null; branch: string; commit: string; written: string[]; removed: string[] } }
@@ -149,7 +152,7 @@ export interface Actions {
   'skill.drafts': { args: Repo; result: { drafts: { skill: string; name: string; step: number; steps: number; saved: string }[] } }
   /** submit a skill's result: refused with what is missing unless every check is met or waived */
   'requirements.draft': { args: Repo; result: { repo: string; jobId: string; attempt: number; started: string[] } }
-  'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[] } }
+  'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[]; rule?: RuleProposed; rule_error?: string } }
   /** each requirement's evidence status and the intent lines it is derived from */
   'requirements.trace': { args: Repo; result: import('./types-s1').TraceView }
   /** the architecture, the sheets with their drawings and requirements, the pin plan, the board; what is not recorded, in notes */
@@ -256,6 +259,18 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
 }
 
 /** Call one API action. */
+/** A rule from an answer, as trace added it (src/api/rule-answers.ts ProposedRule): proposed now, or already there. */
+export interface RuleProposed { state: 'proposed' | 'in_rules' | 'waiting'; change: number | null; branch?: string; applies?: 'auto' | 'review'; words?: string }
+/** One answer made a rule for the project (src/api/rule-answers.ts RuleAnswerView). */
+export interface RuleAnswer {
+  question: string; asked: string; asked_by: string; rule: string; reason: string | null; by: string | null; at: string | null
+  /** in_rules: in the rules file on the default branch; waiting: its change is open; missing: neither yet */
+  state: 'in_rules' | 'waiting' | 'missing'
+  change: number | null
+}
+/** The project's rules: the rules file on the default branch (null: there is none) and the answers made rules. */
+export interface ProjectRules { repo: string; branch: string; path: string; text: string | null; answers: RuleAnswer[] }
+
 /** A logo variant as the repository keeps it (src/api/actions-logo.ts StoredLogo). */
 export interface StoredLogo { path: string; format: 'svg' | 'png'; base64: string }
 /** What trace says of a logo file (src/docs/logo.ts LogoCheck). */
