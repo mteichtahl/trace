@@ -22,6 +22,27 @@ const FLAT = {
     gives: 'Room for 60 projects, projects created in the web app added by every update, a knowledge base per project, the CPU queue, and agents told at once when a person answers their question.',
   },
 }
+// the project's rules (src/api/rule-answers.ts): one rule in the file, one waiting in change 41, and one answered
+// before trace wrote them, which Settings adds (project.rule_from_answer). VITE_MOCK_RULES=empty: no rules at all
+const RULES_TEXT = `# Rules
+
+Never change the USB-C footprint without asking.
+
+## Rules from answers
+
+Rules people made in trace when they answered an agent's question with "A rule for the project". Each says who decided it and which question it answers. Follow them as every other rule here.
+
+<!-- trace: rule from question aq-pins -->
+- J2 is GND, VCC, SCL, SDA, as the OLED module's pins are.
+  - Decided by Priya S. on 2026-11-04, answering the Implementation specialist's question aq-pins: "Which pin order does the OLED header J2 need?"
+`
+const at = (h: number): string => new Date(Date.now() - h * 3_600_000).toISOString()
+const ruleAnswers = [
+  { question: 'aq-thermal', asked: 'Can the modem transmit continuously, or should the design assume modem sleep?', asked_by: 'the Thermal specialist', rule: 'Design to modem sleep: no continuous transmit', reason: 'The case has no airflow.', by: 'priya@acme.example', at: at(0.2), state: 'waiting', change: 41 },
+  { question: 'aq-pins', asked: 'Which pin order does the OLED header J2 need?', asked_by: 'the Implementation specialist', rule: 'J2 is GND, VCC, SCL, SDA', reason: null, by: 'priya@acme.example', at: at(20), state: 'in_rules', change: null },
+  { question: 'aq-log', asked: 'May the firmware log over the USB serial port in production builds?', asked_by: 'the Firmware specialist', rule: 'No logging in production builds', reason: null, by: 'alex@acme.example', at: at(50), state: 'missing', change: null },
+]
+
 const NESTED = { layout: 'nested', projects: { max: 60, updateMax: 60 }, has: { knowledgeBase: true, cpuQueue: true, answerEvents: true }, note: 'Each project has its own nested stack: up to 60 projects, each with its knowledge base.' }
 
 export function smallAction(name: string, a: Record<string, unknown>): Response | undefined {
@@ -44,6 +65,14 @@ export function smallAction(name: string, a: Record<string, unknown>): Response 
       return ok({ repo: a.repo, ok: png || svg, format: png ? 'png' : svg ? 'svg' : null, width: png ? 1024 : 200, height: png ? 512 : 80, problems: png || svg ? [] : ['It is not an SVG or PNG image. Save the logo as SVG (best, sharp at any size) or PNG.'] })
     }
     case 'project.logo_set': return ok({ repo: a.repo, change: 12, branch: `trace/logo-${Date.now().toString(36)}`, commit: 'c0ffee1', written: ['docs/design/logo.svg'], removed: [] })
+    case 'project.rules': return ok(import.meta.env.VITE_MOCK_RULES === 'empty'
+      ? { repo: a.repo, branch: 'main', path: '.trace/rules.md', text: null, answers: [] }
+      : { repo: a.repo, branch: 'main', path: '.trace/rules.md', text: RULES_TEXT, answers: ruleAnswers })
+    case 'project.rule_from_answer': {
+      const r = ruleAnswers.find((x) => x.question === a.question)
+      if (r) Object.assign(r, { state: 'waiting', change: 44 })
+      return ok({ repo: a.repo, question: a.question, state: 'proposed', change: 44, branch: `trace/rule-${String(a.question)}-m2`, applies: 'review', words: 'The rule goes into the project\'s rules (.trace/rules.md) in change #44: it applies once an admin accepts it, and every agent follows it from then on.', summary: 'The rule goes into the project\'s rules (.trace/rules.md) in change #44: it applies once an admin accepts it, and every agent follows it from then on.' })
+    }
     case 'files.edit': return ok({ repo: a.repo, path: a.path, change: 12, branch: `trace/edit-claude-md-${Date.now().toString(36)}`, commit: 'c0ffee1' })
     case 'prompts.chat': return ok({ entries: [{ id: 'chat.role', text: null, version: null, sha: '0123456789ab' }] })
     case 'voice.vocabulary': return ok({ repo: a.repo, language: a.language, name: 'trace-0123abcd-en-AU', state: 'READY', usable: true, note: 'Dictation uses this project\'s words (reference designators, part numbers, net names, requirement ids).' })

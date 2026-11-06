@@ -176,6 +176,7 @@ import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
 import { LOGO_ACTIONS } from './actions-logo.js'
+import { RULE_ANSWER_ACTIONS } from './rule-answers.js'
 import { DOCUMENT_ACTIONS } from './actions-documents.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
@@ -904,6 +905,7 @@ export const ACTIONS = {
   ...DESIGN_ACTIONS,
   ...HANDIN_ACTIONS,
   ...LOGO_ACTIONS,
+  ...RULE_ANSWER_ACTIONS,
   ...DOCUMENT_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
