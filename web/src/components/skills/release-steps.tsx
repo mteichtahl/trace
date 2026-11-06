@@ -6,49 +6,92 @@
  * revision. Where the record has nothing for a step, the step says so plainly.
  */
 import { Check } from 'lucide-react'
+import { useId } from 'react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Rich } from '@/components/rich'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState } from '@/components/states'
-import type { ReleaseView } from '@/lib/types-s1'
+import type { ReleaseView, SkillView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 
 /** The five areas acknowledged in turn, as step ids. */
 export const RELEASE_AREAS = ['coverage', 'emc', 'bom', 'fab', 'changes'] as const
 
-export interface ReleaseDraft { acknowledged?: string[]; parts_ack?: string[]; note?: string }
+export interface ReleaseDraft { acknowledged?: string[]; parts_ack?: string[]; note?: string; choice?: { option: string; reason?: string } }
 
 /** The bar's checks the screen works out from the draft as it is typed (the record agrees once it is saved). Pure. */
-export function releaseChecks(v: ReleaseView | undefined, d: ReleaseDraft & { choice?: { option: string } }): Record<string, 'met' | 'not_met'> {
+export function releaseChecks(v: ReleaseView | undefined, d: ReleaseDraft, recommended?: string): Record<string, 'met' | 'not_met'> {
   const acked = d.acknowledged ?? []
+  const note = (d.note ?? '').trim()
   const out: Record<string, 'met' | 'not_met'> = { areas: RELEASE_AREAS.every((a) => acked.includes(a)) ? 'met' : 'not_met' }
   const opt = d.choice?.option
-  if (opt) out.decision = opt === 'release' || (opt.startsWith('return:') && (d.note ?? '').trim().length >= 5) ? 'met' : 'not_met'
+  if (opt) out.decision = opt === 'release' || (opt.startsWith('return:') && note.length >= 5) ? 'met' : 'not_met'
+  // against trace's recommendation, the note is the reason
+  out.reasons = opt && recommended && opt !== recommended && note.length < 3 ? 'not_met' : 'met'
   // flagged parts left: not met at once; all of them ticked waits for the record (unknown lines stay the person's)
   if (v?.parts?.flagged.some((k) => !(d.parts_ack ?? []).includes(k))) out.single = 'not_met'
   return out
+}
+
+/**
+ * Decide: release, or return to a stage, chosen by selecting it (the draft's choice, at once), with trace's
+ * recommendation marked and its reasons; the note says what has to change, or why not the recommendation.
+ */
+function Decide({ rec, draft, setDraft }: { rec?: SkillView['recommendation']; draft: ReleaseDraft; setDraft: (fn: (d: ReleaseDraft) => ReleaseDraft) => void }) {
+  const id = useId()
+  const chosen = draft.choice?.option ?? ''
+  const against = !!chosen && !!rec && chosen !== rec.recommended
+  const returning = chosen.startsWith('return:')
+  const note = (draft.note ?? '').trim()
+  return (
+    <>
+      {rec && (
+        <section className="mt-4 rounded-xl border bg-card p-4" aria-labelledby={`${id}-q`}>
+          <p id={`${id}-q`} className="text-sm font-medium">{rec.question ?? 'Release, or return?'}</p>
+          {rec.why && <p className="mt-1 text-sm"><span className="text-muted-foreground">trace recommends {rec.options.find((o) => o.id === rec.recommended)?.label.toLowerCase() ?? rec.recommended}: </span><Rich text={rec.why} /></p>}
+          <RadioGroup className="mt-3" value={chosen} onValueChange={(v) => setDraft((d) => ({ ...d, choice: { option: v } }))} aria-labelledby={`${id}-q`}>
+            {rec.options.map((o) => (
+              <Label key={o.id} htmlFor={`${id}-${o.id}`} className="flex cursor-pointer items-start gap-2 rounded-md border p-2.5 font-normal has-[[data-state=checked]]:border-primary">
+                <RadioGroupItem id={`${id}-${o.id}`} value={o.id} className="mt-0.5" />
+                <span>
+                  <span className="font-medium">{o.label}</span>
+                  {o.id === rec.recommended && <Badge className="ml-2 rounded-sm border-transparent bg-primary/10 font-normal text-primary">trace recommends</Badge>}
+                  {o.detail && <span className="block text-xs text-muted-foreground">{o.detail}</span>}
+                </span>
+              </Label>
+            ))}
+          </RadioGroup>
+        </section>
+      )}
+      <section className="mt-6" aria-labelledby={`${id}-note`}>
+        <h2 id={`${id}-note`} className="text-base font-semibold">Note</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {returning ? 'Required: what has to change before the release.' : against ? "Required: why not trace's recommendation." : 'Kept with your decision.'}
+        </p>
+        <textarea
+          className="mt-2 min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
+          value={draft.note ?? ''}
+          onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
+          placeholder={returning ? 'What has to change' : 'Anything the release should carry'}
+          aria-labelledby={`${id}-note`}
+          aria-required={returning || against}
+        />
+        {(returning && note.length < 5) || (against && note.length < 3) ? <p className="mt-1 text-xs text-destructive">{returning ? 'Say what has to change.' : "Say why not trace's recommendation."}</p> : null}
+      </section>
+    </>
+  )
 }
 
 const money = (n: number | null, c: string | null): string => (n === null ? 'not known' : `${c ?? ''} ${n.toFixed(2)}`.trim())
 const day = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 const run = (id: string, label = `run ${id.replace(/^run_/, '').slice(0, 8)}`) => <EvidenceChip evidence={{ kind: 'run', id, label }} />
 
-export function ReleaseStep({ step, view, draft, setDraft, loading }: { step: string; view?: ReleaseView; draft: ReleaseDraft; setDraft: (fn: (d: ReleaseDraft) => ReleaseDraft) => void; loading: boolean }) {
-  if (step === 'decide') {
-    return (
-      <section className="mt-6" aria-labelledby="note">
-        <h2 id="note" className="text-base font-semibold">Note</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Kept with your decision. A return says what has to change.</p>
-        <textarea
-          className="mt-2 min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
-          value={draft.note ?? ''}
-          onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
-          placeholder="Anything the release or the return should carry"
-          aria-labelledby="note"
-        />
-      </section>
-    )
-  }
+export function ReleaseStep({ step, view, draft, setDraft, loading, recommendation }: { step: string; view?: ReleaseView; draft: ReleaseDraft; setDraft: (fn: (d: ReleaseDraft) => ReleaseDraft) => void; loading: boolean; recommendation?: SkillView['recommendation'] }) {
+  if (step === 'decide') return <Decide rec={recommendation} draft={draft} setDraft={setDraft} />
   const area = (RELEASE_AREAS as readonly string[]).includes(step)
   const done = (draft.acknowledged ?? []).includes(step)
   const body = step === 'coverage' ? null : !view ? <EmptyState className="mt-2">{loading ? 'Loading what trace prepared…' : 'trace could not read the record for this step.'}</EmptyState>

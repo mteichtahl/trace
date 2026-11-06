@@ -48,7 +48,8 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const decisionOf = (it: { id: string }) => s.draft.data.decisions?.find((x) => `requirement:${x.requirement}` === it.id)
   const last = s.stepIndex === def.steps.length - 1
   const release = def.id === 'release-review'
-  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(release ? releaseChecks(v?.release, s.draft.data) : {}), ...(needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
+  // Release review's choice is made on its Decide step, its note the reason (release-steps.tsx)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(release ? releaseChecks(v?.release, s.draft.data, v?.recommendation?.recommended) : needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
   const gate = def.id === 'gate-signing'
 
   return (
@@ -82,7 +83,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
 
       {s.view.isError && <div className="mt-4"><QueryError error={s.view.error} what={`what trace prepared for ${def.name}`} onRetry={() => void s.view.refetch()} /></div>}
 
-      {v?.recommendation && s.stepIndex >= Math.max(0, def.steps.findIndex((x) => /choose|decide|pick/i.test(x.title))) && (
+      {!release && v?.recommendation && s.stepIndex >= Math.max(0, def.steps.findIndex((x) => /choose|decide|pick/i.test(x.title))) && (
         <DecisionCard
           className="mt-4"
           decision={v.recommendation}
@@ -95,7 +96,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       {v?.pending_errors?.length ? <p className="mt-3 text-sm text-destructive">{v.pending_errors.join(' ')}</p> : null}
 
       {/* Release review shows each area from the record, with its acknowledgement (release-steps.tsx) */}
-      {release && <ReleaseStep step={s.step.id} view={v?.release} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} loading={s.view.isLoading} />}
+      {release && <ReleaseStep step={s.step.id} view={v?.release} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} loading={s.view.isLoading} recommendation={v?.recommendation} />}
 
       {/* Gate signing has no items of its own: they live on the gate's screen, so an empty "nothing open" here misleads;
           Architecture choice's key parts are their own list (design-steps.tsx KeyParts); Release review's steps are

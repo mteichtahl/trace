@@ -6,10 +6,11 @@ import { ReleaseStep, type ReleaseDraft, releaseChecks } from './release-steps'
 import { boardEmpty } from './step-picture'
 
 const view = SKILL_VIEWS['release-review']!.release!
+const rec = SKILL_VIEWS['release-review']!.recommendation!
 
 function step(id: string, start: ReleaseDraft = {}) {
   let d = start
-  const r = render(<ReleaseStep step={id} view={view} draft={d} setDraft={(fn) => { d = fn(d) }} loading={false} />)
+  const r = render(<ReleaseStep step={id} view={view} draft={d} setDraft={(fn) => { d = fn(d) }} loading={false} recommendation={rec} />)
   return { ...r, draft: () => d }
 }
 
@@ -46,6 +47,22 @@ describe('Release review steps', () => {
     const s = step('emc', { acknowledged: ['coverage'] })
     await userEvent.click(screen.getByRole('button', { name: /Acknowledge/ }))
     expect(s.draft().acknowledged).toEqual(['coverage', 'emc'])
+  })
+
+  it('Decide: selecting a return chooses it at once, and the bar then waits only for the note', async () => {
+    const s = step('decide')
+    expect(screen.getByRole('radio', { name: /Release/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('radio', { name: /Return to Layout/ }))
+    expect(s.draft().choice).toEqual({ option: 'return:layout' })
+    expect(releaseChecks(view, s.draft(), rec.recommended)).toMatchObject({ decision: 'not_met', reasons: 'not_met' })
+    const withNote = { ...s.draft(), note: 'Move /SCK in from the board edge.' }
+    expect(releaseChecks(view, withNote, rec.recommended)).toMatchObject({ decision: 'met', reasons: 'met' })
+  })
+
+  it('Decide: the chosen option shows selected, and a return asks what has to change', () => {
+    step('decide', { choice: { option: 'return:layout' } })
+    expect(screen.getByRole('radio', { name: /Return to Layout/ })).toBeChecked()
+    expect(screen.getByText('Required: what has to change before the release.')).toBeInTheDocument()
   })
 
   it('Decide has a note', () => {

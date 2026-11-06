@@ -29,7 +29,7 @@ import { type PinFinding, architectureView, intentView, linksView, missingFields
 import type { Finding, TraceRequirement } from './record-read.js'
 import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
-import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine } from './release-review.js'
+import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine, releaseRecommendation, releaseView } from './release-review.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
 export interface CheckResult {
@@ -154,6 +154,20 @@ function architectureReasons(input: CheckInput): CheckResult {
   if (a.recommended && choice.option !== a.recommended && !own) return notMet('reasons', `Option ${a.recommended} is trace's recommendation: say in a line why you chose ${choice.option} instead.`)
   const higher = outscoredBy(a, choice.option)
   return higher && !own ? notMet('reasons', `${outscoredWords(higher)}: say in a line why you chose ${choice.option}.`) : shared
+}
+
+/**
+ * Release review's reasons: choosing other than trace's recommendation (releasing when it recommends a return, or the
+ * other way) needs the person's note as the reason. The draft's choice is { option }, its note the reason.
+ */
+function releaseReasons(input: CheckInput): CheckResult {
+  const d = decisionOf(input.draft)
+  if (!d) return met('reasons')
+  const rec = releaseRecommendation(input.r, releaseView(input.r, input.release ?? null, { drc: input.drc, board: input.board, handPlaced: input.handPlaced ?? null }), input.requirements)
+  const chosen = d.choice === 'release' ? 'release' : `return:${d.stage}`
+  if (!rec || chosen === rec.recommended || noteOf(input.draft).length >= 3) return met('reasons')
+  const words = rec.options.find((o) => o.id === rec.recommended)?.label ?? rec.recommended
+  return notMet('reasons', `trace recommends ${words.charAt(0).toLowerCase()}${words.slice(1)} (${rec.why.replace(/\.$/, '')}): say in the note why you chose otherwise.`)
 }
 
 type Checker = (input: CheckInput) => CheckResult
@@ -606,7 +620,7 @@ export function checkSkill(skill: string, input: CheckInput): CheckResult[] | nu
   if (!def) return null
   const confirmed = input.draft?.confirmed && typeof input.draft.confirmed === 'object' ? input.draft.confirmed as Record<string, unknown> : {}
   return def.checks.map((c: SkillCheckDef) => {
-    const r = c.id === 'reasons' ? (skill === 'architecture-choice' ? architectureReasons(input) : reasons(input)) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
+    const r = c.id === 'reasons' ? (skill === 'architecture-choice' ? architectureReasons(input) : skill === 'release-review' ? releaseReasons(input) : reasons(input)) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
     // what no tool can check yet, the person checked themselves: met, and said to be theirs
     return r.confirmable && r.unavailable && confirmed[c.id] === true
       ? { id: r.id, status: 'met', confirmed: true, detail: `You confirmed it: trace cannot check it from the record yet (it needs ${r.unavailable}).` }
