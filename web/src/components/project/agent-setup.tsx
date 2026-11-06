@@ -4,9 +4,13 @@
  * project's tools or start work there. The notice says so, roughly when it will be ready (from how long this
  * installation's updates take), and when the app looks again. The update marking the project added is a live event
  * (`record.changed { what: 'agent' }`, lib/live.ts), which makes the notice look again at once; the run on GitHub
- * sends none, so the app also looks again at the time the API gives (next_check_s), with Check now, and as soon as the
- * person comes back to the tab: a tab in the background does not poll, and in the test run the notice still said
- * "queued" half an hour after the update finished (test-esp32 log #5). Once the agent is there the notice goes away.
+ * sends none, so the app also looks again at the time the API gives (next_check_s), in a background tab too (the person
+ * is often on GitHub watching the run), with Check now, and as soon as the person comes back to the tab. In the test
+ * run the notice still said "queued" half an hour after the update finished (test-esp32 log #5): the API followed a
+ * newer run queued behind the finished one, and the notice said "trace is looking now" while nothing was looking. What
+ * it says of its own looks is what happened (lookLine): looking, when it looks next, that its last look failed and
+ * what it shows is from when, or when it last looked. Once the agent is there the notice goes away, and the API
+ * starts the work queued meanwhile.
  *
  * The update's progress (UpdateProgress) is its steps as the API reads them from the run (done, running, waiting,
  * failed), a bar, "about N min left" from expected_by, and on failure the failing step's last lines (admins only, as
@@ -25,7 +29,8 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { MoreForAdmins } from '@/components/more-for-admins'
 import { time } from '@/lib/format'
-import { useNextLook } from '@/lib/live'
+import { nextLookWords } from '@/lib/live'
+import { useNow } from '@/components/use-now'
 import { q } from '@/lib/queries'
 import type { AgentSetup } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -61,6 +66,28 @@ export const openLabel = (settingUp: boolean): string => (settingUp ? 'Open proj
 
 /** useNextLook's words as the notice says them: "trace looks again in 40 s." Pure. */
 export const lookWords = (next: string): string => (next === 'looking now' ? 'trace is looking now.' : `trace ${next.replace(/^next look/, 'looks again')}.`)
+
+/**
+ * What the notice says of trace's own looks, from what the query did, never from the clock alone: "looking now" only
+ * while a look is on its way (it said so for half an hour while nothing looked, log #5); a look that failed, with what
+ * is shown and from when; past its time with no look (a tab the browser held back, the connection down), when it last
+ * looked. null once there is nothing to look for. Pure.
+ */
+export function lookLine(o: { every: number | false; fetching: boolean; updatedAt: number; failedAt: number; error: string | null; now: number }): string | null {
+  if (o.every === false) return null
+  if (o.fetching) return 'trace is looking now.'
+  const since = o.updatedAt ? ` What is shown is from ${time(o.updatedAt)}.` : ''
+  // the newest look decides: a look that failed after the last good one
+  if (o.error && o.failedAt >= o.updatedAt) {
+    // the screen's clock ticks each second: never "61 s" for a look just made
+    const next = nextLookWords(o.failedAt, o.every, Math.max(o.now, o.failedAt))
+    const why = o.error.replace(/\s+/g, ' ').trim().replace(/\.$/, '').slice(0, 160)
+    return `trace could not look just now (${why}).${since}${next === 'looking now' ? '' : ` It ${next.replace(/^next look/, 'tries again')}.`}`
+  }
+  const next = nextLookWords(o.updatedAt, o.every, o.now)
+  if (next === 'looking now') return o.updatedAt ? `trace last looked at ${time(o.updatedAt)}.` : null
+  return lookWords(next)
+}
 
 /** The notice's words. Pure. */
 export function setupWords(s: AgentSetup, now: number): { title: string; body: string; when: string | null } {
@@ -150,6 +177,9 @@ export function useAgentSetup(repo: string | undefined, o: { fetch?: boolean } =
     enabled: !!repo && o.fetch !== false,
     retry: false,
     refetchInterval: (query) => setupLookEvery(query.state.data),
+    // a tab in the background looks too (the browser may slow it to once a minute): the person is often on GitHub
+    // watching the update, and comes back to a notice that is already right, with its toast (log #5)
+    refetchIntervalInBackground: true,
     // the app's default is not to (main.tsx): here coming back to the tab is when a stale "queued" would be read
     refetchOnWindowFocus: (query) => setupLookEvery(query.state.data) !== false,
   })
@@ -162,7 +192,8 @@ export function AgentSetupNotice({ repo, compact, className }: { repo: string; c
   const setup = useAgentSetup(repo)
   const s = setup.data
   const every = setupLookEvery(s)
-  const next = useNextLook(setup.dataUpdatedAt, every)
+  const now = useNow(1000)
+  const said = lookLine({ every, fetching: setup.isFetching, updatedAt: setup.dataUpdatedAt, failedAt: setup.errorUpdatedAt, error: setup.error ? setup.error.message : null, now })
   const [checking, setChecking] = useState(false)
   // say so once when it becomes ready while the person is here (the compact panel copy leaves it to the page's)
   const was = useRef<boolean | null>(null)
@@ -177,7 +208,7 @@ export function AgentSetupNotice({ repo, compact, className }: { repo: string; c
   const Icon = stalled ? TriangleAlert : Clock
   const look = (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-      {next && <span aria-live="off">{lookWords(next)}</span>}
+      {said && <span aria-live="off">{said}</span>}
       <Button
         variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={checking}
         onClick={async () => { setChecking(true); try { await setup.refetch() } finally { setChecking(false) } }}
