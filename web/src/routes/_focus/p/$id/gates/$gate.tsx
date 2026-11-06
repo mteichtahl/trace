@@ -35,7 +35,8 @@ import { useCommands } from '@/components/shell/command-menu'
 import { LiveDot } from '@/components/shell/live-dot'
 import { EvidenceBody, EvidencePanel } from '@/components/skills/evidence-sheet'
 import { CriterionFindings } from '@/components/criterion-findings'
-import { type Blocker, isOpened, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
+import { type Blocker, criterionStatusLabel, isOpened, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
+import { WaiverRating } from '@/components/waiver-rating'
 import { reauthenticate } from '@/components/skills/reauth'
 import { StatusBadge } from '@/components/status-badge'
 import { WaiverActions } from '@/components/waiver-actions'
@@ -245,7 +246,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
     },
     {
       accessorKey: 'status', header: 'Status', size: 130, meta: { label: 'Status', kind: 'enum' },
-      cell: ({ row }) => <StatusBadge status={row.original.status === 'not_met' ? 'not_met' : 'met'} label={row.original.status === 'waived' ? 'Met (waived)' : row.original.status === 'met' ? (g.waivers.length && row.index === 0 ? `Met (${g.waivers.length} waived)` : 'Met') : 'Not met'} />,
+      cell: ({ row }) => <StatusBadge status={row.original.status === 'not_met' ? 'not_met' : 'met'} label={criterionStatusLabel(row.original, g)} />,
     },
     { id: 'evidence', accessorFn: (c) => c.evidence?.label ?? '', header: 'Evidence', size: 160, meta: { label: 'Evidence', kind: 'text', mono: true } },
     {
@@ -332,7 +333,8 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                         <div className="min-w-0 flex-1 space-y-1 text-sm">
                           <p className="font-medium">{w.title}</p>
                           <p><span className="text-muted-foreground">Reason: </span>{w.reason}</p>
-                          <p className="flex items-center gap-1.5"><span className="text-muted-foreground">Risk: </span><StatusBadge status={w.risk === 'major' ? 'failing' : 'warning'} label={cap(w.risk)} /></p>
+                          <p className="flex items-center gap-1.5"><span className="text-muted-foreground">Rated: </span><WaiverRating rating={w.risk} /></p>
+                          {w.riskText && <p><span className="text-muted-foreground">Risk if the reason is wrong: </span>{w.riskText}</p>}
                           <p><span className="text-muted-foreground">Caught: </span>{w.caught}</p>
                           <WaiverActions repo={repo} waiver={w} className="pt-1" />
                         </div>

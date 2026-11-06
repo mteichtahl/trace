@@ -285,12 +285,24 @@ function openRepeat(db: DatabaseSync, record: JourneyRecord, text: string, block
 }
 
 /** Record an agent's check of a criterion trace owns; refuses a person-owned or unknown criterion, and a met one without evidence. */
+/** Criteria met only on evidence of a kind: what the signer opens has to show the very thing checked. */
+const EVIDENCE_NEEDED: Readonly<Record<string, { kind: string; say: string }>> = {
+  'capture.datasheets': {
+    kind: 'datasheet',
+    say: 'capture.datasheets is met on the datasheets compared: give one evidence of kind datasheet per part checked (ref its MPN or datasheet, label the part, the page and the result, such as "U1 AMS1117-3.3 p.2: input 5 V within the 15 V maximum, 160 mA within 1 A"), beside any run.',
+  },
+}
+
 export function addCriterionCheck(db: DatabaseSync, by: Asker, c: { criterion: string; status: 'met' | 'not_met'; evidence: readonly Evidence[]; note?: string | undefined }, record: JourneyRecord | null): CriterionCheck {
   if (!record) throw new AgentFactError('This project has no journey yet, so it has no criteria to check.')
   const def = record.criteria.find((x) => x.id === c.criterion)
   if (!def) throw new AgentFactError(`There is no criterion called ${c.criterion} in this project (journey.status lists them).`)
   if (def.owner !== 'trace') throw new AgentFactError(`${c.criterion} is a person's to meet (${def.text}) — only their own act meets it. Ask them (journey.ask) if it blocks you.`)
   if (c.status === 'met' && !c.evidence.length) throw new AgentFactError('A met criterion needs its evidence: the run id, artifact or file that shows it.')
+  // the evidence must be what the criterion is about: a netlist run ("54 nets, 23 components") says nothing of which
+  // datasheets were compared, or what came of it (test-esp32 #52)
+  const needs = EVIDENCE_NEEDED[c.criterion]
+  if (c.status === 'met' && needs && !c.evidence.some((e) => e.kind === needs.kind)) throw new AgentFactError(needs.say)
   const id = newId('cc')
   const t = now()
   db.prepare('INSERT INTO criterion_checks (id, criterion, status, evidence, note, checked_at, by, job_id, revision) VALUES (?,?,?,?,?,?,?,?,?)')

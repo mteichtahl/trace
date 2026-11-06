@@ -154,7 +154,7 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'waiver.add': {
       const j = JOURNEYS[repo]
       const id = `W-${(j?.waivers.length ?? 0) + 4}`
-      j?.waivers.push({ id, title: String(a.finding ?? 'Waiver'), reason: String(a.reason), risk: (a.severity as 'degraded') ?? 'minor', caught: String(a.caught) })
+      j?.waivers.push({ id, title: String(a.finding ?? 'Waiver'), reason: String(a.reason), risk: (a.severity as 'degraded') ?? 'degraded', caught: String(a.caught) })
       return later(ok({ id }))
     }
     case 'task':

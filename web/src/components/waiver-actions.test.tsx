@@ -21,7 +21,7 @@ async function inRouter(ui: ReactNode): Promise<void> {
 }
 
 const W: Waiver = {
-  id: 'w1', title: 'finding layout.drc@J1', reason: 'The footprint is the vendor\'s own. Risk: none', risk: 'major', caught: 'On the bench: plug it in', severity: 'safety',
+  id: 'w1', title: 'finding layout.drc@J1', reason: 'The footprint is the vendor\'s own. Risk: none', risk: 'safety', caught: 'On the bench: plug it in', severity: 'safety',
   riskText: 'The plug may not seat.', scope: 'this revision only', by: 'marc@example.com', at: '2026-11-05T06:38:00Z', target: { kind: 'finding', id: 'layout.drc@J1' }, closed: false, mayWithdraw: true,
 }
 

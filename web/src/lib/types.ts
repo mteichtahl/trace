@@ -184,11 +184,18 @@ export interface Criterion {
   added?: boolean
 }
 
+/** The Waiver form's four ratings */
+export type WaiverRating = 'cosmetic' | 'degraded' | 'failure' | 'safety'
+
 export interface Waiver {
   id: string
   title: string
   reason: string
-  risk: 'minor' | 'degraded' | 'major'
+  /** the rating the person chose in the Waiver form, in its words (src/core/journey.ts Severity) */
+  risk: WaiverRating
+  /** the gate criterion it counts for (journey.get `criterion`): a criterion, or the criterion a finding is of; none
+   *  for a requirement's or a test's waiver, which is the stage's only */
+  criterion?: string | null
   caught: string
   acknowledged?: boolean
   /** the record's own words: its severity (cosmetic | degraded | failure | safety), its risk, its scope */

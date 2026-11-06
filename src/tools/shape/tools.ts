@@ -19,7 +19,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
-import { type Store, Writer } from 'n3'
+import { Parser, type Store, Writer } from 'n3'
 import { z } from 'zod'
 import { bridge } from '../../core/bridge.js'
 import { type AnyTool, ToolError, defineTool } from '../../core/registry.js'
@@ -73,6 +73,62 @@ export const findingId = (criterion: string, f: { focus: string | null }): strin
 /** Each finding with its id, and whether a waiver of that one finding (its id in `waived`) excuses it. */
 export const withWaivers = (criterion: string, findings: readonly ShapeFinding[], waived: ReadonlySet<string>): (ShapeFinding & { id: string; waived: boolean })[] =>
   findings.map((f) => ({ ...f, id: findingId(criterion, f), waived: waived.has(findingId(criterion, f)) }))
+
+const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+const SUBCLASS = 'http://www.w3.org/2000/01/rdf-schema#subClassOf'
+const TARGET_CLASS = 'http://www.w3.org/ns/shacl#targetClass'
+const TRACE = 'https://trace-eda.com/ns/trace#'
+
+/** What a shape checked: each kind of record it targets (the project itself left out) and how many the graph has. */
+export interface ShapeScope { kind: string; words: string; count: number }
+
+/** "KeyPart" → "key part" */
+const classWords = (iri: string): string => iri.replace(TRACE, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
+const plural = (n: number, w: string): string => `${n} ${n === 1 ? w : `${w}s`}`
+
+/**
+ * The records `criterion`'s shape was run over: for each class its node shapes target (sh:targetClass), the
+ * instances in the graph, its subclasses' too. The project (trace:Journey) is always one and is left out. Evidence
+ * that says only "every record keeps to its shape" reads the same over an empty record as over a full one (test-esp32
+ * #44); with this it says "7 key parts", or that there was nothing to check.
+ */
+export function shapeScope(criterion: string, quads: Quads, shapes = readFileSync(join(SHAPES_DIR, `${criterion}.ttl`), 'utf8')): ShapeScope[] {
+  const classes = [...new Set(new Parser().parse(shapes).filter((q) => q.predicate.value === TARGET_CLASS).map((q) => q.object.value))].filter((c) => c !== `${TRACE}Journey`)
+  const sub = new Map<string, string[]>()
+  const types = new Map<string, Set<string>>()
+  for (const q of quads) {
+    if (q.predicate.value === SUBCLASS) sub.set(q.object.value, [...(sub.get(q.object.value) ?? []), q.subject.value])
+    else if (q.predicate.value === RDF_TYPE) { const s = types.get(q.object.value) ?? new Set<string>(); s.add(q.subject.value); types.set(q.object.value, s) }
+  }
+  return classes.map((c) => {
+    const seen = new Set<string>()
+    const nodes = new Set<string>()
+    const walk = (k: string): void => { if (seen.has(k)) return; seen.add(k); for (const n of types.get(k) ?? []) nodes.add(n); for (const s of sub.get(k) ?? []) walk(s) }
+    walk(c)
+    return { kind: c.replace(TRACE, ''), words: classWords(c), count: nodes.size }
+  })
+}
+
+/** "7 key parts and 3 fit findings", or "the project" when the shape looks at the project only. */
+export function scopeWords(scope: readonly ShapeScope[]): string {
+  if (!scope.length) return 'the project'
+  const parts = scope.map((s) => plural(s.count, s.words))
+  return parts.length === 1 ? parts[0] as string : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1) as string}`
+}
+
+/** True when the shape had records to look at: a shape over no key parts at all checked nothing. */
+export const checkedSomething = (scope: readonly ShapeScope[]): boolean => !scope.length || scope.some((s) => s.count > 0)
+
+/**
+ * The run's summary, in words: what was checked and what came of it ("architect.stock: checked 7 key parts: every one
+ * keeps to its shape"), saying so when there was nothing to check.
+ */
+export function shapeSummary(criterion: string, scope: readonly ShapeScope[], open: number, waived: number): string {
+  const w = waived ? `, ${waived} waived` : ''
+  if (open) return `${criterion}: checked ${scopeWords(scope)}: ${plural(open, 'finding')}${w}`
+  if (!checkedSomething(scope)) return `${criterion}: nothing to check: the record has no ${scope.map((s) => `${s.words}s`).join(' or ')} yet, so nothing was shown to keep to its shape`
+  return `${criterion}: checked ${scopeWords(scope)}: every one keeps to its shape${w}`
+}
 
 /** Run `criterion`'s shape over a graph given as Turtle. */
 export async function runShape(criterion: string, data: string, call = (m: string, p: Record<string, unknown>) => bridge().call(m, p, Result)): Promise<z.infer<typeof Result>> {
@@ -130,17 +186,19 @@ export const check = defineTool({
       run.artifact('findings.json', JSON.stringify(all, null, 1), 'application/json')
       const conforms = open.length === 0
       const w = all.length - open.length
+      const scope = shapeScope(a.criterion, quads)
+      for (const s of scope) run.measure(s.kind, s.count)
       return {
         status: conforms ? 'pass' as const : 'fail' as const,
-        summary: `${a.criterion}: ${conforms ? 'every record keeps to its shape' : `${open.length} finding${open.length === 1 ? '' : 's'}`}${w ? `, ${w} waived` : ''}`,
-        result: { criterion: a.criterion, conforms, findings: open.slice(0, 50), omitted: Math.max(0, open.length - 50), waived: all.filter((f) => f.waived).map((f) => f.id) },
+        summary: shapeSummary(a.criterion, scope, open.length, w),
+        result: { criterion: a.criterion, conforms, checked: scope, findings: open.slice(0, 50), omitted: Math.max(0, open.length - 50), waived: all.filter((f) => f.waived).map((f) => f.id) },
       }
     })
     if (!scope) return { ...out, recorded_check: false, next: `Not recorded as the criterion's check (no project in scope): journey.check ${a.criterion} ${out.conforms ? 'met' : 'not_met'} with evidence run ${out.run_id}.` }
     const s = scope
     const evidence = out.conforms
-      ? [{ kind: 'run', ref: out.run_id, label: `the ${a.criterion} shape over the project's records${out.waived.length ? `, ${out.waived.length} finding(s) waived` : ''}` }]
-      : [{ kind: 'run', ref: out.run_id, label: `the ${a.criterion} shape: ${out.findings.length} finding(s)` },
+      ? [{ kind: 'run', ref: out.run_id, label: shapeSummary(a.criterion, out.checked, 0, out.waived.length) }]
+      : [{ kind: 'run', ref: out.run_id, label: shapeSummary(a.criterion, out.checked, out.findings.length + out.omitted, out.waived.length) },
         ...out.findings.slice(0, 19).map((f) => ({ kind: 'finding', ref: f.id, label: f.message.slice(0, 300) }))]
     try {
       await s.facts.update((db) => ({ result: addCriterionCheck(db, s.asker, { criterion: a.criterion, status: out.conforms ? 'met' : 'not_met', evidence, note: out.conforms ? 'every record keeps to the shape' : `${out.findings.length} finding(s)` }, rec) }))
