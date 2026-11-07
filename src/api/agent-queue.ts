@@ -13,7 +13,8 @@
  * the start is recorded here and the person carries on. When the project has its agent (the API's own list of worker
  * runtimes, TRACE_WORKER_RUNTIMES, names it after the update's deploy), the next look at the project (journey.get,
  * project.agent; the update's `record.changed { what: 'agent' }` event makes every open app look at once) starts
- * them, oldest first, as the person asked them.
+ * them as the person asked them, one at a time in the order asked: each after the one before it has ended, on top of
+ * its change while that is open (startQueued; test-esp32-run2 log R9).
  *
  *   where     projects/<slug>/journey/queued-starts.json in the central bucket (the API may read it and write it only
  *             with conditional puts: the journey prefix's grant, src/infra/api-grants.ts); the project's worker may
@@ -42,6 +43,11 @@ export const queuedKey = (repo: string): string => `${projectSlug(repo)}/${JOURN
 
 /** What a person reads about a queued start: what it waits for. */
 export const WAITS_FOR_AGENT = 'starts once this project\'s agent is set up'
+/** ... once the agent is there: queued work starts one at a time, in the order it was asked (startQueued). */
+export const WAITS_FOR_EARLIER = 'starts when the work asked before it has finished'
+
+/** What a queued start waits for, as a person reads it. Pure. */
+export const startsWhen = (agentReady: boolean): string => (agentReady ? WAITS_FOR_EARLIER : WAITS_FOR_AGENT)
 
 /** How long a started (or failed) start is kept, so a screen following its queued handle reaches the job. */
 const KEEP_STARTED_MS = 24 * 3600 * 1000
@@ -136,42 +142,77 @@ export async function queueStart(store: Backend, p: StartPayload, now = new Date
 /** The project's queued starts and the ones started in the last day. */
 export const readQueue = async (store: Backend, repo: string): Promise<QueueFile> => (await read(store, repo)).file
 
-/** A queued start's view as `job` and jobs.list show it: queued, and what it waits for. Pure. */
-export function queuedView(repo: string, q: QueuedStart, position: number, of: number): JobView & { title: string; queue: { position: number; of: number; startsWhen: string } } {
+/** A queued start's view as `job` and jobs.list show it: queued, and what it waits for (the agent, or the work before it). Pure. */
+export function queuedView(repo: string, q: QueuedStart, position: number, of: number, agentReady = false): JobView & { title: string; queue: { position: number; of: number; startsWhen: string } } {
   return {
     id: queuedHandle(repo, q.id), workerJobId: q.id, kind: 'task', repository: projectSlug(repo), agent: q.payload.agent ?? null, title: q.title,
-    state: 'queued', step: `queued: ${WAITS_FOR_AGENT}`, startedBy: q.payload.requestedBy, queuedAt: q.queued_at,
-    queue: { position, of, startsWhen: WAITS_FOR_AGENT }, waitsForAgent: true, controls: ['cancel'],
+    state: 'queued', step: `queued: ${startsWhen(agentReady)}`, startedBy: q.payload.requestedBy, queuedAt: q.queued_at,
+    queue: { position, of, startsWhen: startsWhen(agentReady) }, waitsForAgent: !agentReady, controls: ['cancel'],
   }
 }
 
+/** A job's states that have not ended: the next queued start waits while the one before it is in one of them. */
+const NOT_ENDED: ReadonlySet<string> = new Set(['queued', 'running', 'paused'])
+
+/** The view's branch, when it names one. Pure. */
+const branchOf = (v: JobView | undefined): string | null => (typeof v?.branch === 'string' && v.branch ? v.branch : null)
+
 /**
- * Start what was queued, now that the project has its agent (`jobs.hasAgent`): claimed first (moved to `started` with
- * no job yet, in one conditional write), so two looks at once start each one once; then each is started as it was
- * asked and its job (or why it could not start) recorded. Answers what was started. Nothing while there is no agent.
+ * Where the queue stands for its next start: `wait` while the start before it has not ended (a job queued, running or
+ * paused, or one claimed and still starting), else `go`, with the branch the ended one worked on (null when none).
+ * Only the starts of the last day count (older ones are dropped), so a job never heard of again holds nothing for long.
+ */
+async function before(jobs: JobsApi, f: QueueFile, now: Date): Promise<{ wait: true } | { wait: false; branch: string | null }> {
+  const recent = f.started.filter((s) => now.getTime() - Date.parse(s.started_at) < KEEP_STARTED_MS)
+  const last = recent[recent.length - 1]
+  if (!last) return { wait: false, branch: null }
+  // claimed by another look and still starting (no job and no error yet)
+  if (!last.job) return last.error || now.getTime() - Date.parse(last.started_at) > STARTING_MS ? { wait: false, branch: null } : { wait: true }
+  const v = (await jobs.jobStatus(last.job).catch(() => [] as JobView[]))[0]
+  if (v && NOT_ENDED.has(v.state)) return { wait: true }
+  return { wait: false, branch: branchOf(v) }
+}
+
+/** A claimed start with no job recorded after this long did not start (as the job list reads it). */
+const STARTING_MS = 10 * 60 * 1000
+
+/**
+ * Start what was queued, now that the project has its agent (`jobs.hasAgent`), one at a time in the order it was asked
+ * (test-esp32-run2 log R9): work asked one after the other while the agent was being set up often builds on the work
+ * before it (record the statements, then change one of them), and started together the later job could not see what
+ * the earlier one had not yet recorded. So the oldest starts first, and the next only once that one has ended; it
+ * then stacks on the earlier job's change while that change is open (docs/stacked-changes.md: dependent work stacks
+ * on the unmerged change it depends on; a branch with no open change is not stacked on, and it starts from the
+ * default branch). A start given its own branch or base keeps it.
+ *
+ * The start is claimed first (moved to `started` with no job yet, in one conditional write), so two looks at once start
+ * it once; then started as it was asked and its job (or why it could not start) recorded. Every look at the project's
+ * jobs calls this, so the next one starts at the first look after the one before it ends. Answers what was started.
  */
 export async function startQueued(jobs: JobsApi, store: Backend, repo: string, now = new Date()): Promise<StartedStart[]> {
   if (jobs.hasAgent && !jobs.hasAgent(repo)) return []
   const { file } = await read(store, repo)
   if (!file.queued.length) return []
+  const prior = await before(jobs, file, now)
+  if (prior.wait) return []
   const claimed = await change(store, repo, (f) => {
-    if (!f.queued.length) return { file: null, result: [] as QueuedStart[] }
-    const at = now.toISOString()
+    const q = f.queued[0]
+    // (another look claimed it, or a newer start was recorded, since this one read the file: the next look decides)
+    if (!q || f.started.length !== file.started.length) return { file: null, result: null }
     const keep = f.started.filter((s) => now.getTime() - Date.parse(s.started_at) < KEEP_STARTED_MS)
-    const moved = f.queued.map((q): StartedStart => ({ id: q.id, title: q.title, agent: q.payload.agent ?? null, queued_at: q.queued_at, started_at: at, job: null }))
-    return { file: { queued: [], started: [...keep, ...moved] }, result: f.queued }
+    const moved: StartedStart = { id: q.id, title: q.title, agent: q.payload.agent ?? null, queued_at: q.queued_at, started_at: now.toISOString(), job: null }
+    return { file: { queued: f.queued.slice(1), started: [...keep, moved] }, result: q }
   })
-  const out: StartedStart[] = []
-  for (const q of claimed) {
-    const r = await jobs.startJob(q.payload).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message : String(e) }))
-    out.push({
-      id: q.id, title: q.title, agent: q.payload.agent ?? null, queued_at: q.queued_at, started_at: now.toISOString(),
-      // "already running" (the same session) is that job: followed as it
-      job: r.jobId || null, ...(r.accepted || r.jobId ? {} : { error: (r.reason ?? 'trace did not accept the job').slice(0, 300) }),
-    })
+  if (!claimed) return []
+  const p = !prior.branch || claimed.payload.branch || claimed.payload.stackOn ? claimed.payload : { ...claimed.payload, stackOn: prior.branch }
+  const r = await jobs.startJob(p).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message : String(e) }))
+  const out: StartedStart = {
+    id: claimed.id, title: claimed.title, agent: claimed.payload.agent ?? null, queued_at: claimed.queued_at, started_at: now.toISOString(),
+    // "already running" (the same session) is that job: followed as it
+    job: r.jobId || null, ...(r.accepted || r.jobId ? {} : { error: (r.reason ?? 'trace did not accept the job').slice(0, 300) }),
   }
-  await change(store, repo, (f) => ({ file: { ...f, started: f.started.map((s) => out.find((o) => o.id === s.id && s.job === null) ?? s) }, result: null }))
-  return out
+  await change(store, repo, (f) => ({ file: { ...f, started: f.started.map((s) => (s.id === out.id && s.job === null ? out : s)) }, result: null }))
+  return [out]
 }
 
 /** Take a queued start out before it starts: true when it was there. */
@@ -194,7 +235,7 @@ export function withAgentQueue(inner: JobsApi, store: () => Backend, o: { holdS?
     if (!h) return [...await inner.jobStatus(handle)]
     const f = await readQueue(store(), h.repo)
     const i = f.queued.findIndex((q) => q.id === h.id)
-    if (i >= 0) return [queuedView(h.repo, f.queued[i]!, i + 1, f.queued.length)]
+    if (i >= 0) return [queuedView(h.repo, f.queued[i]!, i + 1, f.queued.length, has(h.repo))]
     const s = f.started.find((x) => x.id === h.id)
     if (s?.job) {
       const real = await inner.jobStatus(s.job).catch(() => [] as JobView[])

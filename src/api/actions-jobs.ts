@@ -74,7 +74,7 @@ import { cached } from './github-cache.js'
 import type { PullSummary } from './github.js'
 import { draftingJobs } from './drafting.js'
 import { shownJobTitle } from '../core/plain-words.js'
-import { type QueueFile, WAITS_FOR_AGENT, queuedHandle, readQueue, startQueued } from './agent-queue.js'
+import { type QueueFile, queuedHandle, readQueue, startQueued, startsWhen } from './agent-queue.js'
 
 export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'] as const
 export type JobOp = (typeof JOB_OPS)[number]
@@ -351,7 +351,7 @@ export async function listJobs(ctx: Context, repo: string, o: { at?: number } = 
   const merged = await lostMerged(ctx, repo, result.rows, controls, at)
   const views = jobViews(repo, result.rows, controls, { at, sub: ctx.principal.sub, write, pause: Boolean(jobs.pause), cancel: Boolean(jobs.cancel), merged })
   const live = new Set(views.filter((j) => j.state === 'running').map((j) => j.workerJobId))
-  return { jobs: [...views, ...queuedJobViews(repo, queue, { at, sub: ctx.principal.sub, write })], batch: result.batch.filter((b) => b.endedAt === null && live.has(b.jobId)), rows: result.rows, queue }
+  return { jobs: [...views, ...queuedJobViews(repo, queue, { at, sub: ctx.principal.sub, write, agentReady: !jobs.hasAgent || jobs.hasAgent(repo) })], batch: result.batch.filter((b) => b.endedAt === null && live.has(b.jobId)), rows: result.rows, queue }
 }
 
 /**
@@ -423,10 +423,12 @@ async function agentQueueNow(ctx: Context, repo: string, jobs: JobsApi): Promise
 }
 
 /**
- * The queued starts as the app lists jobs: queued, waiting for the project's agent (cancel takes one out), and the
+ * The queued starts as the app lists jobs: queued, waiting for the project's agent or (once it is there) for the work
+ * asked before them, one at a time (cancel takes one out), and the
  * ones that could not start once it was there, as failed, for a day. Pure.
  */
-export function queuedJobViews(repo: string, q: QueueFile, o: { at: number; sub: string; write: boolean }): IndexedJob[] {
+export function queuedJobViews(repo: string, q: QueueFile, o: { at: number; sub: string; write: boolean; agentReady?: boolean }): IndexedJob[] {
+  const waits = startsWhen(o.agentReady ?? false)
   const base = (id: string, title: string, agent: string | null, by: string | null, bySub: string | null, queuedAt: string) => ({
     workerJobId: id, kind: 'task', repository: projectSlug(repo), agent, agentName: agent ? AGENT_WORDS[agent] ?? agent : null, title, number: null,
     startedBy: by, yours: bySub !== null && bySub === o.sub, held: false, queuedAt, typicalS: null, where: null, branch: null,
@@ -435,8 +437,8 @@ export function queuedJobViews(repo: string, q: QueueFile, o: { at: number; sub:
   })
   const waiting = q.queued.map((s, i): IndexedJob => ({
     ...base(s.id, s.title, s.payload.agent ?? null, s.payload.requestedBy, s.payload.requestedBySub ?? null, s.queued_at),
-    id: queuedHandle(repo, s.id), state: 'queued', step: `queued: ${WAITS_FOR_AGENT}`, startedAt: null, endedAt: null, error: null,
-    queue: { position: i + 1, of: q.queued.length, startsWhen: WAITS_FOR_AGENT }, waitsForAgent: true, controls: o.write ? ['cancel'] : [],
+    id: queuedHandle(repo, s.id), state: 'queued', step: `queued: ${waits}`, startedAt: null, endedAt: null, error: null,
+    queue: { position: i + 1, of: q.queued.length, startsWhen: waits }, waitsForAgent: !o.agentReady, controls: o.write ? ['cancel'] : [],
   }))
   // (one claimed and never answered for a while: its look stopped half way, so it did not start)
   const failed = q.started.filter((s) => s.job === null && (s.error || o.at * 1000 - Date.parse(s.started_at) > STARTING_LOST_MS) && o.at * 1000 - Date.parse(s.started_at) < DAY_S * 1000).map((s): IndexedJob => ({
