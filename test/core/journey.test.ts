@@ -333,7 +333,7 @@ describe('the inbox', () => {
     for (const g of ['define', 'architect', 'capture', 'prove', 'layout', 'signoff']) { meetAll(g); openAll(g); signGate(db, g, signer) }
     meetAll('fabricate.order')
     const items = inboxItems('acme/board', rec(), ADMIN)
-    expect(items).toEqual([expect.objectContaining({ kind: 'spend', action: 'Review order', summary: 'Soil sensor: the order for 10 boards is ready: about US$184. Money is spent when you sign.' })])
+    expect(items).toEqual([expect.objectContaining({ kind: 'spend', action: 'Review order', summary: 'Soil sensor: the order for 10 boards is ready (target US$184, no quote yet). Money is spent when you sign.' })])
   })
 })
 

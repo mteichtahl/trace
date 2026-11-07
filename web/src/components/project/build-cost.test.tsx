@@ -106,7 +106,7 @@ describe('small rules', () => {
     expect(gateSpendLine({ money: false, currency: 'USD', spent: { cloud: null, orders: null }, committed: null, forecast: null, stages: [], lines: [] })).toBeNull()
     const line = gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 12, orders: 100, detail: { estimated: { agents: 12, gpu: 0, cpu: 0, total: 12 }, actual: { total: 3, byService: {}, through: null, estimatedDays: 0 }, basis: 'estimate' } }, committed: 50, forecast: 0, budget: 300, stages: [], lines: [] })
     // the cloud work is not taken off the build budget: US$300 less US$100 paid and US$50 committed
-    expect(line).toBe('Spent so far US$112, US$12 of it cloud work (estimated; US$3 billed by AWS so far), US$100 on orders. Build budget US$300 (boards, parts and case): US$150 left after US$100 paid for orders and US$50 committed for the order ready to place. trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
+    expect(line).toBe('Spent so far US$112, US$12 of it cloud work (estimated; US$3 billed by AWS so far), US$100 on orders. Build budget US$300 (boards, parts and case): US$150 left after US$100 paid for orders and US$50 committed for orders placed but not paid yet. trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
   })
 
   it('the gate\'s line keeps the order and trace\'s cloud work apart, the forecast with its source (test-esp32 run 2, #91: US$1.59 spent, "US$18.41 left")', () => {

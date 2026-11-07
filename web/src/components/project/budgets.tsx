@@ -2,8 +2,9 @@
  * The project's two budgets side by side (Cost and time, and the Overview's side column for admins), each with what
  * counts against it and where its forecast comes from:
  *
- *   Build budget          the order: boards, parts and case (orders paid, the order committed, the order forecast from
- *                         the build plan's quantity and target unit cost)
+ *   Build budget          the order: boards, parts and case (orders paid; committed: orders placed, not paid yet;
+ *                         the order forecast from the build plan's quantity and target unit cost until an order is
+ *                         placed, an order being prepared included: test-esp32 run 2, #218)
  *   Cloud-work allowance  trace's own agents and jobs (estimated)
  *
  * They were one number, so the agents' spend used up the build's money and raising it to keep trace working raised
@@ -39,7 +40,7 @@ export function Budgets({ cost, id, compact = false, className }: { cost: CostVi
             </div>
             <dl className="mt-3 space-y-1 text-sm">
               <Row label="Orders paid" value={money(b.build.orders, b.build.currency)} />
-              <Row label="Committed" hint="The order ready to place" value={money(b.build.committed, b.build.currency)} />
+              <Row label="Committed" hint="Orders placed, not paid yet" value={money(b.build.committed, b.build.currency)} />
               <Row label="Forecast for the order" hint={b.build.forecastSource ? `${b.build.forecastSource[0]!.toUpperCase()}${b.build.forecastSource.slice(1)}` : cost.forecast === null ? 'No target unit cost in the build plan' : undefined} value={cost.forecast === null ? 'not known' : money(b.build.forecast, b.build.currency)} />
             </dl>
           </>

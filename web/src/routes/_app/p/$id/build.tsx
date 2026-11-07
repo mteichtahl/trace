@@ -1,8 +1,13 @@
 /**
- * Build (/p/:id/build): releases, orders, boards by serial and the bench. An order ready to place shows the JLCPCB
- * order sheet (docs/ui/screens/Order.png): the board options to tick as they are entered, the parts re-checked today
- * with any price change, the cost against the budget, "After you pay" to record the order, and the Wait line for
+ * Build (/p/:id/build): releases, orders, boards by serial and the bench. The order being prepared shows the JLCPCB
+ * order sheet (docs/ui/screens/Order.png): the board options the release package recorded, to tick as they are
+ * entered, the parts from the newest check at the build quantity with any price change since sign-off, the board's
+ * newest accepted render, the cost against the budget, "After you pay" to record the order, and the Wait line for
  * JLCPCB's confirmation with what trace does meanwhile. trace prepares the order but never pays.
+ *
+ * It says "ready to place" only when build.get says so (the package built and every line in stock at today's check),
+ * else what is still missing; and its cost is the build plan's target, said as such, until there is a quote
+ * (test-esp32 run 2, #217, #226: "ready to place … about US$90" with no package, 0 options and "All 0 lines in stock").
  *
  * After payment: the shipping as the person records it (order.update) with the Wait line for the carrier, boards by
  * serial with their incoming inspection (src/components/project/build-record.tsx), and the bench with each
@@ -29,7 +34,7 @@ import { DataTable } from '@/components/data-table'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
 import { Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
-import { useFileUrl } from '@/components/skills/findings'
+import { useFileUrl as useRenderUrl } from '@/components/files/data'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { WaitLine } from '@/components/wait-line'
@@ -41,6 +46,7 @@ import type { HardwareLine, HardwareList, OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
 import { DeploysPanel } from '@/components/project/deploys'
+import { orderAmount, orderHeadline } from '@/components/project/order-sheet'
 
 export const Route = createFileRoute('/_app/p/$id/build')({
   staticData: { crumb: 'Build' },
@@ -103,9 +109,9 @@ function Build() {
             {data.orders.map((o) => (
               <li key={o.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5 text-sm">
                 <span className="font-medium">{o.boards} boards of {o.release}</span>
-                <span className="text-muted-foreground">{money(o.total, o.currency)}</span>
+                <span className="text-muted-foreground">{orderAmount(o)}</span>
                 {o.number && <span className="font-mono text-xs">{o.number}</span>}
-                <StatusBadge status={o.state === 'ready' ? 'yours' : o.state === 'delivered' ? 'done' : 'waiting'} label={{ ready: 'Ready to place', placed: 'Placed', confirmed: 'Confirmed', shipped: 'Shipped', delivered: 'Delivered' }[o.state]} className="ml-auto" />
+                <StatusBadge status={o.state === 'ready' ? (o.ready === true ? 'yours' : 'waiting') : o.state === 'delivered' ? 'done' : 'waiting'} label={o.state === 'ready' ? (o.ready === true ? 'Ready to place' : 'Being prepared') : { placed: 'Placed', confirmed: 'Confirmed', shipped: 'Shipped', delivered: 'Delivered' }[o.state]} className="ml-auto" />
               </li>
             ))}
           </ul>
@@ -160,16 +166,24 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
   const signed = orderGate?.state === 'signed' || o.state === 'placed'
   const [entered, setEntered] = useState<Set<string>>(new Set())
   const [number, setNumber] = useState(o.number ?? '')
-  const [paid, setPaid] = useState(o.paid != null ? o.paid.toFixed(2) : o.total.toFixed(2))
+  // what was paid: never the target filled in for the person
+  const [paid, setPaid] = useState(o.paid != null ? o.paid.toFixed(2) : o.basis === 'quote' ? o.total.toFixed(2) : '')
   const [ship, setShip] = useState(o.ship ?? '')
   const record = useCall('order.record', (a) => [['build.get', a.repo], ['journey.get', a.repo]])
-  // the board's picture: the one a run stored (design.get), never a guessed path
-  const design = useAction('design.get', { repo })
-  const board = useFileUrl(repo, design.data?.board?.path)
+  // the board's picture: the newest accepted renders of the revision (build.get), never a guessed path
+  const pictureRef = useMemo(() => (o.render ? { repo, path: o.render.name, run: { id: o.render.run, name: o.render.name } } : null), [repo, o.render])
+  const board = useRenderUrl(pictureRef)
   const changedUp = o.parts.filter((p) => p.now > p.then)
+  const need = (p: PartLine): number => p.need ?? o.boards
+  const short = o.parts.filter((p) => p.stock < need(p) || (p.status !== undefined && p.status !== 'ok'))
+  const head = orderHeadline(o)
+  const quoted = o.basis === 'quote'
   const optionCols = useMemo<ColumnDef<Option, any>[]>(() => [
     { accessorKey: 'option', header: 'Option', size: 200, meta: { label: 'Option', kind: 'text' } },
-    { accessorKey: 'value', header: 'Value', size: 260, meta: { label: 'Value', kind: 'text' }, cell: ({ row }) => <span className="font-medium">{row.original.value}</span> },
+    {
+      accessorKey: 'value', header: 'Value', size: 260, meta: { label: 'Value', kind: 'text' },
+      cell: ({ row }) => <span><span className="font-medium">{row.original.value}</span>{row.original.decided === false && <span className="block text-xs text-muted-foreground">JLCPCB's default: not decided in the record</span>}</span>,
+    },
     {
       id: 'entered', header: 'Entered', size: 90, enableSorting: false, meta: { label: 'Entered' },
       cell: ({ row }) => (
@@ -184,11 +198,11 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
     { accessorKey: 'then', header: 'Price then', size: 100, meta: { label: 'Price then', kind: 'number', align: 'right' }, cell: ({ row }) => price(row.original.then, o.currency) },
     { accessorKey: 'now', header: 'Price now', size: 100, meta: { label: 'Price now', kind: 'number', align: 'right' }, cell: ({ row }) => price(row.original.now, o.currency) },
     {
-      id: 'status', accessorFn: (p) => (p.stock < o.boards ? 'Short' : p.now > p.then ? 'Price up' : 'In stock'), header: 'Status', size: 170, meta: { label: 'Status', kind: 'enum' },
+      id: 'status', accessorFn: (p) => (p.stock < (p.need ?? o.boards) || (p.status !== undefined && p.status !== 'ok') ? 'Short' : p.now > p.then ? 'Price up' : 'In stock'), header: 'Status', size: 170, meta: { label: 'Status', kind: 'enum' },
       cell: ({ row }) => {
         const p = row.original
-        if (p.stock < o.boards) return <StatusBadge status="failing" label="Short: back to Sign-off" />
-        if (p.now > p.then) return <StatusBadge status="warning" label={`In stock · +${money((p.now - p.then) * o.boards, o.currency)}`} />
+        if (p.stock < (p.need ?? o.boards) || (p.status !== undefined && p.status !== 'ok')) return <StatusBadge status="failing" label="Short: back to Sign-off" />
+        if (p.now > p.then) return <StatusBadge status="warning" label={`In stock · +${money((p.now - p.then) * (p.need ?? o.boards), o.currency)}`} />
         return <StatusBadge status="met" label="In stock" />
       },
     },
@@ -201,6 +215,8 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
 
   const canRecord = signed && number.trim().length >= 4 && Number(paid) > 0 && !!ship
   const sumCost = o.cost.reduce((n, c) => n + c.amount, 0)
+  // against the budget: the quote when there is one, else the target (a forecast)
+  const against = quoted ? sumCost : o.target ?? null
 
   return (
     <div className="mt-6 space-y-6">
@@ -208,12 +224,18 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
         <span className="mt-2 size-2 shrink-0 rounded-full bg-primary" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-xs text-muted-foreground">Order gate · trace prepares, you place and pay on JLCPCB</p>
-          <h2 id="order-title" className="mt-1 text-xl font-semibold">The order for {o.boards} boards is ready to place on JLCPCB. Expected cost about {money(o.total, o.currency)}.</h2>
+          <h2 id="order-title" className="mt-1 text-xl font-semibold">{head.title}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{head.cost}</p>
+          {o.ready !== true && o.missing?.length ? (
+            <ul className="mt-2 space-y-1 text-sm" aria-label="Still to do before the order">
+              {o.missing.map((m) => <li key={m} className="flex items-start gap-2"><StatusBadge plain status="untested" label="To do" className="shrink-0" /><span>{m}</span></li>)}
+            </ul>
+          ) : null}
           {o.changed && <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm"><StatusBadge status="warning" /> {o.changed}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {!signed && user?.class === 'admin' && <Button asChild><Link to="/p/$id/gates/$gate" params={{ id, gate: orderGate?.id ?? 'fabricate.order' }}>Sign the order gate</Link></Button>}
-          <Button variant="outline" className="bg-background" onClick={() => toast('The package (Gerbers, parts list and placement file) downloads from the release.')}><Download /> Download the package</Button>
+          <Button variant="outline" className="bg-background" disabled={!o.files.length} onClick={() => toast('The package (Gerbers, parts list and placement file) downloads from the release.')}><Download /> Download the package</Button>
         </div>
       </section>
 
@@ -221,22 +243,38 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
         <div className="min-w-0 space-y-6">
           <section className="rounded-xl border p-5" aria-labelledby="options">
             <h3 id="options" className="text-lg font-semibold">Board options to enter on JLCPCB</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Copy these into JLCPCB's order form and tick each one as you go. They come from the signed release; {entered.size} of {o.options.length} entered.</p>
-            <div className="mt-3"><DataTable id="order-options" persist={false} data={o.options} columns={optionCols} getRowId={(r) => r.option} noun="options" /></div>
+            {o.options.length ? (
+              <>
+                <p className="mt-1 text-sm text-muted-foreground">Copy these into JLCPCB's order form and tick each one as you go. They come from the release package; {entered.size} of {o.options.length} entered.</p>
+                <div className="mt-3"><DataTable id="order-options" persist={false} data={o.options} columns={optionCols} getRowId={(r) => r.option} noun="options" /></div>
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">{o.optionsNote ?? 'No board options yet: the release package records them when it is built (kicad.fab).'}</p>
+            )}
             <p className="mt-4 text-xs text-muted-foreground">Files</p>
-            <div className="mt-1.5 flex flex-wrap gap-2">
-              {o.files.map((f) => <span key={f} className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-xs"><FileText className="size-3.5" aria-hidden />{f}</span>)}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">The parts list (BOM) and placement file (CPL) are in JLCPCB's own format.</p>
+            {o.files.length ? (
+              <>
+                <div className="mt-1.5 flex flex-wrap gap-2">
+                  {o.files.map((f) => <span key={f} className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-xs"><FileText className="size-3.5" aria-hidden />{f}</span>)}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">The parts list (BOM) and placement file (CPL) are in JLCPCB's own format.</p>
+              </>
+            ) : <p className="mt-1 text-sm text-muted-foreground">No package files yet.</p>}
           </section>
 
           <section className="rounded-xl border p-5" aria-labelledby="parts">
-            <h3 id="parts" className="text-lg font-semibold">Parts re-checked {o.checkedAt ? ago(o.checkedAt) : 'today'}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {o.parts.every((p) => p.stock >= o.boards) ? `All ${o.parts.length} lines are in stock at LCSC.` : 'Some lines are short: the project goes back to Sign-off.'}{' '}
-              {changedUp.length ? `${changedUp.length} price${changedUp.length > 1 ? 's' : ''} went up since sign-off, adding ${money(changedUp.reduce((n, p) => n + (p.now - p.then) * o.boards, 0), o.currency)} for ${o.boards} boards.` : 'No price changed since sign-off.'}
-            </p>
-            <div className="mt-3"><DataTable id="order-parts" persist={false} data={o.parts} columns={partCols} getRowId={(r) => r.ref} noun="lines" /></div>
+            <h3 id="parts" className="text-lg font-semibold">{o.checkedAt ? `Parts re-checked ${ago(o.checkedAt)}` : 'Parts not checked yet'}</h3>
+            {o.parts.length ? (
+              <>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {short.length ? `${short.length} of ${o.parts.length} lines are short: the project goes back to Sign-off.` : `All ${o.parts.length} lines are in stock at LCSC for ${o.boards} boards.`}{' '}
+                  {changedUp.length ? `${changedUp.length} price${changedUp.length > 1 ? 's' : ''} went up since sign-off, adding ${money(changedUp.reduce((n, p) => n + (p.now - p.then) * need(p), 0), o.currency)} for ${o.boards} boards.` : 'No price changed since sign-off.'}
+                </p>
+                <div className="mt-3"><DataTable id="order-parts" persist={false} data={o.parts} columns={partCols} getRowId={(r) => r.ref} noun="lines" /></div>
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">There is no parts check at {o.boards} boards yet: stock and prices are checked on the day of the order (parts.bom_check).</p>
+            )}
           </section>
 
           <HardwareSection repo={repo} hardware={o.hardware} />
@@ -244,21 +282,23 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
 
         <aside className="space-y-4">
           <div className="rounded-xl border p-5">
-            <h3 className="text-sm font-semibold">{o.release} · top</h3>
+            <h3 className="text-sm font-semibold">{o.release} · {o.render ? o.render.label.toLowerCase() : 'top'}</h3>
             <div className="mt-3 flex h-40 items-center justify-center rounded-lg bg-muted/50">
-              {board.data?.url ? <img src={board.data.url} alt={`${o.release}, top side`} className="max-h-36" /> : <span className="text-xs text-muted-foreground">No render yet</span>}
+              {board.data?.url ? <img src={board.data.url} alt={`${o.release}, ${o.render ? o.render.label.toLowerCase() : 'top side'}`} className="max-h-36" /> : <span className="text-xs text-muted-foreground">{o.render ? (board.isError ? 'The render could not be loaded' : 'Loading the render') : 'No render yet'}</span>}
             </div>
           </div>
           <div className="rounded-xl border p-5 text-sm">
             <h3 className="font-semibold">Cost</h3>
+            {!quoted && <p className="mt-1 text-xs text-muted-foreground">No quote yet. JLCPCB quotes the boards, assembly and shipping once the package is uploaded.</p>}
             <dl className="mt-3 space-y-1.5">
-              {o.cost.map((c) => <div key={c.label} className="flex justify-between"><dt className="text-muted-foreground">{c.label}</dt><dd>{money(c.amount, o.currency)}</dd></div>)}
-              <div className="flex justify-between border-t pt-2 font-semibold"><dt>Total</dt><dd>{money(sumCost, o.currency)}</dd></div>
+              {o.cost.map((c) => <div key={c.label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{c.label}</dt><dd className="shrink-0">{money(c.amount, o.currency)}</dd></div>)}
+              {quoted && <div className="flex justify-between border-t pt-2 font-semibold"><dt>Total</dt><dd>{money(sumCost, o.currency)}</dd></div>}
+              {!o.cost.length && <div className="text-muted-foreground">No target unit cost in the build plan and no parts check yet.</div>}
             </dl>
-            {o.budget !== undefined && (
+            {o.budget !== undefined && against !== null && (
               <>
-                <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">Budget for {o.release} {money(o.budget, o.currency)} · <StatusBadge plain status={sumCost <= o.budget ? 'met' : 'failing'} label={sumCost <= o.budget ? 'within budget' : 'over budget'} /></p>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden><div className={cn('h-full rounded-full', sumCost <= o.budget ? 'bg-foreground/70' : 'bg-destructive')} style={{ width: `${Math.min(100, (sumCost / o.budget) * 100)}%` }} /></div>
+                <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">Budget for {o.release} {money(o.budget, o.currency)} · <StatusBadge plain status={against <= o.budget ? 'met' : 'failing'} label={`${quoted ? 'the quote' : 'the target'} is ${against <= o.budget ? 'within budget' : 'over budget'}`} /></p>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden><div className={cn('h-full rounded-full', against <= o.budget ? 'bg-foreground/70' : 'bg-destructive')} style={{ width: `${Math.min(100, (against / o.budget) * 100)}%` }} /></div>
               </>
             )}
           </div>
