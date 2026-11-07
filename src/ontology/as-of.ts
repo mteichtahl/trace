@@ -23,7 +23,7 @@ const n = (v: unknown): number | null => (v === null || v === undefined || v ===
 export const CREATED: Readonly<Record<string, string>> = {
   journey: 'created', journey_template: 'at', stages: 'journey', gates: 'journey', gate_criteria: 'journey', criterion_opens: 'at',
   gate_signatures: 'at', questions: 'asked_at', waivers: 'at', decisions: 'at', orders: 'placed_at', order_tracking: 'at', boards: 'created',
-  board_checks: 'at', stuck_dismissals: 'at', handoff_declines: 'at', design_decisions: 'at', job_controls: 'at', criterion_history: 'at',
+  board_checks: 'at', quotes: 'at', agent_quotes: 'at', stuck_dismissals: 'at', handoff_declines: 'at', design_decisions: 'at', job_controls: 'at', criterion_history: 'at',
   stage_history: 'at', journey_history: 'at', agent_questions: 'asked_at', criterion_checks: 'checked_at', stuck: 'at', handoffs: 'created_at',
   jobs: 'queued_at', settings: 'updated', runs: 'started', measurements: 'run', artifacts: 'run', artifact_hashes: 'run', run_inputs: 'run',
   coverage_hits: 'run', parts_list_lines: 'run', test_results: 'at', intent_statements: 'created', requirement_intent: 'updated',

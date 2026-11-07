@@ -169,6 +169,10 @@ trace:PlacedOrder a owl:Class ;
     rdfs:label "Placed order" ;
     rdfs:comment "Boards a person ordered from the fab house, with the fab house's order number and its state." .
 
+trace:FabQuote a owl:Class ;
+    rdfs:label "Fab quote" ;
+    rdfs:comment "What the fab house said an order costs, as a person read it off the fab house's site: its date, total, breakdown and what it was for." .
+
 trace:Shipment a owl:Class ;
     rdfs:label "Shipment" ;
     rdfs:comment "How a placed order travels: its carrier and tracking number." .
@@ -838,6 +842,72 @@ trace:deliveredAt a owl:DatatypeProperty ;
     rdfs:comment "When the order was delivered." ;
     rdfs:domain trace:PlacedOrder ;
     rdfs:range xsd:dateTime .
+
+trace:quotedOn a owl:DatatypeProperty ;
+    rdfs:label "quoted on" ;
+    rdfs:comment "The date the fab house gave the quote." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range xsd:date .
+
+trace:quotedTotal a owl:DatatypeProperty ;
+    rdfs:label "quoted total" ;
+    rdfs:comment "The quote's total, in its currency." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range xsd:decimal .
+
+trace:quotedQuantity a owl:DatatypeProperty ;
+    rdfs:label "boards quoted" ;
+    rdfs:comment "How many boards the quote is for." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range xsd:integer .
+
+trace:quoteLines a owl:DatatypeProperty ;
+    rdfs:label "breakdown" ;
+    rdfs:comment "The quote's lines as the person gave them: boards, assembly and setup, components, extended-part fees, stencil, shipping, tax and duty, other." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range rdf:JSON .
+
+trace:quotedOptions a owl:DatatypeProperty ;
+    rdfs:label "options quoted" ;
+    rdfs:comment "The board and assembly options the quote is for." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range rdf:JSON .
+
+trace:optionsFromRun a owl:ObjectProperty ;
+    rdfs:label "options from run" ;
+    rdfs:comment "The release package run whose options the quote is for, when they were not the person's own." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range trace:Run .
+
+trace:partsCheckRun a owl:ObjectProperty ;
+    rdfs:label "parts check" ;
+    rdfs:comment "The newest parts check when the quote was recorded." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range trace:Run .
+
+trace:partsCheckTotal a owl:DatatypeProperty ;
+    rdfs:label "parts at checked prices" ;
+    rdfs:comment "What that parts check said the parts cost, to tell how parts prices moved between two quotes." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range xsd:decimal .
+
+trace:quoteLink a owl:DatatypeProperty ;
+    rdfs:label "link or reference" ;
+    rdfs:comment "Where the quote is on the fab house's site, or its number there." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range xsd:string .
+
+trace:placedAs a owl:ObjectProperty ;
+    rdfs:label "placed as" ;
+    rdfs:comment "The order placed against the quote." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range trace:PlacedOrder .
+
+trace:fromPersonsWords a owl:DatatypeProperty ;
+    rdfs:label "from the words" ;
+    rdfs:comment "The words a person gave an agent that the agent recorded the quote from." ;
+    rdfs:domain trace:FabQuote ;
+    rdfs:range xsd:string .
 
 trace:ofOrder a owl:ObjectProperty ;
     rdfs:label "of order" ;

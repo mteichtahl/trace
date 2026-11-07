@@ -166,6 +166,7 @@ export const SKILL_DEFS: readonly SkillDef[] = [
       { id: 'stock', text: 'Stock re-checked today', step: 'stock' },
       { id: 'options', text: 'Every option matches the order sheet', step: 'options' },
       { id: 'matching', text: 'Every line matched or acknowledged', step: 'matching' },
+      { id: 'quote', text: 'JLCPCB quote recorded', step: 'pay' },
       { id: 'recorded', text: 'Order number, cost and ship date recorded', step: 'pay' },
       { id: 'reasons', text: 'Every choice against the recommendation has a reason' },
     ],

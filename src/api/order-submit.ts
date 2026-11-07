@@ -8,12 +8,13 @@
  *   options   each board and assembly option to enter on JLCPCB: those kicad.fab recorded with the package, else from
  *             the board (kicad.board) and the package, with the build plan's quantities; an option no record decides is JLCPCB's default, and says so
  *   matching  each line of the package's parts list (kicad.fab's bom.csv) with its LCSC part
- *   pay       the order gate and the order recorded for this revision
+ *   pay       the order gate, the newest JLCPCB quote of this revision (src/core/quotes.ts) and the order recorded
  *
  * The draft records what the person did: `entered` (option ids), `matched` and `unplaced` (line keys: matched as
  * intended, or a part JLCPCB will not place).
  */
 import type { JourneyRecord, OrderRow } from '../core/journey.js'
+import { type QuoteRow, latestQuote } from '../core/quotes.js'
 import { parseCsv } from '../tools/kicad/bom.js'
 import { orderOptionsOf } from '../tools/kicad/order-options.js'
 
@@ -64,6 +65,8 @@ export interface OrderView {
     gate: { id: string; signed: { by: string; at: string } | null } | null
     sheet: 'met' | 'not_met' | 'waived' | null
     order: { number: string; paid: number | null; currency: string; ship: string | null } | null
+    /** the newest JLCPCB quote of this revision, as the person read it off JLCPCB */
+    quote: { id: string; on: string; total: number; currency: string; quantity: number } | null
   }
 }
 
@@ -233,7 +236,7 @@ export function orderLines(rec: OrderRecord): { lines: OrderLine[]; from: OrderV
 }
 
 /** The steps' content from the record (`now`: seconds, for "today"). */
-export function orderView(r: JourneyRecord | null, rec: OrderRecord | null, orders: readonly OrderRow[], now: number): OrderView {
+export function orderView(r: JourneyRecord | null, rec: OrderRecord | null, orders: readonly OrderRow[], now: number, quotes: readonly QuoteRow[] = []): OrderView {
   const R: OrderRecord = rec ?? { parts: null, signedParts: null, fab: null, board: null }
   const { lines, from } = orderLines(R)
   const gate = r?.gates.find((g) => g.id === 'fabricate.order')
@@ -247,6 +250,7 @@ export function orderView(r: JourneyRecord | null, rec: OrderRecord | null, orde
       gate: gate ? { id: gate.id, signed: signed ? { by: signed.by, at: iso(signed.at) } : null } : null,
       sheet: sheet ? (sheet.status === 'met' ? 'met' : sheetWaived ? 'waived' : 'not_met') : null,
       order: o ? { number: o.number, paid: o.paid, currency: o.currency, ship: o.shipDate } : null,
+      quote: ((q) => (q ? { id: q.id, on: q.on, total: q.total, currency: q.currency, quantity: q.quantity } : null))(r ? latestQuote(quotes, r.journey.revision) : null),
     },
   }
 }

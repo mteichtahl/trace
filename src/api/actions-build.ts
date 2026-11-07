@@ -11,7 +11,13 @@
  *                            each inspection check (src/core/boards.ts); the bench: each hil.instruments entry with
  *                            whether it answered its identity query (hil.idn) and the bring-up readings per board and
  *                            step against their limits (src/core/bench.ts: the run record's, and the bench's live copy)
- *   order.record     write   { order, number, paid, ship }: store a placed order in the journey record, logged
+ *   order.record     write   { order, number, paid, ship, quote? }: store a placed order in the journey record, logged,
+ *                            linked to the quote it was placed against (the one named, else the revision's newest quote
+ *                            with no order yet: src/core/quotes.ts linkOrderQuote)
+ *   quote.record     write   { on?, total, currency?, quantity?, lines?, options?, link?, why? }: a JLCPCB quote as the
+ *                            person read it off JLCPCB (trace never signs in there), any time at Fabricate; its options
+ *                            default to the release package's, and the newest parts check is kept with it. build.get's
+ *                            `quotes` lists every one, newest first, with its change from the one before and why
  *   order.update     write   { order, state?, carrier?, tracking?, ship?, note? }: what the person saw on the fab's or
  *                            carrier's page: shipped with a tracking number (and the order is watched with its carrier
  *                            when trace can check that carrier), delivered, cancelled, a corrected ship date. trace
@@ -30,11 +36,12 @@ import { type BoardRow, BOARD_STATUSES, CARRIERS, CHECK_KINDS, CHECK_RESULTS, Ev
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { type JourneyRecord, type OrderRow, type Signer, type StageId, loadJourney, loadOrders, recordOrder } from '../core/journey.js'
 import { CHECKABLE, SHIPPING_PREFIX, type Watch, WatchStore, endWatch, orderWait, watchOrder, watches } from '../core/shipping.js'
-import { ActionError, type Context, Repo, def, hashOf, hashesOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, agentFactsStore, def, hashOf, hashesOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { hasTable, latestRun, runResult } from './record-read.js'
 import { readRenders } from './actions-renders.js'
 import { orderOptionsOf } from '../tools/kicad/order-options.js'
 import { orderEstimateFrom } from '../core/order-estimate.js'
+import { type QuoteRow, QuoteFields, allQuotes, latestQuote, linkOrderQuote, loadAgentQuotes, loadQuotes, quoteDefaults, quoteViews, recordQuote } from '../core/quotes.js'
 
 const signer = (ctx: Context): Signer => ({ hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal) })
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -48,6 +55,11 @@ const benchStore = (ctx: Context, repo: string): BenchStore => new BenchStore(st
 /** The order watches of a project (none when the watch cannot be read: the Wait lines then say no check exists). */
 async function projectWatches(ctx: Context, repo: string): Promise<Watch[]> {
   try { return (await watchStore(ctx).read((db) => watches(db, repo))).result } catch { return [] }
+}
+
+/** The quotes agents recorded from people's words (none when the agents' facts cannot be read). */
+async function agentQuotes(ctx: Context, repo: string): Promise<QuoteRow[]> {
+  try { return (await agentFactsStore(ctx, repo).read((db) => loadAgentQuotes(db))).result } catch { return [] }
 }
 
 /** Whether the carrier's key is set (an admin's integration). Unknown (cannot be listed): taken as set. */
@@ -116,9 +128,12 @@ export function instrumentsOf(db: DatabaseSync): BenchInput['instruments'] {
 }
 
 /** The order's view, with its shipping and its Wait line. */
-function orderView(o: OrderRow, tracking: ReturnType<typeof loadTracking>, w: Watch | null, key: boolean, now: number) {
+function orderView(o: OrderRow, tracking: ReturnType<typeof loadTracking>, w: Watch | null, key: boolean, now: number, quotes: readonly QuoteRow[] = []) {
   const t = tracking.find((x) => x.orderId === o.id) ?? null
+  // the quote it was placed against, and what was paid against it
+  const q = quotes.find((x) => x.orderId === o.id) ?? null
   return {
+    ...(q ? { quote: { id: q.id, on: q.on, total: q.total, currency: q.currency, difference: o.paid !== null && o.currency === q.currency ? Math.round((o.paid - q.total) * 100) / 100 : null } } : {}),
     id: o.id, release: o.revision, state: o.state === 'cancelled' ? 'placed' as const : o.state, cancelled: o.state === 'cancelled', boards: o.boards,
     total: o.paid ?? 0, currency: o.currency, number: o.number, paid: o.paid, ship: o.shipDate, placedAt: iso(o.placedAt), placedBy: o.placedBy,
     shippedAt: iso(o.shippedAt), deliveredAt: iso(o.deliveredAt),
@@ -257,7 +272,7 @@ const OrderRef = z.string().trim().min(1).max(80)
 
 export const BUILD_ACTIONS = {
   'build.get': def('read', Repo, async ({ repo }, ctx) => {
-    const [ws, key, live] = await Promise.all([projectWatches(ctx, repo), carrierKey(ctx), liveBench(ctx, repo)])
+    const [ws, key, live, aq] = await Promise.all([projectWatches(ctx, repo), carrierKey(ctx), liveBench(ctx, repo), agentQuotes(ctx, repo)])
     return withRecordDb(ctx, repo, (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
@@ -270,7 +285,9 @@ export const BUILD_ACTIONS = {
       const b = r.journey.build
       const all = loadOrders(db)
       const tracking = loadTracking(db)
-      const orders: ReturnType<typeof orderView>[] = all.map((o) => orderView(o, tracking, ws.find((w) => w.orderId === o.id) ?? null, key, now))
+      const mine = loadQuotes(db)
+      const quotes = allQuotes(mine, aq)
+      const orders: ReturnType<typeof orderView>[] = all.map((o) => orderView(o, tracking, ws.find((w) => w.orderId === o.id) ?? null, key, now, mine))
       const atFab = r.stages.some((s) => s.id === 'fabricate') && stageOrd(r, r.journey.currentStage) >= stageOrd(r, 'fabricate')
       if (atFab && !orders.some((o) => o.release === r.journey.revision && !o.cancelled)) {
         const fab = latestRun(db, 'kicad.fab')
@@ -278,11 +295,15 @@ export const BUILD_ACTIONS = {
         const sheet = orderSheet(db, { quantity: b.quantity, unitCost: b.unit_cost, currency: b.currency, revision: r.journey.revision, fabricateStarted: r.stages.find((s) => s.id === 'fabricate')?.started ?? null, now })
         // the panel and mounting hardware list, kept apart from the parts: only when the build plan asks for it
         const hardware = b.hardware ? hardwareOf(res, db) : null
-        const { target, partsTotal, ...rest } = sheet
+        const { target, partsTotal, basis: _basis, ...rest } = sheet
+        // the newest quote of this revision is the order's cost; the estimate and the target stay beside it to compare
+        const q = latestQuote(quotes, r.journey.revision)
         orders.unshift({
-          id: 'next', release: r.journey.revision, state: 'ready' as never, cancelled: false, boards: b.quantity, total: target ?? 0, currency: b.currency, number: '', paid: null, ship: null,
+          id: 'next', release: r.journey.revision, state: 'ready' as never, cancelled: false, boards: b.quantity, total: q ? q.total : target ?? 0, currency: q ? q.currency : b.currency, number: '', paid: null, ship: null,
           placedAt: null, placedBy: '', shippedAt: null, deliveredAt: null,
-          // no quote is recorded: the build plan's target, said as such, and the parts at the checked prices
+          basis: q ? 'quote' as const : 'target' as const,
+          ...(q ? { quote: { id: q.id, on: q.on, total: q.total, currency: q.currency, quantity: q.quantity, by: q.by, ...(q.source === 'agent' ? { agent: true } : {}) } } : {}),
+          // the build plan's target, said as such, and the parts at the checked prices
           cost: [
             ...(target !== null ? [{ label: `Target: ${b.quantity} boards at ${b.unit_cost} ${b.currency} each (the build plan's, not a quote)`, amount: target, kind: 'target' as const }] : []),
             ...(partsTotal !== undefined ? [{ label: `Parts for ${b.quantity} boards at the checked prices (boards, assembly and shipping not included)`, amount: partsTotal, kind: 'parts' as const }] : []),
@@ -291,7 +312,7 @@ export const BUILD_ACTIONS = {
           ...(b.hardware ? { hardware } : {}),
         } as never)
         if (b.hardware && !hardware) notes.push('The build plan includes panel and mounting hardware, but no hardware list is made yet: kicad.fab or kicad.bom with hardware makes it.')
-        if (b.unit_cost === null) notes.push('No target unit cost is set in the build plan, and no quote is recorded, so the order\'s cost is not known yet.')
+        if (b.unit_cost === null && !q) notes.push('No target unit cost is set in the build plan, and no quote is recorded, so the order\'s cost is not known yet.')
       }
       const readings = unionReadings(loadReadings(db), live.readings)
       const ids = unionIds(idsFromRuns(db), live.ids)
@@ -299,6 +320,8 @@ export const BUILD_ACTIONS = {
       if (!boards.length && all.some((o) => o.state === 'delivered')) notes.push('The boards have arrived: record each by its serial in Incoming inspection.')
       return {
         repo, releases, orders, boards: boards.map((x) => boardView(x, all, readings)),
+        // every JLCPCB quote, newest first, with its change from the one before and why (at Fabricate, or once any is recorded)
+        ...(atFab || quotes.length ? { quotes: quoteViews(quotes, all) } : {}),
         bench: benchView({ instruments: instrumentsOf(db), ids, readings }),
         notes,
       }
@@ -312,13 +335,35 @@ export const BUILD_ACTIONS = {
     ship: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'a date such as 2026-11-04').nullable().default(null),
     boards: z.number().int().min(1).max(1_000_000).optional(),
     note: z.string().trim().max(1000).optional(),
+    quote: z.string().trim().min(1).max(40).optional().describe('the quote it was placed against (default: the revision\'s newest with no order yet)'),
   }), async (a, ctx) => {
-    const out = await plainly(() => writeJourney(ctx, a.repo, (db) => ({ result: recordOrder(db, { number: a.number, paid: a.paid, ship_date: a.ship, boards: a.boards, note: a.note ?? null }, signer(ctx)) })))
+    const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
+      const placed = recordOrder(db, { number: a.number, paid: a.paid, ship_date: a.ship, boards: a.boards, note: a.note ?? null }, signer(ctx))
+      const q = linkOrderQuote(db, placed.order, a.quote)
+      return { result: { ...placed, quote: q } }
+    }))
+    const q = out.quote
     return {
       ok: true, repo: a.repo, created: out.created, version: out.version,
+      quote: q ? { id: q.id, on: q.on, total: q.total, currency: q.currency, difference: out.order.paid !== null && q.currency === out.order.currency ? Math.round((out.order.paid - q.total) * 100) / 100 : null } : null,
       order: { id: out.order.id, number: out.order.number, boards: out.order.boards, paid: out.order.paid, currency: out.order.currency, ship: out.order.shipDate, state: out.order.state },
       wait: orderWait({ fab: out.order.fab, number: out.order.number, ship: out.order.shipDate, state: out.order.state }, null, { carrierKey: false, now: Date.now() / 1000 }),
     }
+  }),
+
+  'quote.record': def('write', Repo.extend(QuoteFields.shape), async (a, ctx) => {
+    const { repo, ...input } = a
+    // what it is for unless the person says: the revision, the build plan, the release package's options and the
+    // newest parts check, from the record (runs) beside the journey
+    let d: ReturnType<typeof quoteDefaults>
+    try { d = await withRecordDb(ctx, repo, (db) => quoteDefaults(db)) } catch { d = await withJourneyDb(ctx, repo, (db) => quoteDefaults(db)) }
+    if (!d) throw new ActionError('This project has not started its journey yet.')
+    const out = await plainly(() => writeJourney(ctx, repo, (db) => {
+      const q = recordQuote(db, input, d, signer(ctx))
+      return { result: { quote: q, quotes: quoteViews(loadQuotes(db), loadOrders(db)) } }
+    }))
+    const v = out.quotes.find((x) => x.id === out.quote.id)!
+    return { ok: true, repo, version: out.version, quote: v }
   }),
 
   'order.update': def('write', Repo.extend({

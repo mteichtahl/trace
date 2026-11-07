@@ -34,6 +34,10 @@
  *                   The asker's queue slot is never held beyond wait_minutes: the receiving job has a slot of its own
  *   journey.handoff_answer  the job a hand-off started answers it, once: only that job (TRACE_HANDOFF_ID and its job
  *                   id) may. Or says it cannot be answered, and why
+ *   journey.quotes  the JLCPCB quotes people recorded, newest first, with what changed between them and why
+ *                   (src/core/quotes.ts)
+ *   journey.quote_record  a quote a person told the agent, recorded only from their words (said; its total must be a
+ *                   figure in them) into the agents' facts (agent_quotes): trace never signs in to JLCPCB
  *
  * Where: the central bucket's `projects` prefix and the project, from the session's environment (TRACE_PROJECT_HOME
  * on the worker runtime, else TRACE_HOME; TRACE_PROJECT, TRACE_MEMORY_REPOSITORY or GITHUB_REPOSITORY). Who: the
@@ -48,7 +52,7 @@ import {
   AgentFactError, AgentFactsStore, AgentOptionSchema, type Asker, askAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts, projectsBackend,
   projectsFromEnv, resolveStuck,
 } from '../../core/agent-facts.js'
-import { type AgentFacts, EvidenceSchema, type JourneyRecord, JourneyError, journeyView, loadJourney, mergeAgentFacts, outOfDate } from '../../core/journey.js'
+import { type AgentFacts, EvidenceSchema, type JourneyRecord, JourneyError, journeyView, loadJourney, loadOrders, mergeAgentFacts, outOfDate } from '../../core/journey.js'
 import { JourneyStore, JourneyStoreError } from '../../core/journey-store.js'
 import { ToolError, defineTool } from '../../core/registry.js'
 import { Work, findRoot, projectPath } from '../../core/store.js'
@@ -64,6 +68,7 @@ import { JobIndexStore, indexedHandle, loadJobs } from '../../core/job-index.js'
 import { asksAgain } from '../../core/process-time.js'
 import { recordProcessMetric } from '../../core/telemetry.js'
 import { video } from './video.js'
+import { QuoteFields, allQuotes, amount, loadAgentQuotes, loadQuotes, quoteDefaults, quoteRuns, quoteViews, recordAgentQuote } from '../../core/quotes.js'
 import { waiverCriterion } from '../../core/waiver-words.js'
 import { type DesignRows, withDesign } from '../design/db.js'
 import { loadDesignDecisions } from '../design/decisions.js'
@@ -635,4 +640,51 @@ export const handoffAnswer = defineTool({
   }),
 })
 
-export const tools = [status, ask, check, stuck, handoff, handoffAnswer, video]
+// ------------------------------------------------------------------ journey.quotes, journey.quote_record
+
+/** Every JLCPCB quote of the project, the person's and the agents', newest first with what changed and why. */
+async function quotesNow(s: Scope) {
+  const [person, agent] = await Promise.all([
+    s.journey.read((db) => ({ quotes: loadQuotes(db), orders: loadOrders(db) })).then((x) => x.result),
+    s.facts.read((db) => loadAgentQuotes(db)).then((x) => x.result),
+  ])
+  return quoteViews(allQuotes(person.quotes, agent), person.orders)
+}
+
+export const quotes = defineTool({
+  name: 'journey.quotes',
+  description: 'The project\'s JLCPCB quotes as people recorded them (trace never signs in to JLCPCB), newest first: each one\'s date, total and currency, breakdown, quantity, options and revision, the change from the quote before (amount and per cent) with what trace can tell moved (quantity, options, revision, parts prices, breakdown lines) and the person\'s why, and the order placed against it with what was paid against the quote. Read this before speaking of what the order costs: the newest quote is the cost, the order estimate is not.',
+  input: z.object({}),
+  available: configured,
+  run: async () => plainly(async () => {
+    const s = journeyScope()
+    const list = await quotesNow(s)
+    return { quotes: list, summary: list.length ? `${list.length} quote${list.length === 1 ? '' : 's'}; the newest is ${amount(list[0]!.total, list[0]!.currency)} of ${list[0]!.on}.` : 'No JLCPCB quote is recorded yet.' }
+  }),
+})
+
+export const quoteRecord = defineTool({
+  name: 'journey.quote_record',
+  description: 'Record a JLCPCB quote a person told you, only from their words: give those words in said, and the total must be a figure in them. Never a price you worked out, estimated or read anywhere else; trace never signs in to JLCPCB. Its options default to the release package\'s, the quantity and currency to the build plan\'s. It is shown as recorded by you from the person\'s words.',
+  input: QuoteFields.extend({
+    said: z.string().trim().min(6).max(2000).describe('the person\'s own words the quote is from, as they gave them'),
+  }),
+  available: configured,
+  run: async (a) => plainly(async () => {
+    const s = journeyScope()
+    const d = (await s.journey.read((db) => quoteDefaults(db))).result
+    if (!d) throw new ToolError('journey: this project has not started its journey yet')
+    // the release package's options and the newest parts check, from this checkout's record
+    const path = (() => { try { return projectPath() } catch { return null } })()
+    if (path && existsSync(path)) {
+      const w = new Work(path)
+      try { Object.assign(d, quoteRuns(w.db)) } finally { w.db.close() }
+    }
+    const { result: q } = await s.facts.update((db) => ({ result: recordAgentQuote(db, a, d, s.asker) }))
+    const list = await quotesNow(s)
+    const v = list.find((x) => x.id === q.id)
+    return { quote: v ?? q, next: `Recorded from the person's words: ${amount(q.total, q.currency)} for ${q.quantity} boards, quoted ${q.on}. The Build tab shows it as recorded by you.` }
+  }),
+})
+
+export const tools = [status, ask, check, stuck, handoff, handoffAnswer, quotes, quoteRecord, video]

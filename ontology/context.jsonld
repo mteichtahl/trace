@@ -340,6 +340,10 @@
       "@id": "trace:opened",
       "@type": "@id"
     },
+    "optionsFromRun": {
+      "@id": "trace:optionsFromRun",
+      "@type": "@id"
+    },
     "outerSize": {
       "@id": "trace:outerSize",
       "@type": "@json"
@@ -356,12 +360,20 @@
       "@id": "trace:parentJob",
       "@type": "@id"
     },
+    "partsCheckRun": {
+      "@id": "trace:partsCheckRun",
+      "@type": "@id"
+    },
     "pausedAt": {
       "@id": "trace:pausedAt",
       "@type": "xsd:dateTime"
     },
     "performedBy": {
       "@id": "trace:performedBy",
+      "@type": "@id"
+    },
+    "placedAs": {
+      "@id": "trace:placedAs",
       "@type": "@id"
     },
     "placedAt": {
@@ -391,6 +403,18 @@
     "queuedAt": {
       "@id": "trace:queuedAt",
       "@type": "xsd:dateTime"
+    },
+    "quotedOn": {
+      "@id": "trace:quotedOn",
+      "@type": "xsd:date"
+    },
+    "quotedOptions": {
+      "@id": "trace:quotedOptions",
+      "@type": "@json"
+    },
+    "quoteLines": {
+      "@id": "trace:quoteLines",
+      "@type": "@json"
     },
     "receivedAt": {
       "@id": "trace:receivedAt",

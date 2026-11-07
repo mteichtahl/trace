@@ -18,6 +18,9 @@
  *                             its evidence, what it blocks, the asker's recommended answer, what a good answer contains;
  *                             the receiving job, and its answer. Written by the asker's tool, the runtime that starts
  *                             the receiving job, and that job's own answer; a person's decline is in the journey record
+ *           agent_quotes      a JLCPCB quote an agent recorded from the words a person gave it (journey.quote_record),
+ *                             with those words: the same columns as the journey record's quotes (src/core/quotes.ts),
+ *                             shown beside the person's own as "recorded by <agent> from <person>'s words". Append only
  *
  * The API merges these facts into every view of the journey (src/core/journey.ts mergeAgentFacts): an agent's question
  * is a question on Home and in the inbox, an agent's check sets a trace-owned criterion's status (so a gate can be
@@ -113,7 +116,18 @@ CREATE TABLE IF NOT EXISTS handoffs (
   why TEXT,                       -- failed: why (it could not start, or its job ended without an answer)
   ended_at REAL
 );
-CREATE INDEX IF NOT EXISTS handoffs_from ON handoffs(from_job, state);`
+CREATE INDEX IF NOT EXISTS handoffs_from ON handoffs(from_job, state);
+CREATE TABLE IF NOT EXISTS agent_quotes (
+  id TEXT PRIMARY KEY,
+  revision TEXT NOT NULL, fab TEXT NOT NULL, quoted_on TEXT NOT NULL, total REAL NOT NULL, currency TEXT NOT NULL, quantity INTEGER NOT NULL,
+  lines TEXT NOT NULL DEFAULT '[]', options TEXT NOT NULL DEFAULT '[]', options_from TEXT, parts_run TEXT, parts_total REAL,
+  link TEXT, why TEXT, order_id TEXT,
+  said TEXT NOT NULL,             -- the person's words the agent recorded it from
+  agent TEXT NOT NULL,            -- the agent's kind
+  by TEXT NOT NULL,               -- the agent, in words
+  job_id TEXT,
+  at REAL NOT NULL, updated REAL NOT NULL
+);`
 
 export const applyAgentFactsSchema = (db: DatabaseSync): void => { db.exec(SCHEMA) }
 

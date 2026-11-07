@@ -178,6 +178,15 @@ describe('the journey tools', () => {
     expect(await call('journey.stuck', { resolved: true })).toMatchObject({ resolved: 0 })
   })
 
+  it('journey.quote_record records a JLCPCB quote only from the person\'s words; journey.quotes lists it with them', async () => {
+    for (const t of ['journey.quotes', 'journey.quote_record']) expect(API_HIDDEN_TOOLS.has(t), t).toBe(true)
+    expect(await call('journey.quotes', {})).toMatchObject({ quotes: [], summary: 'No JLCPCB quote is recorded yet.' })
+    await expect(call('journey.quote_record', { total: 95, said: 'It should come to about a hundred dollars.' })).rejects.toThrow(/not in the person's words/)
+    const r = await call('journey.quote_record', { total: 96.4, on: '2026-11-02', said: 'JLCPCB quoted me US$96.40 today, shipping included.', why: 'The first quote.' }) as { quote: { total: number; said: string; by: string } }
+    expect(r.quote).toMatchObject({ total: 96.4, said: 'JLCPCB quoted me US$96.40 today, shipping included.', by: 'the Verification specialist' })
+    expect(await call('journey.quotes', {})).toMatchObject({ quotes: [{ total: 96.4, on: '2026-11-02', why: 'The first quote.' }], summary: '1 quote; the newest is US$96.40 of 2026-11-02.' })
+  })
+
   it('journey.status shows a stuck report a person dismissed, with the reason, so the agent knows', async () => {
     const r = await call('journey.stuck', { why: 'The probe is not on the bench network.', recommendation: 'Plug the probe in.' }) as { stuck_id: string }
     expect((await call('journey.status', {}) as { stuck: { id: string; dismissed?: unknown }[] }).stuck.find((x) => x.id === r.stuck_id)).toMatchObject({ id: r.stuck_id, answered: null })

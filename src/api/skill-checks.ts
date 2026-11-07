@@ -29,6 +29,7 @@ import { type PinFinding, architectureView, intentView, linksView, matedParts, m
 import type { Finding, TraceRequirement } from './record-read.js'
 import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
+import { type QuoteRow, latestQuote } from '../core/quotes.js'
 import { type OrderRecord, enteredOf, matchedOf, optionsRun, orderLines, orderOptions, orderSigned } from './order-submit.js'
 import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine, releaseRecommendation, releaseView } from './release-review.js'
 
@@ -83,6 +84,8 @@ export interface CheckInput {
   instruments: { name: string; kind: string; limits?: { max_voltage_v?: number; max_current_a?: number } }[]
   /** the orders recorded (journey.orders) */
   orders: OrderRow[]
+  /** Order submit: the JLCPCB quotes recorded, oldest first (src/core/quotes.ts) */
+  quotes?: QuoteRow[]
   /** a test item's method and status, for the hardware checks */
   tests: { id: string; method: string; status: string }[]
   /** the boards by serial with their inspection checks (journey: boards, board_checks) */
@@ -521,6 +524,12 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (left.length) return notMet('matching', `Confirm ${andList(left.slice(0, 5).map((l) => l.refs))}${left.length > 5 ? ` and ${left.length - 5} more` : ''} against JLCPCB's matching.`)
     const off = lines.filter((l) => unplaced.includes(l.key))
     return met('matching', off.length ? `JLCPCB will not place ${andList(off.map((l) => l.refs))}.` : `${plural(lines.length, 'line')} matched.`)
+  },
+  // the total JLCPCB shows once the package is uploaded, as the person read it (trace never signs in to JLCPCB)
+  'order-submit/quote': (i) => {
+    const q = i.r ? latestQuote(i.quotes ?? [], i.r.journey.revision) : null
+    // asked for, never in the way: an order can be placed on the estimate, and the quote recorded after
+    return q ? met('quote', `${q.currency === 'USD' ? 'US$' : `${q.currency} `}${q.total.toFixed(2)} for ${plural(q.quantity, 'board')}, quoted ${q.on}.`) : { id: 'quote', status: 'not_due', detail: 'no quote recorded yet: record the total JLCPCB shows (Record a quote on the Build tab) so the order\'s cost is the quote, not the estimate' }
   },
   'order-submit/recorded': (i) => {
     const rev = i.r?.journey.revision

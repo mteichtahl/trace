@@ -384,10 +384,12 @@
       "kicad.export",
       "kicad.bom",
       "firmware.build",
-      "firmware.size"
+      "firmware.size",
+      "journey.quotes",
+      "journey.quote_record"
     ],
     "remote": null,
-    "body": "Release stage. The verification specialist delegates this to the worker with agent.delegate, then checks the files.\n\n- Worker: kicad.fab house jlcpcb (Gerbers and drill zipped, BOM, CPL), kicad.export sch_pdf, pcb_pdf and step, kicad.bom jlc=true (17 parts, 15 lines, every one with an LCSC code).\n- Worker: firmware.build target trace-sample-fw (make all test, from `firmware/Makefile`), then firmware.size (`firmware/memory.x` gives the MCU's 64K flash).\n- Specialist: confirm every part has a placement and the unit test printed ALL TESTS PASSED.\n\nDone when: the package is complete with no warnings and the build passes. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Release stage. The verification specialist delegates this to the worker with agent.delegate, then checks the files.\n\n- Worker: kicad.fab house jlcpcb (Gerbers and drill zipped, BOM, CPL), kicad.export sch_pdf, pcb_pdf and step, kicad.bom jlc=true (17 parts, 15 lines, every one with an LCSC code).\n- Worker: firmware.build target trace-sample-fw (make all test, from `firmware/Makefile`), then firmware.size (`firmware/memory.x` gives the MCU's 64K flash).\n- Specialist: confirm every part has a placement and the unit test printed ALL TESTS PASSED.\n- Specialist: read journey.quotes (none yet is fine). If a comment on this issue gives a JLCPCB quote in a person's words, journey.quote_record it with those words in said; never a figure you worked out.\n\nDone when: the package is complete with no warnings and the build passes. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "bringup-bench",

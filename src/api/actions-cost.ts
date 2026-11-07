@@ -15,7 +15,9 @@
  *                                         forecast              the build, for the revision not ordered yet (an order
  *                                                               being prepared included): the newest order estimate's
  *                                                               high end, else quantity x target unit cost
- *                                         forecastBasis         which: { kind: 'estimate', low, high, at, partsRun } or
+ *                                         forecastBasis         which: { kind: 'quote', total, on, id } (the newest
+ *                                                               JLCPCB quote of the revision, when there is one), or
+ *                                                               { kind: 'estimate', low, high, at, partsRun } or
  *                                                               { kind: 'target' }
  *                                         stages[].cloud        the estimated cloud spend of each stage: its jobs' (by
  *                                                               the stage the project was in when each started), and the
@@ -62,8 +64,9 @@ import { type PriceSource, type PriceTable, DEFAULT_PRICES, isStale } from '../c
 import { type PricesInUse, PRICES_PREFIX, pricesFor } from '../core/prices-store.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { SPECIALIST_WORDS, type SpecialistKind, WORKER } from '../agents/kinds.js'
-import { type Context, Repo, def, storeAt, withJourneyDb, withRecordDb } from './action-kit.js'
+import { type Context, Repo, agentFactsStore, def, storeAt, withJourneyDb, withRecordDb } from './action-kit.js'
 import { type OrderEstimate, orderEstimateFrom } from '../core/order-estimate.js'
+import { type QuoteRow, allQuotes, latestQuote, loadAgentQuotes, loadQuotes } from '../core/quotes.js'
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
 const DAY = 86400
@@ -197,10 +200,13 @@ export function buildCost(o: { planned: number | null; placed: boolean; paid: bo
 }
 
 /**
- * What the order is forecast to cost before it is placed: the newest order estimate's high end when there is one in the
- * build's currency, else the build plan's target, with which it is. Pure.
+ * What the order is forecast to cost before it is placed: the newest JLCPCB quote of the revision when there is one in
+ * the build's currency; else the newest order estimate's high end when there is one in that currency; else the build
+ * plan's target, with which it is. Pure.
  */
-export function orderForecast(o: { target: number | null; estimate: OrderEstimate | null; currency: string }) {
+export function orderForecast(o: { target: number | null; estimate: OrderEstimate | null; currency: string; quote?: Pick<QuoteRow, 'id' | 'on' | 'total' | 'currency'> | null | undefined }) {
+  const q = o.quote
+  if (q && q.currency === o.currency) return { planned: q.total, basis: { kind: 'quote' as const, total: q.total, on: q.on, id: q.id } }
   const e = o.estimate
   if (e && e.currency === o.currency) return { planned: e.high, basis: { kind: 'estimate' as const, low: e.low, high: e.high, at: iso(e.at) as string, partsRun: e.partsRun } }
   return { planned: o.target, basis: o.target !== null ? { kind: 'target' as const } : null }
@@ -235,9 +241,9 @@ export const COST_ACTIONS = {
   'cost.get': def('read', Repo, async ({ repo }, ctx) => {
     const money = isAdmin(ctx.principal)
     // the ledger and the actuals are read only for admins: nobody else's answer carries money
-    const [usage, actuals, prices, jobs, estimate] = money
-      ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx), jobsOf(ctx, repo), estimateOf(ctx, repo)])
-      : [{ rows: [], error: null }, { rows: [], status: null }, null, { rows: [], batch: [] }, null]
+    const [usage, actuals, prices, jobs, estimate, agentQuoted] = money
+      ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx), jobsOf(ctx, repo), estimateOf(ctx, repo), agentFactsStore(ctx, repo).read((db) => loadAgentQuotes(db)).then((x) => x.result, () => [] as QuoteRow[])])
+      : [{ rows: [], error: null }, { rows: [], status: null }, null, { rows: [], batch: [] }, null, [] as QuoteRow[]]
     return withJourneyDb(ctx, repo, (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
@@ -274,10 +280,12 @@ export const COST_ACTIONS = {
       // the order's forecast: the newest order estimate's high end when there is one in the build's currency, else the
       // build plan's target (test-esp32 run 2, #178: "10 boards at US$9 each, the build plan's target" with an
       // estimate of US$141 to 244 on record)
-      const of = orderForecast({ target: planned, estimate, currency: b.currency })
+      // the newest JLCPCB quote of the revision before either, when one is recorded (the person's, or an agent's from
+      // the person's words), as the Build tab's headline is
+      const of = orderForecast({ target: planned, estimate, currency: b.currency, quote: latestQuote(allQuotes(loadQuotes(db), agentQuoted), r.journey.revision) })
       const { committed, forecast } = buildCost({ planned: of.planned, placed: placedThisRevision.length > 0, paid: placedThisRevision.every((o) => o.paid !== null) })
       const forecastBasis = of.basis
-      const useEstimate = of.basis?.kind === 'estimate'
+      const useEstimate = of.basis?.kind === 'estimate' || of.basis?.kind === 'quote'
       if (planned === null && !useEstimate) notes.push('No unit cost is set in the build plan and there is no order estimate yet, so the build\'s forecast is unknown.')
       const e = estimateTotals(usage.rows)
       const a = actuals.rows.length ? actualTotals(actuals.rows) : null
