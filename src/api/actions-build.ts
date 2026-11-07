@@ -34,6 +34,7 @@ import { ActionError, type Context, Repo, def, hashOf, hashesOf, label, plainly,
 import { hasTable, latestRun, runResult } from './record-read.js'
 import { readRenders } from './actions-renders.js'
 import { orderOptionsOf } from '../tools/kicad/order-options.js'
+import { orderEstimateFrom } from '../core/order-estimate.js'
 
 const signer = (ctx: Context): Signer => ({ hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal) })
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -189,8 +190,8 @@ const day = (t: number): string => new Date(t * 1000).toISOString().slice(0, 10)
  * package's run (kicad.fab's order_options), its parts from the newest parts check at the build quantity (prices then
  * from the newest check before Fabricate, sign-off's), its picture from the newest renders of the revision, and
  * whether it is ready to place: the package built at Fabricate without problems, and every line in stock at a check
- * made today. What is missing is said, one line each. The cost is the build plan's target until a quote is recorded,
- * and says so. Pure over the record database.
+ * made today. What is missing is said, one line each. The cost is the order estimate (parts check, board and case at
+ * the fab's published prices) and the build plan's target until a quote is recorded, and says so (#227). Pure over the record database.
  */
 export function orderSheet(db: DatabaseSync, o: { quantity: number; unitCost: number | null; currency: string; revision: string; fabricateStarted: number | null; now: number }) {
   const missing: string[] = []
@@ -238,10 +239,15 @@ export function orderSheet(db: DatabaseSync, o: { quantity: number; unitCost: nu
   const render: SheetRender | null = rr && pic ? { run: rr.run, name: pic.name, label: pic.label, revision: rr.revision } : null
 
   const target = o.unitCost !== null ? Math.round(o.unitCost * o.quantity * 100) / 100 : null
+  // the order estimate the gates show (the parts check, board and case at the fab's published prices): the closest to
+  // a price until a quote is recorded, so the sheet is not left with the target alone (#227)
+  let est: ReturnType<typeof orderEstimateFrom> = null
+  try { est = orderEstimateFrom(db, { quantity: o.quantity }) } catch { est = null }
   return {
     ready: missing.length === 0, missing, files, options, optionsNote, parts, render,
     ...(check ? { checkedAt: iso(check.started) as string, checkRun: check.run, partsTotal: check.total } : {}),
     basis: 'target' as const, target,
+    estimate: est ? { low: est.low, high: est.high, currency: est.currency, at: iso(est.at) as string, partsRun: est.partsRun, notIn: est.notIn } : null,
   }
 }
 

@@ -9,7 +9,7 @@ import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { Budgets } from './budgets'
 import { gateSpendLine } from './gate-spend'
-import { orderAmount, orderHeadline } from './order-sheet'
+import { againstBudget, orderAmount, orderHeadline } from './order-sheet'
 
 vi.mock('@tanstack/react-router', async (orig) => ({ ...(await orig<object>()), Link: ({ children }: { children: ReactNode }) => children }))
 
@@ -28,6 +28,18 @@ describe('the order being prepared', () => {
     expect(orderAmount(prepared)).toBe('target US$90, no quote yet')
     expect(orderAmount({ ...prepared, target: null })).toBe('no quote yet')
     expect(orderAmount({ ...prepared, state: 'placed', total: 131.4 })).toBe('US$131')
+  })
+
+  // #227: no quote is ever recorded yet, so the sheet could only show the target; it shows the order estimate the
+  // gates show, said as not a quote, and holds that against the budget
+  it('with an order estimate, says it before the target and holds its high end against the budget', () => {
+    const prepared = { state: 'ready' as const, boards: 10, total: 90, currency: 'USD', basis: 'target' as const, target: 90, cost: [] }
+    const estimate = { low: 141, high: 244, currency: 'USD', at: '2026-11-06T10:00:00.000Z', partsRun: 'p1', notIn: [] }
+    expect(orderHeadline({ ...prepared, estimate }).cost).toBe('No quote yet: the order estimate is US$141 to US$244, from the parts check and the fab\'s published prices, not a quote.')
+    expect(orderAmount({ ...prepared, estimate })).toBe('estimate US$141 to US$244, no quote yet')
+    expect(againstBudget({ ...prepared, estimate })).toEqual({ amount: 244, what: 'the estimate\'s high end' })
+    expect(againstBudget(prepared)).toEqual({ amount: 90, what: 'the target' })
+    expect(againstBudget({ ...prepared, basis: 'quote', estimate, cost: [{ label: 'Boards', amount: 100 }, { label: 'Parts', amount: 50 }] })).toEqual({ amount: 150, what: 'the quote' })
   })
 })
 

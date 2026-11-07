@@ -177,11 +177,11 @@ export function StepNeeds({ def, step, checks }: { def: SkillDef; step: { id: st
         <ul className="space-y-1.5">
           {here.map((c) => {
             const r = of(c.id)
-            const status = r?.status === 'met' ? 'met' : r?.status === 'waived' ? 'waived' : 'not_met'
+            const status = r?.status === 'met' ? 'met' : r?.status === 'waived' ? 'waived' : r?.status === 'not_due' ? 'untested' : 'not_met'
             const why = r?.unavailable ? `trace cannot check it from the record yet: it needs ${r.unavailable}.` : r?.detail
             return (
               <li key={c.id} className="flex flex-wrap items-start gap-2">
-                <StatusBadge status={status} />
+                <StatusBadge status={status} {...(r?.status === 'not_due' ? { label: 'Not due yet' } : {})} />
                 <span className="min-w-0 flex-1">{c.text}{why && <span className="block text-xs text-muted-foreground">{why}</span>}</span>
               </li>
             )

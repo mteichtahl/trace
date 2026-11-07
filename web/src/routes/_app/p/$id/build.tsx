@@ -46,7 +46,7 @@ import type { HardwareLine, HardwareList, OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
 import { DeploysPanel } from '@/components/project/deploys'
-import { orderAmount, orderHeadline } from '@/components/project/order-sheet'
+import { againstBudget, estimateRange, orderAmount, orderHeadline } from '@/components/project/order-sheet'
 
 export const Route = createFileRoute('/_app/p/$id/build')({
   staticData: { crumb: 'Build' },
@@ -215,8 +215,9 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
 
   const canRecord = signed && number.trim().length >= 4 && Number(paid) > 0 && !!ship
   const sumCost = o.cost.reduce((n, c) => n + c.amount, 0)
-  // against the budget: the quote when there is one, else the target (a forecast)
-  const against = quoted ? sumCost : o.target ?? null
+  // against the budget: the quote when there is one, else the order estimate's high end, else the target (a forecast)
+  const vs = againstBudget(o)
+  const against = vs?.amount ?? null
 
   return (
     <div className="mt-6 space-y-6">
@@ -291,13 +292,17 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
             <h3 className="font-semibold">Cost</h3>
             {!quoted && <p className="mt-1 text-xs text-muted-foreground">No quote yet. JLCPCB quotes the boards, assembly and shipping once the package is uploaded.</p>}
             <dl className="mt-3 space-y-1.5">
+              {o.estimate && !quoted && (
+                <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Order estimate, not a quote (parts check of {o.estimate.at.slice(0, 10)}, the fab's published prices)</dt><dd className="shrink-0">{estimateRange(o.estimate)}</dd></div>
+              )}
               {o.cost.map((c) => <div key={c.label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{c.label}</dt><dd className="shrink-0">{money(c.amount, o.currency)}</dd></div>)}
               {quoted && <div className="flex justify-between border-t pt-2 font-semibold"><dt>Total</dt><dd>{money(sumCost, o.currency)}</dd></div>}
               {!o.cost.length && <div className="text-muted-foreground">No target unit cost in the build plan and no parts check yet.</div>}
             </dl>
+            {o.estimate && !quoted && o.estimate.notIn.length > 0 && <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground" aria-label="Not in the estimate">{o.estimate.notIn.map((n) => <li key={n}>{n}</li>)}</ul>}
             {o.budget !== undefined && against !== null && (
               <>
-                <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">Budget for {o.release} {money(o.budget, o.currency)} · <StatusBadge plain status={against <= o.budget ? 'met' : 'failing'} label={`${quoted ? 'the quote' : 'the target'} is ${against <= o.budget ? 'within budget' : 'over budget'}`} /></p>
+                <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">Budget for {o.release} {money(o.budget, o.currency)} · <StatusBadge plain status={against <= o.budget ? 'met' : 'failing'} label={`${vs!.what} is ${against <= o.budget ? 'within budget' : 'over budget'}`} /></p>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden><div className={cn('h-full rounded-full', against <= o.budget ? 'bg-foreground/70' : 'bg-destructive')} style={{ width: `${Math.min(100, (against / o.budget) * 100)}%` }} /></div>
               </>
             )}
