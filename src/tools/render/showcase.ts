@@ -5,9 +5,16 @@
  * records name in case.jsonld), lit and backed with colours taken from the project's logo, or trace's neutral studio
  * look when it has none.
  *
- * Each picture is named <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png and kept as an artifact of one recorded run,
+ * Each picture is named <project>_rev-<revision>_<YYYY-MM-DD>_<shot>.png, the project's name taken from its record
+ * (./subject.ts: the name given, the journey's, the KiCad project's, the repository's; the folder only as a last
+ * resort), and kept as an artifact of one recorded run,
  * whose result (revision, date, palette, shots) the ontology reads as the revision's renders (src/ontology/renders.ts).
  * The run's inputs are the board file, the case files and the logo, so the pictures go out of date when any changes.
+ *
+ * Parts are drawn as fully as the record allows, and the result says what is not: a footprint without a body in
+ * KiCad's 3D library gets its vendor's model (./model.ts, src/tools/kicad/vendor3d.ts); a case part beyond the base and
+ * lid (an off-board module mech.build placed at its mount, mechanical/out/case-<part>.stl) is drawn with the part it
+ * is mounted to; an off-board part the case does not place, and its cable, are listed as not drawn.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
@@ -15,7 +22,7 @@ import { z } from 'zod'
 import { normalisedHash } from '../../core/normalise.js'
 import { logoPath } from '../../docs/logo.js'
 import { defineTool, ToolError } from '../../core/registry.js'
-import { findRoot, scratchDir, Work, type RunInput } from '../../core/store.js'
+import { findRoot, PROJECT_DB, projectPath, scratchDir, Work, type RunInput } from '../../core/store.js'
 import { keepOutput } from '../../core/artifact-store.js'
 import { backendFor } from '../../gpu/jobs.js'
 import { needPcb, resolveProject } from '../kicad/project.js'
@@ -24,8 +31,9 @@ import { CASE_JSON, OUT_DIR, readSettings } from '../mech/settings.js'
 import { SHOTS, type Shot, shotExt } from '../../ontology/renders.js'
 import { findBlender, pngSize, runBlender } from './blender.js'
 import { defaultDevice, DeviceWant, probe, selectDevice } from './device.js'
-import { commitOf, exportBoard, inRepo, type BoardFormat } from './model.js'
+import { type Bodies, commitOf, exportBoard, inRepo, type BoardFormat } from './model.js'
 import { encodeMp4, freeName, RenderResult } from './tools.js'
+import { type CasePart, extraCaseParts, offBoardDrawn, type OffBoardPart, recordFacts, showcaseName } from './subject.js'
 
 export const CASE_SHOTS: readonly Shot[] = ['case', 'board-in-case', 'exploded']
 export const BOARD_SHOTS: readonly Shot[] = ['board', 'board-top', 'board-bottom']
@@ -106,7 +114,7 @@ export const TURNTABLE = {
 const REVISION = /^[A-Z]{1,3}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 
-/** A file-name-safe project name: the repository's folder, lower case, words joined by hyphens. */
+/** A file-name-safe project name: lower case, words joined by hyphens. */
 export function projectSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project'
 }
@@ -142,6 +150,18 @@ export function outlineBounds(outline: readonly (readonly [number, number])[] | 
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
 }
 
+/** The project's name in its journey, when this checkout runs with the project in scope (the agents do). */
+async function journeyName(): Promise<string | null> {
+  try {
+    const { journeyScope } = await import('../journey/tools.js')
+    const { loadJourney } = await import('../../core/journey.js')
+    const s = journeyScope()
+    return (await s.journey.read((db) => loadJourney(db))).result?.journey.name?.trim() || null
+  } catch {
+    return null
+  }
+}
+
 const ShowcaseResult = RenderResult.extend({
   turntable: z.object({ width: z.number(), height: z.number(), samples: z.number() }).nullable().optional(),
   palette: z.object({
@@ -159,6 +179,7 @@ export const showcase = defineTool({
     date: z.string().regex(DATE, 'YYYY-MM-DD').optional().describe('the day the revision was cut (default today, in time_zone)'),
     time_zone: z.string().max(64).optional().describe('IANA time zone for the default date (default UTC)'),
     project: z.string().optional().describe('path to a .kicad_pro/.kicad_pcb (or its folder); omit for the configured/only project'),
+    project_name: z.string().min(1).max(120).optional().describe('the name the files carry (default: the project\'s name in its journey record, else the KiCad project\'s)'),
     shots: z.array(z.enum(SHOTS)).min(1).max(SHOTS.length).optional().describe('default: every board shot, the case shots when the project has a built case, and the turntable'),
     turntable_frames: z.number().int().min(8).max(360).optional().describe('the turntable\'s frames, one turn (default 96 at release, 48 as a draft; 24 a second)'),
     quality: z.enum(['release', 'draft']).default('release').describe('release: 2560×1600 at 256 samples on a GPU (1920×1200 at 128 on a CPU); draft: a quick look'),
@@ -176,7 +197,14 @@ export const showcase = defineTool({
     const p = await resolveProject(a.project)
     const pcb = needPcb(p)
     const root = findRoot(p.dir) ?? p.dir
-    const project = basename(resolve(root))
+    // the project's record: the database the run is kept in, and the repository's own
+    const facts0 = [projectPath(), join(root, PROJECT_DB)].map(recordFacts)
+    const named = showcaseName({
+      given: a.project_name, journey: (await journeyName()) ?? facts0.find((f) => f.journey)?.journey, kicad: p.name,
+      repository: process.env.TRACE_PROJECT ?? process.env.GITHUB_REPOSITORY, folder: basename(resolve(root)),
+    })
+    const project = named.name
+    const offBoard: OffBoardPart[] = facts0.find((f) => f.offBoard.length)?.offBoard ?? []
     const date = a.date ?? dayIn(new Date(), a.time_zone)
     const notes: string[] = []
 
@@ -199,11 +227,26 @@ export const showcase = defineTool({
     // the screws, when the board is screwed down: seated in the open case, lifted out of their holes in the exploded view
     const recordsPath = join(root, CASE_RECORDS)
     let screws: ShowcaseScrew[] = []
+    let extras: (CasePart & { drawn: boolean; file: string })[] = []
     if (hasCase && existsSync(recordsPath)) {
-      try { screws = caseScrews(JSON.parse(readFileSync(recordsPath, 'utf8'))) } catch (e) { notes.push(`${CASE_RECORDS} could not be read (${e instanceof Error ? e.message : String(e)}): no screws shown`) }
+      try {
+        const jsonld = JSON.parse(readFileSync(recordsPath, 'utf8'))
+        screws = caseScrews(jsonld)
+        // the case's other parts (an off-board module at its mount), drawn when mech.build wrote their files
+        extras = extraCaseParts(jsonld).map((c) => {
+          const file = join(root, OUT_DIR, `case-${c.kind}.stl`)
+          return { ...c, file, drawn: existsSync(file) }
+        })
+      } catch (e) { notes.push(`${CASE_RECORDS} could not be read (${e instanceof Error ? e.message : String(e)}): no screws shown`) }
     } else if (hasCase) {
       notes.push(`${CASE_RECORDS} is not there (build the case again with mech.build): no screws shown`)
     }
+    const drawnExtras = extras.filter((c) => c.drawn)
+    const offBoardSeen = offBoardDrawn(offBoard, hasCase ? extras : [])
+    for (const c of extras.filter((x) => !x.drawn && !offBoardSeen.not_drawn.some((n) => n.why.includes(`case-${x.kind}.stl`)))) {
+      offBoardSeen.not_drawn.push({ part: `case part ${c.kind}`, why: `${OUT_DIR}/case-${c.kind}.stl is not there (build the case again with mech.build)` })
+    }
+    if (offBoardSeen.not_drawn.length) notes.push(`not drawn: ${offBoardSeen.not_drawn.map((n) => `${n.part} (${n.why})`).join('; ')}`)
 
     // the project's logo (the documentation module's): a PNG Blender reads, or an SVG whose colours are read here
     const logoRel = LOGO_PATHS.find((l) => existsSync(join(root, l))) ?? null
@@ -233,10 +276,10 @@ export const showcase = defineTool({
       // what the pictures are made from, for freshness (src/ontology/lineage.ts)
       const rel = (abs: string): string => abs.startsWith(resolve(root)) ? resolve(abs).slice(resolve(root).length + 1) : abs
       const fileInput = (abs: string): RunInput => ({ kind: 'file', ref: rel(abs), sha256: normalisedHash(rel(abs), readFileSync(abs)) })
-      work.inputs(id, [fileInput(pcb), ...(hasCase ? [fileInput(base), fileInput(lid)] : []), ...(screws.length ? [fileInput(recordsPath)] : []), ...(logoRel ? [fileInput(join(root, logoRel))] : [])])
+      work.inputs(id, [fileInput(pcb), ...(hasCase ? [fileInput(base), fileInput(lid)] : []), ...drawnExtras.map((c) => fileInput(c.file)), ...(screws.length || drawnExtras.length ? [fileInput(recordsPath)] : []), ...(logoRel ? [fileInput(join(root, logoRel))] : [])])
 
       // the board's model: exported by kicad-cli (GLB), or one handed in
-      let model: { path: string; format: string; note?: string }
+      let model: { path: string; format: string; note?: string; bodies?: Bodies }
       if (a.board_model) {
         const m = inRepo(a.board_model)
         if (!existsSync(m) || !/\.glb$/i.test(m)) throw new ToolError(`${a.board_model}: board_model must be an existing .glb`)
@@ -248,6 +291,8 @@ export const showcase = defineTool({
       const inputs: Record<string, string> = { 'board.glb': model.path }
       const args = ['{in:board.glb}']
       if (hasCase) { inputs['base.stl'] = base; inputs['lid.stl'] = lid; args.push('{in:base.stl}', '{in:lid.stl}') }
+      // the case's other parts come after the lid, the logo last (python/blender/render_showcase.py)
+      for (const c of hasCase ? drawnExtras : []) { inputs[`part-${c.kind}.stl`] = c.file; args.push(`{in:part-${c.kind}.stl}`) }
       if (logoRel && !svg) { inputs['logo.png'] = join(root, logoRel); args.push('{in:logo.png}') }
       const outs = stills.map((s) => names[s])
       const frameOuts = Array.from({ length: frames }, (_, i) => `turntable_${String(i + 1).padStart(4, '0')}.png`)
@@ -255,7 +300,7 @@ export const showcase = defineTool({
       const job = {
         // the turntable's frames come after every picture (python/blender/render_showcase.py)
         shots: [...stills, ...(spin ? ['turntable'] : [])], board_xy_mm: bounds, format: model.format, up_axis: 'Z',
-        ...(hasCase ? { case: { look } } : {}), ...(screws.length ? { fasteners: screws } : {}), ...(logoRel && !svg ? { logo: true } : {}), ...(svg?.length ? { logo_colours: svg.slice(0, 32).map((c) => [c.hex, c.uses]) } : {}),
+        ...(hasCase ? { case: { look } } : {}), ...(drawnExtras.length ? { extra_parts: drawnExtras.map((c) => c.kind) } : {}), ...(screws.length ? { fasteners: screws } : {}), ...(logoRel && !svg ? { logo: true } : {}), ...(svg?.length ? { logo_colours: svg.slice(0, 32).map((c) => [c.hex, c.uses]) } : {}),
         mask_color: a.mask_color, silk_color: a.silk_color,
         ...(a.width ? { width: a.width } : {}), ...(a.height ? { height: a.height } : {}), ...(a.samples ? { samples: a.samples } : {}),
         defaults: q, denoise: true, device: want, engine: 'cycles',
@@ -321,6 +366,7 @@ export const showcase = defineTool({
           run_id: id,
           revision: a.revision,
           date,
+          name: named,
           palette,
           shots: Object.fromEntries(artifacts.map((x) => [x.name, x.shot])),
           artifacts,
@@ -331,7 +377,10 @@ export const showcase = defineTool({
           render: { width: r.render.width, height: r.render.height, samples: r.render.samples, denoiser: r.render.denoiser },
           ...(video && r.turntable ? { turntable: { ...r.turntable, frames, fps: FPS, seconds: Math.round((frames / FPS) * 10) / 10 } } : {}),
           render_seconds: renderSeconds,
-          case: hasCase ? { look, screws: screws.map((x) => `${x.size}x${x.length_mm}`) } : null,
+          case: hasCase ? { look, screws: screws.map((x) => `${x.size}x${x.length_mm}`), parts: drawnExtras.map((c) => c.kind) } : null,
+          // the parts drawn without a body, those drawn with their vendor's model, and what is off the board
+          bodies: model.bodies ?? { vendor: [], missing: [] },
+          off_board: offBoardSeen,
           commit,
           blender: r.blender,
           notes,

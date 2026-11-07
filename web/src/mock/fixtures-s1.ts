@@ -354,19 +354,32 @@ export const BUILD: BuildView = {
   releases: [{ id: 'rel-a', revision: 'Rev A', at: ago(3 * DAY), commit: 'a41e9d0', files: 14, by: 'Marc Teichtahl', frozen: true }],
   orders: [
     {
-      id: 'ord-1', release: 'Rev A', state: 'ready', boards: 10, total: 184, currency: 'USD', budget: 400, changed: 'Two prices changed since sign-off (+US$3.10). Both parts are still in stock.',
-      cost: [{ label: 'Boards', amount: 38 }, { label: 'Assembly', amount: 61 }, { label: 'Parts', amount: 71 }, { label: 'Shipping', amount: 14 }],
+      // as build.get answers it (orderSheet): the package built at Fabricate with its options, the parts checked today at
+      // the build quantity, the newest accepted render; no quote is recorded, so the cost is the target, said as such
+      id: 'ord-1', release: 'Rev A', state: 'ready', boards: 10, total: 120, currency: 'USD', budget: 400,
+      ready: true, missing: [], basis: 'target', target: 120, checkRun: 'run_bom_today',
+      render: { run: 'run_rnd_a', name: 'soil-sensor_rev-A_2026-10-21_board-top.png', label: 'Top', revision: 'A' },
+      cost: [
+        { label: "Target: 10 boards at 12 USD each (the build plan's, not a quote)", amount: 120, kind: 'target' },
+        { label: 'Parts for 10 boards at the checked prices (boards, assembly and shipping not included)', amount: 71.32, kind: 'parts' },
+      ],
       options: [
-        { option: 'Layers', value: '4' }, { option: 'Thickness', value: '1.6 mm' }, { option: 'Colour', value: 'Green' }, { option: 'Surface finish', value: 'ENIG' },
-        { option: 'Outer copper', value: '1 oz' }, { option: 'Impedance control', value: 'Yes (JLC04161H-7628)' }, { option: 'Quantity', value: '10' }, { option: 'Assembly', value: 'Top side' },
+        { option: 'Base material', value: 'FR-4', source: "JLCPCB's default: not decided in the record", decided: false },
+        { option: 'Layers', value: '4', source: 'the board file', decided: true }, { option: 'Dimensions', value: '50 x 30 mm', source: 'the board file', decided: true },
+        { option: 'PCB thickness', value: '1.6 mm', source: 'the board file', decided: true }, { option: 'Outer copper weight', value: '1 oz (35 µm)', source: 'the board file', decided: true },
+        { option: 'Min track width', value: '0.15 mm', source: 'the board file', decided: true }, { option: 'Min hole size', value: '0.3 mm', source: 'the board file', decided: true },
+        { option: 'Solder mask colour', value: 'Green', source: "JLCPCB's default: not decided in the record", decided: false },
+        { option: 'Surface finish', value: 'HASL', source: "JLCPCB's default: not decided in the record", decided: false },
+        { option: 'PCB quantity', value: '10', source: 'the build plan', decided: true },
+        { option: 'Assembly side', value: 'Top side (38 placed parts)', source: 'the placements', decided: true }, { option: 'Assembly quantity', value: '10', source: 'the build plan', decided: true },
       ],
       parts: [
-        { ref: 'U1', name: 'Microcontroller', lcsc: 'C2652091', stock: 3140, then: 3.86, now: 3.98 },
-        { ref: 'U2', name: 'LoRa radio module', lcsc: 'C2939786', stock: 1208, then: 1.92, now: 2.11 },
-        { ref: 'U3', name: 'Low-dropout regulator (LDO)', lcsc: 'C82942', stock: 48920, then: 0.21, now: 0.21 },
-        { ref: 'J1', name: 'Battery connector', lcsc: 'C131337', stock: 22605, then: 0.06, now: 0.06 },
-        { ref: 'J2', name: 'Antenna connector', lcsc: 'C88374', stock: 9771, then: 0.18, now: 0.18 },
-        { ref: 'C1–C14', name: '100 nF capacitors, 0402', lcsc: 'C1525', stock: 9830112, then: 0.002, now: 0.002 },
+        { ref: 'U1', name: 'STM32L072CZT6', lcsc: 'C2652091', stock: 3140, need: 10, status: 'ok', then: 3.86, now: 3.98 },
+        { ref: 'U2', name: 'RFM95W-868S2', lcsc: 'C2939786', stock: 1208, need: 10, status: 'ok', then: 1.92, now: 2.11 },
+        { ref: 'U3', name: 'TLV75533PDBVR', lcsc: 'C82942', stock: 48920, need: 10, status: 'ok', then: 0.21, now: 0.21 },
+        { ref: 'J1', name: 'S2B-PH-K-S', lcsc: 'C131337', stock: 22605, need: 10, status: 'ok', then: 0.06, now: 0.06 },
+        { ref: 'J2', name: 'U.FL-R-SMT-1', lcsc: 'C88374', stock: 9771, need: 10, status: 'ok', then: 0.18, now: 0.18 },
+        { ref: 'C1–C14', name: 'CL05B104KO5NNNC', lcsc: 'C1525', stock: 9830112, need: 140, status: 'ok', then: 0.002, now: 0.002 },
       ],
       files: ['gerbers.zip', 'bom-jlcpcb.csv', 'cpl-jlcpcb.csv', 'hardware.csv'],
       hardware: {
@@ -393,7 +406,8 @@ export const BUILD: BuildView = {
 export const COST: CostView = {
   currency: 'USD',
   spent: { cloud: 38, orders: 0 },
-  committed: 184,
+  // nothing is committed before an order is placed: the order being prepared is a forecast from the target (#218)
+  committed: 0,
   forecast: 120,
   budget: 400,
   stages: [

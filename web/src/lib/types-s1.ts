@@ -506,10 +506,29 @@ export interface OrderView {
   currency: string
   budget?: number
   changed?: string
-  cost: { label: string; amount: number }[]
-  options: { option: string; value: string }[]
-  parts: { ref: string; name: string; lcsc: string; stock: number; then: number; now: number }[]
+  /** `kind`: the build plan's target (not a quote), the parts at the checked prices, or a quoted or paid line */
+  cost: { label: string; amount: number; kind?: 'target' | 'parts' | 'quote' }[]
+  /** the board options the release package recorded (kicad.fab); `decided: false` is JLCPCB's default, decided nowhere */
+  options: { option: string; value: string; source?: string; decided?: boolean }[]
+  /** why there are no options when the package is built (its run recorded none) */
+  optionsNote?: string | null
+  /** the newest parts check at the build quantity: `need` for the boards, `then` the price at sign-off */
+  parts: { ref: string; name: string; lcsc: string; stock: number; need?: number; status?: string; then: number; now: number }[]
   files: string[]
+  /**
+   * The order being prepared: ready to place only when the package is built and every line is in stock at a check made
+   * today; `missing` says what is not done yet, one line each (build.get orderSheet)
+   */
+  ready?: boolean
+  missing?: string[]
+  /** where the expected cost comes from: the build plan's target (no quote yet), or a quote */
+  basis?: 'target' | 'quote'
+  /** the build plan's target for the order, null when no target unit cost is set */
+  target?: number | null
+  /** the parts check the parts come from */
+  checkRun?: string
+  /** the board's picture: the newest accepted renders of the revision */
+  render?: { run: string; name: string; label: string; revision: string } | null
   /**
    * The panel and mounting hardware list (build.get, when the build plan includes it): kept apart from the parts, bought
    * separately and never sent to the assembler. null when it is asked for but no run made it yet; absent when not asked.

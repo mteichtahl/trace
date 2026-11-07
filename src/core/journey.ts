@@ -2448,8 +2448,9 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
       const since = Math.max(...r.criteria.filter((c) => c.gate === g.id).map((c) => c.checkedAt ?? 0), r.stages.find((s) => s.id === stage)?.started ?? 0)
       if (g.id === 'fabricate.order') {
         const b = r.journey.build
-        const cost = b.unit_cost !== null ? ` about ${b.currency === 'USD' ? 'US$' : `${b.currency} `}${Math.round(b.unit_cost * b.quantity)}` : ''
-        out.push({ id: `spend:${g.id}`, kind: 'spend', repo, project, stage, summary: `${lead}the order for ${plural(b.quantity, 'board')} is ready${cost ? `:${cost}` : ''}. Money is spent when you sign.`, since: isoN(since), waited: ago(since, at), blocking: true, action: 'Review order', ref: { kind: 'gate', id: g.id } })
+        // the build plan's target, never called the order's cost: no quote is recorded (test-esp32 run 2, #217)
+        const cost = b.unit_cost !== null ? ` (target ${b.currency === 'USD' ? 'US$' : `${b.currency} `}${Math.round(b.unit_cost * b.quantity)}, no quote yet)` : ''
+        out.push({ id: `spend:${g.id}`, kind: 'spend', repo, project, stage, summary: `${lead}the order for ${plural(b.quantity, 'board')} is ready${cost}. Money is spent when you sign.`, since: isoN(since), waited: ago(since, at), blocking: true, action: 'Review order', ref: { kind: 'gate', id: g.id } })
         continue
       }
       out.push({ id: `gate:${g.id}`, kind: 'gate', repo, project, stage, summary: `${lead}${v.title} is ready. All ${v.total} criteria met or waived; trace recommends signing.`, since: isoN(since), waited: ago(since, at), blocking: true, action: 'Review and sign', ref: { kind: 'gate', id: g.id } })

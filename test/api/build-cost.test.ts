@@ -297,10 +297,11 @@ describe('cost', () => {
     await run(ADMIN, 'project.update', { repo: REPO, build: { cloud_budget: null } })
   })
 
-  it('counts the build once against the budget: forecast until Fabricate, then committed, then neither once ordered', () => {
-    expect(buildCost({ planned: 80, placed: false, atFabricate: false })).toEqual({ committed: 0, forecast: 80 })
-    expect(buildCost({ planned: 80, placed: false, atFabricate: true })).toEqual({ committed: 80, forecast: 0 })
-    expect(buildCost({ planned: 80, placed: true, atFabricate: true })).toEqual({ committed: 0, forecast: 0 })
-    expect(buildCost({ planned: null, placed: false, atFabricate: true })).toEqual({ committed: 0, forecast: null })
+  it('counts the build once against the budget: forecast from the target until an order is placed, committed only when placed without a cost (#218)', () => {
+    // an order being prepared at Fabricate is still a forecast: nothing is committed before it is placed
+    expect(buildCost({ planned: 90, placed: false, paid: false })).toEqual({ committed: 0, forecast: 90 })
+    expect(buildCost({ planned: 90, placed: true, paid: false })).toEqual({ committed: 90, forecast: 0 })
+    expect(buildCost({ planned: 90, placed: true, paid: true })).toEqual({ committed: 0, forecast: 0 })
+    expect(buildCost({ planned: null, placed: false, paid: false })).toEqual({ committed: 0, forecast: null })
   })
 })

@@ -22,6 +22,7 @@ import { boardHoles, checkFab, type Drawing, EXPORT_KINDS, FAB_TECH_LAYERS, draw
 import { describeLayer, designRules, LENGTH_DEFINITION, loadBoard, Net, netNames, signalLength, stackupKnown, type Board, type SignalLength } from './pcb.js'
 import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, kicadWhere, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
 import { netlist, parts, powerNets, readSchematic, symbolSummary, type Symbol } from './schematic.js'
+import { boardOrderOptions } from './order-options.js'
 import { cap, recorded, type RunHandle } from './record.js'
 
 const project = z.string().optional().describe('path to a .kicad_pro, .kicad_sch or .kicad_pcb (or a folder with one project); omit for the configured/only project')
@@ -334,7 +335,7 @@ const bom = defineTool({
 
 const fab = defineTool({
   name: 'kicad.fab',
-  description: 'A fabrication + assembly package in out_dir: Gerbers (with their job file) and drill files (zipped), BOM CSV, placement file, and for JLCPCB the BOM and CPL in their columns. The Gerber and drill choices are applied by kicad-cli itself and then checked against the files written (names, job file, every hole of the board in the right drill file): anything not applied fails the run, so never rename, hand-write or leave out a file to make up for it. Lists the files and flags parts missing an LCSC code or a placement. Needs kicad-cli.',
+  description: 'A fabrication + assembly package in out_dir: Gerbers (with their job file) and drill files (zipped), BOM CSV, placement file, and for JLCPCB the BOM and CPL in their columns. The Gerber and drill choices are applied by kicad-cli itself and then checked against the files written (names, job file, every hole of the board in the right drill file): anything not applied fails the run, so never rename, hand-write or leave out a file to make up for it. Lists the files and flags parts missing an LCSC code or a placement. Records the board options for the order form (order_options: from the board and placements, JLCPCB defaults marked as not decided), which the order sheet shows. Needs kicad-cli.',
   input: z.object({
     project,
     out_dir: z.string().optional().describe('default: <repo>/build/kicad/<project>/fab'),
@@ -377,9 +378,11 @@ const fab = defineTool({
       // the parts the fab will not place: fitted by hand at Incoming inspection (src/core/boards.ts inspectionProblems)
       let handPlaced: string[] = []
       let hw: Hardware | null = null
+      let bomCount: { lines: number; parts: number } | null = null
       if (p.sch) {
         const sch = readSchematic(p.sch, p.name)
         const b = buildBom(sch)
+        bomCount = { lines: b.unique_lines, parts: b.total_parts }
         if (a.hardware) {
           hw = await hardwareFor(p, sch)
           writeFileSync(join(dir, `${p.name}-hardware.csv`), hardwareCsv(hw))
@@ -417,10 +420,13 @@ const fab = defineTool({
       run.measure('files', out.length)
       run.measure('placements', pl.length)
       const ok = check.problems.length === 0
+      // the board options for the fab's order form, from the board and the placements: the order sheet reads them here
+      const orderOptions = boardOrderOptions(board, pl, bomCount)
+      run.artifact('order-options.json', JSON.stringify(orderOptions, null, 2), 'application/json')
       return { status: ok ? 'pass' as const : 'fail' as const,
         summary: ok ? `${out.length} fab files in ${dir}` : `fab package not ready (do not send it): ${check.problems.join('; ')}`,
         result: { project: p.name, out_dir: dir, house: a.house, settings, problems: check.problems, notes: check.notes, holes: check.holes,
-          kicad_cli: commands, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80),
+          kicad_cli: commands, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80), order_options: orderOptions,
           ...(hw ? { hardware: hardwareSummary(hw) } : {}) } }
     })
   },

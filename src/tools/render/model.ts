@@ -9,11 +9,12 @@
  * the 3D model of one footprint on an otherwise empty board and that board is exported (GLB without a board body, or
  * VRML, whose stand-in board the script drops).
  */
-import { copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { findRoot } from '../../core/store.js'
-import { type ModelDeps, defaultCacheDir, httpGet, stageModels } from '../kicad/models3d.js'
+import { type ModelDeps, MODELS_DIR, defaultCacheDir, httpGet, stageModels } from '../kicad/models3d.js'
+import { type BoardFootprint, type NoBody, type VendorBody, boardFootprints, vendorBodies } from '../kicad/vendor3d.js'
 import { kicadCliVersion, runCli } from '../kicad/project.js'
 import { packBase } from '../kicad/remote.js'
 
@@ -33,6 +34,36 @@ export interface Prepared {
   dropKicadBoard: boolean
   /** in words, for the render's notes (a board's component models that could not be had) */
   note?: string
+  /** a board's parts drawn with their vendor's model, and those drawn without a body (and why) */
+  bodies?: Bodies
+}
+
+export interface Bodies { vendor: VendorBody[]; missing: NoBody[] }
+
+const LIBRARY_MODEL = /^\$\{(?:KICAD\d+_3DMODEL_DIR|KISYS3DMOD)\}\/(.+)$/
+
+/**
+ * The footprints the export would draw without a body: those whose library models KiCad's 3D library does not have
+ * (`missing`, from ./models3d.ts), and those that name no model at all, leaving out what is only the board (mounting
+ * holes, fiducials, logos). A model the project carries itself is its own.
+ */
+export function bodiless(fps: readonly BoardFootprint[], missing: ReadonlySet<string>): BoardFootprint[] {
+  return fps.filter((fp) => {
+    if (fp.boardOnly || !fp.pads.length) return false
+    if (!fp.models.length) return true
+    return fp.models.every((m) => {
+      const rel = LIBRARY_MODEL.exec(m)?.[1]
+      return rel !== undefined && missing.has(rel)
+    })
+  })
+}
+
+/** The bodies in words, for the render's notes. */
+export function bodiesNote(b: Bodies): string | null {
+  const parts: string[] = []
+  if (b.vendor.length) parts.push(`${b.vendor.map((v) => `${v.ref} (LCSC ${v.lcsc})`).join(', ')} drawn with the vendor's 3D model from EasyEDA: KiCad's 3D library has none`)
+  if (b.missing.length) parts.push(`no 3D body for ${b.missing.slice(0, 8).map((m) => `${m.ref} (${m.why})`).join('; ')}${b.missing.length > 8 ? `; and ${b.missing.length - 8} more` : ''}`)
+  return parts.length ? parts.join('. ') : null
 }
 
 /**
@@ -40,20 +71,50 @@ export interface Prepared {
  * (../kicad/models3d.ts: the images do not carry the library). `models` is for tests.
  */
 export async function exportBoard(pcb: string, dir: string, format: BoardFormat, models?: ModelDeps): Promise<Prepared> {
-  const staged = await stageModels(pcb, packBase(pcb), format, models ?? { get: httpGet, cacheDir: defaultCacheDir(), version: await kicadCliVersion() })
+  const deps = models ?? { get: httpGet, cacheDir: defaultCacheDir(), version: await kicadCliVersion() }
+  const base = packBase(pcb)
+  const staged = await stageModels(pcb, base, format, deps)
+  const stageDir = staged.dir ?? join(base, MODELS_DIR)
+  // the parts KiCad's library has no body for: their vendor's model, on a copy of the board that names it
+  let board = pcb
+  let copy: string | null = null
+  let madeStage = false
   try {
-    const note = staged.note ? { note: staged.note } : {}
+    const text = readFileSync(pcb, 'utf8')
+    const need = bodiless(boardFootprints(text), new Set(staged.missing.map((m) => m.rel)))
+    let bodies: Bodies | undefined
+    if (need.length) {
+      madeStage = !staged.dir
+      const v = await vendorBodies(pcb, text, need, stageDir, { get: deps.get, cacheDir: deps.cacheDir })
+      const lib = new Set(staged.missing.map((m) => m.rel))
+      const why = (m: NoBody): string => {
+        const fp = need.find((f) => f.ref === m.ref)
+        const own = fp?.models.length ? (fp.models.some((x) => lib.has(LIBRARY_MODEL.exec(x)?.[1] ?? '')) ? 'not in KiCad\'s 3D library' : 'its model could not be had') : 'its footprint names no 3D model'
+        return `${own}; ${m.why}`
+      }
+      bodies = { vendor: v.got, missing: v.missing.map((m) => ({ ...m, why: why(m) })) }
+      if (v.got.length) {
+        // beside the board, so ${KIPRJMOD} and a remote kicad-cli (src/tools/kicad/remote.ts) read the same files
+        copy = join(dirname(pcb), `trace-render-${process.pid}-${Date.now()}.kicad_pcb`)
+        writeFileSync(copy, v.text)
+        board = copy
+      }
+    }
+    const said = bodies ? bodiesNote(bodies) : staged.note
+    const note = { ...(said ? { note: said } : {}), ...(bodies ? { bodies } : {}) }
     if (format === 'glb') {
       const out = join(dir, 'board.glb')
       await runCli(['pcb', 'export', 'glb', '--subst-models', '--include-tracks', '--include-pads', '--include-zones',
-        '--include-silkscreen', '--include-soldermask', '-f', '-o', out, pcb], { timeoutMs: 900_000, env: staged.env })
+        '--include-silkscreen', '--include-soldermask', '-f', '-o', out, board], { timeoutMs: 900_000, env: staged.env })
       return { path: out, format: 'glb', extra: {}, zUp: true, dropKicadBoard: false, ...note }
     }
     const out = join(dir, 'board.wrl')
-    await runCli(['pcb', 'export', 'vrml', '--units', 'm', '-f', '-o', out, pcb], { timeoutMs: 900_000, env: staged.env })
+    await runCli(['pcb', 'export', 'vrml', '--units', 'm', '-f', '-o', out, board], { timeoutMs: 900_000, env: staged.env })
     return { path: out, format: 'wrl', extra: {}, zUp: true, dropKicadBoard: false, ...note }
   } finally {
+    if (copy) rmSync(copy, { force: true })
     staged.remove()
+    if (madeStage) rmSync(stageDir, { recursive: true, force: true })
   }
 }
 

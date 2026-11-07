@@ -2,9 +2,10 @@
 exploded view, lit and backed with colours taken from the project's logo (or a neutral studio look without one).
 
     blender -b --factory-startup --python-exit-code 1 -P render_showcase.py -- job.json result.json \\
-        board.glb [base.stl lid.stl] [logo.png] <one output per picture shot> ... [<one per turntable frame> ...]
+        board.glb [base.stl lid.stl [part.stl ...]] [logo.png] <one output per picture shot> ... [<one per turntable frame> ...]
 
-The job says which inputs are there (`case`, `logo`) and lists the shots in output order; the turntable's frames
+The job says which inputs are there (`case`, `extra_parts`: the case's parts beyond base and lid, such as an off-board
+module mech.build placed at its mount, one STL each after the lid; `logo`) and lists the shots in output order; the turntable's frames
 (`turntable.frames` of them, rendered last at `turntable.defaults`' size) come after every picture. Shots:
 
     board          the populated board, three-quarter view from the front left
@@ -20,6 +21,9 @@ Frames: the case files are in the case frame of docs/enclosure-build.md (millime
 bottom face at z = 0). The board model is placed in that frame by its own board body: its outline's bounds are moved
 onto `board_xy_mm` (the outline's bounds in the case frame, from the board's facts) and its bottom face onto z = 0, so
 where kicad-cli puts the model's origin does not matter. Nothing here edits a model file.
+
+A case part beyond base and lid is drawn with the part it is mounted to: with the lid when it sits above the board's
+top face (a display behind the lid's window), else with the base; it moves, shows and hides with that part.
 """
 import colorsys
 import math
@@ -532,7 +536,8 @@ def main():
     has_logo = bool(job.get("logo"))
     if not has_case and any(s in CASE_SHOTS for s in shots):
         raise C.JobError("a case shot was asked for, but no case was given")
-    n_in = 1 + (2 if has_case else 0) + (1 if has_logo else 0)
+    extra_kinds = [str(k) for k in (job.get("extra_parts") or [])] if has_case else []
+    n_in = 1 + (2 + len(extra_kinds) if has_case else 0) + (1 if has_logo else 0)
     stills = [s for s in shots if s != "turntable"]
     frames = int((job.get("turntable") or {}).get("frames") or 0) if "turntable" in shots else 0
     if "turntable" in shots and frames < 2:
@@ -542,6 +547,7 @@ def main():
                          f"{n_in + len(stills) + frames} paths, got {len(rest)}")
     board_path = rest[0]
     base_path, lid_path = (rest[1], rest[2]) if has_case else (None, None)
+    extra_paths = rest[3:3 + len(extra_kinds)] if has_case else []
     logo_path = rest[n_in - 1] if has_logo else None
     outs = rest[n_in:n_in + len(stills)]
     frame_outs = rest[n_in + len(stills):]
@@ -597,6 +603,22 @@ def main():
         mat = case_material(job["case"].get("look"))
         base, bparts = import_part(base_path, "base", mat)
         lid, lparts = import_part(lid_path, "lid", mat)
+        if extra_kinds:
+            top = board_top(bobjs)
+            mmat = C.principled("Module", C.hex_rgba("#2b2f36"), rough=0.45, metal=0.0)
+            for kind, path in zip(extra_kinds, extra_paths):
+                g, objs = import_part(path, kind, mmat)
+                lo, hi = C.world_bbox(objs)
+                on_lid = (lo.z + hi.z) / 2 > top
+                # mounted to the lid or the base: it moves with that part (the module note)
+                owner = lid if on_lid else base
+                mw = g.matrix_world.copy()
+                g.parent = owner
+                g.matrix_parent_inverse = owner.matrix_world.inverted()
+                g.matrix_world = mw
+                (lparts if on_lid else bparts).extend(objs)
+                C.log(f"case part {kind} with the {'lid' if on_lid else 'base'}")
+            bpy.context.view_layer.update()
 
     screws, sobjs = place_screws(job, bobjs) if has_case else (None, [])
     if sobjs:
