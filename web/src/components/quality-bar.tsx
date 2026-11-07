@@ -40,7 +40,11 @@ export interface QualityBarProps {
 
 export const missing = (checks: QualityCheck[]): QualityCheck[] => checks.filter((c) => c.status === 'not_met')
 
-function Item({ c, wrap = false }: { c: QualityCheck; wrap?: boolean }) {
+/**
+ * One check. Its words wrap within the space it has, on every width: a long one (a check with the checker's reason
+ * after it) on one line ran on under Submit and its count, and the end of the sentence was hidden (test-esp32 #239).
+ */
+function Item({ c }: { c: QualityCheck }) {
   const met = c.status === 'met'
   const waived = c.status === 'waived'
   // asked for later in the skill: holds nothing back, and is not a risk accepted either (#227)
@@ -51,14 +55,13 @@ function Item({ c, wrap = false }: { c: QualityCheck; wrap?: boolean }) {
       onClick={c.onJump}
       disabled={!c.onJump}
       className={cn(
-        'inline-flex items-center gap-1 rounded-md px-2 py-1 text-left text-xs',
-        wrap ? 'max-w-full' : 'whitespace-nowrap',
+        'inline-flex max-w-full items-start gap-1 rounded-md px-2 py-1 text-left text-xs',
         met ? 'bg-verified/10 text-verified' : waived || later ? 'bg-muted text-muted-foreground' : 'bg-muted text-muted-foreground hover:text-foreground',
       )}
     >
-      {met ? <Check className="size-3 shrink-0" aria-hidden /> : waived ? <CircleMinus className="size-3 shrink-0" aria-hidden /> : later ? <CircleDashed className="size-3 shrink-0" aria-hidden /> : <Circle className="size-3 shrink-0" aria-hidden />}
+      {met ? <Check className="mt-0.5 size-3 shrink-0" aria-hidden /> : waived ? <CircleMinus className="mt-0.5 size-3 shrink-0" aria-hidden /> : later ? <CircleDashed className="mt-0.5 size-3 shrink-0" aria-hidden /> : <Circle className="mt-0.5 size-3 shrink-0" aria-hidden />}
       <span className="sr-only">{met ? 'Met: ' : waived ? 'Waived: ' : later ? 'Not due yet: ' : 'Not met: '}</span>
-      {c.text}
+      <span className="min-w-0 break-words">{c.text}</span>
     </button>
   )
 }
@@ -122,7 +125,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
         <>
           <span>{todo.length === 1 ? 'One check is left:' : `${todo.length} checks are left:`}</span>
           {todo.map((c) => (
-            <Item key={c.id} c={c} wrap />
+            <Item key={c.id} c={c} />
           ))}
         </>
       )}
@@ -195,7 +198,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
           <div className="flex flex-col gap-2 px-4 pb-6">
             {blocked && <p className="text-sm text-muted-foreground">{blocked}</p>}
             {checks.map((c) => (
-              <Item key={c.id} c={c} wrap />
+              <Item key={c.id} c={c} />
             ))}
           </div>
         </DrawerContent>
