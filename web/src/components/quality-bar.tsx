@@ -27,6 +27,9 @@ export interface QualityCheck {
   onJump?: () => void
   /** the step of the skill where it is met, if one: the rail marks that step done only once it is */
   step?: string
+  /** the check's name alone, and the checker's reason it is not met: `text` is the two together */
+  name?: string
+  detail?: string
 }
 
 export interface QualityBarProps {
@@ -43,10 +46,26 @@ export interface QualityBarProps {
 export const missing = (checks: QualityCheck[]): QualityCheck[] => checks.filter((c) => c.status === 'not_met')
 
 /**
+ * The reason every check left gives, when two or more are left and all give the same one (no intent statement is
+ * recorded yet, so none of the seven can be checked): said once, not after each check (test-esp32 #10).
+ */
+export function sharedReason(checks: readonly QualityCheck[]): string | null {
+  const left = checks.filter((c) => c.status === 'not_met')
+  const first = left[0]?.detail
+  return left.length > 1 && first && left.every((c) => c.detail === first) ? first : null
+}
+
+/** A check's words as shown: its name alone where its reason is the shared one, said once beside the list. */
+export const checkWords = (c: QualityCheck, shared: string | null): string => (shared && c.status === 'not_met' && c.detail === shared ? c.name ?? c.text : c.text)
+
+/** The shared reason, once, as a sentence. */
+const Shared = ({ reason, className }: { reason: string; className?: string }) => <p className={cn('text-xs text-muted-foreground', className)}>{reason}</p>
+
+/**
  * One check. Its words wrap within the space it has, on every width: a long one (a check with the checker's reason
  * after it) on one line ran on under Submit and its count, and the end of the sentence was hidden (test-esp32 #239).
  */
-function Item({ c }: { c: QualityCheck }) {
+function Item({ c, shared = null }: { c: QualityCheck; shared?: string | null }) {
   const met = c.status === 'met'
   const waived = c.status === 'waived'
   // asked for later in the skill: holds nothing back, and is not a risk accepted either (#227)
@@ -63,7 +82,7 @@ function Item({ c }: { c: QualityCheck }) {
     >
       {met ? <Check className="mt-0.5 size-3 shrink-0" aria-hidden /> : waived ? <CircleMinus className="mt-0.5 size-3 shrink-0" aria-hidden /> : later ? <CircleDashed className="mt-0.5 size-3 shrink-0" aria-hidden /> : <Circle className="mt-0.5 size-3 shrink-0" aria-hidden />}
       <span className="sr-only">{met ? 'Met: ' : waived ? 'Waived: ' : later ? 'Not due yet: ' : 'Not met: '}</span>
-      <span className="min-w-0 break-words">{c.text}</span>
+      <span className="min-w-0 break-words">{checkWords(c, shared)}</span>
     </button>
   )
 }
@@ -79,6 +98,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
   const met = checks.filter((c) => c.status !== 'not_met' && c.status !== 'not_due').length
   const todo = missing(checks)
   const ready = todo.length === 0 && !blocked
+  const shared = sharedReason(checks)
   // trace's assistant reads the bar in the person's own words: asked about an item on it, it knows what it says and
   // whether it is met (test-esp32 #53: it could not see "Firmware matches the schematic")
   useTraceContext(checks.length ? { label: `Quality bar · ${met} of ${due} met`, description: 'The quality bar along the foot of the screen, word for word as the person sees it, each check met, not met, waived or not due yet', value: { checks: checks.map((c) => ({ text: c.text, status: c.status })) } } : null, 'quality-bar')
@@ -127,8 +147,9 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
         <>
           <span>{todo.length === 1 ? 'One check is left:' : `${todo.length} checks are left:`}</span>
           {todo.map((c) => (
-            <Item key={c.id} c={c} />
+            <Item key={c.id} c={c} shared={shared} />
           ))}
+          {shared && <Shared reason={shared} className="basis-full" />}
         </>
       )}
     </div>
@@ -142,10 +163,13 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
           <p className="shrink-0 text-sm font-semibold" aria-live="polite">
             {met} of {due} met
           </p>
-          <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-            {checks.map((c) => (
-              <Item key={c.id} c={c} />
-            ))}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap gap-1.5">
+              {checks.map((c) => (
+                <Item key={c.id} c={c} shared={shared} />
+              ))}
+            </div>
+            {shared && <Shared reason={shared} className="mt-1.5 px-2" />}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-0.5">
             {ready ? (
@@ -160,9 +184,10 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
                       <p className="mb-1 font-medium">Still missing:</p>
                       <ul className="list-disc pl-4">
                         {todo.map((c) => (
-                          <li key={c.id}>{c.text}</li>
+                          <li key={c.id}>{checkWords(c, shared)}</li>
                         ))}
                       </ul>
+                      {shared && <p className="mt-1">{shared}</p>}
                     </>
                   )}
                 </TooltipContent>
@@ -200,8 +225,9 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
           <div className="flex flex-col gap-2 px-4 pb-6">
             {blocked && <p className="text-sm text-muted-foreground">{blocked}</p>}
             {checks.map((c) => (
-              <Item key={c.id} c={c} />
+              <Item key={c.id} c={c} shared={shared} />
             ))}
+            {shared && <Shared reason={shared} />}
           </div>
         </DrawerContent>
       </Drawer>
