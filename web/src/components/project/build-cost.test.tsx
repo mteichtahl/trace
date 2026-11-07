@@ -106,12 +106,23 @@ describe('small rules', () => {
     expect(gateSpendLine({ money: false, currency: 'USD', spent: { cloud: null, orders: null }, committed: null, forecast: null, stages: [], lines: [] })).toBeNull()
     const line = gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 12, orders: 100, detail: { estimated: { agents: 12, gpu: 0, cpu: 0, total: 12 }, actual: { total: 3, byService: {}, through: null, estimatedDays: 0 }, basis: 'estimate' } }, committed: 50, forecast: 0, budget: 300, stages: [], lines: [] })
     // the cloud work is not taken off the build budget: US$300 less US$100 paid and US$50 committed
-    expect(line).toBe('Spent so far US$112, US$12 of it cloud work (estimated; US$3 billed by AWS so far), US$100 on orders. Build budget US$300 (boards, parts and case): US$150 left after US$100 paid for orders and US$50 committed for orders placed but not paid yet. trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
+    expect(line).toBe('Spent so far US$112, US$12 of it cloud work (estimated from model use and job time), US$100 on orders. Apart from that, AWS billed US$3 for the project\'s own tagged resources: its agent runtime, memory and runner, which the estimate does not count. Model use and the shared job machines are not tagged per project, so that bill leaves them out; the two figures are different spend. Billing runs about a day behind. Build budget US$300 (boards, parts and case): US$150 left after US$100 paid for orders and US$50 committed for orders placed but not paid yet. trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
+  })
+
+  it('the gate\'s line says what AWS billed is the project\'s tagged resources, not a check on the estimate (test-esp32 run 2, #183)', () => {
+    // "US$119 of it cloud work (estimated; US$34.75 billed by AWS so far)" read as an estimate 3.4 times the bill
+    const actual = { total: 34.75, byService: { 'Amazon Bedrock AgentCore': 30.1, 'AWS CodeBuild': 4.1, 'AWS Secrets Manager': 0.55 }, through: '2026-11-05', estimatedDays: 1 }
+    const line = gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 119, orders: 0, detail: { estimated: { agents: 110, gpu: 4, cpu: 5, total: 119 }, actual, basis: 'estimate' } }, committed: 0, forecast: 0, stages: [], lines: [] })!
+    expect(line).not.toMatch(/estimated; US\$34.75 billed/)
+    expect(line).toMatch(/US\$119 of it cloud work \(estimated from model use and job time\)/)
+    expect(line).toMatch(/AWS billed US\$34.75 through 2026-11-05 for the project's own tagged resources \(Amazon Bedrock AgentCore, AWS CodeBuild, AWS Secrets Manager\)/)
+    expect(line).toMatch(/which the estimate does not count/)
+    expect(line).toMatch(/the two figures are different spend/)
   })
 
   it('the gate\'s line keeps the order and trace\'s cloud work apart, the forecast with its source (test-esp32 run 2, #91: US$1.59 spent, "US$18.41 left")', () => {
     const define = { money: true, currency: 'USD', spent: { cloud: 1.59, orders: 0 }, committed: 0, forecast: 80, budget: 100, quantity: 10, unit_cost: 8, stages: [], lines: [] }
-    expect(gateSpendLine(define)).toBe('Spent so far US$1.59, US$1.59 of it cloud work (estimated). Build budget US$100 (boards, parts and case): US$20 left after US$80 forecast for the order (10 boards at US$8 each, the build plan\'s target unit cost). trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
+    expect(gateSpendLine(define)).toBe('Spent so far US$1.59, US$1.59 of it cloud work (estimated from model use and job time). Build budget US$100 (boards, parts and case): US$20 left after US$80 forecast for the order (10 boards at US$8 each, the build plan\'s target unit cost). trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
     // the Architect gate with an allowance: the build still has its US$20, the cloud work is counted against its own
     const architect = { ...define, spent: { cloud: 21.28, orders: 0 }, cloudBudget: 60 }
     expect(gateSpendLine(architect)).toMatch(/Build budget US\$100 \(boards, parts and case\): US\$20 left after US\$80 forecast for the order .* Cloud-work allowance US\$60: US\$38.72 left after US\$21.28 of trace's cloud work \(estimated\)\.$/)
