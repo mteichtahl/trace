@@ -208,3 +208,23 @@ describe('Intent builder decisions', () => {
     expect(changedFields(shown, { ...shown, connector: 'Qwiic' })).toEqual({ connector: 'Qwiic' })
   })
 })
+
+// #31: an intent line marked "don't care" showed as "not covered" in the diagram, and no check or item said why
+describe('traceability: a line left out on purpose', () => {
+  const row = (id: string): CoverageRow => ({ id, verdict: 'untested', kind: 'functional', text: id, acceptance: null, status: 'accepted', tests: [] })
+  it('says "left out: don\'t care", or the reason it was left out with, not "not covered"', () => {
+    const t = {
+      intent: [
+        { id: 'I-1', topic: 'Power', text: 'p', kind: 'statement' as const },
+        { id: 'I-2', topic: 'Compliance', text: 'c', kind: 'dont_care' as const },
+        { id: 'I-3', topic: 'Physical', text: 'b', kind: 'statement' as const, uncovered: 'Checked by Board setup against the outline.' },
+        { id: 'I-4', topic: 'Build', text: 'x', kind: 'statement' as const },
+      ],
+      links: [{ requirement: 'R-1', intent: 'I-1' }],
+    }
+    const l = layoutTrace([row('R-1')], t)
+    expect(l.intents.map((i) => [i.id, i.uncovered, i.left])).toEqual([
+      ['I-1', false, undefined], ['I-2', false, "don't care"], ['I-3', false, 'Checked by Board setup against the outline.'], ['I-4', true, undefined],
+    ])
+  })
+})

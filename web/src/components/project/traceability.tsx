@@ -39,7 +39,11 @@ export function parseKey(key: string): TraceNode | null {
 export interface TraceLayout {
   /** intent: the line it is placed under (its first, in the intent's order); intents: every line it is linked to */
   reqs: { row: CoverageRow; y: number; intent?: string; intents: string[]; failing: boolean }[]
-  intents: { id: string; topic: string; text: string; y: number; failing: boolean; uncovered: boolean; proposed: boolean }[]
+  /**
+   * uncovered: no requirement comes from it and nothing says why. left: no requirement comes from it, and that is
+   * meant: "don't care" (a line marked so), or the reason a person left it out with
+   */
+  intents: { id: string; topic: string; text: string; y: number; failing: boolean; uncovered: boolean; left?: string; proposed: boolean }[]
   height: number
 }
 
@@ -59,7 +63,11 @@ export function layoutTrace(rows: CoverageRow[], trace: TraceView | undefined, f
     const placed = reqs.filter((r) => r.intent === it.id)
     const mine = reqs.filter((r) => r.intents.includes(it.id))
     const y = placed.length ? (placed[0]!.y + placed[placed.length - 1]!.y) / 2 : mine.length ? mine[0]!.y : spare++ * ROW
-    return { id: it.id, topic: it.topic, text: it.text, y, failing: mine.some((r) => r.failing), uncovered: mine.length === 0 && !filter && it.uncovered === undefined, proposed: it.state === 'proposed' }
+    // a line with no requirement is "not covered" only while nothing says why: one marked "don't care", or left out
+    // with a reason, says so instead (test-esp32 #31: a don't-care line showed as not covered, and no check said why)
+    const none = mine.length === 0 && !filter
+    const left = !none ? undefined : it.kind === 'dont_care' ? "don't care" : it.uncovered
+    return { id: it.id, topic: it.topic, text: it.text, y, failing: mine.some((r) => r.failing), uncovered: none && left === undefined, ...(left !== undefined ? { left } : {}), proposed: it.state === 'proposed' }
   }).filter((it) => !filter || reqs.some((r) => r.intents.includes(it.id)))
   const height = Math.max(reqs.length, ...intents.map((i) => i.y / ROW + 1), 1) * ROW
   return { reqs, intents, height }
@@ -129,12 +137,12 @@ export function traceElements(l: TraceLayout, links: readonly TraceLink[], selec
   for (const it of l.intents) {
     const key = `intent:${it.id}`
     nodes.push({
-      id: key, type: 'box', position: { x: COL.intent.x, y: it.y }, selected: key === selected, ariaLabel: `Intent ${it.topic}${it.proposed ? ', proposed by trace' : ''}: ${it.text}`,
+      id: key, type: 'box', position: { x: COL.intent.x, y: it.y }, selected: key === selected, ariaLabel: `Intent ${it.topic}${it.proposed ? ', proposed by trace' : ''}${it.uncovered ? ', not covered' : ''}${it.left !== undefined ? `, left out: ${it.left}` : ''}: ${it.text}`,
       data: {
         label: it.text, failing: it.failing, dashed: it.proposed, lit: lit(key), side: 'right', width: COL.intent.w,
         body: (
           <>
-            <span className="block text-[11px] text-muted-foreground">{it.topic}{it.proposed ? ' · proposed' : ''}{it.uncovered ? ' · not covered' : ''}</span>
+            <span className="block truncate text-[11px] text-muted-foreground" title={it.left !== undefined ? `Left out: ${it.left}` : undefined}>{it.topic}{it.proposed ? ' · proposed' : ''}{it.uncovered ? ' · not covered' : ''}{it.left !== undefined ? ` · left out: ${it.left}` : ''}</span>
             <span className="line-clamp-2">{it.text}</span>
           </>
         ),
