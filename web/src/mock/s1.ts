@@ -25,6 +25,10 @@ const UNPACKAGED = {
   })),
 }
 
+// what skill.get says of the Intent builder's checks before any intent statement is recorded (src/api/skill-checks.ts)
+const NO_INTENT = 'No intent statements are recorded yet: answer the topics and trace drafts them.'
+const NO_INTENT_CHECKS = ['answered', 'quantities', 'vague', 'interfaces', 'conflicts', 'testable', 'owners'].map((id) => ({ id, status: 'not_met' as const, detail: NO_INTENT }))
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const ok = (result: unknown) => json({ ok: true, result })
 const fail = (error: string, status = 200) => json({ ok: false, error }, status)
@@ -162,8 +166,9 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'cost.get':
       return repo === 'acme/soil-sensor' ? ok(COST) : fail('cost.get: no record yet')
     case 'skill.get': {
-      // the panel controller has not started its intent: the Intent builder opens on its first topic (test-esp32 #8)
-      const fresh = repo === 'acme/panel-controller' && a.skill === 'intent-builder' ? { summary: '0 of 7 checks met.', recommendation: undefined, checks: [], intent: { topic: 0, answered: [], statements: [], questions: [] } } : {}
+      // the panel controller has not started its intent: the Intent builder opens on its first topic (test-esp32 #8),
+      // every check not met for the one reason the API gives before any statement is recorded
+      const fresh = repo === 'acme/panel-controller' && a.skill === 'intent-builder' ? { summary: '0 of 7 checks met.', recommendation: undefined, checks: NO_INTENT_CHECKS, intent: { topic: 0, answered: [], statements: [], questions: [] } } : {}
       const v0 = { ...SKILL_VIEWS[String(a.skill)], ...fresh }
       // Order submit's pay step shows the newest quote (mock/quotes.ts)
       const v = a.skill === 'order-submit' && v0.order ? { ...v0, order: { ...v0.order, pay: payWithQuote(v0.order.pay) }, checks: quoteCheck(v0.checks ?? []) } : v0

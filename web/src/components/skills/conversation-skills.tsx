@@ -26,7 +26,7 @@ import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-car
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { OutOfDateNote } from '@/components/question-notes'
-import type { QualityCheck } from '@/components/quality-bar'
+import { sharedReason, type QualityCheck } from '@/components/quality-bar'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
@@ -34,7 +34,6 @@ import { type ResultOf, call } from '@/lib/api'
 import { useCall } from '@/lib/queries'
 import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
-import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
 import { IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, noteStatements, notedAnswer, openingWords, useSkillThread, withNoted } from './intent-chat'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
@@ -219,6 +218,32 @@ export function draftCount(statements: number, noted: number): string {
   return `${statements} ${statements === 1 ? 'statement' : 'statements'}${noted ? ` · ${noted} noted in your draft` : ''}`
 }
 
+/**
+ * The Draft intent panel's quality bar: each check's name on its own line, its reason under it, not beside it: beside
+ * it, in the panel's width, the name wrapped a word a line (test-esp32 #10). A reason every check left gives is said
+ * once, under the list.
+ */
+export function IntentQualityList({ checks, topic }: { checks: QualityCheck[]; topic: number }) {
+  const shared = sharedReason(checks)
+  return (
+    <>
+      <ul className="mt-2 space-y-1.5">
+        {checks.map((c) => (
+          <li key={c.id} className="flex items-start gap-2 text-sm">
+            {c.status === 'met' ? <Check className="mt-1 size-3.5 shrink-0 text-verified" aria-hidden /> : c.id === 'interfaces' && topic === 3 ? <CircleDot className="mt-1 size-3.5 shrink-0 text-primary" aria-hidden /> : <Circle className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+            <div className="min-w-0 flex-1">
+              <span className="sr-only">{c.status === 'met' ? 'Met: ' : 'Not met: '}</span>
+              <p className="break-words">{c.name ?? c.text}</p>
+              {c.status !== 'met' && c.detail && c.detail !== shared && <p className="break-words text-xs text-muted-foreground">{c.detail}</p>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {shared && <p className="mt-2 text-xs text-muted-foreground">{shared}</p>}
+    </>
+  )
+}
+
 export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const s = useSkill<IntentLocal>(repo, def, { done: [] })
   const kept = useSkillThread(repo, def.id)
@@ -309,15 +334,7 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
         )}
         <section className="border-t pt-4">
           <h3 className="text-sm font-semibold">Quality bar · {checks.length - left} of {checks.length} met</h3>
-          <ul className="mt-2 space-y-1.5">
-            {checks.map((c) => (
-              <li key={c.id} className="flex items-center gap-2 text-sm">
-                {c.status === 'met' ? <Check className="size-3.5 text-verified" aria-hidden /> : c.id === 'interfaces' && topic === 3 ? <CircleDot className="size-3.5 text-primary" aria-hidden /> : <Circle className="size-3.5 text-muted-foreground" aria-hidden />}
-                <span className="flex-1">{c.text.replace(/ \(.*\)$/, '')}</span>
-                <span className={cn('text-xs', c.status === 'met' ? 'text-verified' : 'text-muted-foreground')}>{c.status === 'met' ? 'Met' : (/\((.*)\)$/.exec(c.text)?.[1] ?? 'Not met')}</span>
-              </li>
-            ))}
-          </ul>
+          <IntentQualityList checks={checks} topic={topic} />
         </section>
       </div>
     </div>

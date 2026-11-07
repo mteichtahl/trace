@@ -166,7 +166,8 @@ jobs:
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","tests-pass"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     steps:
       # a run that only adds projects (add_projects) skips the tests on purpose: skipped counts as passed there only
-      - env:
+      - name: every job it needs passed
+        env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
           ADD_PROJECTS: ${{ inputs.add_projects && 'true' || 'false' }}
         run: |
@@ -178,7 +179,10 @@ jobs:
     needs: tests-pass
     # a push to main, or the workflow run by hand on main (Actions → ci → Run workflow: e.g. to add a project created in
     # the web app now rather than at the next merge). Either way only on main, which is all the role trusts
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.TRACE_UPDATE_ROLE != ''
+    # always() and tests-pass's own result: without them GitHub's implied success() also asks every job before
+    # tests-pass, and an add_projects run skips those on purpose, so the update was skipped and the new project never
+    # got its agent (test-esp32 log R7)
+    if: always() && needs.tests-pass.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.TRACE_UPDATE_ROLE != ''
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","update-installation"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 60
     # one update at a time: a newer merge waits for the one deploying now instead of cancelling it. GitHub keeps only
@@ -216,7 +220,7 @@ jobs:
   # smoke user's sign-in, which the update role may read.
   smoke-live:
     needs: update-installation
-    if: vars.TRACE_SMOKE_SECRET != ''
+    if: always() && needs.update-installation.result == 'success' && vars.TRACE_SMOKE_SECRET != ''
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","smoke-live"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
