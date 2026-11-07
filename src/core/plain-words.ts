@@ -23,9 +23,23 @@ const INTERNAL: readonly RegExp[] = [
   /`[^`]+`/, // code
   /\b\S+\.(?:[cm]?js|ts|py|rs|json):\d+/, // a file and line
   /\b(?:stack|traceback|errno|exit code|stderr|ENOENT|ECONN\w+)\b/i,
+  /\b[a-z]{3,}\.[a-z][a-z_]{2,}\b/, // a criterion's or a tool's id (architect.stock, render.board)
+  /\bsha256\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{12,}\b/i, // a hash or a run's id (52b9eb5d36ae4a0d)
 ]
 
 const internal = (s: string): boolean => INTERNAL.some((re) => re.test(s))
+
+/**
+ * A sentence with its asides that cite the agent's internals taken out (test-esp32 #170: "No configured supplier lists
+ * a 0.96 in SSD1306 module (parts_search on LCSC: …; bom_check d908…: not found)." is plain without its brackets).
+ * Brackets that name nothing internal ("(GND first)") stay.
+ */
+function withoutInternalAsides(s: string): string {
+  return s.replace(/\s*\([^()]*\)/g, (aside) => (internal(aside) ? '' : aside)).replace(/\s+([,.;:!?])/g, '$1').replace(/\s{2,}/g, ' ').trim()
+}
+
+/** A sentence that adds to the point rather than making it ("Also: …", "Note: …"): it never leads a summary (#170). */
+const ASIDE = /^(?:also|note|besides|separately|in addition|additionally|p\.?s\.?)\b[:,]?/i
 
 /** The words with an agent's internals taken out ("(job-…)", backticks, a file and line), spaces tidied. */
 function stripped(s: string): string {
@@ -71,14 +85,16 @@ export function plainSummary(text: string, o: { max?: number } = {}): { summary:
   const max = o.max ?? 160
   const all = sentences(text)
   const whole = text.replace(/\s+/g, ' ').trim()
-  const plain = all.filter((s) => !internal(s))
+  const plain = all.map(withoutInternalAsides).filter((s) => s && !internal(s))
+  // the point leads: an aside is kept only after a sentence that is not one
+  while (plain.length > 1 && ASIDE.test(plain[0]!) && plain.some((s) => !ASIDE.test(s))) plain.push(plain.shift()!)
   let out = ''
   for (const s of plain) {
     const next = out ? `${out} ${s}` : s
     if (next.length > max) break
     out = next
   }
-  if (!out) out = atWord(stripped(plain[0] ?? all[0] ?? whole), max)
+  if (!out) out = atWord(stripped(plain[0] ?? (all[0] === undefined ? whole : withoutInternalAsides(all[0]))), max)
   return { summary: out, same: out === whole }
 }
 

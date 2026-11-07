@@ -34,7 +34,7 @@ import { useCommands } from '@/components/shell/command-menu'
 import { LiveDot } from '@/components/shell/live-dot'
 import { EvidenceBody, EvidencePanel } from '@/components/skills/evidence-sheet'
 import { CriterionFindings } from '@/components/criterion-findings'
-import { type Blocker, criterionStatusLabel, isOpened, isWaiverRead, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
+import { type Blocker, criterionStatusLabel, isOpened, isWaiverRead, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel, signRefusal } from '@/components/skills/gate-rules'
 import { WaiverRating } from '@/components/waiver-rating'
 import { reauthenticate } from '@/components/skills/reauth'
 import { StatusBadge } from '@/components/status-badge'
@@ -483,6 +483,8 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
   const [code, setCode] = useState('')
   const [complete, setComplete] = useState<((c: string) => Promise<boolean>) | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // the record's refusal, in words: why the gate was not signed (test-esp32 #179)
+  const [refused, setRefused] = useState<string | null>(null)
   const label = signLabel(g.name)
 
   const doSign = () =>
@@ -494,11 +496,16 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
         if ((r as { jobError?: string }).jobError) toast.warning(`${to ?? 'The next stage'}'s work did not start.`, { description: `${(r as { jobError?: string }).jobError} Ask trace to start it.` })
         onSigned()
       },
-      onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+      onError: (e) => {
+        const words = signRefusal(e)
+        setRefused(words)
+        setError(words ? null : e instanceof Error ? e.message : String(e))
+      },
     })
 
   const go = async () => {
     setError(null)
+    setRefused(null)
     if (!reauth) return doSign()
     setChecking('busy')
     try {
@@ -523,7 +530,7 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setChecking('idle'); setError(null); setCode('') } }}>
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setChecking('idle'); setError(null); setRefused(null); setCode('') } }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{label}?</DialogTitle>
@@ -546,6 +553,7 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
             </InputOTP>
           </div>
         )}
+        {refused && <ErrorState title={<><strong className="font-medium">The gate was not signed.</strong> {refused}</>} kept="Your notes and acknowledgements are kept." />}
         {error && <ErrorState title="The gate was not signed." kept="Your notes and acknowledgements are kept." detail={error} />}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
