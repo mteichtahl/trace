@@ -40,6 +40,6 @@ describe('the build budget at Fabricate (#218)', () => {
     expect(build).toHaveTextContent('CommittedOrders placed, not paid yetUS$0')
     expect(build).toHaveTextContent('Forecast for the order10 boards at US$9 each, the build plan\'s target unit costUS$90')
     expect(build).not.toHaveTextContent('ready to place')
-    expect(gateSpendLine(c)).toMatch(/US\$185 left after US\$90 forecast for the order \(10 boards at US\$9 each, the build plan's target unit cost\)/)
+    expect(gateSpendLine(c)).toMatch(/US\$185 left\. After US\$90 forecast for the order: 10 boards at US\$9 each, the build plan's target unit cost\./)
   })
 })

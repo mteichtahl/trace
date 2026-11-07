@@ -37,7 +37,7 @@ describe('the order estimate against the cost requirements (#162)', () => {
 
   it('is on the gate line and in the Build budget once there is a parts check', () => {
     const c: CostView = { money: true, currency: 'USD', spent: { cloud: 12, orders: 0 }, committed: 0, forecast: 80, budget: 100, quantity: 10, unit_cost: 8, stages: [], lines: [], orderEstimate: ESTIMATE }
-    expect(gateSpendLine(c)).toMatch(/Order estimate US\$141 to US\$244/)
+    expect(gateSpendLine(c)).toMatch(/Order estimate US\$141 to US\$244 for 10 boards/)
     expect(gateSpendLine({ ...c, orderEstimate: undefined })).not.toMatch(/Order estimate/)
     render(wrap(<Budgets cost={c} id="x" />))
     const est = screen.getByLabelText('Order estimate')
@@ -54,9 +54,9 @@ describe('the order forecast (#178)', () => {
       forecastBasis: { kind: 'estimate', low: 141, high: 244, at: '2026-11-06T10:00:00.000Z', partsRun: 'p1' },
     }
     const line = gateSpendLine(c)
-    expect(line).toMatch(/US\$31 left after US\$244 forecast for the order \(the high end of the order estimate of 2026-11-06, US\$141 to US\$244, from its parts check and the fab's published prices\)/)
+    expect(line).toMatch(/US\$31 left\. After US\$244 forecast for the order: the high end of the order estimate of 2026-11-06, US\$141 to US\$244, from its parts check and the fab's published prices\./)
     expect(line).not.toMatch(/the build plan's target/)
     // without an estimate: the target, as before
-    expect(gateSpendLine({ ...c, forecast: 90, forecastBasis: { kind: 'target' } })).toMatch(/US\$90 forecast for the order \(10 boards at US\$9 each, the build plan's target unit cost\)/)
+    expect(gateSpendLine({ ...c, forecast: 90, forecastBasis: { kind: 'target' } })).toMatch(/US\$90 forecast for the order: 10 boards at US\$9 each, the build plan's target unit cost\./)
   })
 })
