@@ -144,6 +144,16 @@ export function quoteRuns(db: DatabaseSync): Pick<QuoteDefaults, 'options' | 'op
   return out
 }
 
+/**
+ * The options a quote is for when the person gives none: the quote before it on the same revision (its release
+ * package is frozen, so a choice the person made then still stands), else the release package's. Defaulting to the
+ * package's every time read as "Options changed" back to the package's values after a quote with the person's own.
+ */
+export function carryOptions(d: QuoteDefaults, before: readonly QuoteRow[]): QuoteDefaults {
+  const prev = before.filter((x) => x.revision === d.revision).sort(byTime).at(-1)
+  return prev && prev.options.length ? { ...d, options: prev.options, optionsFrom: prev.optionsFrom } : d
+}
+
 /** A quote's rules, the same for a person's and an agent's. Returns the row to write (no id, by or time). */
 function quoteOf(q: QuoteInput, d: QuoteDefaults): Omit<QuoteRow, 'id' | 'by' | 'at' | 'source' | 'said' | 'orderId'> {
   const on = q.on ?? today()
@@ -174,7 +184,7 @@ const values = (id: string, q: ReturnType<typeof quoteOf>): unknown[] => [
 /** Record a quote the person read off JLCPCB, in the journey record. Logged in the decisions. */
 export function recordQuote(db: DatabaseSync, input: QuoteInput, d: QuoteDefaults, by: Signer): QuoteRow {
   if (!loadJourney(db)) throw new JourneyError('This project has not started its journey yet.')
-  const q = quoteOf(input, d)
+  const q = quoteOf(input, carryOptions(d, loadQuotes(db)))
   const id = newId()
   const t = now()
   transaction(db, () => {
@@ -203,7 +213,7 @@ export function recordAgentQuote(db: DatabaseSync, input: QuoteInput & { said: s
   const said = input.said.trim()
   if (said.length < 6) throw new JourneyError('Give the person\'s words the quote is from (said): an agent records a quote only from what a person told it.')
   if (!figures(said).some((n) => Math.abs(n - input.total) < 0.005)) throw new JourneyError(`The total ${input.total} is not in the person's words. Record only the figure the person gave; ask them (journey.ask) when it is not clear.`)
-  const q = quoteOf(input, d)
+  const q = quoteOf(input, carryOptions(d, loadAgentQuotes(db)))
   const id = newId()
   const t = now()
   db.prepare(`INSERT INTO agent_quotes (${COLS}, said, agent, by, job_id, at, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...values(id, q) as never[], said, agent.agent, agent.label, agent.jobId, t, t)

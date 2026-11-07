@@ -91,7 +91,9 @@ describe('JLCPCB quotes', () => {
       reasons: ['Options changed: Surface finish HASL to ENIG.', 'Parts re-checked (bom-2): +US$3.20 at the checked prices.', 'PCB +US$4.00, Components +US$3.20, Shipping −US$5.00.'],
     })
     expect(second.why).toBe('ENIG for the fine-pitch module.')
-    expect(third.change).toMatchObject({ amount: 91.8, pct: 77.7, reasons: ['Quantity 10 to 20 boards.', 'Options changed: Surface finish ENIG to HASL.'] })
+    expect(third.change).toMatchObject({ amount: 91.8, pct: 77.7, reasons: ['Quantity 10 to 20 boards.'] })
+    // no options given: the second quote's ENIG stands, not the package's HASL again
+    expect(third.options).toEqual(second.options)
     expect(third.link).toBe('https://cart.jlcpcb.com/quote/Q-998')
     // the order being prepared costs the newest quote; the estimate stays beside it to compare
     expect(b.orders[0]).toMatchObject({ id: 'next', basis: 'quote', total: 210, quote: { total: 210, on: '2026-11-06', quantity: 20 } })

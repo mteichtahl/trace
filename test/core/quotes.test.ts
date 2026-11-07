@@ -73,6 +73,21 @@ describe('recording a quote', () => {
     db.close()
   })
 
+  it('a quote with no options given keeps the options of the quote before it on the same revision', () => {
+    // the release package is frozen for a revision, so a choice the person made on an earlier quote still stands:
+    // defaulting to the package's every time read as "Options changed" back to the package's values
+    const db = project()
+    const enig = [{ option: 'Layers', value: '2' }, { option: 'Surface finish', value: 'ENIG' }]
+    const a = recordQuote(db, { on: '2026-11-01', total: 120, options: enig }, D, by)
+    const b = recordQuote(db, { on: '2026-11-02', total: 118 }, D, by)
+    expect(b).toMatchObject({ options: enig, optionsFrom: null })
+    expect(quoteChanges(a, b).reasons.join(' ')).not.toMatch(/Options/)
+    // another revision starts from its own release package
+    const c = recordQuote(db, { on: '2026-11-03', total: 90 }, { ...D, revision: 'B' }, by)
+    expect(c).toMatchObject({ options: D.options, optionsFrom: 'fab-1' })
+    db.close()
+  })
+
   it('an agent records a quote only from the person\'s words, which are kept with it', () => {
     const db = open(join(dir, 'facts.db'))
     applyAgentFactsSchema(db)
