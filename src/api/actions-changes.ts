@@ -76,7 +76,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFact
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type DiscardView, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
-  editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, traceChanges,
+  askedFor, handoffIdOf, editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, traceChanges,
   jobWorking, traceJob, unfinishedWords, verdictOf, creditedAgent,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
@@ -335,6 +335,12 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     pull.state === 'closed' ? discardOf(ctx, repo, number) : Promise.resolve(null),
     pull.state === 'open' ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),
   ])
+  // a specialist another one asked: who asked and what, from the agents' facts (read only for such a change; the
+  // job's title says it when they cannot be read)
+  const handoffs = handoffIdOf(job, pull.head.ref)
+    ? await agentFacts(ctx, repo).then((f) => f.handoffs ?? [], () => null)
+    : null
+  const asked = askedFor({ job, branch: pull.head.ref, rows: found.rows, handoffs, agentWords: AGENT_WORDS })
   // one count of its checks everywhere (test-esp32 #201): the checks listed on its page, each workflow read as its jobs,
   // are what the heading, the Overview's card (both from this answer) and the recommendation count, not GitHub's
   // status, which counts a workflow as one check
@@ -402,6 +408,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
     ...(infra ? { infra_failed: infra } : {}),
     ...(discarded ? { discarded } : {}),
+    ...(asked ? { handoff: asked } : {}),
   }
 }
 

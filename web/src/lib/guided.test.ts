@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { READERS, changeWords, readChange, readChangeDiff, readChanges, readGuide, readJourney, readSteps, splitRecommendation, verdictOf } from './readers'
-import { changeLine, changeOf, checksWords, recommendationWords, currentStage, decisionMode, gateMeter, nextPlace, ownerWord, stageSteps, stepLabel, stepPlace, stepWords } from './guided'
+import { askedLine, changeLine, changeOf, checksWords, recommendationWords, currentStage, decisionMode, gateMeter, nextPlace, ownerWord, stageSteps, stepLabel, stepPlace, stepWords } from './guided'
 import type { Gate, Journey, Stage, StageStep } from './types'
 
 const stage = (id: string, state: Stage['state'], extra: Partial<Stage> = {}): Stage => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1), state, criteria: { met: 0, total: 0 }, ...extra })
@@ -214,6 +214,24 @@ describe('changes in words, and what the decision bar may do', () => {
     expect(changeLine({ verdict: 'conflict', checks: null } as never)).toMatch(/trace will bring it up to date/)
     // a stacked change waits for the one below it, named
     expect(changeLine({ verdict: 'blocked', state: 'open', checks: null, builds_on: { number: 4, title: 'Pin plan' } } as never)).toBe('Builds on "Pin plan". Accept that one first; this one follows it.')
+  })
+
+  // test-esp32 #234: "trace is fixing it" on every failing change, though no job was fixing it (ci-red sat 13 hours)
+  it('never says trace is fixing a failing change: a job working on it reads as working, and otherwise asking is the step', () => {
+    const failing = { ...c, passed: 1, total: 2, failed: 1, running: 0, failing: ['build'] }
+    const line = changeLine({ verdict: 'failing', state: 'open', checks: failing } as never)
+    expect(line).toBe('1 check failing: build. No job is fixing it now: ask for changes and trace fixes it.')
+    expect(line).not.toMatch(/trace is fixing/)
+    expect(changeLine({ verdict: 'checking', state: 'open', checks: failing, working: true } as never)).toBe('trace is still working on this change. Ready to review when its job finishes.')
+  })
+
+  // test-esp32 #141, #234: an EMC job opened a change and nothing said who started it or what it checked
+  it('says which specialist asked for a change and what, and nothing for one a person or a stage started', () => {
+    const handoff = { by: 'the Implementation specialist', question: 'Check the USB pair for emissions.', blocks: 'the layout review gate.' }
+    expect(askedLine({ from: 'the EMC specialist', handoff })).toBe('The Implementation specialist asked the EMC specialist for this: "Check the USB pair for emissions." It was holding up the layout review gate.')
+    expect(askedLine({ from: 'the EMC specialist' })).toBeNull()
+    expect(readChange({ number: 21, title: 'x', handoff }).handoff).toEqual(handoff)
+    expect(readChange({ number: 21, title: 'x', handoff: { by: 'x' } }).handoff).toBeUndefined()
   })
 
   // log #68: "2 checks passed, trace recommends accepting" while the job behind the change was still running

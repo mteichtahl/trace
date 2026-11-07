@@ -167,12 +167,27 @@ export function changeLine(c: ChangeSummary): string {
   switch (c.verdict) {
     case 'ready': return `Ready to review. ${checksWords(c.checks)}.`
     case 'checking': return `${checksWords(c.checks)}. Ready to review when the last one finishes.`
-    case 'failing': return `${checksWords(c.checks)}. trace is fixing it.`
+    // no job of trace's is working on it (that would read "still working" above): never "trace is fixing it" (test-esp32
+    // #234). Asking for changes starts the fix
+    case 'failing': return `${checksWords(c.checks)}. No job is fixing it now: ask for changes and trace fixes it.`
     case 'conflict': return 'The design moved on since this was made. trace will bring it up to date.'
     case 'unfinished': return c.answers?.length ? answersLine(c.answers) : `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says it is not finished. trace recommends asking for changes.`
     case 'applying': return 'Its checks passed: trace applies it now.'
     default: return blockedLine(c)
   }
+}
+
+/**
+ * Why a change exists when one specialist asked another for it (a hand-off): "The Implementation specialist asked the
+ * EMC specialist for this: "…"". Null when a person or a stage started its work (test-esp32 #141, #234: an EMC job
+ * ran and opened a change, and nothing said who started it or what it checked).
+ */
+export function askedLine(d: Pick<ChangeDetail, 'from' | 'handoff'>): string | null {
+  const h = d.handoff
+  if (!h) return null
+  const q = h.question.length > 400 ? `${h.question.slice(0, 400).trimEnd()}…` : h.question
+  const blocks = h.blocks?.replace(/\.$/, '')
+  return `${h.by[0]?.toUpperCase() ?? ''}${h.by.slice(1)} asked ${d.from} for this: "${q}"${blocks ? ` It was holding up ${blocks}.` : ''}`
 }
 
 /** What a change that is not ready waits for, in plain words, from what the list knows. */

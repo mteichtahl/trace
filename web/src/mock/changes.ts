@@ -140,7 +140,7 @@ const CHANGES: Record<string, ChangeDetail[]> = {
         { name: 'Matches the pin plan', state: 'running', summary: null, id: 'cr:5606' },
       ],
       requirements: ['R-001'],
-      recommendation: { verdict: 'wait', why: 'The enclosure clearance check failed and 2 checks are still running; trace is fixing the clearance.' },
+      recommendation: { verdict: 'wait', why: 'The enclosure clearance check failed and 2 checks are still running; trace waits for them before it recommends anything.' },
       may_accept: false, blockers: ['2 checks are still running and 1 failed. Accepting opens once they pass.'],
     }),
     // an edit someone made in the app (docs/stay-in-trace.md): a setting a contributor changed, waiting for an admin
@@ -257,6 +257,8 @@ const CHANGES: Record<string, ChangeDetail[]> = {
     summary(53, {
       title: 'The verification specialist\'s record: 39 tests and 17 test results', from: 'the Verification specialist', stage: 'prove', opened_at: ago(3 * MIN), updated_at: ago(1 * MIN),
       head: { ref: 'claude/handoff-hobe8233b1531243', sha: HEAD },
+      // another specialist asked for it: who asked and what, on its page (test-esp32 #141, #234)
+      handoff: { by: 'the Implementation specialist', question: 'Plan the tests for the USB-C input, the UART bridge and the 3.3 V supply, and check each part against its datasheet page.', blocks: 'the design proven gate' },
       checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
       summary: [
         'Adds 39 tests (22 planned, 17 passed)',

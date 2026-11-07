@@ -214,6 +214,8 @@ export function readChange(raw: unknown): ChangeDetail {
     base: ref(c.base), head: ref(c.head),
     ...(readRequirementEdits(c.requirement_edits) ? { requirement_edits: readRequirementEdits(c.requirement_edits)! } : {}),
     ...(readDiscarded(c.discarded) ? { discarded: readDiscarded(c.discarded)! } : {}),
+    // the hand-off its job answered: absent when a person or a stage started it, and from an older API
+    ...(isObj(c.handoff) && str(c.handoff.by) && str(c.handoff.question) ? { handoff: { by: String(c.handoff.by), question: String(c.handoff.question), ...(str(c.handoff.blocks) ? { blocks: String(c.handoff.blocks) } : {}) } } : {}),
   }
 }
 

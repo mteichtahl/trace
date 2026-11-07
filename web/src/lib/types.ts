@@ -394,6 +394,11 @@ export interface ChangeDetail extends ChangeSummary {
   discarded?: { by: string; at: string; reason: string; jobs: string[] }
   /** the accepted requirements its database edits, said before it is accepted; absent: it edits none */
   requirement_edits?: RequirementEdits
+  /**
+   * A specialist asked another for this work (a hand-off): who asked, what, and what it blocks. Absent: a person or a
+   * stage started its job, or an older API.
+   */
+  handoff?: { by: string; question: string; blocks?: string }
 }
 
 /** change.get: the accepted requirements a change's database edits (src/api/requirement-edits.ts). */

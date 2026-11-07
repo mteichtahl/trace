@@ -151,6 +151,11 @@ export interface ChangeDetail extends ChangeSummary {
   /** the accepted requirements its database edits, said before it is accepted (src/api/requirement-edits.ts) */
   requirement_edits?: RequirementEditsView
   /**
+   * The hand-off its job answered (askedFor): the specialist that asked, and what it asked, so a person sees why a
+   * specialist they did not start made it (test-esp32 #141, #234). Absent: a person or a stage started its job.
+   */
+  handoff?: AskedFor
+  /**
    * Every check that failed, failed for a reason outside the work (GitHub busy or down, the runner lost: infraReason):
    * which ones, by checks_list id, and why in plain words. The page offers to run them again (change.rerun). Absent:
    * no check failed, or one failed on the work itself.
@@ -486,6 +491,39 @@ export function fromWords(job: Pick<JobRow, 'agent' | 'payload'> | null, agentWo
   const ran = job?.agent
   const routed = ran && ran !== a && (SPECIALIST_KINDS as readonly string[]).includes(ran) ? ` (routed to the ${agentWords[ran] ?? ran} specialist)` : ''
   return `the ${agentWords[a] ?? a} specialist${routed}`
+}
+
+/** Who asked for a change's work, and what, when a specialist asked another (a hand-off). */
+export interface AskedFor { by: string; question: string; blocks?: string }
+
+const HANDOFF_BRANCH = /(?:^|\/)handoff-(ho[0-9a-f]{14})$/
+const ASKED_TITLE = /^Asked by (the .+? specialist): (.+)$/s
+
+/** The hand-off a change's work answered, by its id: the job's, else its branch's ("claude/handoff-<id>"). */
+export const handoffIdOf = (job: Pick<JobRow, 'handoff'> | null, branch: string): string | null => job?.handoff ?? HANDOFF_BRANCH.exec(branch)?.[1] ?? null
+
+/**
+ * The hand-off a change's work answered (src/core/handoffs.ts): its id from the job, else from the branch a hand-off's
+ * job works on ("claude/handoff-<id>"); what was asked from the agents' facts when they were read, else from the job's
+ * title ("Asked by the Implementation specialist: …", cut at 200 characters). Null: no hand-off made it. Pure.
+ */
+export function askedFor(o: {
+  job: Pick<JobRow, 'handoff' | 'title'> | null; branch: string
+  rows?: readonly Pick<JobRow, 'handoff' | 'title'>[]
+  handoffs?: readonly { id: string; fromAgent: string; question: string; blocks?: string | null }[] | null
+  agentWords: Readonly<Record<string, string>>
+}): AskedFor | null {
+  const id = handoffIdOf(o.job, o.branch)
+  if (!id) return null
+  const flat = (x: string): string => x.replace(/\s+/g, ' ').trim()
+  const h = o.handoffs?.find((x) => x.id === id)
+  if (h && flat(h.question)) {
+    const blocks = flat(h.blocks ?? '')
+    return { by: `the ${o.agentWords[h.fromAgent] ?? h.fromAgent} specialist`, question: flat(h.question), ...(blocks ? { blocks } : {}) }
+  }
+  const row = o.job?.handoff === id ? o.job : o.rows?.find((r) => r.handoff === id) ?? null
+  const m = row ? ASKED_TITLE.exec(row.title) : null
+  return m ? { by: m[1]!, question: flat(m[2]!) } : null
 }
 
 // ------------------------------------------------------------------ verdict, recommendation, may_accept
