@@ -109,9 +109,11 @@ const SOIL_SPEND = {
 const SOIL_COST: CostView = {
   ...COST,
   money: true,
-  // the build is forecast, not committed, before Fabricate
+  // the build is forecast, not committed, before Fabricate: from the order estimate's high end, not the target (#178)
   committed: 0,
-  // two budgets: the build's for the order (US$120 forecast of US$200) and the cloud-work allowance for trace's work
+  forecast: 171.2,
+  forecastBasis: { kind: 'estimate', low: 96.4, high: 171.2, at: ago(DAY), partsRun: 'b0c4a1e9d2f37a60' },
+  // two budgets: the build's for the order (US$171.20 forecast of US$200) and the cloud-work allowance for trace's work
   budget: 200,
   cloudBudget: 60,
   quantity: 10,

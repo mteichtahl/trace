@@ -75,7 +75,7 @@ function Cost() {
         <Tile label="Cloud work to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate · ${money(d.spent.detail.actual.total, d.currency)} billed by AWS` : 'Estimate · AWS has billed nothing tagged yet') : undefined} />
         <Tile label="Orders paid" value={m(d.spent.orders)} />
         <Tile label="Committed" value={m(d.committed)} hint="Orders placed, not paid yet" />
-        <Tile label="Forecast for the order" value={m(d.forecast)} hint={forecastSource(d, d.orderCurrency ?? d.currency) ?? 'Boards × the target unit cost'} />
+        <Tile label="Forecast for the order" value={m(d.forecast)} hint={((s) => (s ? `${s[0]!.toUpperCase()}${s.slice(1)}` : 'Boards × the target unit cost'))(forecastSource(d, d.orderCurrency ?? d.currency))} />
       </div>
       {d.warning && <SpendWarningCard warning={d.warning} currency={d.currency} id={id} link={false} className="mt-4" />}
       <Budgets cost={d} id={id} className="mt-4" />
