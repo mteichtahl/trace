@@ -4,7 +4,7 @@
  * Try again), Error (what happened, whether anything was lost, the one thing to do, detail folded with Copy) and
  * Offline (what was true when, actions wait). Plus NotShared, the one answer for a page you cannot see.
  */
-import { ChevronRight, Copy, RefreshCw, TriangleAlert, WifiOff } from 'lucide-react'
+import { ChevronRight, Copy, Loader2, RefreshCw, TriangleAlert, WifiOff } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -34,6 +34,41 @@ export function Loading({ children, loading = true, delay = 150 }: { children: R
   const shown = useDelayed(loading, delay)
   if (!loading || !shown) return null
   return <div aria-busy="true" aria-live="polite">{children}</div>
+}
+
+/** How long a first load shows its skeletons alone before it says in words that it is taking long. */
+export const SLOW_LOAD_MS = 8_000
+
+/**
+ * What a slow first load says under its skeletons (test-esp32 #171: after a deploy the Overview stayed on grey
+ * placeholders for 15 s and more, saying nothing, until a reload). While trace is updating a read tries again for about
+ * a minute (lib/api.ts readRetry), and the API runtime may take up to 50 s to start answering: the person is told.
+ */
+export function slowLoadWords(what: string, failureReason: unknown): string {
+  const What = what.charAt(0).toUpperCase() + what.slice(1)
+  if (isUpdating(failureReason)) return `trace is updating, so ${what} is taking a moment to load. It tries again by itself.`
+  if (failureReason) return `${What} did not load on the first try. trace is trying again.`
+  return `${What} is taking longer than usual to load. trace is still waiting for an answer.`
+}
+
+/**
+ * Under a first load's skeletons: nothing while it is quick; once it has taken SLOW_LOAD_MS, or a try has failed and
+ * another is on its way, what is happening in words and Try again (which asks again now).
+ */
+export function SlowLoad({ loading, failureReason, what, onRetry }: { loading: boolean; failureReason?: unknown; what: string; onRetry?: () => void }) {
+  const slow = useDelayed(loading, SLOW_LOAD_MS)
+  if (!loading || (!slow && !failureReason)) return null
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+      <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+      <span className="min-w-0 flex-1">{slowLoadWords(what, failureReason)}</span>
+      {onRetry && (
+        <Button size="sm" variant="outline" onClick={onRetry}>
+          <RefreshCw /> Try again
+        </Button>
+      )}
+    </div>
+  )
 }
 
 /** A stack of line skeletons, for lists. */
