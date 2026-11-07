@@ -57,12 +57,15 @@ export function waitForViewer(embed: HTMLElement, board: boolean, timeoutMs = 20
   })
 }
 
-/** Layers that are not the drawing: the sheet's frame and title block, the grid, and KiCanvas's own overlays. */
-const NOT_DRAWN = /^:(DrawingSheet|Grid|Overlay|Interactive|Marks|Anchors)$/
+/**
+ * Layers that are not the circuit: the sheet's frame and title block, the grid, KiCanvas's own overlays, and free text
+ * and pictures (a sheet's heading note sits in the top corner, far from the parts: test-esp32 #242).
+ */
+const NOT_DRAWN = /^:(DrawingSheet|Grid|Overlay|Interactive|Marks|Anchors|Notes|Bitmap)$/
 
 /**
- * The box around what is drawn on a schematic sheet (symbols, wires, labels, text), not the page: a sheet drawn in one
- * corner of an A4 page opens on its parts, readable, instead of the whole page (test-esp32 #50). Null when nothing is.
+ * The box around the circuit on a schematic sheet (symbols, wires, labels), not the page: a sheet drawn in one corner
+ * of an A4 page opens on its parts, readable, instead of the whole page (test-esp32 #50, #242). Null when nothing is.
  */
 export function contentBox(layers: Iterable<{ name: string; bbox?: Pick<KcBox, 'x' | 'y' | 'w' | 'h' | 'valid'> | undefined }>): { x: number; y: number; w: number; h: number } | null {
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
