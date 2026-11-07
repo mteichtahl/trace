@@ -9,7 +9,8 @@
  *                         the person's own (the Intent builder's chat noted it in their draft and Submit recorded it),
  *                         with its words, topic and kind, read as a row beside the agents' (record.ts statedRows)
  *   intent.uncovered      left out: no requirement will cover this statement, with the reason
- *   requirement           accepted, or struck with the reason (Requirements review keeps the reason with it)
+ *   requirement           accepted (with the person's own wording when they edited it: detail.edited), or struck
+ *                         with the reason (Requirements review keeps the reason with it)
  *   architecture.criteria fixed: the criteria and their weights, before any score is read
  *   architecture.choice   chosen: the option, the person's reason, the criteria that decided it, their scores
  *   pins.agreed           agreed: the pin plan of one part, as it stood (its fingerprint), against the schematic

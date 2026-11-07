@@ -117,7 +117,7 @@ function trace(): TraceView {
  * refused). Accepting R-017 is refused the first time: the Verification agent has just added R-022, a duplicate of
  * it, so the record's check of conflicts is not met when Submit checks it again; striking one of the two clears it.
  */
-type ReviewDraft = { decisions?: { requirement: string; choice: string; reason?: string }[]; uncovered?: { statement: string }[]; no_conflicts?: boolean }
+type ReviewDraft = { decisions?: { requirement: string; choice: string; reason?: string; criterion?: string }[]; uncovered?: { statement: string }[]; no_conflicts?: boolean }
 const review = { duplicate: false }
 const REVIEW_CHECKS: Record<string, string> = { criterion: 'One testable criterion each', conflicts: 'No conflicts or duplicates', sources: 'Every requirement cites its source', covered: 'Every intent statement covered', struck: 'Struck requirements keep their reason' }
 const choiceOf = (d: ReviewDraft, id: string): string | undefined => d.decisions?.find((x) => x.requirement === id)?.choice
@@ -125,8 +125,12 @@ function reviewChecks(d: ReviewDraft = {}): SkillView['checks'] {
   const undecided = ['R-019', ...(review.duplicate ? ['R-022'] : [])].filter((id) => !choiceOf(d, id))
   const duplicate = review.duplicate && choiceOf(d, 'R-017') !== 'strike' && choiceOf(d, 'R-022') !== 'strike'
   const struck = (d.decisions ?? []).filter((x) => x.choice === 'strike')
+  // R-008 was accepted with a criterion without a number (test log R23): an edit of its criterion with one meets it
+  const r8 = d.decisions?.find((x) => x.requirement === 'R-008')
+  const vague = r8?.choice === 'strike' || /\d/.test(r8?.criterion ?? '') ? [] : ['R-008']
   return [
-    undecided.length ? { id: 'criterion', status: 'not_met', detail: `${undecided.length} requirement${undecided.length > 1 ? 's' : ''} neither accepted nor under an open question: ${undecided.join(', ')}.` } : { id: 'criterion', status: 'met' },
+    undecided.length ? { id: 'criterion', status: 'not_met', detail: `${undecided.length} requirement${undecided.length > 1 ? 's' : ''} neither accepted nor under an open question: ${undecided.join(', ')}.` }
+      : vague.length ? { id: 'criterion', status: 'not_met', detail: `1 accepted requirement without a criterion with a number: ${vague.join(', ')}.` } : { id: 'criterion', status: 'met' },
     duplicate ? { id: 'conflicts', status: 'not_met', detail: 'Duplicates: R-017 and R-022.' }
       : d.no_conflicts ? { id: 'conflicts', status: 'met', detail: 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other.', by_draft: 'no_conflicts' }
       : { id: 'conflicts', status: 'not_met', detail: 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.', by_draft: 'no_conflicts' },
@@ -140,7 +144,7 @@ function submitReview(d: ReviewDraft): Response {
   if (choiceOf(d, 'R-017') === 'accept' && !review.duplicate) review.duplicate = true
   const missing = (reviewChecks(d) ?? []).filter((c) => c.status === 'not_met')
   if (missing.length) return fail(`Requirements review cannot be submitted yet. Not met: ${missing.map((c) => `${REVIEW_CHECKS[c.id]}${c.detail ? ` (${c.detail})` : ''}`).join('; ')}.`)
-  const n = (choice: string) => (d.decisions ?? []).filter((x) => x.choice === choice).length
+  const n = (choice: string) => (d.decisions ?? []).filter((x) => x.choice === choice || (choice === 'accept' && x.choice === 'edit')).length
   const recorded = [n('accept') ? `${n('accept')} requirement${n('accept') > 1 ? 's' : ''} accepted` : '', n('strike') ? `${n('strike')} requirement${n('strike') > 1 ? 's' : ''} struck` : '', d.uncovered?.length ? `${d.uncovered.length} intent line${d.uncovered.length > 1 ? 's' : ''} left out` : ''].filter(Boolean).join(', ')
   const waits = !choiceOf(d, 'R-017')
   const why = 'R-017 waits on an open question: answer it, then accept or strike it here.'
@@ -187,11 +191,13 @@ const SKILLS: Record<string, (draft?: ReviewDraft) => Partial<SkillView>> = {
     }
   },
   'requirements-review': (d) => {
-    const rq = (id: string, title: string, detail: string, criterion: string | null = null, was?: SkillItem['was']) => ({ id: `requirement:${id}`, title: `${id}: ${title}`, detail, status: 'open' as const, criterion, ...(was ? { was } : {}) })
+    const rq = (id: string, title: string, detail: string, criterion: string | null = null, was?: SkillItem['was'], kind = 'functional') => ({ id: `requirement:${id}`, title: `${id}: ${title}`, detail, status: 'open' as const, criterion, words: title, kind, ...(was ? { was } : {}) })
     return {
       summary: 'Three requirements are still proposed (R-017 waits on an open question about its test house; R-011 came back after an answer changed its acceptance limit), and one intent line has no requirement yet.',
       items: [
-        rq('R-017', 'Meets CISPR 32 class B radiated emissions', 'From Sold in Australia: CISPR 32 class B. An open question asks which test house measures it.', 'Below the class B limit lines, 30 MHz to 1 GHz'),
+        rq('R-017', 'Meets CISPR 32 class B radiated emissions', 'From Sold in Australia: CISPR 32 class B. An open question asks which test house measures it.', 'Below the class B limit lines, 30 MHz to 1 GHz', undefined, 'emc'),
+        // accepted already, but its criterion has no number: listed so it can be edited (test log R23)
+        { ...rq('R-008', 'Reads soil moisture accurately', 'From Reads volumetric water content.', 'Readings are accurate across the range', undefined, 'electrical'), accepted: true },
         rq('R-019', 'Has a two-line display', 'From the brief.'),
         // an answer that changed a requirement brought it back: its criterion changed, its words did not (test-esp32 #63)
         rq('R-011', 'The 3.3 V rail is rated for at least 600 mA', 'From Runs from one 3.7 V lithium cell. Reopened: an answer changed its acceptance limit.', '3.1-3.6 V at every load, at up to 600 mA', {

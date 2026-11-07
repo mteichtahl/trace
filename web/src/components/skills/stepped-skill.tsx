@@ -19,7 +19,8 @@ import { projectId } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
-import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, decidedByReview } from './design-steps'
+import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, RequirementLine, decidedByReview } from './design-steps'
+import { RequirementsChat, withRequirementEdit } from './requirement-edit'
 import { ReleaseStep, type ReleaseDraft, releaseChecks } from './release-steps'
 import { OrderStep, type OrderDraft, orderChecks } from './order-steps'
 import { StepPicture } from './step-picture'
@@ -95,6 +96,8 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
         />
       )}
 
+      {/* trace's chat changes the review's rows in the draft as the rows do (decide_requirement), never with a job */}
+      {def.id === 'requirements-review' && <RequirementsChat items={all} decisions={s.draft.data.decisions ?? []} loaded={s.draft.loaded} setDecisions={(fn) => s.draft.setData((d) => ({ ...d, decisions: fn(d.decisions ?? []) }))} />}
       <DesignSteps repo={repo} skill={def.id} step={s.step.id} view={v} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} />
       {v?.pending_errors?.length ? <p className="mt-3 text-sm text-destructive">{v.pending_errors.join(' ')}</p> : null}
 
@@ -115,14 +118,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
           <ul className="mt-2 divide-y rounded-xl border">
             {items.map((it) => {
               if (decidedByReview(def.id, it)) {
-                const d = decisionOf(it)
-                return (
-                  <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                    <StatusBadge status={d ? (d.choice === 'accept' ? 'met' : 'waived') : 'yours'} label={d ? (d.choice === 'accept' ? 'Accepted' : 'Struck') : 'Undecided'} />
-                    <span className="min-w-0 flex-1 text-sm">{it.title}{it.criterion !== undefined && <span className="block text-xs">Criterion: {it.criterion ?? 'none given'}</span>}{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
-                    {!d && <Button size="sm" variant="outline" onClick={() => s.goTo('decide')}>Decide <ArrowRight /></Button>}
-                  </li>
-                )
+                return <RequirementLine key={it.id} it={it} decision={decisionOf(it)} onDecide={() => s.goTo('decide')} onEdit={(id, f) => s.draft.setData((d) => withRequirementEdit(d, id, f))} />
               }
               if (it.question) {
                 return (

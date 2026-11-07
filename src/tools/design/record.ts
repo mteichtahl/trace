@@ -320,8 +320,35 @@ export interface RequirementNow extends RequirementWords { status: string; updat
  */
 export function decisionStands(d: DesignDecision, now: RequirementNow | undefined): boolean {
   if (!now) return true
-  if (typeof d.detail.text === 'string') return d.detail.text === now.text && (!('acceptance' in d.detail) || d.detail.acceptance === now.acceptance)
+  if (typeof d.detail.text === 'string') {
+    if (d.detail.text === now.text && (!('acceptance' in d.detail) || d.detail.acceptance === now.acceptance)) return true
+    // an agent that wrote the person's own edit into the row changed nothing the person decided
+    const e = editedOf(d)
+    return Boolean(e && (e.text !== undefined || e.acceptance !== undefined) && (e.text ?? d.detail.text) === now.text && (e.acceptance ?? (typeof d.detail.acceptance === 'string' ? d.detail.acceptance : null)) === now.acceptance)
+  }
   return !(now.status === 'proposed' && now.updated !== null && now.updated > d.at)
+}
+
+/** The kinds a requirement can be (src/tools/verify/db.ts REQ_KINDS). */
+export const REQUIREMENT_KINDS = ['functional', 'electrical', 'timing', 'emc'] as const
+
+/**
+ * A person's own wording of a requirement, kept with their decision (Requirements review: Edit, or trace's chat with
+ * decide_requirement): its words, its acceptance criterion, the method that checks it, its kind. Each field left out
+ * keeps the agent's. The agents' row is never changed: the edit is laid over it wherever the requirement is read.
+ */
+export interface RequirementWording { text?: string; acceptance?: string; method?: string; kind?: string }
+
+/** The person's wording a decision on a requirement keeps, or null when it keeps none. */
+export function editedOf(d: Pick<DesignDecision, 'detail'>): RequirementWording | null {
+  const e = d.detail.edited
+  if (!e || typeof e !== 'object') return null
+  const out: RequirementWording = {}
+  for (const k of ['text', 'acceptance', 'method', 'kind'] as const) {
+    const v = (e as Record<string, unknown>)[k]
+    if (typeof v === 'string' && v.trim()) out[k] = v
+  }
+  return Object.keys(out).length ? out : null
 }
 
 /** The requirement rows as a decision on one is checked against them (decisionStands). */
@@ -329,14 +356,16 @@ export const requirementsNow = (all: readonly Record<string, unknown>[]): Map<st
   new Map(all.map((q) => [String(q.id), { text: String(q.text), acceptance: q.acceptance === null || q.acceptance === undefined ? null : String(q.acceptance), status: String(q.status), updated: typeof q.updated === 'number' ? q.updated : null }]))
 
 /**
- * A requirement's standing decision: accepted, or struck with the reason. Given the rows as they are now, a decision
- * an agent's change has reopened is left out, so the requirement is the person's to decide again.
+ * A requirement's standing decision: accepted (with the person's own wording, when they edited it), or struck with the
+ * reason. Given the rows as they are now, a decision an agent's change has reopened is left out, so the requirement is
+ * the person's to decide again.
  */
-export function requirementDecisions(decisions: readonly DesignDecision[], rows?: ReadonlyMap<string, RequirementNow>): Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string }> {
-  const m = new Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string }>()
+export function requirementDecisions(decisions: readonly DesignDecision[], rows?: ReadonlyMap<string, RequirementNow>): Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string; edited?: RequirementWording }> {
+  const m = new Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string; edited?: RequirementWording }>()
   for (const [id, d] of standing(decisions, 'requirement')) {
     if (rows && !decisionStands(d, rows.get(id))) continue
-    m.set(id, { choice: d.choice === 'struck' ? 'struck' : 'accepted', reason: typeof d.detail.reason === 'string' ? d.detail.reason : null, by: d.by, at: iso(d.at) })
+    const edited = d.choice === 'struck' ? null : editedOf(d)
+    m.set(id, { choice: d.choice === 'struck' ? 'struck' : 'accepted', reason: typeof d.detail.reason === 'string' ? d.detail.reason : null, by: d.by, at: iso(d.at), ...(edited ? { edited } : {}) })
   }
   return m
 }

@@ -186,7 +186,7 @@ export const PICTURES_REPLY = [
   'Tap any picture to open it full screen.',
 ].join('\n')
 
-function agui(body: { threadId: string; runId: string; messages: { role: string; content?: unknown }[] }): Response {
+function agui(body: { threadId: string; runId: string; messages: { role: string; content?: unknown }[]; tools?: { name: string }[] }): Response {
   const last = [...body.messages].reverse().find((m) => m.role === 'user')
   const q = typeof last?.content === 'string' ? last.content : ''
   // a card's answer (remember's Confirm, start_task's job) comes back as the tool's result: acknowledge it, no new card
@@ -216,6 +216,22 @@ function agui(body: { threadId: string; runId: string; messages: { role: string;
       { type: 'TEXT_MESSAGE_END', messageId: say },
       { type: 'TOOL_CALL_START', toolCallId: call, toolCallName: 'remember', parentMessageId: say },
       { type: 'TOOL_CALL_ARGS', toolCallId: call, delta: JSON.stringify({ repo: 'acme/soil-sensor', scope, text: text.charAt(0).toUpperCase() + text.slice(1) }) },
+      { type: 'TOOL_CALL_END', toolCallId: call },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
+    ])
+  }
+  // asked in Requirements review to make a criterion testable, trace edits the requirement in the person's draft, as a
+  // row's Edit does (decide_requirement, run by the app: test log R23), rather than offering a Verification job
+  if ((body.tools ?? []).some((t) => t.name === 'decide_requirement') && /\b(criterion|reword|testable)\b/i.test(q)) {
+    const say = crypto.randomUUID()
+    const call = `call_${id.slice(0, 8)}`
+    return sse([
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: say, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: say, delta: 'I gave R-008 a criterion with a number, the conditions and the method, in your draft. It stays accepted; Submit records it.' },
+      { type: 'TEXT_MESSAGE_END', messageId: say },
+      { type: 'TOOL_CALL_START', toolCallId: call, toolCallName: 'decide_requirement', parentMessageId: say },
+      { type: 'TOOL_CALL_ARGS', toolCallId: call, delta: JSON.stringify({ decisions: [{ requirement: 'R-008', choice: 'edit', criterion: 'Within ±3 % VWC of the gravimetric reference from 0 to 50 % VWC, at 5-40 °C, in loam', method: 'Bench test against oven-dried samples' }] }) },
       { type: 'TOOL_CALL_END', toolCallId: call },
       { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
     ])
