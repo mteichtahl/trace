@@ -95,13 +95,13 @@ describe('Connect a system', () => {
     expect(screen.getByText('Recommended')).toBeInTheDocument()
     expect(screen.getByText('Safest: it can look but not change anything.')).toBeInTheDocument()
 
-    await userEvent.click(screen.getByLabelText(/Soil sensor/))
+    await userEvent.click(screen.getByLabelText(/^soil-sensor/))
     expect(screen.getByTestId('part-acme/soil-sensor')).toHaveTextContent('Reviewer')
-    expect(screen.queryByRole('combobox', { name: /Part on Soil sensor/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: /Part on soil-sensor/ })).not.toBeInTheDocument()
 
     // read and change offers both parts; going back to read only forces reviewer again
     await userEvent.click(screen.getByLabelText(/Read and change/))
-    expect(screen.getByRole('combobox', { name: /Part on Soil sensor/ })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /Part on soil-sensor/ })).toBeInTheDocument()
     await userEvent.click(screen.getByLabelText(/Read only/))
     expect(screen.getByTestId('part-acme/soil-sensor')).toHaveTextContent('Reviewer')
 

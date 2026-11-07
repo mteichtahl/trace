@@ -370,11 +370,13 @@ export function readRetryDelay(n: number, e: unknown): number {
   return Math.min(1000 * 2 ** n, 30_000)
 }
 
-/** A project's display name from its repo slug (owner/soil-sensor → Soil sensor). */
+/**
+ * A project's name until its journey is read, or when it has none: the repository's own name as it is (owner/soil-sensor
+ * → soil-sensor), as trace names it. Not a prettified guess: "Test esp32 run2" showed for seconds before the real
+ * "test-esp32-run2" (test-esp32-run2 R8).
+ */
 export function projectName(repo: string): string {
-  const name = repo.split('/').pop() ?? repo
-  const words = name.replace(/[-_]+/g, ' ').trim()
-  return words.charAt(0).toUpperCase() + words.slice(1)
+  return repo.split('/').pop() || repo
 }
 
 /** The project id used in addresses (/p/:id): the repo with its slash encoded as `~`. */
