@@ -366,6 +366,8 @@ describe('delegation', () => {
     expect((p as { request: string }).request).toBe(delegatedRequest('impl', 'job-p', 'Commit the seed 7 placer settings of closure run R1.', ['fpga_timing: closure closed']))
     expect((p as { request: string }).request).toMatch(/Implementation specialist \(job job-p\) delegated this to you/)
     expect((p as { request: string }).request).toContain('1. fpga_timing: closure closed')
+    // its card names the work, not the framing "Meet every acceptance criterion below" (test-esp32-run2 R37)
+    expect((p as { headline?: string }).headline).toBe('Commit the seed 7 placer settings of closure run R1')
     // one at a time
     expect(() => d.start({ token, brief: 'again', acceptance: ['x'] }, () => ({ accepted: true, jobId: 'job-w2' }))).toThrow(/still running/)
     expect(d.status(token, 'job-w', () => [{ id: 'job-w', kind: 'task', key: 'k', state: 'succeeded', startedAt: '', log: [] }]).state).toBe('succeeded')
