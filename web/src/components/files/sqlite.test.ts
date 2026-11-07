@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { cellText, describeDbDiff, describeRuns, diffDb, isSqlite, openDb, readOnly, readRows, runsDigest, summarise, toCsv } from './sqlite'
+import { cellText, describeDbDiff, describeRuns, diffDb, isSqlite, jsonText, localTime, openDb, readable, readOnly, readRows, rowFields, runsDigest, summarise, toCsv } from './sqlite'
 
 const require = createRequire(import.meta.url)
 let SQL: SqlJsStatic
@@ -62,7 +62,8 @@ describe('sqlite files', () => {
     const parts = d.find((t) => t.name === 'parts')!
     expect(parts.matchedBy).toBe('key')
     expect(parts.counts).toEqual({ added: 1, removed: 1, changed: 1, same: 1 })
-    expect(parts.rows.find((r) => r.change === 'changed')!.fields).toEqual([{ column: 'qty', before: '2', after: '6' }])
+    expect(parts.rows.find((r) => r.change === 'changed')!.fields).toEqual([{ column: 'qty', before: '2', after: '6', was: 2, now: 6 }])
+    expect(parts.keyColumns).toEqual(['id'])
     expect(d.find((t) => t.name === 'fresh')!.status).toBe('added')
     expect(d.find((t) => t.name === 'old')!.status).toBe('removed')
     expect(d.at(-1)!.name).toBe('same')
@@ -103,5 +104,52 @@ describe('sqlite files', () => {
     // not a trace record, or one that adds no run: nothing to say
     expect(runsDigest(a, a)).toBeNull()
     expect(runsDigest(null, make('CREATE TABLE parts(id INTEGER PRIMARY KEY)'))).toBeNull()
+  })
+
+  // test-esp32 log R10 (#59, #19): an added intent statement read as words, not stored values
+  it('reads an added row as words: times, JSON, flags, and no empty fields', () => {
+    const db = make(`CREATE TABLE intent_statements (id TEXT PRIMARY KEY, topic TEXT, text TEXT, source TEXT, detail TEXT,
+        decide_by TEXT, owner TEXT, conflicts TEXT, testable INTEGER, status TEXT, created REAL, updated REAL, by TEXT);
+      INSERT INTO intent_statements VALUES ('I24', 'interfaces', 'Wi-Fi reset: hold the button',
+        '{"kind":"person","ref":"marc@teichtahl.com","quote":"I24 Wi-Fi reset: hold it"}', '{}', NULL, '', '[]', 1, 'proposed',
+        1794081403.409, 1794081403.409, 'the Verification specialist');`)
+    const d = diffDb(null, db).find((t) => t.name === 'intent_statements')!
+    const row = d.rows[0]!
+    const when = localTime(1794081403409)
+    expect(rowFields(d.columns, row.after!, d.keyColumns)).toEqual([
+      { column: 'topic', text: 'interfaces' },
+      { column: 'text', text: 'Wi-Fi reset: hold the button' },
+      { column: 'source', text: 'person marc@teichtahl.com, quote: "I24 Wi-Fi reset: hold it"' },
+      { column: 'testable', text: 'yes' },
+      { column: 'status', text: 'proposed' },
+      { column: 'created', text: when },
+      { column: 'updated', text: when },
+      { column: 'by', text: 'the Verification specialist' },
+    ])
+    expect(when).toMatch(/2026/)
+  })
+
+  it('reads stored values as a person would', () => {
+    // times: by column name in seconds or milliseconds, or a number that clearly is one
+    expect(readable('opened_at', 1794081403)).toBe(localTime(1794081403000))
+    expect(readable('updated', 1794081403409)).toBe(localTime(1794081403409))
+    expect(readable('t', 1794081403.5)).toBe(localTime(1794081403500))
+    expect(readable('qty', 1794081403)).toBe('1794081403')
+    expect(readable('created', 12)).toBe('12')
+    // flags: 0 or 1 in a yes-or-no column only
+    expect(readable('testable', 0)).toBe('no')
+    expect(readable('is_dnp', 1)).toBe('yes')
+    expect(readable('qty', 1)).toBe('1')
+    expect(readable('testable', 2)).toBe('2')
+    // JSON: compact words, nested objects in brackets, empty ones empty
+    expect(readable('detail', '{}')).toBe('')
+    expect(readable('conflicts', '[]')).toBe('')
+    expect(readable('conflicts', '["I3","I7"]')).toBe('I3, I7')
+    expect(readable('detail', '{"interface":{"type":"I2C","rate":400000},"limits":[{"name":"Vin","max":5.5,"unit":"V"}]}')).toBe('interface: (I2C, rate: 400000), limits: (Vin, max: 5.5, unit: V)')
+    expect(readable('note', '{not json')).toBe('{not json')
+    expect(jsonText({ kind: 'document', page: 4, ref: 'ds.pdf', extra: null })).toBe('document ds.pdf, page: 4')
+    // empty
+    expect(readable('owner', null)).toBe('')
+    expect(readable('owner', '  ')).toBe('')
   })
 })

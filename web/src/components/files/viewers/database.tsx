@@ -20,7 +20,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { type FileRef, useFileBytes } from '../data'
 import { baseName } from '../kinds'
-import { type DbTable, type RunsDigest, type TableDiff, all, cellText, describeDbDiff, describeRuns, diffDb, loadSql, openDb, readOnly, readRows, resultWord, runsDigest, summarise, toCsv } from '../sqlite'
+import { type DbTable, type RunsDigest, type TableDiff, all, cellText, describeDbDiff, describeRuns, diffDb, loadSql, openDb, readable, readOnly, readRows, resultWord, rowFields, runsDigest, summarise, toCsv } from '../sqlite'
 import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerProps, type ViewerSize } from './common'
 
 const ROW_LIMIT = 5000
@@ -319,7 +319,8 @@ export function RunsSummary({ runs, table }: { runs: RunsDigest; table: 'runs' |
 
 function TableChanges({ d, runs }: { d: TableDiff; runs?: RunsDigest | null }) {
   const n = d.counts.added + d.counts.removed + d.counts.changed
-  const show = (v: SqlValue[] | undefined) => (v ?? []).map((x, i) => `${d.columns[i] ?? i}: ${x === null ? 'empty' : cellText(x)}`).join(' · ')
+  // an added or removed row: its filled-in fields, one a line, read as words (test-esp32 #59, #19, R10)
+  const show = (v: SqlValue[] | undefined) => rowFields(d.columns, v ?? [], d.matchedBy === 'key' ? d.keyColumns : [])
   // a trace record's runs and the files they made: said by kind and file, every row one click away
   const grouped = runs && (d.name === 'runs' || d.name === 'artifacts') && d.status !== 'same' ? d.name : null
   const rows = d.rows.length > 0 && (
@@ -335,15 +336,19 @@ function TableChanges({ d, runs }: { d: TableDiff; runs?: RunsDigest | null }) {
             {d.rows.map((r, i) => (
               <tr key={`${r.change}:${r.key}:${i}`} className={cn('border-b align-top', r.change === 'added' && 'bg-verified/5', r.change === 'removed' && 'bg-destructive/5')}>
                 <td className="px-3 py-2"><StatusBadge status={BADGE[r.change].status} label={BADGE[r.change].label} /></td>
-                <td className="max-w-[200px] truncate px-3 py-2 font-mono text-xs" title={r.key}>{d.matchedBy === 'row' ? '—' : r.key}</td>
-                <td className="px-3 py-2 text-xs">
+                <td className="max-w-[9rem] truncate px-3 py-2 font-mono text-xs" title={r.key}>{d.matchedBy === 'row' ? '—' : r.key}</td>
+                <td className="min-w-[16rem] px-3 py-2 text-xs break-words">
                   {r.change === 'changed'
                     ? r.fields.map((f) => (
                         <div key={f.column}>
-                          <span className="font-mono">{f.column}</span>: <del className="text-muted-foreground">{f.before || 'empty'}</del> → <ins className="font-medium no-underline">{f.after || 'empty'}</ins>
+                          <span className="font-mono">{f.column}</span>: <del className="text-muted-foreground">{readable(f.column, f.was) || 'empty'}</del> → <ins className="font-medium no-underline">{readable(f.column, f.now) || 'empty'}</ins>
                         </div>
                       ))
-                    : <span className="break-all">{show(r.after ?? r.before)}</span>}
+                    : show(r.after ?? r.before).map((f) => (
+                        <div key={f.column}>
+                          <span className="font-mono text-muted-foreground">{f.column}</span>: {f.text}
+                        </div>
+                      ))}
                 </td>
               </tr>
             ))}
@@ -397,14 +402,15 @@ export function DatabaseCompare({ before, after, size }: { before: { file: FileR
   const design = runs ? changed.find((d) => !BOOKKEEPING.has(d.name)) : undefined
   const current = diff.find((d) => d.name === pick) ?? design ?? changed[0] ?? diff[0]
   return (
-    <div className={cn('flex flex-col', AREA[size])}>
+    <div className={cn('@container flex flex-col', AREA[size])}>
       <Controls>
         <span className="font-medium">{describeDbDiff(diff)}</span>
         {diff.length > changed.length && <span className="text-muted-foreground">{count(diff.length - changed.length, 'table')} unchanged</span>}
         {runs && <span className="text-muted-foreground">{describeRuns(runs)}</span>}
       </Controls>
-      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[220px_1fr]">
-        <ul className="max-h-[160px] overflow-auto border-b text-xs md:max-h-none md:border-r md:border-b-0" aria-label="Tables">
+      {/* the table list sits beside the rows only when there is room for both; a narrow pane puts it above (R10) */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 @3xl:grid-cols-[200px_1fr]">
+        <ul className="max-h-[160px] overflow-auto border-b text-xs @3xl:max-h-none @3xl:border-r @3xl:border-b-0" aria-label="Tables">
           {diff.map((d) => (
             <li key={d.name}>
               <button type="button" onClick={() => setPick(d.name)} aria-current={current?.name === d.name} className={cn('flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent', current?.name === d.name && 'bg-accent')}>
