@@ -54,3 +54,24 @@ describe('the rail', () => {
     expect(within(screen.getByRole('navigation', { name: 'Steps' })).getByRole('button', { name: /Pay/ })).toBeDisabled()
   })
 })
+
+// R16: the Intent builder let the whole document scroll (4562 px in an 873 px window): screen-reader text, absolutely
+// positioned inside a panel's scroller with no positioned ancestor, grew the page, and the header scrolled away
+describe('the Focus shell', () => {
+  it('is the viewport, clips what is inside it, and each scroller is positioned', () => {
+    const { container } = render(
+      <TooltipProvider>
+        <FocusLayout title="Intent builder" variant="conversational" centre="fill" steps={steps} checks={checks} onSubmit={() => {}} onClose={() => {}} aside={<p>draft</p>}>
+          <p>chat</p>
+        </FocusLayout>
+      </TooltipProvider>,
+    )
+    const shell = container.querySelector('[data-focus-shell]')!
+    expect(shell).toHaveClass('h-dvh', 'overflow-clip', 'relative')
+    // every scroller or clipped panel in it is the containing block of what is absolute inside it
+    const panels = Array.from(shell.querySelectorAll('.overflow-y-auto, .overflow-clip'))
+    expect(panels.length).toBeGreaterThanOrEqual(3)
+    for (const el of panels) expect(el).toHaveClass('relative')
+    expect(screen.getByText('chat').parentElement).toHaveClass('min-h-0', 'overflow-clip')
+  })
+})

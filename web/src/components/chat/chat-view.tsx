@@ -322,7 +322,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, pinIntro
 
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col', className)}>
-      <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 [overflow-anchor:none]" aria-live="polite" aria-busy={running || opening}>
+      <div ref={scroller} className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 [overflow-anchor:none]" aria-live="polite" aria-busy={running || opening}>
         {messages.slice(0, introAt < 0 ? messages.length : introAt).map((m, i) => renderMessage(m, i))}
         {introAt >= 0 && intro}
         {introAt >= 0 && messages.slice(introAt).map((m, j) => renderMessage(m, introAt + j))}
