@@ -35,6 +35,7 @@ export interface Budgets {
  */
 export function forecastSource(c: Pick<CostView, 'quantity' | 'unit_cost' | 'forecastBasis'>, currency: string): string | null {
   const e = c.forecastBasis
+  if (e?.kind === 'quote') return `the JLCPCB quote of ${e.on}, the newest recorded (not the estimate)`
   if (e?.kind === 'estimate') return `the high end of the order estimate of ${e.at.slice(0, 10)}, ${money(e.low, currency)} to ${money(e.high, currency)}, from its parts check and the fab's published prices`
   return c.quantity && c.unit_cost ? `${c.quantity} boards at ${money(c.unit_cost, currency)} each, the build plan's target unit cost` : null
 }

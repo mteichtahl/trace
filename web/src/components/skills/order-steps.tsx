@@ -12,6 +12,7 @@ import { EvidenceChip } from '@/components/evidence-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState } from '@/components/states'
 import { fileHref } from '@/components/files/data'
+import { exact } from '@/components/project/order-sheet'
 import { projectId } from '@/lib/api'
 import type { OrderSheetView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
@@ -188,6 +189,15 @@ function Pay({ repo, v }: { repo: string; v: OrderSheetView['pay'] }) {
         <span className="min-w-0 flex-1">The order gate{v.gate?.signed ? <span className="block text-xs text-muted-foreground">Signed by {v.gate.signed.by}, {day(v.gate.signed.at)}.</span> : <span className="block text-xs text-muted-foreground">An admin signs it before anything is paid.</span>}</span>
         {v.gate && <Link className="text-xs text-primary hover:underline" to="/p/$id/gates/$gate" params={{ id, gate: v.gate.id }}>Open the order gate</Link>}
       </li>
+      {v.quote !== undefined && (
+        <li className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <StatusBadge status={v.quote ? 'met' : 'yours'} label={v.quote ? 'Recorded' : 'Not recorded'} />
+          <span className="min-w-0 flex-1">The JLCPCB quote{v.quote
+            ? <span className="block text-xs text-muted-foreground">{exact(v.quote.total, v.quote.currency)} for {v.quote.quantity} boards, quoted {v.quote.on}. Record it again if JLCPCB's total changes.</span>
+            : <span className="block text-xs text-muted-foreground">Record the total JLCPCB shows once the package is uploaded, so the order's cost is the quote, not the estimate.</span>}</span>
+          <Link className="text-xs text-primary hover:underline" to="/p/$id/build" params={{ id }}>{v.quote ? 'See the cost over time' : 'Record a quote'}</Link>
+        </li>
+      )}
       <li className="flex flex-wrap items-center gap-3 px-4 py-3">
         <StatusBadge status={v.order ? 'met' : 'yours'} label={v.order ? 'Recorded' : 'Not recorded'} />
         <span className="min-w-0 flex-1">Pay on JLCPCB, then record the order{v.order ? <span className="block text-xs text-muted-foreground">Order {v.order.number}{v.order.paid !== null ? `, ${v.order.currency} ${v.order.paid.toFixed(2)} paid` : ', cost not given'}{v.order.ship ? `, ships ${v.order.ship}` : ', no ship date'}.</span> : <span className="block text-xs text-muted-foreground">The order number, what was paid and the quoted ship date, on the Build page.</span>}</span>

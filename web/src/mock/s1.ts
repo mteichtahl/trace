@@ -8,6 +8,7 @@ import { OPS_RUNS } from './fixtures-admin'
 import {
   BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, PANEL_GATE, QUESTIONS, QUESTIONS_BY_ID, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
 } from './fixtures-s1'
+import { QUOTES, payWithQuote, quoteCheck, recordQuote, withQuotes } from './quotes'
 import type { Gate } from '@/lib/types'
 import type { GateMore, JourneyMore } from '@/lib/types-s1'
 
@@ -132,18 +133,27 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'files.url':
       return FILE_URLS[String(a.path)] ? ok({ url: FILE_URLS[String(a.path)] }) : fail('no such file')
     case 'build.get':
-      return repo === 'acme/soil-sensor' ? ok(import.meta.env.VITE_MOCK_ORDER === 'empty' ? UNPACKAGED : BUILD) : ok({ releases: [], orders: [], boards: [] })
+      return repo === 'acme/soil-sensor' ? ok(withQuotes(import.meta.env.VITE_MOCK_ORDER === 'empty' ? UNPACKAGED : BUILD)) : ok({ releases: [], orders: [], boards: [] })
     case 'order.record': {
       const o = BUILD.orders.find((x) => x.id === a.order)
-      if (o) Object.assign(o, { state: 'placed', number: a.number, paid: a.paid, ship: a.ship })
+      // linked to the newest quote, with what was paid against it
+      const q = QUOTES.find((x) => x.order === null)
+      if (o) Object.assign(o, { state: 'placed', number: a.number, paid: a.paid, ship: a.ship, total: a.paid ?? 0, ...(q ? { quote: { id: q.id, on: q.on, total: q.total, currency: q.currency, difference: typeof a.paid === 'number' ? Math.round((a.paid - q.total) * 100) / 100 : null } } : {}) })
+      if (o && q) q.order = { id: o.id, number: String(a.number), paid: (a.paid as number | null) ?? null, difference: typeof a.paid === 'number' ? Math.round((a.paid - q.total) * 100) / 100 : null }
       return later(ok({ ok: true, wait: o?.wait }))
+    }
+    case 'quote.record': {
+      if (!(Number(a.total) > 0)) return fail('Give the quote\'s total, as JLCPCB shows it.')
+      return later(ok({ ok: true, quote: recordQuote(a as never) }))
     }
     case 'cost.get':
       return repo === 'acme/soil-sensor' ? ok(COST) : fail('cost.get: no record yet')
     case 'skill.get': {
       // the panel controller has not started its intent: the Intent builder opens on its first topic (test-esp32 #8)
       const fresh = repo === 'acme/panel-controller' && a.skill === 'intent-builder' ? { summary: '0 of 7 checks met.', recommendation: undefined, checks: [], intent: { topic: 0, answered: [], statements: [], questions: [] } } : {}
-      const v = { ...SKILL_VIEWS[String(a.skill)], ...fresh }
+      const v0 = { ...SKILL_VIEWS[String(a.skill)], ...fresh }
+      // Order submit's pay step shows the newest quote (mock/quotes.ts)
+      const v = a.skill === 'order-submit' && v0.order ? { ...v0, order: { ...v0.order, pay: payWithQuote(v0.order.pay) }, checks: quoteCheck(v0.checks ?? []) } : v0
       // the question its link names (test-esp32 #107), else the project's first
       const question = String(a.skill) === 'question-answer' ? (a.question ? QUESTIONS_BY_ID[String(a.question)] : undefined) ?? QUESTIONS[repo] : undefined
       const d = drafts[`${repo}|${String(a.skill)}`]

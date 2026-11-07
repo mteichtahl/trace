@@ -6,6 +6,7 @@
  */
 import type { BoardView, BuildView, CostView, JobSpendView, ReadingView, UsageMonth } from '@/lib/types-s1'
 import { BUILD, COST } from './fixtures-s1'
+import { costWithQuote } from './quotes'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -199,7 +200,7 @@ export function buildCostAction(name: string, a: Record<string, unknown>): Respo
   switch (name) {
     case 'skill.get': { const v = repo === PANEL ? panelSkill(String(a.skill)) : undefined; return v ? ok(v) : undefined }
     case 'build.get': return repo === PANEL ? ok(PANEL_BUILD) : undefined
-    case 'cost.get': return repo === SOIL ? ok(SOIL_COST) : undefined
+    case 'cost.get': return repo === SOIL ? ok(costWithQuote(SOIL_COST)) : undefined
     case 'usage.month': return ok(MONTH())
     case 'order.update': {
       const o = [...PANEL_BUILD.orders, ...BUILD.orders].find((x) => x.id === a.order || x.number === a.order)

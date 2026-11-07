@@ -23,7 +23,7 @@ describe('the order being prepared', () => {
     expect(orderHeadline(prepared).title).toBe('The order for 10 boards is not ready to place yet.')
     expect(orderHeadline({ ...prepared, ready: true }).title).toBe('The order for 10 boards is ready to place on JLCPCB.')
     expect(orderHeadline({ ...prepared, target: null }).cost).toBe('No quote yet, and no target unit cost in the build plan.')
-    expect(orderHeadline({ ...prepared, basis: 'quote', total: 184, ready: true }).cost).toBe('Expected cost about US$184, from the quote.')
+    expect(orderHeadline({ ...prepared, basis: 'quote', total: 184, ready: true }).cost).toBe('JLCPCB quoted US$184.00.')
     // the Orders list: "10 boards of A · US$90 · Ready to place" was the target shown as the order's cost
     expect(orderAmount(prepared)).toBe('target US$90, no quote yet')
     expect(orderAmount({ ...prepared, target: null })).toBe('no quote yet')
@@ -39,7 +39,24 @@ describe('the order being prepared', () => {
     expect(orderAmount({ ...prepared, estimate })).toBe('estimate US$141 to US$244, no quote yet')
     expect(againstBudget({ ...prepared, estimate })).toEqual({ amount: 244, what: 'the estimate\'s high end' })
     expect(againstBudget(prepared)).toEqual({ amount: 90, what: 'the target' })
-    expect(againstBudget({ ...prepared, basis: 'quote', estimate, cost: [{ label: 'Boards', amount: 100 }, { label: 'Parts', amount: 50 }] })).toEqual({ amount: 150, what: 'the quote' })
+    // the quote's total, never the target and parts lines beside it added up
+    expect(againstBudget({ ...prepared, basis: 'quote', total: 182.4, estimate, cost: [{ label: 'Target', amount: 90 }, { label: 'Parts', amount: 50 }] })).toEqual({ amount: 182.4, what: 'the quote' })
+  })
+})
+
+describe('with a JLCPCB quote', () => {
+  it('makes the newest quote the headline cost, keeps the estimate to compare, and shows what was paid against it', () => {
+    const estimate = { low: 141, high: 244, currency: 'USD', at: '2026-11-06T10:00:00.000Z', partsRun: 'p1', notIn: [] }
+    const prepared = { state: 'ready' as const, boards: 10, total: 182.4, currency: 'USD', basis: 'quote' as const, target: 90, ready: true, estimate, quote: { id: 'q1', on: '2026-11-05', total: 182.4, currency: 'USD', quantity: 10 } }
+    expect(orderHeadline(prepared).cost).toBe('JLCPCB quoted US$182.40 on 2026-11-05. The estimate was US$141 to US$244.')
+    expect(orderHeadline({ ...prepared, quote: { ...prepared.quote, quantity: 20 } }).cost).toBe('JLCPCB quoted US$182.40 on 2026-11-05 for 20 boards. The estimate was US$141 to US$244.')
+    expect(orderAmount(prepared)).toBe('quoted US$182.40')
+    expect(orderAmount({ ...prepared, state: 'placed', total: 185.6, quote: { ...prepared.quote, difference: 3.2 } })).toBe('US$185.60 paid, quoted US$182.40 (+US$3.20)')
+  })
+
+  it('the Cost page says the forecast is the quote, not the estimate', () => {
+    expect(gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 0, orders: 0 }, committed: 0, forecast: 182.4, forecastBasis: { kind: 'quote', total: 182.4, on: '2026-11-05', id: 'q1' }, budget: 275, quantity: 10, unit_cost: 9, stages: [], lines: [] } as never))
+      .toMatch(/forecast for the order: the JLCPCB quote of 2026-11-05, the newest recorded \(not the estimate\)/)
   })
 })
 

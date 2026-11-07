@@ -46,7 +46,8 @@ import type { HardwareLine, HardwareList, OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
 import { DeploysPanel } from '@/components/project/deploys'
-import { againstBudget, estimateRange, orderAmount, orderHeadline } from '@/components/project/order-sheet'
+import { againstBudget, estimateRange, exact, orderAmount, orderHeadline } from '@/components/project/order-sheet'
+import { QuoteHistory } from '@/components/project/quotes'
 
 export const Route = createFileRoute('/_app/p/$id/build')({
   staticData: { crumb: 'Build' },
@@ -79,6 +80,13 @@ function Build() {
     <div className="pb-12">
       {ready && <OrderSheet repo={repo} order={ready} />}
       {data.notes?.length ? <div className="mt-6 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
+
+      {data.quotes && (
+        <QuoteHistory
+          repo={repo} quotes={data.quotes} estimate={ready?.estimate ?? null}
+          defaults={{ quantity: ready?.boards ?? data.orders[0]?.boards ?? 1, currency: ready?.currency ?? data.orders[0]?.currency ?? 'USD', release: ready?.release ?? data.orders[0]?.release ?? 'this revision', options: ready?.options.filter((x) => !/quantity$/i.test(x.option)).length ?? 0 }}
+        />
+      )}
 
       {deploys}
 
@@ -214,7 +222,6 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
   ])
 
   const canRecord = signed && number.trim().length >= 4 && Number(paid) > 0 && !!ship
-  const sumCost = o.cost.reduce((n, c) => n + c.amount, 0)
   // against the budget: the quote when there is one, else the order estimate's high end, else the target (a forecast)
   const vs = againstBudget(o)
   const against = vs?.amount ?? null
@@ -290,13 +297,18 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
           </div>
           <div className="rounded-xl border p-5 text-sm">
             <h3 className="font-semibold">Cost</h3>
-            {!quoted && <p className="mt-1 text-xs text-muted-foreground">No quote yet. JLCPCB quotes the boards, assembly and shipping once the package is uploaded.</p>}
+            {!quoted && <p className="mt-1 text-xs text-muted-foreground">No quote yet. JLCPCB quotes the boards, assembly and shipping once the package is uploaded; record it under JLCPCB cost over time.</p>}
+            {quoted && o.quote && (
+              <div className="mt-2">
+                <p className="text-xs text-muted-foreground">Latest JLCPCB quote, {o.quote.on}{o.quote.quantity && o.quote.quantity !== o.boards ? `, for ${o.quote.quantity} boards` : ''}{o.quote.agent ? ` (recorded by ${o.quote.by} from your words)` : ''}</p>
+                <p className="mt-0.5 text-2xl font-semibold tracking-tight">{exact(o.quote.total, o.quote.currency)}</p>
+              </div>
+            )}
             <dl className="mt-3 space-y-1.5">
-              {o.estimate && !quoted && (
-                <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Order estimate, not a quote (parts check of {o.estimate.at.slice(0, 10)}, the fab's published prices)</dt><dd className="shrink-0">{estimateRange(o.estimate)}</dd></div>
+              {o.estimate && (
+                <div className="flex justify-between gap-3"><dt className="text-muted-foreground">{quoted ? 'Order estimate, to compare' : 'Order estimate, not a quote'} (parts check of {o.estimate.at.slice(0, 10)}, the fab's published prices)</dt><dd className="shrink-0">{estimateRange(o.estimate)}</dd></div>
               )}
               {o.cost.map((c) => <div key={c.label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{c.label}</dt><dd className="shrink-0">{money(c.amount, o.currency)}</dd></div>)}
-              {quoted && <div className="flex justify-between border-t pt-2 font-semibold"><dt>Total</dt><dd>{money(sumCost, o.currency)}</dd></div>}
               {!o.cost.length && <div className="text-muted-foreground">No target unit cost in the build plan and no parts check yet.</div>}
             </dl>
             {o.estimate && !quoted && o.estimate.notIn.length > 0 && <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground" aria-label="Not in the estimate">{o.estimate.notIn.map((n) => <li key={n}>{n}</li>)}</ul>}
@@ -312,9 +324,14 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
             <p className="text-muted-foreground">Record the order so trace can watch it and start the bring-up work.</p>
             <div className="space-y-1.5"><Label htmlFor="order-number">Order number</Label><Input id="order-number" value={number} onChange={(e) => setNumber(e.target.value)} placeholder="e.g. Y12-4471058A" className="font-mono" disabled={!signed} /></div>
             <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1.5"><Label htmlFor="order-paid">Paid ({o.currency === 'USD' ? 'US$' : o.currency})</Label><Input id="order-paid" inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value)} disabled={!signed} /></div>
+              <div className="space-y-1.5"><Label htmlFor="order-paid">Paid ({o.currency === 'USD' ? 'US$' : o.currency})</Label><Input id="order-paid" inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value)} disabled={!signed} aria-describedby={o.quote && !o.quote.agent ? 'order-paid-quote' : undefined} /></div>
               <div className="space-y-1.5"><Label htmlFor="order-ship">Quoted ship date</Label><Input id="order-ship" type="date" value={ship} onChange={(e) => setShip(e.target.value)} disabled={!signed} /></div>
             </div>
+            {o.quote && !o.quote.agent && (
+              <p id="order-paid-quote" className="text-xs text-muted-foreground">
+                Placed against the quote of {o.quote.on}, {exact(o.quote.total, o.quote.currency)}{Number(paid) > 0 && Math.abs(Number(paid) - o.quote.total) >= 0.005 ? `: ${Number(paid) > o.quote.total ? '+' : '−'}${exact(Math.abs(Number(paid) - o.quote.total), o.quote.currency)} on it` : ''}.
+              </p>
+            )}
             <Button type="submit" variant="outline" className="w-full" disabled={!canRecord || record.isPending}>{record.isPending && <Loader2 className="animate-spin" />}Record order</Button>
             {!signed && <p className="text-xs text-muted-foreground">Available once the order gate is signed.</p>}
             {o.state === 'placed' && <p className="flex items-center gap-1.5 text-xs text-verified"><Check className="size-3.5" /> Recorded{o.number ? `: ${o.number}` : ''}</p>}
