@@ -9,19 +9,19 @@
  * a Submit pressed meanwhile waits for the save and then submits. Only the bar for the screen's width is drawn, so
  * there is one Submit in the page.
  */
-import { Check, Circle, CircleMinus, Loader2 } from 'lucide-react'
+import { Check, Circle, CircleDashed, CircleMinus, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import type { CriterionStatus } from '@/lib/types'
+import type { CheckStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export interface QualityCheck {
   id: string
   text: string
-  status: CriterionStatus
+  status: CheckStatus
   /** jump to where it is fixed */
   onJump?: () => void
 }
@@ -42,6 +42,8 @@ export const missing = (checks: QualityCheck[]): QualityCheck[] => checks.filter
 function Item({ c, wrap = false }: { c: QualityCheck; wrap?: boolean }) {
   const met = c.status === 'met'
   const waived = c.status === 'waived'
+  // asked for later in the skill: holds nothing back, and is not a risk accepted either (#227)
+  const later = c.status === 'not_due'
   return (
     <button
       type="button"
@@ -50,11 +52,11 @@ function Item({ c, wrap = false }: { c: QualityCheck; wrap?: boolean }) {
       className={cn(
         'inline-flex items-center gap-1 rounded-md px-2 py-1 text-left text-xs',
         wrap ? 'max-w-full' : 'whitespace-nowrap',
-        met ? 'bg-verified/10 text-verified' : waived ? 'bg-muted text-muted-foreground' : 'bg-muted text-muted-foreground hover:text-foreground',
+        met ? 'bg-verified/10 text-verified' : waived || later ? 'bg-muted text-muted-foreground' : 'bg-muted text-muted-foreground hover:text-foreground',
       )}
     >
-      {met ? <Check className="size-3 shrink-0" aria-hidden /> : waived ? <CircleMinus className="size-3 shrink-0" aria-hidden /> : <Circle className="size-3 shrink-0" aria-hidden />}
-      <span className="sr-only">{met ? 'Met: ' : waived ? 'Waived: ' : 'Not met: '}</span>
+      {met ? <Check className="size-3 shrink-0" aria-hidden /> : waived ? <CircleMinus className="size-3 shrink-0" aria-hidden /> : later ? <CircleDashed className="size-3 shrink-0" aria-hidden /> : <Circle className="size-3 shrink-0" aria-hidden />}
+      <span className="sr-only">{met ? 'Met: ' : waived ? 'Waived: ' : later ? 'Not due yet: ' : 'Not met: '}</span>
       {c.text}
     </button>
   )
@@ -66,7 +68,9 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
   // one bar at a time: the desktop one or the phone one, never both in the page with one hidden, so Submit is one
   // button wherever it is looked for (#198: a hidden copy listed first did nothing when pressed)
   const wide = useMediaQuery('(min-width: 768px)')
-  const met = checks.filter((c) => c.status !== 'not_met').length
+  // a check not due yet is in neither count: it is neither met nor left to do
+  const due = checks.filter((c) => c.status !== 'not_due').length
+  const met = checks.filter((c) => c.status !== 'not_met' && c.status !== 'not_due').length
   const todo = missing(checks)
   const ready = todo.length === 0 && !blocked
   // Submit pressed before it could submit: say why, until it can
@@ -127,7 +131,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
       {wide && (
         <div className="flex items-center gap-4 px-6 py-3">
           <p className="shrink-0 text-sm font-semibold" aria-live="polite">
-            {met} of {checks.length} met
+            {met} of {due} met
           </p>
           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
             {checks.map((c) => (
@@ -168,7 +172,7 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
       {!wide && (
         <div className="flex items-center gap-3 px-4 py-3">
           <button type="button" className="flex-1 text-left text-sm font-semibold underline-offset-4 hover:underline" onClick={() => setList(true)}>
-            {met} of {checks.length} met
+            {met} of {due} met
             {blocked ? (
               <span className="block text-xs font-normal text-muted-foreground">Waits for the project's agent</span>
             ) : !ready && (

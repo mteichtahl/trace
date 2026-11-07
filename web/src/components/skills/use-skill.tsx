@@ -19,7 +19,7 @@ import { useCommands } from '@/components/shell/command-menu'
 import { projectId, projectName } from '@/lib/api'
 import { useAction, useJourney } from '@/lib/queries'
 import { returnTo } from '@/lib/return-to'
-import type { CriterionStatus } from '@/lib/types'
+import type { CheckStatus, CriterionStatus } from '@/lib/types'
 import type { SkillView } from '@/lib/types-s1'
 import { type SkillDef, checksOf } from './definitions'
 import { useSkillDraft } from './draft'
@@ -56,7 +56,7 @@ export function qualityChecks(def: SkillDef, view: Pick<SkillView, 'checks'> | u
     const api = from.get(c.id)
     const mine = (api?.confirmable || api?.confirmed) && local[c.id] !== undefined
     const held = !!api?.unavailable && !mine
-    const status: CriterionStatus = held ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
+    const status: CheckStatus = held ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
     // the record's words are about its own verdict: where the screen's differs, they no longer fit
     const detail = api?.unavailable && status === 'not_met' ? `cannot be checked yet: needs ${api.unavailable}` : local[c.id] && api && local[c.id] !== api.status ? undefined : api?.detail
     return { id: c.id, text: status !== 'met' && detail ? `${c.text} (${detail})` : c.text, status, onJump: c.step && jump ? () => jump(c.step!) : undefined }

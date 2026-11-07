@@ -92,7 +92,14 @@ describe('the order being prepared (#217, #226)', () => {
     ])
     expect(s).toMatchObject({ checkRun: today, partsTotal: 33.4, render: { run: r, name: 'g_rev-A_2026-11-06_board-top.png', label: 'Top', revision: 'A' } })
     expect(f).toBeTruthy()
+    // #227: no quote is recorded, so the sheet carries the order estimate the gates show, from the newest parts check
+    expect(s.estimate).toMatchObject({ currency: 'USD', partsRun: expect.any(String) })
+    expect(s.estimate!.low).toBeGreaterThanOrEqual(33.4)
+    expect(s.estimate!.high).toBeGreaterThanOrEqual(s.estimate!.low)
+    expect(s.estimate!.notIn).toEqual(expect.arrayContaining([expect.stringMatching(/^No case yet/)]))
   })
+
+  it('has no order estimate without a parts check (#227)', () => expect(orderSheet(record().db, at).estimate).toBeNull())
 
   it('is not ready with a package from before Fabricate, a failed one, or one without options; a stale or short check says so', () => {
     const w = record()

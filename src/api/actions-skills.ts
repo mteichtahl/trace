@@ -561,9 +561,11 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
 
 /** The bar in words: "4 of 6 met; 2 need the record to hold more first." */
 function summaryOf(checks: CheckResult[]): string {
-  const ok = checks.filter((c) => c.status !== 'not_met').length
+  // a check not due yet is in neither count (#227)
+  const due = checks.filter((c) => c.status !== 'not_due')
+  const ok = due.filter((c) => c.status !== 'not_met').length
   const missing = checks.filter((c) => c.unavailable).length
-  return `${ok} of ${checks.length} checks met${missing ? `; ${missing} cannot be checked until the record holds more` : ''}.`
+  return `${ok} of ${due.length} checks met${missing ? `; ${missing} cannot be checked until the record holds more` : ''}.`
 }
 
 /** The target of a waiver draft's `what` ("criterion:capture.erc", "requirement:REQ-1", "finding:erc:…", or other). */
@@ -584,7 +586,7 @@ export const SKILL_ACTIONS = {
     return {
       repo: a.repo, skill: sk.id, name: sk.name, stage: sk.stage,
       steps: sk.steps, step: i.draftRow?.step ?? 0,
-      checks, met: checks.filter((c) => c.status !== 'not_met').length, total: checks.length, summary: summaryOf(checks),
+      checks, met: checks.filter((c) => c.status !== 'not_met' && c.status !== 'not_due').length, total: checks.filter((c) => c.status !== 'not_due').length, summary: summaryOf(checks),
       ...(i.pendingErrors.length ? { pending_errors: i.pendingErrors } : {}),
       draft: i.draft, saved: i.draftRow?.saved ?? null,
       ...extras(a.skill, i),

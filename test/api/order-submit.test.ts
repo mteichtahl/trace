@@ -107,7 +107,9 @@ describe('Order submit: each step from the record', () => {
   it('Pay and record: the order gate, not signed yet, and no order', async () => {
     const v = await view()
     expect(v.order.pay).toEqual({ gate: { id: 'fabricate.order', signed: null }, sheet: 'not_met', order: null })
-    expect(check(v, 'recorded')).toMatchObject({ status: 'waived', detail: expect.stringMatching(/after the order gate is signed/) })
+    // not due yet, never "waived" (a risk accepted): nothing is paid before the gate, and it holds Submit back no more
+    // than a waiver would (#227)
+    expect(check(v, 'recorded')).toMatchObject({ status: 'not_due', detail: expect.stringMatching(/^not due yet: .*after the order gate is signed/) })
   })
 
   it('the options and the matching are ticked one by one, and Submit then meets the order sheet, keeping the draft', async () => {

@@ -105,6 +105,9 @@ export type Template = 'board' | 'fpga' | 'firmware' | 'mixed'
 export type StageState = 'done' | 'current' | 'queued' | 'reopened' | 'skipped'
 export type GateState = 'locked' | 'open' | 'ready' | 'signed' | 'returned'
 export type CriterionStatus = 'met' | 'not_met' | 'waived'
+/** A quality-bar check's verdict: a criterion's, or `not_due`, asked for later in the skill, so it holds nothing back
+ * (never "waived", which means a risk accepted: #227) */
+export type CheckStatus = CriterionStatus | 'not_due'
 
 export interface EvidenceRef {
   kind: 'run' | 'datasheet' | 'requirement' | 'file' | 'record' | 'memory' | 'part' | 'chat'

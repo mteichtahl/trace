@@ -358,6 +358,8 @@ export const BUILD: BuildView = {
       // the build quantity, the newest accepted render; no quote is recorded, so the cost is the target, said as such
       id: 'ord-1', release: 'Rev A', state: 'ready', boards: 10, total: 120, currency: 'USD', budget: 400,
       ready: true, missing: [], basis: 'target', target: 120, checkRun: 'run_bom_today',
+      // the order estimate the gates show (cost.get's orderEstimate): before the target, said as not a quote (#227)
+      estimate: { low: 96.4, high: 171, currency: 'USD', at: ago(HOUR), partsRun: 'run_bom_today', notIn: ['Parts bought apart from the order (a display module, cables) are in it only when they are in the parts check.'] },
       render: { run: 'run_rnd_a', name: 'soil-sensor_rev-A_2026-10-21_board-top.png', label: 'Top', revision: 'A' },
       cost: [
         { label: "Target: 10 boards at 12 USD each (the build plan's, not a quote)", amount: 120, kind: 'target' },
@@ -369,6 +371,7 @@ export const BUILD: BuildView = {
         { option: 'PCB thickness', value: '1.6 mm', source: 'the board file', decided: true }, { option: 'Outer copper weight', value: '1 oz (35 µm)', source: 'the board file', decided: true },
         { option: 'Min track width', value: '0.15 mm', source: 'the board file', decided: true }, { option: 'Min hole size', value: '0.3 mm', source: 'the board file', decided: true },
         { option: 'Solder mask colour', value: 'Green', source: "JLCPCB's default: not decided in the record", decided: false },
+        { option: 'Silkscreen colour', value: 'White', source: "JLCPCB's default: not decided in the record", decided: false },
         { option: 'Surface finish', value: 'HASL', source: "JLCPCB's default: not decided in the record", decided: false },
         { option: 'PCB quantity', value: '10', source: 'the build plan', decided: true },
         { option: 'Assembly side', value: 'Top side (38 placed parts)', source: 'the placements', decided: true }, { option: 'Assembly quantity', value: '10', source: 'the build plan', decided: true },
@@ -553,7 +556,7 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
       { id: 'stock', status: 'met', detail: "From today's stock check." },
       { id: 'options', status: 'not_met', detail: 'Tick layers, dimensions, PCB quantity, PCB thickness and outer copper weight and 8 more once entered.' },
       { id: 'matching', status: 'not_met', detail: "Confirm C1 C2, C3, C4 C6, C5 and D1 and 9 more against JLCPCB's matching." },
-      { id: 'recorded', status: 'waived', detail: 'Paid and recorded after the order gate is signed; Submit now says the order sheet matches the release' },
+      { id: 'recorded', status: 'not_due', detail: 'not due yet: the order is paid and recorded after the order gate is signed; Submit now says the order sheet matches the release' },
     ],
     order: {
       stock: {

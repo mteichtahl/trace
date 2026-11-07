@@ -4,7 +4,7 @@
  * "assumed" so the backend can match it or this file can follow the backend. Actions marked "needs building" in
  * lib/api.ts have no backend yet; the screens say so where they show their data.
  */
-import type { CriterionStatus, EvidenceRef, Gate, Journey, Part, Question, Template, Wait } from './types'
+import type { CheckStatus, EvidenceRef, Gate, Journey, Part, Question, Template, Wait } from './types'
 
 // ------------------------------------------------------------------ gates (journey.get, assumed extras)
 
@@ -136,7 +136,7 @@ export interface BenchReadout {
 /** One quality-bar check as skill.get computes it from the record. */
 export interface SkillCheckView {
   id: string
-  status: CriterionStatus
+  status: CheckStatus
   detail?: string
   /** the check cannot be computed yet: what the record has to hold first */
   unavailable?: string
@@ -531,6 +531,11 @@ export interface OrderView {
   basis?: 'target' | 'quote'
   /** the build plan's target for the order, null when no target unit cost is set */
   target?: number | null
+  /**
+   * the order estimate the gates show: the newest parts check with the board and case at the fab's published prices,
+   * a range and not a quote; null without a parts check (build.get, #227)
+   */
+  estimate?: { low: number; high: number; currency: string; at: string; partsRun: string; notIn: string[] } | null
   /** the parts check the parts come from */
   checkRun?: string
   /** the board's picture: the newest accepted renders of the revision */

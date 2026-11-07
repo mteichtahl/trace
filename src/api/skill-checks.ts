@@ -32,7 +32,11 @@ import { staleSentence } from '../tools/mech/stale.js'
 import { type OrderRecord, enteredOf, matchedOf, optionsRun, orderLines, orderOptions, orderSigned } from './order-submit.js'
 import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine, releaseRecommendation, releaseView } from './release-review.js'
 
-export type CheckStatus = 'met' | 'not_met' | 'waived'
+/**
+ * A check's verdict. `not_due`: it is not asked for yet at this point of the skill (the order is recorded after the
+ * order gate is signed), so it holds nothing back; not "waived", which means a risk accepted (#227).
+ */
+export type CheckStatus = 'met' | 'not_met' | 'waived' | 'not_due'
 export interface CheckResult {
   id: string; status: CheckStatus; detail?: string; unavailable?: string
   /** unavailable for good (no tool records what it needs yet), so the person may confirm it themselves: the draft's
@@ -523,7 +527,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const o = i.orders.find((x) => x.revision === rev && x.state !== 'cancelled')
     // before the order gate is signed nothing is paid yet: Submit then says the order sheet matches the release, and
     // the order is recorded after the gate, on the same skill
-    if (!o && i.r?.gates.some((g) => g.id === 'fabricate.order') && !orderSigned(i.r)) return { id: 'recorded', status: 'waived', detail: 'Paid and recorded after the order gate is signed; Submit now says the order sheet matches the release' }
+    if (!o && i.r?.gates.some((g) => g.id === 'fabricate.order') && !orderSigned(i.r)) return { id: 'recorded', status: 'not_due', detail: 'not due yet: the order is paid and recorded after the order gate is signed; Submit now says the order sheet matches the release' }
     if (!o) return notMet('recorded', 'Record the order number, what was paid and the ship date.')
     const missing = [o.paid === null ? 'what was paid' : '', o.shipDate ? '' : 'the ship date'].filter(Boolean)
     return missing.length ? notMet('recorded', `Order ${o.number} has no ${missing.join(' or ')}.`) : met('recorded', `Order ${o.number}.`)
