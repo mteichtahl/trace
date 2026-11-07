@@ -11,7 +11,7 @@ import { type ActionDeps, type Context, perform } from '../../src/api/actions.js
 import { QUEUED_DRAFTING, REQUIREMENTS_FROM_INTENT } from '../../src/api/actions-skills.js'
 import type { JobsApi } from '../../src/api/action-kit.js'
 import {
-  WAITS_FOR_AGENT, parseQueue, parseQueued, queueStart, queuedHandle, queuedId, readQueue, startQueued, withAgentQueue,
+  WAITS_FOR_AGENT, WAITS_FOR_EARLIER, parseQueue, parseQueued, queueStart, queuedHandle, queuedId, readQueue, startQueued, withAgentQueue,
 } from '../../src/api/agent-queue.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -103,6 +103,59 @@ describe('the jobs API with the queue in front of it', () => {
     await queueStart(store, task('Broken'))
     const jobs: JobsApi = { repositoryOf: () => null, hasAgent: () => true, jobStatus: async () => [], startJob: async () => ({ accepted: false, jobId: '', reason: 'the project is paused' }) }
     expect(await startQueued(jobs, store, 'acme/new')).toMatchObject([{ job: null, error: 'the project is paused' }])
+  })
+
+  it('queued work starts one at a time in the order asked, the next on top of the earlier change (test-esp32-run2 R9)', async () => {
+    const store = backendFor(mkdtempSync(join(tmpdir(), 'trace-queue-')))
+    let agent = false
+    const states = new Map<string, { state: string; branch?: string }>()
+    const started: Start[] = []
+    const inner: JobsApi = {
+      repositoryOf: () => null,
+      hasAgent: () => agent,
+      jobStatus: async (id) => (id && states.has(id) ? [{ id, kind: 'task', repository: 'acme/new', ...states.get(id)! }] : []),
+      startJob: async (p) => {
+        started.push(p)
+        const id = `job-${started.length}`
+        states.set(id, { state: 'running', branch: `claude/task-${started.length}` })
+        return { accepted: true, jobId: id }
+      },
+    }
+    const jobs = withAgentQueue(inner, () => store, { holdS: 0 })
+    const a = await jobs.startJob(task('Record the intent statements I1 to I23'))
+    const b = await jobs.startJob(task('Add I24 and change I20'))
+    const c = await jobs.startJob(task('Ship it', { branch: 'claude/own' }))
+    agent = true
+    // the first only: the second waits for it, and says so
+    expect(await startQueued(jobs, store, 'acme/new')).toMatchObject([{ job: 'job-1' }])
+    expect(await startQueued(jobs, store, 'acme/new')).toEqual([])
+    expect(started.map((p) => p.request)).toEqual(['Record the intent statements I1 to I23'])
+    expect(await jobs.jobStatus(b.jobId)).toMatchObject([{ state: 'queued', queue: { position: 1, of: 2, startsWhen: WAITS_FOR_EARLIER }, waitsForAgent: false }])
+    // paused (a question to answer): still waits
+    states.set('job-1', { state: 'paused', branch: 'claude/task-1' })
+    expect(await startQueued(jobs, store, 'acme/new')).toEqual([])
+    // the first ended: the second starts, stacked on its change (the worker stacks only on an open one)
+    states.set('job-1', { state: 'succeeded', branch: 'claude/task-1' })
+    expect(await startQueued(jobs, store, 'acme/new')).toMatchObject([{ job: 'job-2' }])
+    expect(started[1]).toEqual(task('Add I24 and change I20', { stackOn: 'claude/task-1' }))
+    expect(await jobs.jobStatus(a.jobId)).toMatchObject([{ state: 'succeeded', startedAs: 'job-1' }])
+    // a start given its own branch keeps it
+    states.set('job-2', { state: 'failed' })
+    expect(await startQueued(jobs, store, 'acme/new')).toMatchObject([{ job: 'job-3' }])
+    expect(started[2]).toEqual(task('Ship it', { branch: 'claude/own' }))
+    expect(c.jobId).toMatch(/^queued~/)
+    expect((await readQueue(store, 'acme/new')).queued).toEqual([])
+  })
+
+  it('a job never heard of again does not hold the queue', async () => {
+    const store = backendFor(mkdtempSync(join(tmpdir(), 'trace-queue-')))
+    await queueStart(store, task('One'))
+    await queueStart(store, task('Two'))
+    const asked: string[] = []
+    const jobs: JobsApi = { repositoryOf: () => null, hasAgent: () => true, jobStatus: async () => [], startJob: async (p) => { asked.push(p.request); return { accepted: true, jobId: `j-${asked.length}` } } }
+    await startQueued(jobs, store, 'acme/new')
+    await startQueued(jobs, store, 'acme/new')
+    expect(asked).toEqual(['One', 'Two'])
   })
 
   it('an installation whose jobs API cannot tell is left as it is', () => {

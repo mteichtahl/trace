@@ -15,7 +15,7 @@
  * full-height drawer; the quality bar is a sticky footer.
  */
 import { Check, ListOrdered, MessageSquare, PanelRightClose, Sparkles, X, OctagonX } from 'lucide-react'
-import { type ReactNode, useContext, useEffect, useState } from 'react'
+import { type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { FocusNotice } from '@/components/project/agent-setup'
@@ -88,6 +88,13 @@ export function FocusLayout({
   const [traceDrawer, setTraceDrawer] = useState(false)
   const idx = steps.findIndex((s) => s.state === 'current')
   const rail = railStates(steps, checks)
+  const pane = useRef<HTMLDivElement>(null)
+  const current = steps[idx]?.id
+
+  // a new step opens at its heading: the centre pane scrolls back to the top, not the window (test-esp32 R24)
+  useEffect(() => {
+    if (pane.current) pane.current.scrollTop = 0
+  }, [current])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -196,7 +203,7 @@ export function FocusLayout({
         {centre === 'fill' ? (
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">{children}</div>
         ) : (
-          <div className="relative min-w-0 flex-1 overflow-y-auto">
+          <div ref={pane} className="relative min-w-0 flex-1 overflow-y-auto" data-focus-centre>
             <div className={cn('mx-auto w-full px-4 py-6 md:px-6', variant === 'checklist' ? 'max-w-none' : 'max-w-[960px]')}>{children}</div>
           </div>
         )}

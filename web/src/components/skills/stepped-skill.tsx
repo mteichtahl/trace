@@ -9,7 +9,6 @@
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { DecisionCard } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
@@ -25,6 +24,7 @@ import { ReleaseStep, type ReleaseDraft, releaseChecks } from './release-steps'
 import { OrderStep, type OrderDraft, orderChecks } from './order-steps'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
+import { SkillChat } from './skill-chat'
 
 interface Draft extends SkillDraftBase, DesignDraft, ReleaseDraft, OrderDraft {
   resolved: string[]
@@ -69,7 +69,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       draftSaving={s.draft.saving}
-      trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
+      trace={<SkillChat repo={repo} skill={def.id} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >
       <StepHeader def={def} index={s.stepIndex} />
       {gate && (

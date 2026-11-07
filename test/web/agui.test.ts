@@ -48,6 +48,13 @@ describe('the trace agent over AG-UI', () => {
     expect(sent.toolConfig?.tools?.map((x) => x.toolSpec?.name)).toContain('journey_get')
   })
 
+  it('can say what trace is doing (jobs_list), and is told the workflow runs in status are internal names (test log R25)', () => {
+    expect(BACKEND_TOOLS.jobs_list).toMatchObject({ action: 'jobs.list' })
+    expect(BACKEND_TOOLS.status!.description).toMatch(/Never name a workflow to the person/)
+    expect(BACKEND_TOOLS.status!.description).toMatch(/jobs_list/)
+    expect(BACKEND_TOOLS.runs!.description).toMatch(/Not the agents' jobs/)
+  })
+
   it('runs a backend tool as the person, between STEP_STARTED and STEP_FINISHED, then answers', async () => {
     const w = world()
     w.runtime.answers.set('journey.get', (a) => ({ body: { ok: true, result: { repo: a.repo, stage: 'Schematic' } } }))

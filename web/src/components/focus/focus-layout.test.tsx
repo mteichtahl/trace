@@ -75,3 +75,24 @@ describe('the Focus shell', () => {
     expect(screen.getByText('chat').parentElement).toHaveClass('min-h-0', 'overflow-clip')
   })
 })
+
+// R24: a click on the rail kept the centre pane's scroll, so the new step's heading was far above the view
+describe('a new step', () => {
+  it('opens with the centre pane at the top; the same step keeps its place', () => {
+    const at = (current: string) => steps.map((s) => ({ ...s, state: s.id === current ? 'current' as const : s.state === 'current' ? 'done' as const : s.state }))
+    const shell = (current: string, words = 'work') => (
+      <TooltipProvider>
+        <FocusLayout title="Requirements review" steps={at(current)} checks={checks} onSubmit={() => {}} onClose={() => {}} onStep={() => {}} anyStep>
+          <p>{words}</p>
+        </FocusLayout>
+      </TooltipProvider>
+    )
+    const { container, rerender } = render(shell('matching'))
+    const pane = container.querySelector<HTMLElement>('[data-focus-centre]')!
+    pane.scrollTop = 900
+    rerender(shell('matching', 'more work'))
+    expect(pane.scrollTop).toBe(900)
+    rerender(shell('pay'))
+    expect(pane.scrollTop).toBe(0)
+  })
+})

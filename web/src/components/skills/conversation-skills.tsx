@@ -22,6 +22,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { FOCUS_AGENT_ID } from '@/components/chat/agent'
 import { useTraceContext } from '@/components/chat/context'
 import { EmbeddedChat } from '@/components/chat/embedded-chat'
+import { SkillChat } from './skill-chat'
 import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
@@ -628,7 +629,7 @@ export function QuestionAnswer({ repo, def, question, option }: { repo: string; 
             <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={4} className="field-sizing-fixed resize-y" value={d.answer} onChange={(e) => set({ question: q.id, answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
           )}
           {!wide && <section className="space-y-5 rounded-xl border p-5 text-sm" aria-label="Your answer"><h2 className="font-semibold">Your answer</h2>{fields}</section>}
-          <div className="h-[360px] overflow-hidden rounded-xl border"><EmbeddedChat repo={repo} title="Ask trace about this question" placeholder="Why does it recommend that? Where did it look?" /></div>
+          <div className="h-[360px] overflow-hidden rounded-xl border"><SkillChat repo={repo} skill={`${def.id}-${q.id}`} title="Ask trace about this question" placeholder="Why does it recommend that? Where did it look?" /></div>
         </div>
       )}
       {s.stepIndex < def.steps.length - 1 && <div className="mt-6 flex justify-end"><Button variant="outline" onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>}

@@ -11,7 +11,7 @@
  *            CloudFront and the browser from closing a quiet stream.
  *   runs     before a `tool` call runs, a CUSTOM event trace.tool_run { toolCallId, repo, run: tool:<id> }: the call
  *            carries that run id, so its log can be watched while it runs (docs/progress-and-logs.md)
- *   tools    backend: read-only actions (status, runs, run, journey.get, kb.search, memory.recall, tools.list, tool
+ *   tools    backend: read-only actions (status, runs, jobs.list, run, journey.get, kb.search, memory.recall, tools.list, tool
  *            for read-only tools, graph.neighbourhood, files.list, inbox), run here as the person. Each result reaches
  *            the model fenced as data (the catalog's chat.tool_result, its closing tag stripped), never as words of the
  *            person's. Bedrock tool names allow no dots, so `journey.get` is offered as `journey_get`.
@@ -104,8 +104,9 @@ const repo = { type: 'string', description: 'The project, as OWNER/REPO' }
 interface BackendTool { action: string; description: string; schema: Record<string, unknown>; step: string }
 
 export const BACKEND_TOOLS: Readonly<Record<string, BackendTool>> = {
-  status: { action: 'status', step: 'Checking the project\'s status', description: 'The project\'s open pull requests, open agent-fix issues, recent trace workflow runs and last deploy.', schema: { type: 'object', properties: { repo }, required: ['repo'] } },
-  runs: { action: 'runs', step: 'Reading the run record', description: 'The project\'s run record, newest first.', schema: { type: 'object', properties: { repo, kind: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['repo'] } },
+  status: { action: 'status', step: 'Checking the project\'s status', description: 'The project\'s open pull requests (its changes), open agent-fix issues, last deploy, and recent GitHub workflow runs (`runs`: the checks and housekeeping GitHub runs for trace, not the agents\' work). To say what trace\'s agents are doing, use jobs_list. Never name a workflow to the person (trace-prs, trace-ci and the like are internal names): say "a check on GitHub" or what it does.', schema: { type: 'object', properties: { repo }, required: ['repo'] } },
+  runs: { action: 'runs', step: 'Reading the run record', description: 'The project\'s run record, newest first: the tool runs (checks, simulations, builds) kept in the record. Not the agents\' jobs: a task started from this chat is in jobs_list, not here.', schema: { type: 'object', properties: { repo, kind: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['repo'] } },
+  jobs_list: { action: 'jobs.list', step: 'Checking what trace is doing', description: 'What trace\'s agents are doing on the project, as its Trace is doing list shows it: each job (a task the person started, queued, running, paused, done or failed, with why), the agents and their hand-offs. Use it to say whether work the person confirmed has started, is queued or failed.', schema: { type: 'object', properties: { repo }, required: ['repo'] } },
   run: { action: 'run', step: 'Reading a run', description: 'One run: its arguments, result, measurements and artifact list.', schema: { type: 'object', properties: { repo, id: { type: 'string' } }, required: ['repo', 'id'] } },
   journey_get: { action: 'journey.get', step: 'Reading the project\'s journey', description: 'The project\'s journey: stages, gates and their criteria, the next step, open questions, waivers and decisions.', schema: { type: 'object', properties: { repo }, required: ['repo'] } },
   kb_search: { action: 'kb.search', step: 'Searching the knowledge base', description: 'Search the project\'s knowledge base (its documents, datasheets and design files).', schema: { type: 'object', properties: { repo, query: { type: 'string' }, top_k: { type: 'integer', minimum: 1, maximum: 20 } }, required: ['repo', 'query'] } },

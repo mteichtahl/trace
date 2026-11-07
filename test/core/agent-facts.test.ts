@@ -317,7 +317,8 @@ describe('merging the agents\' facts into the journey views', () => {
     const f = await s.read()
     const v = journeyView(r, CONTRIB, undefined, f)
     const plain = 'trace could not make the PDF of the design document because its diagram tool failed. The written document is committed.'
-    expect(v.questions[0]).toMatchObject({ kind: 'stuck', text: why, summary: plain })
+    // (its own words kept, but never trace's internal job ids: test-esp32-run2 log R18)
+    expect(v.questions[0]).toMatchObject({ kind: 'stuck', text: why.replace('job-mw2lhy11-952f6819', 'another job'), summary: plain })
     expect(v.next.summary).toBe(`the Verification specialist is stuck: ${plain}`)
     for (const said of [v.next.summary, inboxItems('acme/board', r, CONTRIB, undefined, f)[0]!.summary]) expect(said).not.toMatch(/docs_|job-mw2|node:net|3f2a9c1d/)
     // a report already plain has nothing behind it

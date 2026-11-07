@@ -59,6 +59,7 @@ import { z } from 'zod'
 import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
+import { type JobLook, jobRefs, plainJobRefs, plainJobRefsOf, refKey } from './job-refs.js'
 import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
@@ -1499,6 +1500,19 @@ export function nextStep(r: JourneyRecord, viewer: Viewer, at: number = now()): 
   return { ...n, step: stepPlace(steps), after: afterWords(r, n, steps) }
 }
 
+/** The button that takes a question's recommended option, when its label is a long sentence (USE_RECOMMENDED). */
+export const USE_RECOMMENDED = 'Use the recommendation'
+
+/**
+ * The button for a question's recommended option: "Use <label>" when the label is a short name for it ("Use 3.3 V"),
+ * else USE_RECOMMENDED, never "Use " before a sentence (test-esp32-run2 log R18: "Use Re-run the I20 note and Q4
+ * closure after …"). The app opens the question with that option chosen either way (web/src/lib/readers.ts withChosen).
+ */
+export function useButton(label: string): string {
+  const l = label.trim().replace(/\.$/, '')
+  return l.length <= 32 && l.split(/\s+/).length <= 5 && !/^[A-Z][a-z-]+ (the|a|an|it|this|that)\b/.test(l) ? `Use ${l}` : USE_RECOMMENDED
+}
+
 /** The next step itself: what to do, whose it is and why (nextStep adds where it sits and what follows). */
 function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 'step' | 'after'> {
   const stageId = r.journey.currentStage
@@ -1546,7 +1560,7 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
       return {
         kind: 'answer', belongs_to: 'you', yours: true, summary: `${verb}: ${words}`, why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.',
         recommendation: rec ? `trace recommends ${rec.label}${rec.why ? `: ${rec.why}` : ''}` : q.recommendation ? `${q.askedBy} recommends: ${q.recommendation}` : null,
-        button: rec ? `Use ${rec.label}` : 'Answer', stage: q.stage, ref: { kind: 'question', id: q.id },
+        button: rec ? useButton(rec.label) : 'Answer', stage: q.stage, ref: { kind: 'question', id: q.id },
       }
     }
     return {
@@ -2507,7 +2521,12 @@ export interface StuckFact {
   stage: StageId | null; at: number; resolvedAt: number | null
 }
 /** What the agents contributed to one project (the newest check per criterion only), and their hand-offs to each other. */
-export interface AgentFacts { questions: AgentQuestion[]; checks: CriterionCheck[]; stuck: StuckFact[]; handoffs?: HandoffFact[] | undefined }
+export interface AgentFacts {
+  questions: AgentQuestion[]; checks: CriterionCheck[]; stuck: StuckFact[]; handoffs?: HandoffFact[] | undefined
+  /** what the caller knows of the project's jobs (journey.get): their titles in place of their ids, and whether a stuck
+   * note's job has landed (src/core/job-refs.ts). Absent: ids read as "another job", and no note is retired by it */
+  jobs?: JobLook | null | undefined
+}
 export const NO_AGENT_FACTS: AgentFacts = { questions: [], checks: [], stuck: [] }
 
 const withFacts = (r: JourneyRecord, f: AgentFacts | null | undefined): JourneyRecord => (f ? mergeAgentFacts(r, f) : r)
@@ -2545,6 +2564,22 @@ export function dismissStuck(db: DatabaseSync, id: string, by: Signer, reason: s
 }
 
 /**
+ * Whether an open stuck note no longer needs anyone (test-esp32-run2 log R18: "the earlier job has not recorded its
+ * statements" still showed after that job's change was accepted): the project's current stage is past the one it was
+ * stuck in, or it names other jobs and every one of them has ended and left no open change. Not known is not retired.
+ */
+export function stuckRetired(r: Pick<JourneyRecord, 'journey' | 'stages'>, s: Pick<StuckFact, 'stage' | 'jobId' | 'why' | 'recommendation' | 'options'>, look: JobLook | null | undefined): boolean {
+  const ord = (id: StageId | null): number | undefined => r.stages.find((x) => x.id === id)?.ord
+  const at = ord(r.journey.currentStage)
+  const was = ord(s.stage)
+  if (at !== undefined && was !== undefined && at > was) return true
+  if (!look) return false
+  const own = s.jobId ? refKey(s.jobId) : null
+  const named = jobRefs([s.why, s.recommendation, ...s.options.flatMap((o) => [o.label, o.why])].join('\n')).filter((x) => refKey(x) !== own)
+  return named.length > 0 && named.every((x) => look.landed(x) === true)
+}
+
+/**
  * The record with the agents' facts merged in, the rules every view follows:
  *
  *   questions   each agent question is a question (from: 'agent'), for the person whose sub it names, else for its
@@ -2554,7 +2589,10 @@ export function dismissStuck(db: DatabaseSync, id: string, by: Signer, reason: s
  *               than the record's own, was made on this revision, and is not older than the reopening of the
  *               criterion's stage. A person-owned criterion is never moved by an agent's fact
  *   stuck       an agent that is stuck and not resolved (or that a person answered) is a 'stuck' item for the
- *               contributors, its recommendation with it
+ *               contributors, its recommendation with it. One not answered is retired (test-esp32-run2 log R18) once
+ *               the project's stage has moved on past the one it was stuck in, or once every other job it names has
+ *               ended and left no open change (what it waited on landed: `jobs.landed`)
+ *   words       trace's internal job ids in an agent's words read as the job's title, or "another job"
  */
 export function mergeAgentFacts(r: JourneyRecord, f: AgentFacts): JourneyRecord {
   const own = new Map(r.questions.map((q) => [q.id, q]))
@@ -2563,14 +2601,18 @@ export function mergeAgentFacts(r: JourneyRecord, f: AgentFacts): JourneyRecord 
     return p ? { answer: p.answer, optionId: p.optionId, answerReason: p.answerReason, answeredBy: p.answeredBy, answeredByHash: p.answeredByHash, answeredAt: p.answeredAt } : {}
   }
   const unanswered = { answer: null, optionId: null, answerReason: null, answeredBy: null, answeredByHash: null, answeredAt: null }
+  const look = f.jobs ?? null
+  const words = (t: string): string => plainJobRefs(t, look)
+  const opts = (o: readonly OptionRow[]): OptionRow[] => o.map((x) => ({ ...x, label: words(x.label), why: words(x.why) }))
   const asked: QuestionRow[] = f.questions.map((q) => ({
-    id: q.id, kind: 'question', askedBy: q.askedBy, askedOf: null, askedOfSub: q.askedOfSub, askedPart: q.askedPart, stage: q.stage, text: q.text, blocks: q.blocks,
-    options: q.options, sources: q.sources, jobId: q.jobId, askedAt: q.askedAt, from: 'agent', ...unanswered, ...answer(q.id),
+    id: q.id, kind: 'question', askedBy: q.askedBy, askedOf: null, askedOfSub: q.askedOfSub, askedPart: q.askedPart, stage: q.stage, text: words(q.text), blocks: plainJobRefsOf(q.blocks, look),
+    options: opts(q.options), sources: q.sources, jobId: q.jobId, askedAt: q.askedAt, from: 'agent', ...unanswered, ...answer(q.id),
   }))
-  const stuck: QuestionRow[] = f.stuck.filter((s) => s.resolvedAt === null || own.get(s.id)?.answeredAt != null).map((s) => ({
-    id: s.id, kind: 'stuck', askedBy: s.agent, askedOf: null, askedOfSub: null, askedPart: 'contributors', stage: s.stage, text: s.why,
-    blocks: s.jobId ? `the job ${s.jobId}` : null, options: s.options, sources: s.sources, jobId: s.jobId, askedAt: s.at, recommendation: s.recommendation,
-    from: 'agent', ...unanswered, ...answer(s.id),
+  const answered = (id: string): boolean => own.get(id)?.answeredAt != null
+  const stuck: QuestionRow[] = f.stuck.filter((s) => answered(s.id) || (s.resolvedAt === null && !stuckRetired(r, s, look))).map((s) => ({
+    id: s.id, kind: 'stuck', askedBy: s.agent, askedOf: null, askedOfSub: null, askedPart: 'contributors', stage: s.stage, text: words(s.why),
+    blocks: s.jobId && look?.title(s.jobId) ? `the job "${look.title(s.jobId)}"` : null, options: opts(s.options), sources: s.sources, jobId: s.jobId, askedAt: s.at,
+    recommendation: words(s.recommendation), from: 'agent', ...unanswered, ...answer(s.id),
   }))
   const theirs = new Set([...asked, ...stuck].map((q) => q.id))
   const questions = [...r.questions.filter((q) => !theirs.has(q.id)), ...asked, ...stuck].sort((a, b) => a.askedAt - b.askedAt)

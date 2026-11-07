@@ -252,6 +252,21 @@ function agui(body: { threadId: string; runId: string; messages: { role: string;
       { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
     ])
   }
+  // asked to start work, trace offers it; nothing starts until the person's Confirm (renderers.tsx StartTaskCard)
+  if (/\bstart\b/i.test(q)) {
+    const say = crypto.randomUUID()
+    const call = `call_${id.slice(0, 8)}`
+    return sse([
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: say, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: say, delta: 'I can start that once you confirm it.' },
+      { type: 'TEXT_MESSAGE_END', messageId: say },
+      { type: 'TOOL_CALL_START', toolCallId: call, toolCallName: 'start_task', parentMessageId: say },
+      { type: 'TOOL_CALL_ARGS', toolCallId: call, delta: JSON.stringify({ repo: 'acme/soil-sensor', agent: 'impl', request: q.slice(0, 200) || 'Draft the power sheet.' }) },
+      { type: 'TOOL_CALL_END', toolCallId: call },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
+    ])
+  }
   // a question about a simulation runs a tool for a while, with its run named (docs/progress-and-logs.md, "Chat")
   if (/simulat|settle/i.test(q)) {
     const call = `call_${id.slice(0, 8)}`
