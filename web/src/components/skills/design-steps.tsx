@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Cited } from '@/components/cited'
 import { StatusBadge } from '@/components/status-badge'
 import { ArchitectureSummary, CriteriaFollow, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagramCanvas } from '@/components/project/block-diagram'
@@ -272,9 +273,9 @@ function CompareOptions({ view, scores }: { view?: SkillView; scores: boolean })
       <BlockDiagramCanvas title="Block diagram" subtitle={o ? `Option ${o.id}: ${o.name}` : undefined} height={360} {...drawn(a, current)} />
       {o && (
         <div className="space-y-1 text-sm">
-          <p>{o.summary}</p>
-          {o.why && <p className="text-muted-foreground"><span className="font-medium text-foreground">Why:</span> {o.why}</p>}
-          {o.gives_up && <p className="text-muted-foreground"><span className="font-medium text-foreground">Gives up:</span> {o.gives_up}</p>}
+          <p><Cited text={o.summary} /></p>
+          {o.why && <p className="text-muted-foreground"><span className="font-medium text-foreground">Why:</span> <Cited text={o.why} /></p>}
+          {o.gives_up && <p className="text-muted-foreground"><span className="font-medium text-foreground">Gives up:</span> <Cited text={o.gives_up} /></p>}
         </div>
       )}
       <ArchitectureSummary a={a} current={current} requirements={requirements} />
