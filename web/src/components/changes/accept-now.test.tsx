@@ -45,7 +45,7 @@ const client = () => {
 /** The Overview's wiring of the card, as routes/_app/p/$id/index.tsx does it. */
 function Card() {
   const a = useAcceptNow(REPO)
-  return <NextStepCard step={step} onAccept={() => a.run({ number: 12, title: 'Power sheet', step: { index: 3, total: 5, stage: 'Capture' } })} accepting={a.busy} acceptRefused={a.refused?.number === 12 ? a.refused.text : null} />
+  return <NextStepCard step={step} onAccept={() => a.run({ number: 12, title: 'Power sheet', step: { index: 4, total: 5, stage: 'Capture' } })} accepting={a.busy} acceptRefused={a.refused?.number === 12 ? a.refused.text : null} />
 }
 const show = (qc = client()) => render(<QueryClientProvider client={qc}><Card /></QueryClientProvider>)
 
@@ -62,9 +62,13 @@ beforeEach(() => {
   mockCall.mockImplementation((async (action: string) => {
     if (action === 'change.get') return change()
     if (action === 'change.accept') return { merged: true, sha: 'm', stage: 'capture', next: 'trace checks stock for 10 boards.' }
+    if (action === 'journey.get') return after
     return {}
   }) as never)
 })
+
+/** The journey once the change is in: Capture still on step 4 of 5 (its gate's review is next). */
+const after = { stages: [{ id: 'define', name: 'Define', state: 'done' }, { id: 'capture', name: 'Capture', state: 'current' }], next: { step: { index: 4, total: 5 } } }
 
 describe('Accept now on the Overview', () => {
   it('reads the change again and accepts the head it says now, not the copy the card was drawn from', async () => {
@@ -72,8 +76,20 @@ describe('Accept now on the Overview', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Accept now' }))
     await waitFor(() => expect(mockCall).toHaveBeenCalledWith('change.accept', { repo: REPO, number: 12, head_sha: NOW }))
     const order = mockCall.mock.calls.map((c) => c[0])
-    expect(order).toEqual(['change.get', 'change.accept'])
+    expect(order.slice(0, 2)).toEqual(['change.get', 'change.accept'])
+    // where Capture is, as the journey read after the accept says: what Next step says too, not a step on from before
     await waitFor(() => expect(toasts).toEqual(['Accepted into the design: Capture is now on step 4 of 5. trace checks stock for 10 boards.']))
+  })
+
+  it('says no step when the journey cannot be read after the accept, rather than guess one (test-esp32 #54)', async () => {
+    mockCall.mockImplementation((async (action: string) => {
+      if (action === 'change.get') return change()
+      if (action === 'change.accept') return { merged: true, sha: 'm', stage: 'capture', next: 'trace checks stock for 10 boards.' }
+      throw new ApiError('not now', 500, 'internal')
+    }) as never)
+    show()
+    await userEvent.click(screen.getByRole('button', { name: 'Accept now' }))
+    await waitFor(() => expect(toasts).toEqual(['Accepted into the design: "Power sheet" is part of the design now. trace checks stock for 10 boards.']))
   })
 
   it('shows its progress from the click until the API answers, and takes no second click meanwhile', async () => {
