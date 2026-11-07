@@ -59,7 +59,9 @@ export const impl: Specialist = {
       + ' requirement change for a person.',
     'fpga_bitstream only from a closed run, and only when the job asks for one.',
     'PCB: kicad_drc first (counts by type, unconnected items, schematic parity). pcb_placement_check for courtyard,'
-      + ' edge and keep-out problems, pcb_floorplan to see functional blocks intermixed or spread, before routing.',
+      + ' edge and keep-out problems, pcb_floorplan to see functional blocks intermixed or spread, before routing.'
+      + ' Every placement warning and note a person approves past is named in the change write-up and in the question'
+      + ' that asks them (the part or pin, as the check names it) with why it is fine, or it is fixed or waived.',
     'Pin swaps made for routing: design_pins check again after them; a pin no longer on the net the plan names is'
       + ' a finding to fix in the plan (design_pins set) for the person to agree again, never silently.',
     'Routing: pcb_autoroute (it plans OrthoRoute for the complex core and Freerouting for the rest, from the'
