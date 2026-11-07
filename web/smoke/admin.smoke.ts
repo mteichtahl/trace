@@ -1,5 +1,5 @@
 /** The installation-wide screens: people, connected systems, instructions, installation, usage, operations, agents, knowledge. */
-import { admin } from './env'
+import { admin, live } from './env'
 import { expect, test } from './fixtures'
 
 test('admin: people and access', async ({ app, page }) => {
@@ -74,9 +74,15 @@ test('preferences: voice and dictation switches save', async ({ app, page }) => 
   await page.getByRole('button', { name: 'Voice' }).click()
   const spoken = page.getByRole('switch', { name: 'Spoken replies' })
   const before = await spoken.getAttribute('aria-checked')
+  // each click saves to the shared live account: wait for both saves, so the switch is never left flipped
+  const save = () => (live ? page.waitForResponse((r) => r.url().includes('/api/call') && (r.request().postData() ?? '').includes('prefs.voice.speech')) : Promise.resolve())
+  let saved = save()
   await spoken.click()
+  await saved
   await expect(spoken).not.toHaveAttribute('aria-checked', before!)
+  saved = save()
   await spoken.click()
+  await saved
   await expect(spoken).toHaveAttribute('aria-checked', before!)
   await expect(page.getByRole('switch', { name: 'Dictation' })).toBeVisible()
 })

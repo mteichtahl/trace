@@ -28,7 +28,18 @@ test('past conversations are kept', async ({ app }) => {
   await expect(chat.getByRole('listitem').first()).toBeVisible()
 })
 
-test('read-aloud and dictation controls are there', async ({ app }) => {
+test('read-aloud and dictation controls are there', async ({ app, page }) => {
+  // The controls show only while spoken replies are on. The live account is shared with the preferences test, which
+  // flips that switch: set it here instead of trusting what an earlier run left.
+  await app.open('/me')
+  await page.getByRole('button', { name: 'Voice' }).click()
+  const spoken = page.getByRole('switch', { name: 'Spoken replies' })
+  if ((await spoken.getAttribute('aria-checked')) !== 'true') {
+    const saved = (live ? page.waitForResponse((r) => r.url().includes('/api/call') && (r.request().postData() ?? '').includes('prefs.voice.speech')) : Promise.resolve())
+    await spoken.click()
+    await saved
+    await expect(spoken).toHaveAttribute('aria-checked', 'true')
+  }
   await app.open(projectPath())
   const chat = await app.openChat()
   await expect(chat.getByRole('switch', { name: 'Read replies aloud' })).toBeVisible()
