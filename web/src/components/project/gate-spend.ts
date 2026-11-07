@@ -1,6 +1,7 @@
 /**
- * The gate's cost list (admins), one short item each: what the project has spent so far, the cloud part an estimate with what AWS billed
- * beside it, and the project's two budgets, each by its own name:
+ * The gate's cost list (admins), one short item each: what the project has spent so far in all (the cloud work
+ * estimated, what AWS billed and the orders paid: spentTotal), what AWS billed explained, and the project's two
+ * budgets, each by its own name:
  *
  *   the build budget          what the order may cost (boards, parts, case): the orders paid, orders placed and not
  *                             paid yet (committed) and the order forecast (the newest order estimate's high end, else
@@ -52,6 +53,49 @@ export function budgetsOf(c: Costs): Budgets {
 }
 
 /**
+ * What the project has spent in all (Marc: "Spent so far means all costs in total"): trace's cloud work (estimated),
+ * what AWS billed for the project's tagged resources (agent runtime, memory, runner, secrets: spend the estimate does
+ * not count, so nothing is counted twice) and the orders paid. It counted the estimate alone, so test-esp32 said US$141
+ * spent with US$34.75 billed beside it. Orders placed and not paid yet are said apart, not added; orders in another
+ * currency too. A report, not a budget: the build budget and the cloud-work allowance are checked as before. cost.get
+ * says the same (spent.total, spent.text). Pure.
+ */
+export interface SpentTotal {
+  total: number
+  currency: string
+  /** each part in words, in order: the cloud work, the AWS bill, the orders */
+  parts: string[]
+  /** "US$90 more is committed: orders placed, not paid yet."; null with nothing committed */
+  committed: string | null
+}
+
+export const NOT_A_BUDGET = 'A total to know, not a budget: the build budget and the cloud-work allowance are checked as before.'
+
+export function spentTotal(c: Pick<CostView, 'currency' | 'orderCurrency' | 'spent' | 'committed'>): SpentTotal {
+  const oc = c.orderCurrency ?? c.currency
+  const same = oc === c.currency
+  const cloud = c.spent.cloud ?? 0
+  const orders = c.spent.orders ?? 0
+  const billed = c.spent.detail?.actual ?? null
+  const total = cents(cloud + (billed?.total ?? 0) + (same ? orders : 0))
+  return {
+    total, currency: c.currency,
+    parts: [
+      `cloud work ${money(cloud, c.currency)} (estimated)`,
+      billed ? `AWS billed ${money(billed.total, c.currency)}${billed.through ? ` (to ${billed.through})` : ''}` : 'no AWS bill read yet',
+      orders ? `orders ${money(orders, oc)} paid${same ? '' : ' (not added: another currency)'}` : 'no orders paid yet',
+    ],
+    committed: c.committed ? `${money(c.committed, oc)} more is committed: orders placed, not paid yet.` : null,
+  }
+}
+
+/** The parts as one sentence: "Cloud work US$141 (estimated), AWS billed US$34.75 (to 2026-11-05), no orders paid yet." */
+export function spentParts(t: SpentTotal): string {
+  const s = t.parts.join(', ')
+  return `${s[0]!.toUpperCase()}${s.slice(1)}.`
+}
+
+/**
  * One item of the gate's cost list: a short head ("Build budget" "US$200 for boards, parts and case: US$28.80 left")
  * and what explains it, one short line each. The list was one paragraph of about ninety words (spent, the AWS bill,
  * the build budget with the forecast's source, the order estimate with its limits, the allowance), hard to read at a
@@ -61,15 +105,11 @@ export interface SpendItem { id: 'spent' | 'billed' | 'build' | 'estimate' | 'cl
 
 export function gateSpendItems(c: CostView): SpendItem[] | null {
   if (!c.money) return null
-  const cloud = c.spent.cloud ?? 0
-  const orders = c.spent.orders ?? 0
   const actual = c.spent.detail?.actual
   const b = budgetsOf(c)
-  const cloudPart = c.spent.cloud !== null && (cloud > 0 || actual) ? `${money(cloud, c.currency)} of it cloud work (estimated from model use and job time).` : ''
-  const ordersPart = orders ? `${money(orders, c.orderCurrency ?? c.currency)} on orders.` : ''
-  // one kind of spend is said on the line itself; both, one under the other
-  const only = cloudPart && !ordersPart && cloud > 0 ? ', all of it cloud work (estimated from model use and job time)' : ordersPart && !cloudPart ? ', all of it on orders' : ''
-  const items: SpendItem[] = [{ id: 'spent', label: 'Spent so far', text: `${money(cloud + orders, c.currency)}${only}.`, more: only ? [] : [cloudPart, ordersPart].filter(Boolean) }]
+  // the total first, its parts right under it
+  const t = spentTotal(c)
+  const items: SpendItem[] = [{ id: 'spent', label: 'Spent so far', text: `${money(t.total, t.currency)} in all.`, more: [spentParts(t), ...(t.committed ? [t.committed] : []), NOT_A_BUDGET] }]
   if (actual) items.push(billedItem(actual, c.currency))
   if (b.build) items.push(buildItem(b.build))
   if (c.orderEstimate) items.push(estimateItem(c.orderEstimate))
@@ -92,7 +132,7 @@ export function gateSpendLine(c: CostView): string | null {
 function billedItem(a: NonNullable<NonNullable<CostView['spent']['detail']>['actual']>, currency: string): SpendItem {
   const services = Object.entries(a.byService).filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).map(([s]) => s)
   return {
-    id: 'billed', label: 'Billed by AWS', text: `${money(a.total, currency)}${a.through ? ` through ${a.through}` : ''}, apart from the estimate.`,
+    id: 'billed', label: 'Billed by AWS', text: `${money(a.total, currency)}${a.through ? ` through ${a.through}` : ''}, in the total, apart from the estimate.`,
     more: [
       `For the project's own tagged resources${services.length ? ` (${services.slice(0, 3).join(', ')}${services.length > 3 ? ' and more' : ''})` : ''}: its agent runtime, memory and runner, which the estimate does not count.`,
       'Model use and the shared job machines are not tagged per project, so the bill leaves them out: the two figures are different spend.',

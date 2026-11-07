@@ -14,7 +14,7 @@ import { assign, seen } from '../../src/core/access.js'
 import { BenchStore, insertIds, insertReadings, newReading } from '../../src/core/bench.js'
 import { backendFor } from '../../src/core/central.js'
 import { ActualsStore, CostLedger, insertUsage, jobRow, modelRows, writeActuals } from '../../src/core/cost.js'
-import { buildCost, orderForecast } from '../../src/api/actions-cost.js'
+import { buildCost, orderForecast, spentTotal } from '../../src/api/actions-cost.js'
 import type { OrderEstimate } from '../../src/core/order-estimate.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { IntegrationStore, type SecretsApi } from '../../src/core/integrations.js'
@@ -259,6 +259,9 @@ describe('cost', () => {
     expect(a.spent.detail.estimated).toEqual({ agents: 3, gpu: 0, cpu: 0.45, tools: 0, total: 3.45 })
     expect(a.spent).toMatchObject({ cloud: 3.45, orders: 48.5 })
     expect(a.spent.detail.actual).toMatchObject({ total: 1.5, estimatedDays: 1 })
+    // spent so far is all of it: the estimate, what AWS billed for the project's tagged resources and the orders paid
+    expect(a.spent.total).toBe(53.45)
+    expect(a.spent.text).toMatch(/^Spent so far US\$53.45: cloud work US\$3.45 \(estimated\), AWS billed US\$1.50 \(to \d{4}-\d\d-\d\d\), orders US\$48.50 paid\.$/)
     expect(a.stages.find((s: { state: string }) => s.state === 'current').cloud).toBe(3.45)
     expect(a.lines.filter((l: { kind: string }) => l.kind !== 'order').map((l: { kind: string; estimate: boolean }) => [l.kind, l.estimate])).toEqual([['agents', true], ['cpu', true]])
     expect(a.explorer).toMatchObject({ ok: true, tag: 'active', nextAt: expect.any(String) })
@@ -296,6 +299,18 @@ describe('cost', () => {
     const m = await run(ADMIN, 'usage.month', {})
     expect(m.projects.find((p: { repo: string }) => p.repo === REPO)).toMatchObject({ budget: 300, cloudBudget: 3 })
     await run(ADMIN, 'project.update', { repo: REPO, build: { cloud_budget: null } })
+  })
+
+  it('says spent so far as the total of all costs, its parts after it (Marc: "Spent so far means all costs in total")', () => {
+    // test-esp32: US$141 of cloud work estimated, US$34.75 billed by AWS for the project's tagged resources, no orders
+    expect(spentTotal({ cloud: 141, billed: { total: 34.75, through: '2026-11-05' }, orders: 0, committed: 0, currency: 'USD', orderCurrency: 'USD' }))
+      .toEqual({ total: 175.75, text: 'Spent so far US$176: cloud work US$141 (estimated), AWS billed US$34.75 (to 2026-11-05), no orders paid yet.' })
+    // no bill read yet: the estimate and the orders, and what is committed said apart, not added
+    expect(spentTotal({ cloud: 12, billed: null, orders: 40, committed: 90, currency: 'USD', orderCurrency: 'USD' }))
+      .toEqual({ total: 52, text: 'Spent so far US$52: cloud work US$12 (estimated), no AWS bill read yet, orders US$40 paid. US$90 more is committed: orders placed, not paid yet.' })
+    // orders in another currency cannot be added
+    expect(spentTotal({ cloud: 10, billed: { total: 2, through: null }, orders: 50, committed: 0, currency: 'USD', orderCurrency: 'EUR' }))
+      .toEqual({ total: 12, text: 'Spent so far US$12: cloud work US$10 (estimated), AWS billed US$2, orders EUR 50 paid (not added: another currency).' })
   })
 
   it('counts the build once against the budget: forecast from the target until an order is placed, committed only when placed without a cost (#218)', () => {

@@ -10,6 +10,11 @@
  *                                                               the dated price table; actuals from Cost Explorer by the
  *                                                               project's tag, a day behind (the screen says so)
  *                                         spent.orders          what the recorded orders cost
+ *                                         spent.total           what the project has spent in all (spentTotal): the
+ *                                                               cloud-work estimate, what AWS billed for the project's
+ *                                                               tagged resources (different spend, PR #366) and the
+ *                                                               orders paid; a report, not a budget
+ *                                         spent.text            it in words, the total first and its parts after it
  *                                         committed             an order of the revision placed with no cost given yet
  *                                                               (its target); nothing before an order is placed
  *                                         forecast              the build, for the revision not ordered yet (an order
@@ -212,6 +217,34 @@ export function orderForecast(o: { target: number | null; estimate: OrderEstimat
   return { planned: o.target, basis: o.target !== null ? { kind: 'target' as const } : null }
 }
 
+/** An amount as the screens say it: "US$141", "US$34.75". */
+function moneyText(n: number, currency: string): string {
+  const prefix = currency === 'USD' ? 'US$' : currency === 'AUD' ? 'A$' : `${currency} `
+  const digits = Math.abs(n) < 100 && n % 1 !== 0 ? 2 : 0
+  return `${prefix}${n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
+}
+
+/**
+ * What the project has spent in all ("Spent so far means all costs in total"): trace's cloud work (estimated), what
+ * AWS billed for the project's tagged resources (agent runtime, memory, runner, secrets: spend the estimate does not
+ * count, so the two add up without counting anything twice) and the orders paid. Orders placed and not paid yet are
+ * said apart, not added. Orders in another currency than the cloud's (USD) are said apart too: they cannot be added.
+ * Only a report: the build budget and the cloud-work allowance are checked as before. Pure.
+ */
+export function spentTotal(o: { cloud: number; billed: { total: number; through: string | null } | null; orders: number; committed: number; currency: string; orderCurrency: string }) {
+  const m = (n: number) => moneyText(n, o.currency)
+  const om = (n: number) => moneyText(n, o.orderCurrency)
+  const sameCurrency = o.orderCurrency === o.currency
+  const total = cents(o.cloud + (o.billed?.total ?? 0) + (sameCurrency ? o.orders : 0))
+  const parts = [
+    `cloud work ${m(o.cloud)} (estimated)`,
+    o.billed ? `AWS billed ${m(o.billed.total)}${o.billed.through ? ` (to ${o.billed.through})` : ''}` : 'no AWS bill read yet',
+    o.orders ? `orders ${om(o.orders)} paid${sameCurrency ? '' : ' (not added: another currency)'}` : 'no orders paid yet',
+  ]
+  const committed = o.committed ? ` ${om(o.committed)} more is committed: orders placed, not paid yet.` : ''
+  return { total, text: `Spent so far ${m(total)}: ${parts.join(', ')}.${committed}` }
+}
+
 /** One job's spend as the screens show it: its stage and specialist in words, its times as dates. */
 function jobLine(j: SpendByJob['jobs'][number]) {
   return {
@@ -311,7 +344,7 @@ export const COST_ACTIONS = {
       return {
         repo, money, currency: 'USD',
         ...(b.currency !== 'USD' ? { orderCurrency: b.currency } : {}),
-        spent: { cloud: cents(e.total), orders: Math.round(paid * 100) / 100, detail: cloud },
+        spent: { cloud: cents(e.total), orders: cents(paid), ...spentTotal({ cloud: cents(e.total), billed: a ? { total: a.total, through: a.lastDay } : null, orders: cents(paid), committed, currency: 'USD', orderCurrency: b.currency }), detail: cloud },
         committed,
         forecast,
         ...(forecastBasis ? { forecastBasis } : {}),

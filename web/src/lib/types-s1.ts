@@ -648,7 +648,15 @@ export interface CostView {
   money?: boolean
   currency: string
   /** cloud: the estimated cloud spend (detail: by kind, and the actuals) */
-  spent: { cloud: number | null; orders: number | null; detail?: CloudSpend }
+  spent: {
+    cloud: number | null
+    orders: number | null
+    /** what the project has spent in all: the cloud-work estimate, what AWS billed and the orders paid (a report, not a budget) */
+    total?: number
+    /** it in words: "Spent so far US$176: cloud work US$141 (estimated), AWS billed US$34.75 (to 2026-11-05), …" */
+    text?: string
+    detail?: CloudSpend
+  }
   /** the currency of the orders when it is not the cloud's (USD) */
   orderCurrency?: string
   explorer?: ExplorerView

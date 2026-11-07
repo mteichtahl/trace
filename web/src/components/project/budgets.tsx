@@ -15,7 +15,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { money } from '@/lib/format'
 import type { CostView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
-import { budgetsOf, estimateLine } from './gate-spend'
+import { NOT_A_BUDGET, budgetsOf, estimateLine, spentTotal } from './gate-spend'
 
 const pct = (n: number, of: number): string => `${Math.min(100, Math.max(0, (n / of) * 100))}%`
 
@@ -73,6 +73,40 @@ export function Budgets({ cost, id, compact = false, className }: { cost: CostVi
         )}
       </section>
     </div>
+  )
+}
+
+/**
+ * Spent so far: what the project has spent in all, first, and its parts right under it: trace's cloud work
+ * (estimated), what AWS billed for the project's tagged resources (with the day it is read to) and the orders paid
+ * (gate-spend.ts's spentTotal). Orders placed and not paid yet are said apart. A report, not a budget.
+ */
+export function SpentSoFar({ cost, compact = false, className }: { cost: CostView; compact?: boolean; className?: string }) {
+  const t = spentTotal(cost)
+  const oc = cost.orderCurrency ?? cost.currency
+  const billed = cost.spent.detail?.actual ?? null
+  const parts: { label: string; hint: string; value: string }[] = [
+    { label: 'Cloud work', hint: 'Estimated from model use and job time', value: money(cost.spent.cloud ?? 0, cost.currency) },
+    { label: 'Billed by AWS', hint: billed ? `The project's tagged resources${billed.through ? `, to ${billed.through}` : ''}` : 'Not read yet', value: billed ? money(billed.total, cost.currency) : 'none yet' },
+    { label: 'Orders paid', hint: oc === cost.currency ? 'Boards, parts and case' : 'Not added: another currency', value: money(cost.spent.orders ?? 0, oc) },
+  ]
+  return (
+    <section className={cn('rounded-xl border p-5', className)} aria-label="Spent so far">
+      <h3 className="text-sm font-semibold">Spent so far</h3>
+      <p className={cn('mt-1 font-semibold tracking-tight', compact ? 'text-2xl' : 'text-3xl')}>{money(t.total, t.currency)}</p>
+      <dl className={cn('mt-3 text-sm', compact ? 'space-y-1' : 'grid gap-x-6 gap-y-1 sm:grid-cols-3')}>
+        {parts.map((p) => compact
+          ? <Row key={p.label} label={p.label} hint={p.hint} value={p.value} />
+          : (
+            <div key={p.label} className="min-w-0">
+              <dt className="text-muted-foreground">{p.label}</dt>
+              <dd className="font-medium tabular-nums">{p.value} <span className="block text-xs font-normal text-muted-foreground/80">{p.hint}</span></dd>
+            </div>
+          ))}
+      </dl>
+      {t.committed && <p className="mt-2 text-sm">{t.committed}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">{NOT_A_BUDGET}</p>
+    </section>
   )
 }
 
