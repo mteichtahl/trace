@@ -128,7 +128,8 @@ export function runResult(db: DatabaseSync, id: string): Record<string, unknown>
   return v && typeof v === 'object' ? v as Record<string, unknown> : null
 }
 
-function artifactText(db: DatabaseSync, run: string, name: string): string | null {
+/** A run artifact as text, or null. */
+export function artifactText(db: DatabaseSync, run: string, name: string): string | null {
   const r = db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(run, name) as Record<string, unknown> | undefined
   return r ? new TextDecoder().decode(unpackArtifact(r.mime === null ? null : String(r.mime), r.bytes as Uint8Array).bytes) : null
 }

@@ -59,7 +59,7 @@ export function qualityChecks(def: SkillDef, view: Pick<SkillView, 'checks'> | u
     const status: CriterionStatus = held ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
     // the record's words are about its own verdict: where the screen's differs, they no longer fit
     const detail = api?.unavailable && status === 'not_met' ? `cannot be checked yet: needs ${api.unavailable}` : local[c.id] && api && local[c.id] !== api.status ? undefined : api?.detail
-    return { id: c.id, text: status === 'not_met' && detail ? `${c.text} (${detail})` : c.text, status, onJump: c.step && jump ? () => jump(c.step!) : undefined }
+    return { id: c.id, text: status !== 'met' && detail ? `${c.text} (${detail})` : c.text, status, onJump: c.step && jump ? () => jump(c.step!) : undefined }
   })
 }
 

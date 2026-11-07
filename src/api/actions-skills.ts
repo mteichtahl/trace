@@ -52,7 +52,7 @@ import type { DesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentDraft, intentView, linksView, outscoredBy, outscoredWords, pinCheck } from '../tools/design/record.js'
 import { type DecisionInput, Decision, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
-import { checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
+import { artifactText, checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
 import { keyPartsView } from '../tools/design/key-parts.js'
 import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuantity, loadIds, loadReadings, unionIds, unionReadings } from '../core/bench.js'
 import { loadBoards } from '../core/boards.js'
@@ -98,6 +98,7 @@ function skillBench(skill: string, i: CheckInput) {
 import { type CheckInput, type CheckResult, checkSkill, questionsFirst, questionsOn } from './skill-checks.js'
 import { changeImpact } from './change-impact.js'
 import { type ReleaseRecord, decisionOf, noteOf, releaseRecommendation, releaseView } from './release-review.js'
+import { type OrderRecord, type RunRow, matchedOf, orderSigned, orderView, releaseSignedAt } from './order-submit.js'
 
 /** The skills whose Submit records design decisions. */
 const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
@@ -198,8 +199,23 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
         drcRun: drc.run ? { id: drc.run.id, started: drc.run.started } : null,
       }
     })() : null
+    // Order submit: what its steps show (order-submit.ts)
+    const order: OrderRecord | null = skill === 'order-submit' ? (() => {
+      const runRow = (x: { id: string; status: string; summary: string | null; started: number } | null): RunRow | null => (x ? { id: x.id, status: x.status, summary: x.summary, started: x.started, result: runResult(db, x.id) } : null)
+      const parts = latestRun(db, 'parts.bom_check')
+      // the parts check the release was approved on: the newest at or before the release approval's signature
+      const signedAt = releaseSignedAt(r)
+      const before = signedAt !== null && hasTable(db, 'runs') ? db.prepare("SELECT id, status, summary, started FROM runs WHERE kind='parts.bom_check' AND started <= ? ORDER BY started DESC LIMIT 1").get(signedAt) as { id: string; status: string; summary: string | null; started: number } | undefined : undefined
+      const args = fab && hasTable(db, 'runs') ? (() => { try { return JSON.parse(String((db.prepare('SELECT args FROM runs WHERE id=?').get(fab.id) as { args?: unknown } | undefined)?.args ?? '{}')) as Record<string, unknown> } catch { return {} } })() : {}
+      return {
+        parts: runRow(parts),
+        signedParts: before ? runRow({ id: String(before.id), status: String(before.status), summary: before.summary === null ? null : String(before.summary), started: Number(before.started) }) : null,
+        fab: fab ? { ...runRow(fab)!, result: fabResult, outDir: typeof args.out_dir === 'string' ? args.out_dir : null, bomCsv: artifactText(db, fab.id, 'bom.csv') } : null,
+        board: boardRun ? { id: boardRun.id, result: runResult(db, boardRun.id) } : null,
+      }
+    })() : null
     return {
-      boards: loadBoards(db), handPlaced, release, ids: unionIds(idsFromRuns(db), bench.ids), readings: unionReadings(loadReadings(db), bench.readings),
+      boards: loadBoards(db), handPlaced, release, order, ids: unionIds(idsFromRuns(db), bench.ids), readings: unionReadings(loadReadings(db), bench.readings),
       r, viewer, requirements: live, struck,
       erc: erc.findings ? { findings: erc.findings, errors: erc.report.errors } : null,
       drc: drc.findings ? { findings: drc.findings, errors: drc.report.errors } : null,
@@ -526,6 +542,7 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       const rec = releaseRecommendation(i.r, v, i.requirements)
       return { release: v, ...(rec ? { recommendation: rec } : {}) }
     }
+    case 'order-submit': return { order: orderView(i.r, i.order ?? null, i.orders, Date.now() / 1000) }
     case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
     case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }
     default: return {}
@@ -682,6 +699,17 @@ export const SKILL_ACTIONS = {
           { kind: 'run', ref: i.releaseReport.id, label: `the release report (report.md of run ${i.releaseReport.id.slice(0, 8)})` },
         ])
       }
+      // Order submit before the order gate is signed: the order sheet matches the release (fabricate.order.sheet), so
+      // the gate can be signed; the draft is kept, and after paying the same skill records the order
+      let ordering = false
+      if (a.skill === 'order-submit' && rec?.criteria.some((c) => c.id === 'fabricate.order.sheet') && !orderSigned(rec)) {
+        const open = (id: string): boolean => { const c = rec.criteria.find((x) => x.id === id); return Boolean(c && c.status !== 'met' && !rec.waivers.some((w) => w.targetKind === 'criterion' && w.target === id && w.closedAt === null)) }
+        const waits = ['fabricate.order.package', 'fabricate.order.stock'].filter(open)
+        if (waits.length) throw new ActionError(`The order sheet can't be confirmed yet: ${waits.map((id) => rec.criteria.find((c) => c.id === id)!.text.replace(/\.$/, '').toLowerCase()).join('; ')}. trace is still working on ${waits.length === 1 ? 'it' : 'them'}.`)
+        const off = matchedOf(a.draft).unplaced
+        move('fabricate.order.sheet', true, [{ kind: 'skill', ref: 'order-submit', label: `Order submit: options entered and parts matched${off.length ? ` (JLCPCB does not place ${off.join(', ')})` : ''}, submitted by ${by.label}` }])
+        ordering = true
+      }
       if (a.skill === 'waiver') {
         const d = a.draft
         const sev = SEVERITIES.includes(d.severity as never) ? d.severity as (typeof SEVERITIES)[number] : (() => { throw new ActionError('Give the severity.') })()
@@ -704,13 +732,13 @@ export const SKILL_ACTIONS = {
       const id = decide(db, {
         kind: 'skill.submitted', stage: loadJourney(db)?.journey.currentStage ?? null, ref: ref ?? a.skill, by: by.label,
         summary: `${sk.name} was submitted with every check of its quality bar met or waived${jobId ? '; the agents raise the change' : ''}.`,
-        detail: { skill: a.skill, checks: checks.map((c) => ({ id: c.id, status: c.status })), ...(jobId ? { job: jobId } : {}), ...(a.skill === 'release-review' ? { decision: returning ? `return:${returning}` : 'release', ...(noteOf(a.draft) ? { note: noteOf(a.draft) } : {}) } : {}) },
+        detail: { skill: a.skill, checks: checks.map((c) => ({ id: c.id, status: c.status })), ...(jobId ? { job: jobId } : {}), ...(a.skill === 'release-review' ? { decision: returning ? `return:${returning}` : 'release', ...(noteOf(a.draft) ? { note: noteOf(a.draft) } : {}) } : {}), ...(a.skill === 'order-submit' ? { unplaced: matchedOf(a.draft).unplaced } : {}) },
       })
       // a criterion it set is still not met: the draft is kept, so the person carries on from it on the skill's page
       // (what was decided is recorded; deciding it again on the next Submit records it again, superseding)
-      const partly = set.some((c) => c.status === 'not_met')
+      const partly = set.some((c) => c.status === 'not_met') || ordering
       if (!partly) putDraft(db, by.hash, a.skill, null)
-      return { result: { id, ref, answered, backTo, recorded: recordedWords(recorded), criteria: set, kept: partly } }
+      return { result: { id, ref, answered, backTo, recorded: recordedWords(recorded), criteria: set, kept: partly, ordering } }
     }))
     // saved: the wait from asked to answered, as question.answer records it (src/api/process-metrics.ts)
     if (out.answered) recordAnswered(a.repo, out.answered)
@@ -751,6 +779,7 @@ export const SKILL_ACTIONS = {
     const docs = await docsAfterDesign(ctx, a.repo, before).catch(() => ({ started: undefined }))
     if (docs.started) started = [...started, docs.started]
     if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
+    if (out.ordering) started = [...started, 'The order sheet matches the release: the order gate can be signed. After paying on JLCPCB, record the order and submit Order submit again.']
     if (returning) started = [...started, returning === i.r?.journey.currentStage ? `The release gate was returned with your note; ${STAGE_NAMES[returning]} stays open.` : `The release gate was returned with your note, and ${STAGE_NAMES[returning]} is reopened; every gate from there is signed again.`]
     return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(queued ? { queued } : {}), ...(jobError ? { jobError } : {}), ...(summary ? { summary } : {}), ...(rule.rule ? { rule: rule.rule } : {}), ...(rule.rule_error ? { rule_error: rule.rule_error } : {}), started, ...(out.recorded ? { recorded: out.recorded } : {}), criteria: out.criteria, ...(out.kept ? { draft_kept: true } : {}), ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),

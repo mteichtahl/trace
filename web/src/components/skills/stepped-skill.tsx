@@ -21,10 +21,11 @@ import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, decidedByReview } from './design-steps'
 import { ReleaseStep, type ReleaseDraft, releaseChecks } from './release-steps'
+import { OrderStep, type OrderDraft, orderChecks } from './order-steps'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
 
-interface Draft extends SkillDraftBase, DesignDraft, ReleaseDraft {
+interface Draft extends SkillDraftBase, DesignDraft, ReleaseDraft, OrderDraft {
   resolved: string[]
   choice?: { option: string; reason?: string }
 }
@@ -48,8 +49,9 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const decisionOf = (it: { id: string }) => s.draft.data.decisions?.find((x) => `requirement:${x.requirement}` === it.id)
   const last = s.stepIndex === def.steps.length - 1
   const release = def.id === 'release-review'
+  const order = def.id === 'order-submit'
   // Release review's choice is made on its Decide step, its note the reason (release-steps.tsx)
-  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(release ? releaseChecks(v?.release, s.draft.data, v?.recommendation?.recommended) : needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(order ? orderChecks(v?.order, s.draft.data) : {}), ...(release ? releaseChecks(v?.release, s.draft.data, v?.recommendation?.recommended) : needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
   const gate = def.id === 'gate-signing'
 
   return (
@@ -98,13 +100,16 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       {/* Release review shows each area from the record, with its acknowledgement (release-steps.tsx) */}
       {release && <ReleaseStep step={s.step.id} view={v?.release} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} loading={s.view.isLoading} recommendation={v?.recommendation} />}
 
+      {/* Order submit shows each step from the record, with its ticks (order-steps.tsx) */}
+      {order && <OrderStep repo={repo} step={s.step.id} view={v?.order} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} loading={s.view.isLoading} />}
+
       {/* Gate signing has no items of its own: they live on the gate's screen, so an empty "nothing open" here misleads;
           Architecture choice's key parts are their own list (design-steps.tsx KeyParts); Release review's steps are
           their own (above) */}
-      {!gate && !release && !(def.id === 'architecture-choice' && s.step.id === 'parts' && v?.key_parts) && !(all.length > 0 && items.length === 0) && <section className="mt-6" aria-labelledby="items">
+      {!gate && !release && !order && !(def.id === 'architecture-choice' && s.step.id === 'parts' && v?.key_parts) && !(all.length > 0 && items.length === 0) && <section className="mt-6" aria-labelledby="items">
         <h2 id="items" className="text-base font-semibold">For this step</h2>
         {items.length === 0 ? (
-          <EmptyState className="mt-2">{s.view.isLoading ? 'Loading what trace prepared…' : `trace has nothing open for “${s.step.title.toLowerCase()}”. ${s.step.detail}`}</EmptyState>
+          s.view.isLoading ? <EmptyState className="mt-2">Loading what trace prepared…</EmptyState> : <StepNeeds def={def} step={s.step} checks={v?.checks} />
         ) : (
           <ul className="mt-2 divide-y rounded-xl border">
             {items.map((it) => {
@@ -145,5 +150,33 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
         </div>
       )}
     </FocusLayout>
+  )
+}
+
+/**
+ * A step with no items of its own (test-esp32 #225): what the step asks and where its checks stand, from the checker,
+ * rather than "trace has nothing open", which read as though there was nothing to do. Pure but for rendering.
+ */
+export function StepNeeds({ def, step, checks }: { def: SkillDef; step: { id: string }; checks?: { id: string; status: string; detail?: string; unavailable?: string }[] }) {
+  const here = def.checks.filter((c) => c.step === step.id)
+  const of = (id: string) => checks?.find((c) => c.id === id)
+  return (
+    <div className="mt-2 rounded-xl border px-4 py-3 text-sm">
+      {here.length ? (
+        <ul className="space-y-1.5">
+          {here.map((c) => {
+            const r = of(c.id)
+            const status = r?.status === 'met' ? 'met' : r?.status === 'waived' ? 'waived' : 'not_met'
+            const why = r?.unavailable ? `trace cannot check it from the record yet: it needs ${r.unavailable}.` : r?.detail
+            return (
+              <li key={c.id} className="flex flex-wrap items-start gap-2">
+                <StatusBadge status={status} />
+                <span className="min-w-0 flex-1">{c.text}{why && <span className="block text-xs text-muted-foreground">{why}</span>}</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : <p className="text-muted-foreground">trace prepares nothing from the record for this step yet: it is yours to do as the step says.</p>}
+    </div>
   )
 }

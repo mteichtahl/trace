@@ -201,6 +201,33 @@ export interface SkillView {
   handPlaced?: string[]
   /** Release review: what each step shows, from the record (src/api/release-review.ts) */
   release?: ReleaseView
+  /** Order submit: what each step shows, from the record (src/api/order-submit.ts) */
+  order?: OrderSheetView
+}
+
+/** Order submit's steps from the record (src/api/order-submit.ts OrderView). */
+export interface OrderSheetView {
+  stock: {
+    run: string; at: string; today: boolean; status: string; summary: string | null
+    boards: number | null; build_quantity: number; currency: string | null; total: number | null
+    blocking: number; changed: number
+    lines: { key: string; line: number; mpn: string | null; lcsc: string | null; refs: string | null; need: number; stock: number | null; status: string; unit_price: number | null; was_price: number | null; was_status: string | null; change: 'new' | 'price' | 'status' | null }[]
+    signed: { run: string; at: string; total: number | null } | null
+  } | null
+  package: {
+    run: string; at: string; status: string; dir: string | null
+    files: { path: string; name: string; bytes: number | null; repo_path: string | null; upload: boolean }[]
+    problems: string[]; placements: number | null; hand_placed: string[] | null
+  } | null
+  options: { id: string; group: 'board' | 'assembly'; label: string; value: string; source: string; decided: boolean }[]
+  board_run: string | null
+  lines: { key: string; refs: string; value: string | null; mpn: string | null; lcsc: string | null; qty: number | null }[]
+  lines_from: 'package' | 'parts' | null
+  pay: {
+    gate: { id: string; signed: { by: string; at: string } | null } | null
+    sheet: 'met' | 'not_met' | 'waived' | null
+    order: { number: string; paid: number | null; currency: string; ship: string | null } | null
+  }
 }
 
 /** Release review's steps from the record (src/api/release-review.ts ReleaseView). */
