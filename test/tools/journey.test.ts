@@ -7,7 +7,7 @@ import { API_HIDDEN_TOOLS, apiTool } from '../../src/agents/runtime/tool.js'
 import { bucketStore } from '../../src/api/action-kit.js'
 import { AgentFactsStore, loadAgentFacts, projectsFromEnv } from '../../src/core/agent-facts.js'
 import { backendFor } from '../../src/core/central.js'
-import { answerQuestion, dismissStuck, loadJourney, startJourney } from '../../src/core/journey.js'
+import { addWaiver, answerQuestion, dismissStuck, loadJourney, startJourney } from '../../src/core/journey.js'
 import { JourneyStore } from '../../src/core/journey-store.js'
 import { Registry, ToolError } from '../../src/core/registry.js'
 import { Work } from '../../src/core/store.js'
@@ -131,6 +131,26 @@ describe('the journey tools', () => {
     const r = await call('journey.check', { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: runId }], note: 'every requirement maps to a block' }) as { check_id: string; gate: { id: string; met: number } }
     expect(r).toMatchObject({ criterion: 'architect.mapped', gate: { id: 'architect', met: 1 } })
     expect((await facts.read((db) => loadAgentFacts(db))).result.checks).toEqual([expect.objectContaining({ criterion: 'architect.mapped', status: 'met', by: 'verify', jobId: 'job-7' })])
+  })
+
+  it('journey.check refuses met on a cited run that did not pass, unless a person waived what failed (test-esp32 #233)', async () => {
+    const w = new Work()
+    const failed = w.start('kicad.length', { subject: 'USB_D' })
+    w.finish(failed, 'fail', 'USB_D+/USB_D-: no tolerance given')
+    const erc = w.start('kicad.erc', { subject: 'board' })
+    w.finish(erc, 'fail', 'ERC: 1 errors, 0 warnings')
+    w.close()
+    // the failed run alone, or beside a run that passed
+    await expect(call('journey.check', { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: failed }] })).rejects.toThrow(/not met on a run that did not pass: run .* \(kicad.length\) failed: USB_D\+\/USB_D-: no tolerance given/)
+    await expect(call('journey.check', { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: runId }, { kind: 'run', ref: failed }] })).rejects.toThrow(/did not pass/)
+    // recorded not met on it, as it is
+    await expect(call('journey.check', { criterion: 'architect.mapped', status: 'not_met', evidence: [{ kind: 'run', ref: failed }] })).resolves.toMatchObject({ status: 'not_met' })
+    // an ERC run that fails on an error a person waived shows the criterion met
+    await expect(call('journey.check', { criterion: 'capture.erc', status: 'met', evidence: [{ kind: 'run', ref: erc }] })).rejects.toThrow(/did not pass/)
+    await journey.update((db) => ({ result: addWaiver(db, { target: { kind: 'finding', id: 'erc:pin_not_driven:U1 pin 3' }, reason: 'The pin is driven by the module on the other board.', risk: 'The net floats if the module is left off.', severity: 'cosmetic', caught_where: null, scope: 'this revision only' }, { hash: 'h'.repeat(16), label: 'admin@example.com', admin: true }) }))
+    await expect(call('journey.check', { criterion: 'capture.erc', status: 'met', evidence: [{ kind: 'run', ref: erc }] })).resolves.toMatchObject({ criterion: 'capture.erc', status: 'met' })
+    // the newest check stands: architect.mapped is met again on the run that passed
+    await call('journey.check', { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: runId }] })
   })
 
   it('journey.check refuses capture.datasheets met while an off-board module\'s pins differ from its connector\'s (test-esp32 #169)', async () => {
