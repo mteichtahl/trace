@@ -14,9 +14,26 @@
     <title>trace</title>
     <!-- before anything paints: the theme and display preferences (a file, so script-src needs no 'unsafe-inline') -->
     <script src="/theme.js"></script>
+    <!-- the page's outline until the app's code has loaded and drawn it (test-esp32 #15: blank for about 3 s) -->
+    <style>
+      body:has(> #root > .boot) { margin: 0; background: oklch(1 0 0); }
+      .dark body:has(> #root > .boot) { background: oklch(0.145 0 0); }
+      .boot { display: flex; min-height: 100dvh; }
+      .boot i { display: block; border-radius: 6px; background: oklch(0.97 0 0); animation: boot 2s ease-in-out infinite; }
+      .dark .boot i { background: oklch(0.269 0 0); }
+      .boot-rail { width: 16rem; flex-shrink: 0; padding: 16px 12px; box-sizing: border-box; border-right: 1px solid oklch(0.922 0 0); }
+      .dark .boot-rail { border-color: oklch(1 0 0 / 10%); }
+      .boot-main { flex: 1; min-width: 0; }
+      .boot-bar { height: 56px; border-bottom: 1px solid oklch(0.922 0 0); }
+      .dark .boot-bar { border-color: oklch(1 0 0 / 10%); }
+      .boot-page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+      @media (max-width: 767px) { .boot-rail { display: none; } .boot-page { padding: 16px; } }
+      @keyframes boot { 50% { opacity: 0.5; } }
+      @media (prefers-reduced-motion: reduce) { .boot i { animation: none; } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot" role="status" aria-label="Loading trace"><div class="boot-rail"><i style="width: 96px; height: 24px"></i><i style="width: 144px; height: 20px; margin-top: 32px"></i><i style="width: 144px; height: 20px; margin-top: 12px"></i><i style="width: 144px; height: 20px; margin-top: 12px"></i></div><div class="boot-main"><div class="boot-bar"></div><div class="boot-page"><i style="width: 224px; height: 32px"></i><i style="height: 128px; margin-top: 24px; border-radius: 12px"></i><i style="height: 176px; margin-top: 24px; border-radius: 12px"></i></div></div></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
