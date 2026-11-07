@@ -159,6 +159,17 @@ describe('Requirements review, the whole screen', () => {
     await waitFor(() => expect(mockCall.mock.calls.find(([a]) => a === 'skill.submit')?.[1]).toMatchObject({ draft: { no_conflicts: true } }))
   })
 
+  // #30: the rail's steps could not be clicked (Decide did nothing); only each step's Continue moved on
+  it('a step on the rail opens with a click, a later one too', async () => {
+    wrap(<SteppedSkill repo={REPO} def={def} />)
+    await screen.findByText('Do any two requirements contradict each other?')
+    const rail = screen.getAllByRole('navigation', { name: 'Steps' })[0]!
+    await userEvent.click(within(rail).getByRole('button', { name: /Cover the intent/ }))
+    expect((await screen.findAllByText('Step 6 of 6')).length).toBeGreaterThan(0)
+    await userEvent.click(within(rail).getByRole('button', { name: /Decide/ }))
+    expect((await screen.findAllByText('Step 2 of 6')).length).toBeGreaterThan(0)
+  })
+
   it('saves go one after another, so an older one never lands last', async () => {
     wrap(<SteppedSkill repo={REPO} def={def} />)
     const tick = await screen.findByRole('checkbox', { name: /no two requirements contradict/ })

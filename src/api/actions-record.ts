@@ -80,9 +80,10 @@ export const RECORD_ACTIONS = {
       repo, intent, links,
       ...(intent.length ? {} : { intent_note: 'No intent statements are recorded yet: the Intent builder writes them (an agent proposes each line, a person accepts it), and each requirement then links back to the line it came from.' }),
       requirements: requirements.map((q) => ({ ...q, derived_from: links.filter((l) => l.requirement === q.id).map((l) => l.intent) })),
+      // uncovered: lines no requirement covers and nothing says why; one marked "don't care" needs none (test-esp32 #31)
       summary: {
         requirements: requirements.length, verified: count('verified'), failing: count('failing'), untested: count('untested'), waived: count('waived'),
-        intent: intent.length, accepted: intent.filter((s) => s.state === 'accepted' || s.state === 'edited').length, uncovered: intent.filter((s) => !s.covered && s.uncovered === undefined).length,
+        intent: intent.length, accepted: intent.filter((s) => s.state === 'accepted' || s.state === 'edited').length, uncovered: intent.filter((s) => !s.covered && s.uncovered === undefined && s.kind !== 'dont_care').length,
         unlinked: requirements.filter((q) => !links.some((l) => l.requirement === q.id)).length,
       },
     }
