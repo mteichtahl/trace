@@ -20,8 +20,10 @@ const W = 1180
 const H = 470
 const BW = 200
 const BH = 92
-// fit the frame (not the blocks), so switching options keeps every block where it was drawn
-const FIT = { bounds: { x: -16, y: -16, width: W + 32, height: H + 32 } }
+// fit the frame (not the blocks), so switching options keeps every block where it was drawn; below 0.8 a block's
+// words cannot be read (test-esp32-run2 R31: Architecture choice opened it at 65 %), so it opens at 0.8 from its top
+// left corner and the person drags it; Fit still shows the whole drawing
+export const FIT = { bounds: { x: -16, y: -16, width: W + 32, height: H + 32 }, readable: 0.8 }
 
 type Side = 'left' | 'right' | 'top' | 'bottom'
 const SIDES: { side: Side; position: Position }[] = [
