@@ -5031,6 +5031,8 @@
       "spent": {
         "cloud": 0,
         "orders": 40,
+        "total": 40,
+        "text": "Spent so far US$40: cloud work US$0 (estimated), no AWS bill read yet, orders US$40 paid.",
         "detail": {
           "estimated": {
             "agents": 0,
