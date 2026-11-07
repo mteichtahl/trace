@@ -225,9 +225,21 @@ safety net (or until the worker gave up), looking as if it needed a person. Now:
   resolving }` (numbers only) and the app says, wherever they are, which changes trace is bringing up to date and which
   need them (`conflictNotice`, web/src/lib/live.ts).
 - **The app resolves** (`resolveConflicts`): it waits for GitHub to settle (4 rounds, 2.5 s apart), remakes each edit
-  made in trace on the newest design (`applyEdits`, its one-run-per-repository lock), and starts the worker once
+  made in trace on the newest design (`applyEdits`, its one-run-per-repository lock), merges the record itself into
+  each change of trace's own whose only conflict is the record (below), and starts the worker once
   (`trace-worker.yml`, `workflow_dispatch`) for every other change in conflict. The worker merges the default branch in,
   never a rebase or a force-push. An edit that cannot be made again is left: the person discards it.
+- **The record merged in seconds** (`src/api/record-merge.ts`, 7 November 2026, test-esp32 log #191, #213). Every
+  specialist's change records its runs in `.trace/project.db`, so a change cut before the one accepted just before it
+  always conflicted there, and "Bring it up to date" started an agent job of minutes to merge rows that never
+  overlapped. Now, when the files both sides changed since their common ancestor are the record alone, the API merges
+  it row by row (`mergeRows`, src/core/dbmerge.ts: a row is named by its primary key; a row both sides changed to
+  different results, a table one side removed or whose columns differ, or a row a cascade would take with it, is a
+  conflict and nothing is merged) and writes a merge commit through the Git Data API: the change's own files on the
+  default branch's tree with the merged record, parents the change and the default branch, the branch moved only if
+  it is still where it was read (never forced). Only trace's own branches (`worker.own_branch_prefix`, or `trace/`)
+  in the repository itself. Anything else goes to the worker as before. A change opened already in conflict (a
+  `pull_request` delivery, opened or reopened) asks `hook.conflicts` too: no push to the default branch follows it.
 - **Bring it up to date**: `change.resolve { repo, number }` (write). A change in conflict's decision bar leads with
   "Bring it up to date" instead of Accept. It does the same for that one change and passes the workflow input `retry`:
   the pick leaves a `trace-retry` marker, the attempts before it no longer count (so work the worker gave up on goes

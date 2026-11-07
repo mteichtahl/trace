@@ -66,7 +66,7 @@ export const HOOK_ACTIONS = {
   }),
 
   'hook.conflicts': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx): Promise<ConflictReport> => {
-    if (!(await projects()).includes(repo)) return { repo, conflicts: [], remade: [], worker: [], left: [], checking: [], started: 'not-needed' }
+    if (!(await projects()).includes(repo)) return { repo, conflicts: [], remade: [], record: [], worker: [], left: [], checking: [], started: 'not-needed' }
     return resolveConflicts(ctx, repo)
   }),
 

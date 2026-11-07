@@ -16,6 +16,9 @@
  *                                                              its number
  *               an edit made in trace that cannot              left: the app says to discard it and make it again
  *               (or whose remaking failed)
+ *               a change of trace's own whose only conflict    merged here, with no agent (record-merge.ts): the
+ *               is the project record, the two sides           default branch merged in by a merge commit, the
+ *               changing different rows                        record merged row by row (test-esp32 log #191, #213)
  *               anything else (a specialist's change, a        the worker (trace-worker.yml, workflow_dispatch) is
  *               person's branch)                               started once for all of them: it merges the default
  *                                                              branch in, never a rebase or a force-push
@@ -28,6 +31,8 @@ import { ActionError, type Context } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
 import { editStore } from './edits.js'
 import { GitHubError, type GitHubApi, type PullStatus } from './github.js'
+import { type RecordMerge, mergeRecordOnly } from './record-merge.js'
+import { projectRule } from './actions-changes.js'
 
 /** The worker's workflow in a project (templates/workflows/trace-worker.yml, as `tracectl onboard` names it). */
 export const WORKER_WORKFLOW = 'trace-worker.yml'
@@ -42,6 +47,8 @@ export interface ConflictReport {
   conflicts: number[]
   /** edits made in trace, made again on the newest design */
   remade: number[]
+  /** their only conflict was the project record, and the rows did not overlap: merged here, no agent */
+  record: number[]
   /** handed to the worker: it merges the default branch into each */
   worker: number[]
   /** edits made in trace that cannot be made again: a person discards and makes them again */
@@ -77,11 +84,15 @@ export async function findConflicts(gh: GitHubApi, repo: string, o: { rounds?: n
  * asked about (change.resolve); absent, every one in conflict (hook.conflicts). Never throws for one change's sake: what
  * could not be done is in the report.
  */
-export async function resolveConflicts(ctx: Context, repo: string, o: { only?: readonly number[]; retry?: boolean; wait?: (ms: number) => Promise<void> } = {}): Promise<ConflictReport> {
+export async function resolveConflicts(ctx: Context, repo: string, o: {
+  only?: readonly number[]; retry?: boolean; wait?: (ms: number) => Promise<void>
+  /** the record-only merge (tests put a fake here) */
+  mergeRecord?: (gh: GitHubApi, number: number, prefix: string) => Promise<RecordMerge>
+} = {}): Promise<ConflictReport> {
   const gh = await ctx.deps.github()
   const found = await findConflicts(gh, repo, o.wait ? { wait: o.wait } : {})
   const conflicts = o.only ? found.conflicts.filter((c) => o.only!.includes(c.number)) : found.conflicts
-  const report: ConflictReport = { repo, conflicts: conflicts.map((c) => c.number), remade: [], worker: [], left: [], checking: found.checking, started: 'not-needed' }
+  const report: ConflictReport = { repo, conflicts: conflicts.map((c) => c.number), remade: [], record: [], worker: [], left: [], checking: found.checking, started: 'not-needed' }
   if (!conflicts.length) return report
 
   const edits = await editStore(ctx).list(repo).catch(() => [])
@@ -98,8 +109,20 @@ export async function resolveConflicts(ctx: Context, repo: string, o: { only?: r
     const done = await applyEdits(ctx, repo).catch(() => [])
     for (const n of mine) (done.some((a) => a.number === n && a.did === 'redone') ? report.remade : report.left).push(n)
   }
+  if (report.worker.length) {
+    // the record alone in conflict, its rows apart: merged here in seconds rather than by an agent job of minutes
+    const prefix = (await projectRule(ctx, repo).catch(() => null))?.prefix ?? 'claude/'
+    const merge = o.mergeRecord ?? ((g: GitHubApi, n: number, p: string) => mergeRecordOnly(ctx, g, repo, n, p))
+    const rest: number[] = []
+    for (const n of report.worker) {
+      const r = await merge(gh, n, prefix).catch((e: unknown): RecordMerge => ({ ok: false, why: String(e) }))
+      if (r.ok) report.record.push(n)
+      else rest.push(n)
+    }
+    report.worker = rest
+  }
   if (report.worker.length) report.started = await startWorker(gh, repo, o.retry ? report.worker : [])
-  if (report.remade.length) ctx.deps.githubCache?.bust(repo)
+  if (report.remade.length || report.record.length) ctx.deps.githubCache?.bust(repo)
   return report
 }
 
@@ -130,6 +153,7 @@ export async function startWorker(gh: GitHubApi, repo: string, retry: readonly n
 /** What change.resolve tells the person, in plain words, for the one change they asked about. */
 export function resolveWords(number: number, r: ConflictReport): string {
   if (r.remade.includes(number)) return 'trace made it again on the newest design. Its checks run again now, and it comes back to you when they pass.'
+  if (r.record.includes(number)) return 'Only the project record was in conflict, and the two sides changed different rows of it: trace merged the newest design into it. Its checks run again now, and it comes back to you when they pass.'
   if (r.left.includes(number)) throw new ActionError('This change was made in trace and cannot be made again on the newest design. Discard it and make it again.')
   if (r.worker.includes(number)) {
     switch (r.started) {

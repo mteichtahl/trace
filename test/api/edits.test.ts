@@ -16,7 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/api/actions.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { applyEdits } from '../../src/api/apply-edits.js'
-import { resolveConflicts } from '../../src/api/conflicts.js'
+import { resolveConflicts, resolveWords } from '../../src/api/conflicts.js'
 import { type ChangeFacts, editAcceptance, editOf, editRecommendation, editVerdict, editsByBranch } from '../../src/api/changes.js'
 import { editStore } from '../../src/api/edits.js'
 import { requiresReview, withoutReview } from '../../src/api/actions-rules.js'
@@ -362,7 +362,22 @@ describe('changes in conflict, found and set going by trace (src/api/conflicts.t
     await editStore(ctx(ADMIN)).put(edit({ applies: 'auto' }))
     const r = await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait })
     expect(r).toMatchObject({ conflicts: [1, 2, 3], remade: [1], worker: [2, 3], left: [], checking: [], started: 'yes' })
-    expect(github.did).toEqual(['reset trace/settings-quantity-1 sha-main', 'put trace/settings-quantity-1 .trace/project.db', 'dispatch trace-worker.yml main'])
+    // the record-only merge looked first (GET only: no record in this fake, so nothing was merged)
+    expect(github.did.filter((d) => !d.startsWith('GET '))).toEqual(['reset trace/settings-quantity-1 sha-main', 'put trace/settings-quantity-1 .trace/project.db', 'dispatch trace-worker.yml main'])
+  })
+
+  it('a change whose only conflict is the record, its rows apart: merged here, and the worker not started for it (log #213)', async () => {
+    github.add(2, 'claude/task-renders', { mergeable: 'dirty' })
+    github.add(3, 'claude/emc-ferrite', { mergeable: 'dirty' })
+    const asked: number[] = []
+    const r = await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait, mergeRecord: async (_g, n, prefix) => { asked.push(n); expect(prefix).toBe('claude/'); return n === 2 ? { ok: true, commit: sha(9) } : { ok: false, why: 'docs/a.md changed on both sides' } } })
+    expect(asked).toEqual([2, 3])
+    expect(r).toMatchObject({ conflicts: [2, 3], record: [2], worker: [3], started: 'yes' })
+    github.did.length = 0
+    const only = await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait, only: [2], mergeRecord: async () => ({ ok: true, commit: sha(9) }) })
+    expect(only).toMatchObject({ record: [2], worker: [], started: 'not-needed' })
+    expect(github.did.filter((d) => d.startsWith('dispatch'))).toEqual([])
+    expect(resolveWords(2, only)).toMatch(/Only the project record was in conflict.*different rows/)
   })
 
   it('still unknown after settling: reported as checking, nothing started', async () => {
@@ -393,7 +408,7 @@ describe('changes in conflict, found and set going by trace (src/api/conflicts.t
     github.add(3, 'claude/emc-ferrite', { mergeable: 'dirty' })
     const r = await run(USER, 'change.resolve', { repo: REPO, number: 2 })
     expect(r).toMatchObject({ conflict: true, worker: true, remade: false, text: expect.stringMatching(/bringing it up to date/) })
-    expect(github.did).toEqual(['dispatch trace-worker.yml main {"retry":"2"}'])
+    expect(github.did.filter((d) => !d.startsWith('GET '))).toEqual(['dispatch trace-worker.yml main {"retry":"2"}'])
     expect((await decisions()).find((d) => d.kind === 'change.resolve')).toMatchObject({ by: 'c-user@example.com' })
   })
 
@@ -401,7 +416,7 @@ describe('changes in conflict, found and set going by trace (src/api/conflicts.t
     github.add(2, 'claude/impl-regulator', { mergeable: 'dirty' })
     github.oldWorkflow = true
     expect(await run(USER, 'change.resolve', { repo: REPO, number: 2 })).toMatchObject({ worker: true, text: expect.stringMatching(/workflows are older/) })
-    expect(github.did).toEqual(['dispatch trace-worker.yml main'])
+    expect(github.did.filter((d) => !d.startsWith('GET '))).toEqual(['dispatch trace-worker.yml main'])
   })
 
   it('change.resolve on a change not in conflict starts nothing; an edit that cannot be made again is refused', async () => {
