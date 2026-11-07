@@ -33,6 +33,7 @@ import { type BoardFacts, boardFacts, repoPath } from './board.js'
 import {
   CAPABILITIES, FIGURES, type FigureStatus, RECOMMENDED, RECOMMENDED_WHY, SOURCES, UPLOAD, capabilitiesStamp, figureStatus, isCnc, pageText, processRow, staleness,
 } from './capabilities.js'
+import { sameApartFromStamps } from './stable-output.js'
 import { ALL_ENGINE_FILES, type EngineResult, FORMATS, PY_DIR, partsFor, runCase } from './engine.js'
 import { copyRepoFile, readRepoFile, removeRepoFile, repoDir, repoFile, writeRepoFile } from './paths.js'
 import { type BuildInputs, engineStamp, sha256, staleReasons } from './stale.js'
@@ -301,13 +302,16 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
     repoFile(r, OUT_DIR)
     const c = await runCase({ facts, settings: s, script, caseFile, formats })
     const res = c.result
-    // mechanical/out/: this build's files only
+    // mechanical/out/: this build's files only. A file the same as the one there but for its export time stamp or
+    // random ids is left as it is, so a build that changed nothing changes no file (test-esp32 log #222)
     repoDir(r, OUT_DIR)
-    for (const f of ALL_ENGINE_FILES) if (f !== 'result.json') removeRepoFile(r, `${OUT_DIR}/${f}`)
+    const unchanged = new Set(Object.entries(c.outputs).filter(([name, p]) => name !== 'result.json' && existsSync(join(r, OUT_DIR, name))
+      && sameApartFromStamps(name, readRepoFile(r, `${OUT_DIR}/${name}`), readFileSync(p))).map(([name]) => name))
+    for (const f of ALL_ENGINE_FILES) if (f !== 'result.json' && !unchanged.has(f)) removeRepoFile(r, `${OUT_DIR}/${f}`)
     const written: string[] = []
     for (const [name, p] of Object.entries(c.outputs)) {
       if (name === 'result.json') continue
-      writeRepoFile(r, `${OUT_DIR}/${name}`, readFileSync(p))
+      if (!unchanged.has(name)) writeRepoFile(r, `${OUT_DIR}/${name}`, readFileSync(p))
       written.push(`${OUT_DIR}/${name}`)
     }
     written.sort()
