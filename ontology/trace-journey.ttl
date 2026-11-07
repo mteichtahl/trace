@@ -17,7 +17,7 @@
     rdfs:label "trace journey" ;
     rdfs:comment "Templates, stages, gates and their criteria, signatures, waivers, questions, decisions, hand-offs and jobs: the record of how a project got where it is." ;
     owl:imports <https://trace-eda.com/ns/trace/core> ;
-    owl:versionInfo "0.3.1" .
+    owl:versionInfo "0.4.0" .
 
 # ================================================================== templates, journey, revisions, stages
 
@@ -172,6 +172,10 @@ trace:PlacedOrder a owl:Class ;
 trace:FabQuote a owl:Class ;
     rdfs:label "Fab quote" ;
     rdfs:comment "What the fab house said an order costs, as a person read it off the fab house's site: its date, total, breakdown and what it was for." .
+
+trace:QuoteNote a owl:Class ;
+    rdfs:label "Quote note" ;
+    rdfs:comment "What happened to a fab quote after it was recorded: corrected by a new quote, withdrawn as a mistake, or an agent's quote confirmed by a person." .
 
 trace:Shipment a owl:Class ;
     rdfs:label "Shipment" ;
@@ -902,6 +906,24 @@ trace:placedAs a owl:ObjectProperty ;
     rdfs:comment "The order placed against the quote." ;
     rdfs:domain trace:FabQuote ;
     rdfs:range trace:PlacedOrder .
+
+trace:aboutQuote a owl:DatatypeProperty ;
+    rdfs:label "about the quote" ;
+    rdfs:comment "The identifier of the quote the note is about: a person's quote, or an agent's when it was confirmed." ;
+    rdfs:domain trace:QuoteNote ;
+    rdfs:range xsd:string .
+
+trace:quoteNoteKind a owl:DatatypeProperty ;
+    rdfs:label "what happened" ;
+    rdfs:comment "Corrected, withdrawn or confirmed." ;
+    rdfs:domain trace:QuoteNote ;
+    rdfs:range xsd:string .
+
+trace:replacedByQuote a owl:ObjectProperty ;
+    rdfs:label "replaced by" ;
+    rdfs:comment "The quote that takes its place: the correction, or the person's copy of an agent's quote." ;
+    rdfs:domain trace:QuoteNote ;
+    rdfs:range trace:FabQuote .
 
 trace:fromPersonsWords a owl:DatatypeProperty ;
     rdfs:label "from the words" ;

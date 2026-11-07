@@ -585,7 +585,17 @@ export interface QuoteView {
   by: string
   /** recorded by an agent from these words of the person's */
   said?: string
-  /** from the quote before: the total's change (null across currencies) and what trace can tell moved */
+  /** an agent's, not in the journey record yet: confirmed by the person (quote.confirm) before an order links to it */
+  agent?: true
+  /** an agent's the person confirmed into the journey record, by whom */
+  confirmedBy?: string
+  /** the quote this one corrects (quote.correct): its date and total as entered, and what was wrong */
+  corrects?: { id: string; on: string; total: number; reason: string | null; by: string }
+  /** corrected by another quote: kept to see, out of the totals */
+  correctedBy?: string
+  /** withdrawn as a mistake (quote.withdraw): kept to see, out of the totals */
+  withdrawn?: { reason: string; by: string; at: string }
+  /** from the quote before that counts: the total's change (null across currencies) and what trace can tell moved */
   change: { amount: number | null; pct: number | null; reasons: string[] } | null
   /** the order placed against it: paid minus quoted in `difference` */
   order: { id: string; number: string; paid: number | null; difference: number | null } | null

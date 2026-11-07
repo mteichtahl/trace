@@ -234,6 +234,13 @@ export const TABLES: readonly TableMap[] = [
     },
   },
   {
+    db: 'journey', table: 'quote_notes', class: 'QuoteNote', kind: 'quote-note', key: 'id',
+    columns: {
+      id: ID(), quote_id: { prop: 'aboutQuote' }, kind: { prop: 'quoteNoteKind' }, by_quote: { prop: 'replacedByQuote', ref: 'quote' },
+      reason: { prop: 'reason' }, by: { prop: 'recordedBy' }, at: { prop: 'recordedAt', as: 'time' },
+    },
+  },
+  {
     db: 'journey', table: 'stuck_dismissals', class: 'StuckDismissal', kind: 'stuck-dismissal', key: 'stuck_id',
     columns: {
       stuck_id: { prop: 'dismisses' }, job_id: { prop: 'fromJob', ref: 'job' }, reason: { prop: 'reason' },

@@ -48,3 +48,37 @@ export function againstBudget(o: Pick<OrderView, 'basis' | 'cost' | 'estimate' |
   if (o.estimate) return { amount: o.estimate.high, what: 'the estimate\'s high end' }
   return o.target != null ? { amount: o.target, what: 'the target' } : null
 }
+
+/**
+ * A unit price. Below a cent it keeps its digits, up to five places (US$0.002, US$0.00202), so a change of a fraction
+ * of a cent shows in the two columns (#229).
+ */
+export function unitPrice(n: number, c: string): string {
+  if (!(n > 0 && n < 0.01)) return money(n, c)
+  const digits = n.toFixed(5).replace(/0+$/, '')
+  return `${money(0, c).replace(/0$/, '')}${digits.length < 5 ? n.toFixed(3) : digits}`
+}
+
+type PriceLine = Pick<OrderView['parts'][number], 'now' | 'then' | 'need'>
+
+/** One line's change since sign-off at the build quantity: "+US$0.40", "−US$0.10", "up under a cent", or null. */
+export function lineChange(p: PriceLine, boards: number, currency: string): string | null {
+  if (p.now === p.then) return null
+  const d = (p.now - p.then) * (p.need ?? boards)
+  return Math.abs(d) < 0.005 ? `${d > 0 ? 'up' : 'down'} under a cent` : signedMoney(d, currency)
+}
+
+/**
+ * The parts check's price sentence: the rises and the drops since sign-off, and their net change for the build. A net
+ * change that rounds to nothing is said as under a cent, not "adding US$0.00" (test-esp32 round 6, #229).
+ */
+export function priceChangeLine(parts: PriceLine[], boards: number, currency: string): string {
+  const up = parts.filter((p) => p.now > p.then).length
+  const down = parts.filter((p) => p.now < p.then).length
+  if (!up && !down) return 'No price changed since sign-off.'
+  const n = (k: number) => `${k} price${k > 1 ? 's' : ''}`
+  const moved = up && down ? `${n(up)} went up and ${down} went down` : up ? `${n(up)} went up` : `${n(down)} went down`
+  const net = parts.reduce((s, p) => s + (p.now - p.then) * (p.need ?? boards), 0)
+  const words = Math.abs(net) < 0.005 ? `less than a cent${up && down ? ' net' : ''}` : up && down ? `${signedMoney(net, currency)} net` : signedMoney(net, currency)
+  return `${moved} since sign-off: ${words} for ${boards} boards.`
+}

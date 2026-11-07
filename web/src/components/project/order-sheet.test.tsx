@@ -9,7 +9,7 @@ import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { Budgets } from './budgets'
 import { gateSpendLine } from './gate-spend'
-import { againstBudget, orderAmount, orderHeadline } from './order-sheet'
+import { againstBudget, lineChange, orderAmount, orderHeadline, priceChangeLine, unitPrice } from './order-sheet'
 
 vi.mock('@tanstack/react-router', async (orig) => ({ ...(await orig<object>()), Link: ({ children }: { children: ReactNode }) => children }))
 
@@ -70,5 +70,30 @@ describe('the build budget at Fabricate (#218)', () => {
     expect(build).toHaveTextContent('Forecast for the order10 boards at US$9 each, the build plan\'s target unit costUS$90')
     expect(build).not.toHaveTextContent('ready to place')
     expect(gateSpendLine(c)).toMatch(/US\$185 left\. After US\$90 forecast for the order: 10 boards at US\$9 each, the build plan's target unit cost\./)
+  })
+})
+
+describe('price changes since sign-off (#229)', () => {
+  // round 6: "2 prices went up since sign-off, adding US$0.00 for 10 boards", and "+US$0.00" on both lines, while C1/C2 went down
+  const parts = [
+    { then: 0.0037, now: 0.0038 },
+    { then: 0.0012, now: 0.0013 },
+    { then: 0.04, now: 0.03, need: 20 },
+  ]
+  it('counts the drops too, and says the net change', () => {
+    expect(priceChangeLine(parts, 10, 'USD')).toBe('2 prices went up and 1 went down since sign-off: −US$0.20 net for 10 boards.')
+    expect(priceChangeLine([{ then: 1, now: 1 }], 10, 'USD')).toBe('No price changed since sign-off.')
+    expect(priceChangeLine([{ then: 0.5, now: 0.54 }], 10, 'USD')).toBe('1 price went up since sign-off: +US$0.40 for 10 boards.')
+  })
+  it('never says US$0.00 for a change of a fraction of a cent', () => {
+    expect(priceChangeLine(parts.slice(0, 2), 10, 'USD')).toBe('2 prices went up since sign-off: less than a cent for 10 boards.')
+    expect(lineChange(parts[0]!, 10, 'USD')).toBe('up under a cent')
+    expect(lineChange(parts[2]!, 10, 'USD')).toBe('−US$0.20')
+    expect(lineChange({ then: 1, now: 1 }, 10, 'USD')).toBeNull()
+    // the two columns show the change too
+    expect(unitPrice(0.0037, 'USD')).toBe('US$0.0037')
+    expect(unitPrice(0.00202, 'USD')).toBe('US$0.00202')
+    expect(unitPrice(0.002, 'USD')).toBe('US$0.002')
+    expect(unitPrice(0.21, 'USD')).toBe('US$0.21')
   })
 })
