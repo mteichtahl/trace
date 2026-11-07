@@ -166,7 +166,8 @@ jobs:
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","tests-pass"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     steps:
       # a run that only adds projects (add_projects) skips the tests on purpose: skipped counts as passed there only
-      - env:
+      - name: every job it needs passed
+        env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
           ADD_PROJECTS: ${{ inputs.add_projects && 'true' || 'false' }}
         run: |

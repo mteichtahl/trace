@@ -224,6 +224,14 @@ describe('the update\'s steps, read from its run\'s jobs', () => {
     expect(updateSteps([{ id: 1, name: 'x', status: 'completed', conclusion: 'skipped' }])).toEqual([{ name: 'x', state: 'done' }])
   })
 
+  it('a step left unnamed shows as its job, not as its shell (test-esp32 log R4)', () => {
+    const run: RunJob[] = [jobs[0]!, { id: 14, name: 'tests pass', status: 'completed', conclusion: 'success', steps: [step(1, 'Set up job', 'completed', 'success'), step(2, 'Run for r in $RESULTS; do', 'completed', 'success')] }]
+    expect(updateSteps(run).map((s) => s.name)).toEqual(['typescript › npm ci', 'tests pass'])
+    const two: RunJob[] = [{ id: 15, name: 'build', status: 'completed', conclusion: 'success', steps: [step(1, 'Run npm ci', 'completed', 'success'), step(2, 'Bundle', 'completed', 'success')] }, jobs[2]!]
+    expect(updateSteps(two).map((s) => s.name)).toEqual(['build › step 1', 'build › Bundle', 'tests pass'])
+    expect(updateSteps([{ id: 16, name: 'checkout', status: 'completed', conclusion: 'success', steps: [step(1, 'Run actions/checkout@v4', 'completed', 'success')] }]).map((s) => s.name)).toEqual(['Run actions/checkout@v4'])
+  })
+
   it('a failed step is failed, and its job is the one whose log is read', () => {
     const failing: RunJob[] = [jobs[0]!, { id: 12, name: 'update-installation', status: 'completed', conclusion: 'failure', steps: [step(1, 'Test', 'completed', 'success'), step(2, 'Deploy', 'completed', 'failure')] }]
     expect(updateSteps(failing).at(-1)).toEqual({ name: 'update-installation › Deploy', state: 'failed' })
