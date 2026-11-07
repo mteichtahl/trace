@@ -111,6 +111,18 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(acceptance(facts({ state: 'merged' }), true).blockers).toEqual(['It is already accepted into the design.'])
   })
 
+  // test-esp32 #76: a change just brought up to date said both "No checks have run on it yet" and "Its checks passed,
+  // but this repository asks for a review trace cannot give": GitHub says "blocked" until the required checks report
+  it('a change blocked only because its checks have not reported yet says one thing: its checks are still to run', () => {
+    const fresh = facts({ mergeable: 'blocked', checks: checks({ total: 0, passed: 0 }) })
+    expect(verdictOf(fresh)).toBe('checking')
+    expect(recommendationOf(fresh)).toEqual({ verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' })
+    expect(acceptance(fresh, true).blockers).toEqual(['No checks have run on it yet.'])
+    expect(recommendationOf(fresh).why).not.toMatch(/checks passed/)
+    // checks trace could not read on a blocked change: said as that, never as passed
+    expect(recommendationOf(facts({ mergeable: 'blocked', checks: null })).why).toBe('trace could not read its checks. Look again in a minute.')
+  })
+
   it('checks that could not be read, or none run yet, are never ready and never accepted', () => {
     const unread = facts({ checks: null })
     expect(verdictOf(unread)).toBe('checking')

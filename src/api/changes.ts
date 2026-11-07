@@ -551,7 +551,9 @@ function verdictOfOwn(f: ChangeFacts): Verdict {
   // person should hear first
   if (f.unfinished || f.answers?.length) return 'unfinished'
   if ((f.checks?.running ?? 0) > 0 || f.mergeable === 'unknown') return 'checking'
-  if (f.mergeable === 'behind' || f.mergeable === 'blocked') return 'blocked'
+  // "blocked" before any check reported is GitHub waiting for the required ones (a change just brought up to date):
+  // checking, as below, not stopped by a rule (test-esp32 #76)
+  if (f.mergeable === 'behind' || (f.mergeable === 'blocked' && (f.checks?.total ?? 0) > 0)) return 'blocked'
   // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance). A token
   // that may not read checks will not fix itself by waiting: blocked, not checking
   if (f.checks === null && f.checks_denied) return 'blocked'
@@ -607,8 +609,10 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.mergeable === 'unknown') return { verdict: 'wait', why: 'GitHub is still working out whether it can be merged. Look again in a minute.' }
   if (f.mergeable === 'behind') return { verdict: 'none', why: 'It is behind changes accepted since it was made. trace will bring it up to date.' }
   // its checks are done, yet GitHub says the repository's rules stop it: almost always a required approving review,
-  // which trace cannot give (GitHub refuses an approval from the account that opened it)
-  if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
+  // which trace cannot give (GitHub refuses an approval from the account that opened it). A change just brought up to
+  // date is "blocked" too, until its required checks report: none have run, so it is not that (test-esp32 #76: the
+  // page said "Its checks passed, but …" beside "No checks have run on it yet")
+  if (f.mergeable === 'blocked' && (f.checks?.total ?? 0) > 0) return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
   if (f.checks === null) return f.checks_denied ? { verdict: 'none', why: CHECKS_DENIED } : { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
   if (f.stacked) return { verdict: 'wait', why: `${stackedWords(f.stacked)} Its checks passed: it follows that change into the design once it is accepted.` }
