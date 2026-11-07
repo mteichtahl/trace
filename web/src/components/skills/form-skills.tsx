@@ -10,7 +10,7 @@
  *   A released revision is never edited: a change to it opens the next revision.
  */
 import { ArrowRight } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -75,6 +75,30 @@ export function draftFrom(w: Waiver): Partial<WaiverDraft> {
 
 const VAGUE = /^(not needed|n\/?a|none|no need|unnecessary|not required|later|tbd|-+)\.?$/i
 
+/**
+ * What the "What is waived" step lists: the chosen item first, and only it while `all` is false (opened from a finding's
+ * "Waive this one…", test-esp32 #148: the chosen finding sat 28th, below the fold, and read as if nothing were chosen).
+ * Nothing chosen, or a choice not in the list: all of them, in their order. Pure.
+ */
+export function waivableShown<T extends { id: string }>(list: readonly T[], what: string | undefined, all: boolean): T[] {
+  const chosen = list.find((w) => w.id === what)
+  if (!chosen) return [...list]
+  return all ? [chosen, ...list.filter((w) => w !== chosen)] : [chosen]
+}
+
+/**
+ * The "Where exactly" example, for what is waived and where it is caught: a rule check's finding is run again on the
+ * release files, a stock finding when the order is placed, a requirement in a later stage's simulation, anything on
+ * the bench in a bring-up step. Pure.
+ */
+export function whereExample(caught: WaiverDraft['caught'], kind: 'requirement' | 'finding' | 'test' | undefined, title = ''): string {
+  if (caught === 'bench') return kind === 'finding' ? 'Bring-up step 1 (inspect the part on the assembled board)' : 'Bring-up step 3 (unpowered rail check)'
+  if (kind === 'finding' && /\bstock\b/i.test(title)) return 'Fabricate: the stock check when the order is placed'
+  if (kind === 'finding') return 'Sign-off: the rule checks on the release files'
+  if (kind === 'test') return 'Bring-up: the same test on the first assembled board'
+  return 'Prove: SPICE stability run on the LDO'
+}
+
 /** The waiver's quality bar, worked out from the form. Pure, so it is tested on its own. */
 export function waiverChecks(d: WaiverDraft): Record<string, CriterionStatus> {
   const reasonOk = d.reason.trim().length >= 12 && !VAGUE.test(d.reason.trim())
@@ -110,7 +134,15 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
       : []),
     ...(v?.waivable ?? []),
   ]
+  // a finding it was opened with ("Waive this one…") that the list does not name: still the one chosen, in the gate's words
+  const opened = d.what?.startsWith('finding:') && !waivable.some((w) => w.id === d.what)
+    ? j.data?.gates.flatMap((g) => g.criteria.flatMap((c) => c.findings ?? [])).find((f) => `finding:${f.id}` === d.what)
+    : undefined
+  if (opened) waivable.unshift({ id: `finding:${opened.id}`, kind: 'finding', title: opened.text })
   const target = waivable.find((w) => w.id === d.what)
+  // opened with something chosen ("Waive this one…", "Take it again"): only it, until the person asks for the rest
+  const [all, setAll] = useState(!about && !replaces)
+  const shown = waivableShown(waivable, d.what, all)
   const againstRec = target?.recommendation === 'fix'
   const local = { ...waiverChecks(d), reasons: againstRec && (d.reasonAgainst ?? '').trim().length < 3 ? 'not_met' as const : 'met' as const }
   const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...local }, s.goTo)
@@ -140,7 +172,7 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
         {s.step.id === 'what' && (
           <>
             <RadioGroup value={d.what ?? ''} onValueChange={(x) => set({ what: x })} aria-label="What is waived" className="gap-2">
-              {waivable.map((w) => (
+              {shown.map((w) => (
                 <Label key={w.id} className="flex cursor-pointer items-start gap-3 rounded-xl border p-4 font-normal has-[[data-state=checked]]:border-primary">
                   <RadioGroupItem value={w.id} className="mt-0.5" />
                   <span className="min-w-0 flex-1 space-y-1">
@@ -151,6 +183,9 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
                   </span>
                 </Label>
               ))}
+              {shown.length < waivable.length ? (
+                <Button variant="outline" size="sm" className="justify-self-start" onClick={() => setAll(true)}>Choose something else ({waivable.length - shown.length} more)</Button>
+              ) : (
               <Label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4 font-normal has-[[data-state=checked]]:border-primary">
                 <RadioGroupItem value="other" className="mt-0.5" />
                 <span className="flex-1 space-y-2">
@@ -158,6 +193,7 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
                   {d.what === 'other' && <Input value={d.custom ?? ''} onChange={(e) => set({ custom: e.target.value })} placeholder="The requirement, finding or test, by its id" aria-label="What is waived" />}
                 </span>
               </Label>
+              )}
             </RadioGroup>
             {againstRec && (
               <div className="space-y-1.5">
@@ -206,7 +242,7 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
             {(d.caught === 'later' || d.caught === 'bench') && (
               <div className="space-y-1.5">
                 <Label htmlFor="w-where">Where exactly</Label>
-                <Input id="w-where" value={d.where} onChange={(e) => set({ where: e.target.value })} placeholder={d.caught === 'bench' ? 'Bring-up step 3 (unpowered rail check)' : 'Prove: SPICE stability run on the LDO'} />
+                <Input id="w-where" value={d.where} onChange={(e) => set({ where: e.target.value })} placeholder={whereExample(d.caught, target?.kind, target?.title)} />
                 <p className="text-xs text-muted-foreground">A later check is added to the test plan as a test item.</p>
               </div>
             )}
