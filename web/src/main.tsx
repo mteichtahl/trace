@@ -5,6 +5,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ApiError, onAnswer } from '@/lib/api'
 import { afterWrite } from '@/lib/after-write'
+import { listenForNewVersion } from '@/lib/new-version'
+import { RouteError } from '@/components/route-error'
 import { routeTree } from './routeTree.gen'
 
 export const queryClient = new QueryClient({
@@ -26,6 +28,8 @@ const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultPreload: 'intent',
+  // a page whose code a deploy replaced reloads the tab once; anything else is said in words (components/route-error.tsx)
+  defaultErrorComponent: RouteError,
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
 })
@@ -35,6 +39,9 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+// Vite could not preload a page's code: a deploy replaced it, so the tab reloads once (lib/new-version.ts)
+listenForNewVersion()
 
 async function start() {
   // mock mode: development only, never in a production build (the branch is removed at build time)
