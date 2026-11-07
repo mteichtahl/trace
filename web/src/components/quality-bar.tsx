@@ -7,10 +7,11 @@
  * yet, so nothing could be saved). `saving`: the person's last change is still being saved, and the bar is checked on
  * the saved draft (a tick pressed just before Submit would otherwise be checked as not there yet, test-esp32 #64), so
  * a Submit pressed meanwhile waits for the save and then submits. Only the bar for the screen's width is drawn, so
- * there is one Submit in the page.
+ * there is one Submit in the page. The bar is in trace's assistant's context, as the person sees it.
  */
 import { Check, Circle, CircleMinus, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useTraceContext } from '@/components/chat/context'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -69,6 +70,9 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
   const met = checks.filter((c) => c.status !== 'not_met').length
   const todo = missing(checks)
   const ready = todo.length === 0 && !blocked
+  // trace's assistant reads the bar in the person's own words: asked about an item on it, it knows what it says and
+  // whether it is met (test-esp32 #53: it could not see "Firmware matches the schematic")
+  useTraceContext(checks.length ? { label: `Quality bar · ${met} of ${checks.length} met`, description: 'The quality bar along the foot of the screen, word for word as the person sees it, each check met, not met or waived', value: { checks: checks.map((c) => ({ text: c.text, status: c.status })) } } : null, 'quality-bar')
   // Submit pressed before it could submit: say why, until it can
   const [asked, setAsked] = useState(false)
   // Submit pressed while the draft was being saved: submit once it is
