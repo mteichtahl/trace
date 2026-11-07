@@ -102,6 +102,11 @@ The repository `mteichtahl/trace` is not onboarded with trace's harness, so it h
   a pull request gains commits, it merges them into the ones built on it. It uses the `TRACE_TOKEN` secret when the
   repository has one, so its pushes start CI; with only `GITHUB_TOKEN` it still keeps the stack in order, and CI runs
   on the next push.
+- Merge the next one up only once the workflow has moved it onto `main`. If one is merged into its base after the
+  base's own pull request merged (before the workflow moved it), its commits are on a branch nothing merges any more
+  (#361 into #356's branch, test log #237): the workflow then opens a pull request from `stack/carry-<n>` that carries
+  them on to where that branch went (`main`, or the first branch up the stack still open), and says so on the merged
+  one. Review and merge it like any other. Opened with `GITHUB_TOKEN` only, it starts no CI until its next push.
 
 ## Not done
 
