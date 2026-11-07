@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EventType } from '@ag-ui/core'
 import type { ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime'
-import { MAX_ROUNDS, TOOL_RUN_EVENT, toBedrock } from '../../src/web/agui.js'
+import { BACKEND_TOOLS, MAX_ROUNDS, TOOL_RUN_EVENT, toBedrock } from '../../src/web/agui.js'
 import { TOOL_RUN_ID } from '../../src/core/run-logs.js'
 import { API_UNAVAILABLE } from '../../src/web/call.js'
 import { accessToken } from '../api/fixtures.js'
@@ -46,6 +46,13 @@ describe('the trace agent over AG-UI', () => {
     expect(sent.system?.[0]?.text).toMatch(/recommendation/)
     expect(sent.messages).toEqual([{ role: 'user', content: [{ text: 'How is the soil sensor doing?' }] }])
     expect(sent.toolConfig?.tools?.map((x) => x.toolSpec?.name)).toContain('journey_get')
+  })
+
+  it('can say what trace is doing (jobs_list), and is told the workflow runs in status are internal names (test log R25)', () => {
+    expect(BACKEND_TOOLS.jobs_list).toMatchObject({ action: 'jobs.list' })
+    expect(BACKEND_TOOLS.status!.description).toMatch(/Never name a workflow to the person/)
+    expect(BACKEND_TOOLS.status!.description).toMatch(/jobs_list/)
+    expect(BACKEND_TOOLS.runs!.description).toMatch(/Not the agents' jobs/)
   })
 
   it('runs a backend tool as the person, between STEP_STARTED and STEP_FINISHED, then answers', async () => {

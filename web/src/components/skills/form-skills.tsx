@@ -17,7 +17,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
-import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { DecisionCard } from '@/components/decision-card'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { FocusLayout } from '@/components/focus/focus-layout'
@@ -32,6 +31,7 @@ import { type SkillDef, pictureOf } from './definitions'
 import { StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
+import { SkillChat } from './skill-chat'
 
 // ------------------------------------------------------------------ waiver
 
@@ -159,7 +159,7 @@ export function WaiverSkill({ repo, def, about, replaces }: { repo: string; def:
       outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       onSubmit={() => s.submit(() => call('skill.submit', { repo, skill: def.id, draft: d }), d.replaces ? `Waiver taken again. ${d.replaces} is withdrawn, and the record keeps both.` : 'Waiver taken. It is listed at every later gate until it closes.')}
-      trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
+      trace={<SkillChat repo={repo} skill={def.id} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >
       <StepHeader def={def} index={s.stepIndex} />
       {d.replaces && (
@@ -309,7 +309,7 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
       outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       onSubmit={() => s.submit(async () => { const r = await call('task', { repo, request }); if (!r.accepted) throw new Error(r.reason ?? 'trace did not accept the request') }, 'Change request submitted. An admin approves or rejects it at a gate.')}
-      trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
+      trace={<SkillChat repo={repo} skill={def.id} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >
       <StepHeader def={def} index={s.stepIndex} />
       <div className="mt-5 space-y-4">

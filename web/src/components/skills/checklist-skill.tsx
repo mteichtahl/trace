@@ -17,7 +17,6 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { StatusBadge } from '@/components/status-badge'
 import { QueryError } from '@/components/states'
@@ -31,6 +30,7 @@ import { StepPicture } from './step-picture'
 import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
 import { InspectionPanel } from './inspection-panel'
 import { BenchReadings } from '@/components/project/build-record'
+import { SkillChat } from './skill-chat'
 
 interface Draft extends SkillDraftBase { ticked: string[] }
 
@@ -122,7 +122,7 @@ export function ChecklistSkill({ repo, def }: { repo: string; def: SkillDef }) {
       draftSavedAt={s.draft.savedAt}
       aside={aside}
       stop={{ visible: powered, onStop: () => void stop() }}
-      trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} placeholder="Note something about this step, or ask…" />}
+      trace={<SkillChat repo={repo} skill={def.id} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} placeholder="Note something about this step, or ask…" />}
     >
       <StepHeader def={def} index={s.stepIndex} />
       {out.length > 0 && (
