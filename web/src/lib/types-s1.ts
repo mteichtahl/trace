@@ -229,6 +229,8 @@ export interface OrderSheetView {
     gate: { id: string; signed: { by: string; at: string } | null } | null
     sheet: 'met' | 'not_met' | 'waived' | null
     order: { number: string; paid: number | null; currency: string; ship: string | null } | null
+    /** the newest JLCPCB quote of this revision, as the person read it off JLCPCB (absent from an older API) */
+    quote?: { id: string; on: string; total: number; currency: string; quantity: number } | null
   }
 }
 
@@ -529,6 +531,11 @@ export interface OrderView {
   missing?: string[]
   /** where the expected cost comes from: the build plan's target (no quote yet), or a quote */
   basis?: 'target' | 'quote'
+  /**
+   * the order being prepared: the newest JLCPCB quote of the revision (its cost when basis is 'quote'); a placed order:
+   * the quote it was placed against, and what was paid against it (`difference`: paid minus quoted)
+   */
+  quote?: { id: string; on: string; total: number; currency: string; quantity?: number; by?: string; agent?: boolean; difference?: number | null }
   /** the build plan's target for the order, null when no target unit cost is set */
   target?: number | null
   /**
@@ -557,7 +564,38 @@ export interface OrderView {
   deliveredAt?: string | null
   meanwhile?: { title: string; state: 'done' | 'running' | 'todo' }[]
 }
+/** One JLCPCB quote (build.get quotes, newest first): what JLCPCB said the order costs, as the person read it off JLCPCB. */
+export interface QuoteView {
+  id: string
+  /** the quote's date (YYYY-MM-DD) and when it was recorded */
+  on: string
+  at: string
+  total: number
+  currency: string
+  quantity: number
+  revision: string
+  fab: string
+  lines: { kind: QuoteLineKind; amount: number; label: string }[]
+  options: { option: string; value: string }[]
+  /** the release package run the options are from; null: the person's own */
+  optionsFrom: string | null
+  partsRun: string | null
+  link: string | null
+  why: string | null
+  by: string
+  /** recorded by an agent from these words of the person's */
+  said?: string
+  /** from the quote before: the total's change (null across currencies) and what trace can tell moved */
+  change: { amount: number | null; pct: number | null; reasons: string[] } | null
+  /** the order placed against it: paid minus quoted in `difference` */
+  order: { id: string; number: string; paid: number | null; difference: number | null } | null
+}
+export type QuoteLineKind = 'pcb' | 'assembly' | 'components' | 'extended' | 'stencil' | 'shipping' | 'tax' | 'other'
+export interface QuoteInput { on?: string; total: number; currency?: string; quantity?: number; lines?: { kind: QuoteLineKind; amount: number }[]; options?: { option: string; value: string }[]; link?: string; why?: string }
+
 export interface BuildView {
+  /** every JLCPCB quote, newest first (from Fabricate on; absent before, and from an older API) */
+  quotes?: QuoteView[]
   /** `files`: null when the record does not count them */
   releases: { id: string; revision: string; at: string; commit: string; branch?: string | null; files: number | null; by: string; frozen: boolean }[]
   orders: OrderView[]
@@ -665,7 +703,7 @@ export interface CostView {
   /** the build: the newest order estimate's high end, else quantity × unit cost; null without either */
   forecast: number | null
   /** where the forecast comes from: the order estimate (its range, its parts check's date), or the build plan's target */
-  forecastBasis?: { kind: 'estimate'; low: number; high: number; at: string; partsRun: string } | { kind: 'target' }
+  forecastBasis?: { kind: 'quote'; total: number; on: string; id: string } | { kind: 'estimate'; low: number; high: number; at: string; partsRun: string } | { kind: 'target' }
   /** the build budget: what the order (boards, parts, case) may cost; cloud work never counts against it */
   budget?: number
   /** the cloud-work allowance: what trace's own cloud work may cost (US$); absent while none is set */
