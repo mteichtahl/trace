@@ -788,14 +788,25 @@ export function summaryBullets(o: { jobSummary: string | null; body: string; com
   // every job's on the branch, oldest first: a change two jobs made is not said by the second one's alone (log #18)
   const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => s?.trim() ?? '').filter(Boolean)
   if (jobs.length) {
-    return clean(jobs.flatMap((job) => {
+    const lines = jobs.map((job) => {
       const l = firstList(job)
-      return l.length ? l : job.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, '')).filter((x) => x.trim())
-    }))
+      return clean(l.length ? l : job.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, '')).filter((x) => x.trim()))
+    })
+    // several jobs' reports read as one would contradict each other ("Changes 2 requirements", then an earlier job's "I
+    // did not touch any requirement's words", log #166): each is labelled with the job it is from
+    const said = lines.filter((l) => l.length)
+    if (said.length < 2) return said.flat().slice(0, 12)
+    return [...new Set(said.flatMap((l, i) => l.map((x) => `**${jobLabel(i, said.length)}:** ${x}`)))].slice(0, 12)
   }
   const fromBody = clean(firstList(o.body))
   if (fromBody.length) return fromBody
   return clean(o.commits.map((m) => m.split('\n')[0] ?? ''))
+}
+
+/** Which of a change's jobs a report is from, oldest first: "Earlier job", "Latest job", or "Job 2 of 3". */
+function jobLabel(i: number, n: number): string {
+  if (i === n - 1) return 'Latest job'
+  return n === 2 ? 'Earlier job' : `Job ${i + 1} of ${n}`
 }
 
 /** What kind of file it is, for the review page's viewer: KiCad's schematic and board files open in the viewer. */
