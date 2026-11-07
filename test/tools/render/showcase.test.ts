@@ -12,6 +12,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { buildGraph } from '../../../src/ontology/graph.js'
 import { findBlender } from '../../../src/tools/render/blender.js'
 import { caseLook, caseScrews, dayIn, outlineBounds, projectSlug, shotName, showcase, svgColours } from '../../../src/tools/render/showcase.js'
+import { extraCaseParts, offBoardDrawn, recordFacts, showcaseName } from '../../../src/tools/render/subject.js'
 
 /** A small SVG logo in the same colours as logo.png: navy block (used twice), red bar, grey band, white text. */
 const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 256">
@@ -97,6 +98,52 @@ describe('names, days and looks', () => {
     expect(caseScrews(null)).toEqual([])
   })
 
+  it('names the pictures after the project in its record, the working folder only as a last resort (#215)', () => {
+    const folder = 'task-revision-a-was-cut-on-2026-11'
+    expect(showcaseName({ journey: 'test-esp32', kicad: 'desk-gadget', repository: 'mteichtahl/test-esp32-e2e', folder })).toEqual({ name: 'test-esp32', from: 'journey' })
+    expect(showcaseName({ given: 'Desk Gadget', journey: 'test-esp32', folder })).toEqual({ name: 'Desk Gadget', from: 'given' })
+    expect(showcaseName({ journey: ' ', kicad: 'desk-gadget', folder })).toEqual({ name: 'desk-gadget', from: 'kicad' })
+    expect(showcaseName({ repository: 'mteichtahl/test-esp32-e2e', folder })).toEqual({ name: 'test-esp32-e2e', from: 'repository' })
+    expect(showcaseName({ folder })).toEqual({ name: folder, from: 'folder' })
+    expect(shotName(showcaseName({ journey: 'test-esp32', folder }).name, 'A', '2026-11-06', 'case')).toBe('test-esp32_rev-A_2026-11-06_case.png')
+  })
+
+  it('reads the journey\'s name and the off-board parts from the project database', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'trace-showcase-db-')), 'project.db')
+    expect(recordFacts(path)).toEqual({ journey: null, offBoard: [] })
+    const db = new DatabaseSync(path)
+    db.exec("CREATE TABLE journey (id TEXT, name TEXT); INSERT INTO journey VALUES ('current', 'test-esp32')")
+    db.exec('CREATE TABLE arch_blocks (option TEXT, id TEXT, parts TEXT, status TEXT)')
+    const parts = JSON.stringify([{ mpn: '2.54-1*4PFemale', key: true }, { mpn: 'SSD1306-0.96-OLED-128x64-I2C-module', role: 'Lid-mounted OLED, cable to J2', key: true, off_board: true, size_mm: [27.3, 27.3, 2.37] }])
+    const ins = db.prepare('INSERT INTO arch_blocks VALUES (?,?,?,?)')
+    ins.run('A', 'oled', parts, 'proposed')
+    ins.run('B', 'oled', parts, 'proposed')
+    ins.run('C', 'batt', JSON.stringify([{ mpn: 'LiPo-1S', off_board: true }]), 'withdrawn')
+    db.close()
+    expect(recordFacts(path)).toEqual({ journey: 'test-esp32', offBoard: [{ mpn: 'SSD1306-0.96-OLED-128x64-I2C-module', role: 'Lid-mounted OLED, cable to J2', size_mm: [27.3, 27.3, 2.37] }] })
+  })
+
+  it('draws an off-board module the case places, and lists what it cannot draw (#214)', () => {
+    // the test run's case records: the OLED module is a case part at its mount on the lid
+    const jsonld = { '@graph': [
+      { '@id': 'case:base', '@type': 'EnclosurePart', partKind: 'base', boundingBox: [59.4, 44.4, 6.6] },
+      { '@id': 'case:lid', '@type': 'EnclosurePart', partKind: 'lid', boundingBox: [59.4, 44.4, 16] },
+      { '@id': 'case:oled-module', '@type': 'EnclosurePart', partKind: 'oled-module', boundingBox: [27.3, 27.3, 3.87] },
+      { '@id': 'case:x', '@type': 'EnclosurePart', partKind: '../evil' },
+    ] }
+    expect(extraCaseParts(jsonld)).toEqual([{ kind: 'oled-module', size_mm: [27.3, 27.3, 3.87] }])
+    expect(extraCaseParts(null)).toEqual([])
+    const oled = { mpn: 'SSD1306-0.96-OLED-128x64-I2C-module', role: 'Lid-mounted OLED, cable to J2', size_mm: [27.3, 27.3, 2.37] }
+    const cable = { part: 'SSD1306-0.96-OLED-128x64-I2C-module cable', why: 'trace has no shape for cables' }
+    expect(offBoardDrawn([oled], [{ kind: 'oled-module', size_mm: [27.3, 27.3, 3.87], drawn: true }])).toEqual({
+      drawn: [{ part: oled.mpn, as: 'case part oled-module' }], not_drawn: [cable],
+    })
+    // the case part's file is not there; the case does not place it at all; the record has no size
+    expect(offBoardDrawn([oled], [{ kind: 'oled-module', size_mm: [27.3, 27.3, 3.87], drawn: false }]).not_drawn[0]!.why).toMatch(/case-oled-module\.stl is not there/)
+    expect(offBoardDrawn([oled], []).not_drawn[0]!.why).toMatch(/the case does not place it/)
+    expect(offBoardDrawn([{ mpn: 'Sensor', role: null, size_mm: null }], [])).toEqual({ drawn: [], not_drawn: [{ part: 'Sensor', why: 'the record has no size or place for it' }] })
+  })
+
   it('refuses a case shot when the case has not been built', async () => {
     process.chdir(sample())
     await expect(run({ revision: 'A', project: PCB, board_model: 'board.glb', shots: ['exploded'] })).rejects.toThrow(/mech\.build/)
@@ -114,14 +161,16 @@ describe.skipIf(!works)('with Blender', () => {
     const dir = sample({ case: true, logo: true })
     process.chdir(dir)
     const r = await run({ revision: 'C', date: '2026-11-05', project: PCB, board_model: 'board.glb', quality: 'draft', width: 160, height: 100, samples: 4, device: 'cpu', shots: ['board', 'exploded'] })
-    const project = dir.split('/').pop()?.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    // named after the KiCad project (the test's database has no journey), never the folder it runs in (#215)
+    const project = 'trace-sample'
     expect(r.shots).toEqual({ [`${project}_rev-C_2026-11-05_board.png`]: 'board', [`${project}_rev-C_2026-11-05_exploded.png`]: 'exploded' })
     const pal = r.palette as Record<string, unknown>
     expect(pal.source).toBe('logo')
     expect(pal.base).toBe('#1d3557')
     expect(pal.accent).toBe('#e63946')
     expect((pal.logo as Record<string, unknown>).path).toBe('docs/design/logo.png')
-    expect(r.case).toEqual({ look: 'nylon', screws: [] })
+    expect(r.name).toEqual({ name: 'trace-sample', from: 'kicad' })
+    expect(r.case).toEqual({ look: 'nylon', screws: [], parts: [] })
     expect(r.notes).toContain('mechanical/out/case.jsonld is not there (build the case again with mech.build): no screws shown')
     // the run record (test/setup.ts points every test's at TRACE_PROJECT_DB), with this run alone in the graph
     const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
@@ -137,7 +186,7 @@ describe.skipIf(!works)('with Blender', () => {
   it('shows the case\'s screws seated in the open case and lifted out of their holes in the exploded view', async () => {
     process.chdir(sample({ case: true, screws: true }))
     const r = await run({ revision: 'B', date: '2026-11-05', project: PCB, board_model: 'board.glb', quality: 'draft', width: 160, height: 100, samples: 4, device: 'cpu', shots: ['board-in-case', 'exploded'] })
-    expect(r.case).toEqual({ look: 'nylon', screws: ['M3x6', 'M3x6', 'M3x6', 'M3x6'] })
+    expect(r.case).toEqual({ look: 'nylon', screws: ['M3x6', 'M3x6', 'M3x6', 'M3x6'], parts: [] })
     const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
     const inputs = db.prepare('SELECT ref FROM run_inputs WHERE run_id=? ORDER BY ord').all(String(r.run_id)).map((x) => (x as { ref: string }).ref)
     expect(inputs).toContain('mechanical/out/case.jsonld')
@@ -147,7 +196,8 @@ describe.skipIf(!works)('with Blender', () => {
     const dir = sample()
     process.chdir(dir)
     const r = await run({ revision: 'A', date: '2026-11-05', project: PCB, board_model: 'board.glb', quality: 'draft', width: 160, height: 100, samples: 2, device: 'cpu', shots: ['board', 'turntable'], turntable_frames: 8, out_dir: 'out' })
-    const project = dir.split('/').pop()?.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    // named after the KiCad project (the test's database has no journey), never the folder it runs in (#215)
+    const project = 'trace-sample'
     const mp4 = `${project}_rev-A_2026-11-05_turntable.mp4`
     expect(r.shots).toEqual({ [`${project}_rev-A_2026-11-05_board.png`]: 'board', [mp4]: 'turntable' })
     expect(r.turntable).toMatchObject({ width: 160, height: 100, frames: 8, fps: 24 })
