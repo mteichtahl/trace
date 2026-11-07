@@ -8,16 +8,43 @@
  * Boxes cannot be dragged or joined; a page scrolls past the drawing, and Ctrl/⌘ + scroll or a pinch zooms it.
  */
 import '@xyflow/react/dist/base.css'
-import { Background, type Edge, type Node, type NodeChange, type NodeTypes, ReactFlow, ReactFlowProvider, useReactFlow, useStore } from '@xyflow/react'
+import { Background, type Edge, type Node, type NodeChange, type NodeTypes, ReactFlow, ReactFlowProvider, useReactFlow, useStore, useStoreApi } from '@xyflow/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CanvasFrame, type CanvasFrameProps } from './canvas-frame'
 
-/** How a drawing fits the frame: its boxes (with padding), or fixed bounds so a layout holds still between versions. */
-export type FlowFit = { padding: number } | { bounds: { x: number; y: number; width: number; height: number } }
+/**
+ * How a drawing fits the frame: its boxes (with padding), or fixed bounds so a layout holds still between versions.
+ * `readable`: the zoom below which the boxes cannot be read; a drawing that would open smaller than that (a long
+ * column of rows) opens fitted to the frame's width instead, at its top, and the person drags it up and down. The
+ * Fit button still shows the whole drawing.
+ */
+export type FlowFit = { padding: number; readable?: number } | { bounds: { x: number; y: number; width: number; height: number } }
+
+type Rect = { x: number; y: number; width: number; height: number }
+type Viewport = { x: number; y: number; zoom: number }
+
+/**
+ * Where a drawing opens when fitting it whole would make it unreadable (smaller than `readable`): as wide as the frame
+ * allows (between `readable` and 1), centred across when it is narrower, its top at the frame's top. null when the
+ * whole drawing fits at a readable size (fit it whole), or the frame has no size yet. Pure.
+ */
+export function readableViewport(box: Rect, frame: { width: number; height: number }, padding: number, readable: number): Viewport | null {
+  if (!frame.width || !frame.height || !box.width || !box.height) return null
+  const pad = 1 + 2 * padding
+  if (Math.min(frame.width / (box.width * pad), frame.height / (box.height * pad)) >= readable) return null
+  const zoom = Math.min(1, Math.max(readable, frame.width / (box.width * pad)))
+  const margin = Math.round(padding * Math.min(frame.width, frame.height) / 2) + 8
+  return { zoom, x: Math.max(margin, (frame.width - box.width * zoom) / 2) - box.x * zoom, y: margin - box.y * zoom }
+}
 
 type Flow = ReturnType<typeof useReactFlow>
 const fitTo = (flow: Flow, fit: FlowFit, duration?: number) =>
   'bounds' in fit ? flow.fitBounds(fit.bounds, { duration }) : flow.fitView({ padding: fit.padding, duration })
+/** The first view of a drawing: readable (readableViewport) where it says so, else fitted. */
+const openAt = (flow: Flow, fit: FlowFit, frame: { width: number; height: number }, duration?: number) => {
+  const v = 'readable' in fit && fit.readable ? readableViewport(flow.getNodesBounds(flow.getNodes()), frame, fit.padding, fit.readable) : null
+  return v ? flow.setViewport(v, { duration }) : fitTo(flow, fit, duration)
+}
 
 /** A drawing in the Canvas frame; `children` is a FlowView (or a component that renders one). */
 export function FlowCanvas({ fit, children, ...frame }: Omit<CanvasFrameProps, 'viewport'> & { fit: FlowFit }) {
@@ -68,12 +95,14 @@ export interface FlowViewProps {
 export function FlowView({ nodes, edges, nodeTypes, selected, onChoose, label, fit, refitKey }: FlowViewProps) {
   const flow = useReactFlow()
   const pickable = useMemo(() => new Set(nodes.filter((n) => n.selectable !== false).map((n) => n.id)), [nodes])
+  const store = useStoreApi()
+  const sized = useStore((s) => s.width > 0 && s.height > 0)
 
   useEffect(() => {
-    const t = setTimeout(() => void fitTo(flow, fit, refitKey === undefined ? undefined : 200), 0)
+    const t = setTimeout(() => { const { width, height } = store.getState(); void openAt(flow, fit, { width, height }, refitKey === undefined ? undefined : 200) }, 0)
     return () => clearTimeout(t)
-    // fit is the caller's constant; refitKey says when the boxes changed
-  }, [flow, refitKey])
+    // fit is the caller's constant; refitKey says when the boxes changed; `sized` when the frame's size is first known
+  }, [flow, store, refitKey, sized])
 
   // the selection leaves the drawing (a filter, another option): clear it
   useEffect(() => {

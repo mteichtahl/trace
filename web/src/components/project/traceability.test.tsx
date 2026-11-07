@@ -7,7 +7,8 @@ import { render, screen } from '@testing-library/react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
 import type { CoverageRow, TraceView } from '@/lib/types-s1'
-import { Traceability, chainOf, layoutTrace, nodeKey, parseKey, traceElements, traceLinks } from './traceability'
+import { readableViewport } from '@/components/canvas/flow'
+import { FIT, TRACE_WIDTH, Traceability, chainOf, layoutTrace, nodeKey, parseKey, traceElements, traceLinks } from './traceability'
 
 const row = (id: string, verdict: CoverageRow['verdict'], tests = 1): CoverageRow => ({
   id, verdict, kind: 'functional', text: `${id} text`, acceptance: null, status: 'accepted',
@@ -133,5 +134,34 @@ describe('block diagram', () => {
     expect(sidesFor({ x: 0, y: 0 }, { x: 400, y: 20 })).toEqual({ from: 'right', to: 'left' })
     expect(sidesFor({ x: 400, y: 0 }, { x: 0, y: 0 })).toEqual({ from: 'left', to: 'right' })
     expect(sidesFor({ x: 0, y: 0 }, { x: 40, y: 280 })).toEqual({ from: 'bottom', to: 'top' })
+  })
+})
+
+// R21: Requirements review's diagram opened fitted whole with 23 requirements, at 21-71 %, every box unreadable in the
+// ~470 px frame
+describe('the first view of a long drawing', () => {
+  const frame = { width: 912, height: 470 }
+  const many = layoutTrace(Array.from({ length: 23 }, (_, i) => row(`R-${i}`, 'untested')), undefined)
+  const box = { x: 0, y: -28, width: TRACE_WIDTH, height: many.height + 28 }
+
+  it('opens as wide as the frame, readable, at the top of the drawing', () => {
+    const v = readableViewport(box, frame, FIT.padding, FIT.readable)
+    expect(v).not.toBeNull()
+    expect(v!.zoom).toBeGreaterThanOrEqual(0.8)
+    expect(v!.zoom).toBeLessThanOrEqual(1)
+    // the head row is in view, just under the frame's top edge
+    expect(v!.y + box.y * v!.zoom).toBeGreaterThan(0)
+    expect(v!.y + box.y * v!.zoom).toBeLessThan(40)
+    // the three columns fit across
+    expect(v!.x + TRACE_WIDTH * v!.zoom).toBeLessThanOrEqual(frame.width)
+  })
+
+  it('a narrow frame keeps the boxes readable and lets the drawing run past its right edge', () => {
+    expect(readableViewport(box, { width: 400, height: 470 }, FIT.padding, FIT.readable)?.zoom).toBe(0.8)
+  })
+
+  it('a drawing that fits readably, or a frame not yet measured, is fitted whole', () => {
+    expect(readableViewport({ ...box, height: 3 * 70 + 28 }, frame, FIT.padding, FIT.readable)).toBeNull()
+    expect(readableViewport(box, { width: 0, height: 0 }, FIT.padding, FIT.readable)).toBeNull()
   })
 })

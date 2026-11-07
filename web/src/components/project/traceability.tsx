@@ -204,7 +204,9 @@ export interface TraceabilityProps {
   onSelect?: (n: TraceNode | null) => void
 }
 
-const FIT = { padding: 0.08 }
+// below 0.8 the boxes cannot be read: with many rows (23 at 71 %, test-esp32 R21) it opens as wide as the frame, at
+// the top, and the person drags it down; Fit still shows the whole drawing
+export const FIT = { padding: 0.08, readable: 0.8 }
 
 /** The traceability view in its Canvas frame, the frame's zoom and fit driving React Flow's viewport. */
 export function TraceabilityCanvas({ rows, trace, filter, selected, onSelect, filterControls, ...frame }: TraceabilityProps & Omit<CanvasFrameProps, 'children' | 'viewport' | 'filter'> & { filterControls?: ReactNode }) {
