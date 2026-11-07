@@ -35,7 +35,7 @@ import { useCall } from '@/lib/queries'
 import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import type { SkillDef } from './definitions'
-import { DECIDE_INTENT_DESCRIPTION, DecideIntent, type IntentDecision, IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, type ShownStatement, changedFields, decideStatements, decidedAnswer, interfacesCheck, noteStatements, notedAnswer, openingWords, TOPIC_QUESTIONS, useSkillThread, withDecided, withNoted } from './intent-chat'
+import { DECIDE_INTENT_DESCRIPTION, DecideIntent, type IntentDecision, IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, type ShownStatement, changedFields, decideStatements, decidedAnswer, interfacesCheck, mergedFields, noteStatements, notedAnswer, openingWords, TOPIC_QUESTIONS, useSkillThread, withDecided, withNoted } from './intent-chat'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
 import { type SkillDraftBase, draftChecks, focusSteps, qualityChecks, useSkill } from './use-skill'
 
@@ -62,10 +62,17 @@ export { changedFields, type IntentDecision }
 /** `proposed`: the statements trace's chat noted from the person's answers (intent-chat.tsx noteStatements). */
 interface IntentLocal extends SkillDraftBase { topic?: number; decisions?: IntentDecision[]; proposed?: NotedStatement[] }
 
-/** The draft with one statement's decision replaced, or removed (null). Pure. */
+/**
+ * The draft with one statement's decision replaced, or removed (null: Undo drops the whole edit). An edit over an
+ * earlier edit keeps the earlier one's interface fields under its own, as decide_intent does (test log R17). Pure.
+ */
 export function withIntentDecision<D extends { decisions?: IntentDecision[] }>(d: D, statement: string, decision: Omit<IntentDecision, 'statement'> | null): D {
+  const before = (d.decisions ?? []).find((x) => x.statement === statement)
   const rest = (d.decisions ?? []).filter((x) => x.statement !== statement)
-  return { ...d, decisions: decision ? [...rest, { statement, ...decision }] : rest }
+  if (!decision) return { ...d, decisions: rest }
+  const fields = decision.choice === 'edit' && before?.choice === 'edit' ? mergedFields(before.interface, decision.interface) : decision.interface
+  const { interface: _i, ...plain } = decision
+  return { ...d, decisions: [...rest, { statement, ...plain, ...(fields ? { interface: fields } : {}) }] }
 }
 
 const DECIDED_WORD: Record<IntentDecision['choice'], string> = { accept: 'Accepting', edit: 'Rewording', reject: 'Rejecting' }
