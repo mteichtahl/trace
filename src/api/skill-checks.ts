@@ -666,6 +666,16 @@ export function questionsOn(skill: string, r: JourneyRecord | null, design: Desi
   return r.questions.filter((q) => q.kind !== 'stuck' && q.answeredAt === null && about.test(`${q.text} ${q.blocks ?? ''}`)).sort((a, b) => a.askedAt - b.askedAt)
 }
 
+/**
+ * The parts of the pin plan a question names (J2 in "Which pin order should the OLED header J2 have?"), so the pin map
+ * shows the question on their pins (test-esp32 #106). Pure.
+ */
+export function questionParts(q: Pick<QuestionRow, 'text' | 'blocks'>, design: DesignRows | null): string[] {
+  const parts = [...new Set((design?.pins ?? []).filter((p) => p.status !== 'withdrawn').map((p) => p.part))]
+  const words = `${q.text} ${q.blocks ?? ''}`
+  return parts.filter((part) => new RegExp(`(?<![A-Za-z0-9_])${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`).test(words))
+}
+
 /** Why a review cannot be submitted over its open questions, naming the one to answer first; null when none is open. */
 export function questionsFirst(skill: string, open: readonly QuestionRow[]): string | null {
   const q = open[0]

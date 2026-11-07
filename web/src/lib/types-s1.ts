@@ -92,6 +92,8 @@ export interface SkillItem {
   status: 'open' | 'done' | 'waived'
   /** the badge's word, when the status's own word does not fit (a case design not offered) */
   label?: string
+  /** an open question it is: answered with Answer it, never resolved here (Pin plan review, test-esp32 #106) */
+  question?: string
   evidence?: EvidenceRef
   /** Requirements review: the requirement's acceptance criterion */
   criterion?: string | null
@@ -382,7 +384,10 @@ export interface PinView {
   use?: string
   alt?: string
   reserved?: string
-  status: 'ok' | 'conflict' | 'spare' | 'waived'
+  /** asked: an open question names its part (design.get), so it is not agreed until it is answered */
+  status: 'ok' | 'conflict' | 'spare' | 'waived' | 'asked'
+  /** the open question about it, to answer (status asked) */
+  question?: string
   note?: string
   findings?: { id: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
 }

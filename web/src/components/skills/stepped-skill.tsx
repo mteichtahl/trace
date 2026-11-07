@@ -123,6 +123,17 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
                   </li>
                 )
               }
+              if (it.question) {
+                return (
+                  <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <StatusBadge status="yours" label={it.label ?? 'Unanswered'} />
+                    <span className="min-w-0 flex-1 text-sm">{it.title}{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
+                    <Button size="sm" variant="outline" asChild>
+                      <Link to="/p/$id/do/$skill" params={{ id: projectId(repo), skill: 'question-answer' }} search={{ question: it.question }}>Answer it <ArrowRight /></Link>
+                    </Button>
+                  </li>
+                )
+              }
               const done = it.status !== 'open' || s.draft.data.resolved.includes(it.id)
               return (
                 <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">

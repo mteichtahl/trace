@@ -24,8 +24,9 @@
  *
  * build.get, order.record and the rest of the Build tab's record are in actions-build.ts; cost.get in actions-cost.ts.
  */
-import { loadJourney } from '../core/journey.js'
-import { type Context, Repo, def, withRecordDb } from './action-kit.js'
+import { loadJourney, mergeAgentFacts } from '../core/journey.js'
+import { type Context, Repo, agentFacts, def, withRecordDb } from './action-kit.js'
+import { questionParts, questionsOn } from './skill-checks.js'
 import { caseStaleness, caseView } from './case-read.js'
 import { standing } from '../tools/design/decisions.js'
 import { TOPIC_NAMES } from '../tools/design/db.js'
@@ -88,7 +89,8 @@ export const RECORD_ACTIONS = {
   })),
 
   'design.get': def('read', Repo, async ({ repo }, ctx) => {
-    const files = await kicadFiles(ctx, repo)
+    // the agents' questions too: one asked about a pin is shown on its pins (test-esp32 #106)
+    const [files, facts] = await Promise.all([kicadFiles(ctx, repo), agentFacts(ctx, repo).catch(() => null)])
     return withRecordDb(ctx, repo, async (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
@@ -151,14 +153,23 @@ export const RECORD_ACTIONS = {
       const pinFindings = pinCheck(design.rows.pins, net?.nets ?? null, matedParts(arch))
       const waived = new Set((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
       const agreed = standing(design.decisions, 'pins.agreed')
+      // an open question that names a part of the plan: its pins are not agreed but asked, until it is answered (the
+      // specialist drew J2 "pending this answer" while the map said Agreed: test-esp32 #106)
+      const asked = new Map<string, { id: string; text: string }>()
+      for (const q of questionsOn('pin-plan-review', r && facts ? mergeAgentFacts(r, facts) : r, design.rows)) {
+        for (const part of questionParts(q, design.rows)) if (!asked.has(part)) asked.set(part, { id: q.id, text: q.text })
+      }
       const pins = design.rows.pins.filter((p) => p.status !== 'withdrawn').map((p) => {
         const mine = pinFindings.filter((f) => f.target === `pin:${p.part}.${p.pin}` || (p.peripheral && f.target === `peripheral:${p.part}.${p.peripheral}`) || (p.function && f.target === `peripheral:${p.part}.${p.function.toUpperCase()}`))
         const open = mine.filter((f) => !waived.has(f.id))
-        const status = p.kind === 'spare' || p.kind === 'nc' ? (open.length ? 'conflict' as const : 'spare' as const) : open.some((f) => f.severity === 'blocks') ? 'conflict' as const : mine.length && !open.length ? 'waived' as const : 'ok' as const
+        const question = asked.get(p.part)
+        const settled = p.kind === 'spare' || p.kind === 'nc' ? (open.length ? 'conflict' as const : 'spare' as const) : open.some((f) => f.severity === 'blocks') ? 'conflict' as const : mine.length && !open.length ? 'waived' as const : 'ok' as const
+        const status = question && settled !== 'conflict' ? 'asked' as const : settled
         return {
           part: p.part, pin: p.pin, name: p.name, net: p.net ?? '', fn: p.function ?? (p.kind === 'spare' ? 'Spare' : p.kind), ...(p.peripheral ? { peripheral: p.peripheral } : {}), ...(p.use ? { use: p.use } : {}),
           ...(p.alternates.length ? { alt: p.alternates.join(', ') } : {}), ...(p.reserved ? { reserved: p.reserved } : {}), status,
-          ...(open.length || p.note ? { note: [...open.map((f) => f.text), ...(p.note ? [p.note] : [])].join(' ') } : {}),
+          ...(question ? { question: question.id } : {}),
+          ...(question || open.length || p.note ? { note: [...(question ? [`Open question: ${question.text}`] : []), ...open.map((f) => f.text), ...(p.note ? [p.note] : [])].join(' ') } : {}),
           findings: mine.map((f) => ({ id: f.id, severity: waived.has(f.id) ? 'waived' as const : f.severity, text: f.text })),
         }
       })

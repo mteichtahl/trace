@@ -95,7 +95,7 @@ function skillBench(skill: string, i: CheckInput) {
     readings: rs.filter((r) => r.board === board).map(readingView),
   }
 }
-import { type CheckInput, type CheckResult, checkSkill, questionsFirst, questionsOn } from './skill-checks.js'
+import { type CheckInput, type CheckResult, checkSkill, questionParts, questionsFirst, questionsOn } from './skill-checks.js'
 import { changeImpact } from './change-impact.js'
 import { type ReleaseRecord, decisionOf, noteOf, releaseRecommendation, releaseView } from './release-review.js'
 import { type OrderRecord, type RunRow, matchedOf, orderSigned, orderView, releaseSignedAt } from './order-submit.js'
@@ -508,7 +508,17 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
     case 'pin-plan-review': {
       if (!i.design) return {}
       const waived = new Set((i.r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
-      return { items: pinCheck(i.design.rows.pins, i.nets ?? null, matedParts(architectureView(i.design.rows, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const })) }
+      // an open question about a pin comes first, with Answer it: the plan is agreed on its answer, and Submit is refused
+      // until then (questionsFirst; test-esp32 #106)
+      const design = i.design.rows
+      const asked = questionsOn('pin-plan-review', i.r, design).map((q) => {
+        const parts = questionParts(q, design)
+        return {
+          id: `question:${q.id}`, title: `${parts.length ? `Open question about ${parts.join(', ')}` : 'Open question'}: ${q.text}`, status: 'open' as const, label: 'Unanswered', question: q.id,
+          detail: `${q.askedBy} asks. Answer it before agreeing the plan${q.blocks ? `; it holds back ${q.blocks.replace(/\.$/, '')}` : ''}.`,
+        }
+      })
+      return { items: [...asked, ...pinCheck(design.pins, i.nets ?? null, matedParts(architectureView(design, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const }))] }
     }
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }
