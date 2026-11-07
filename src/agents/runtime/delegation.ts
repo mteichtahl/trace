@@ -30,6 +30,7 @@ import type { TraceConfig } from '../../core/config.js'
 import { SPECIALISTS } from '../index.js'
 import { type SpecialistKind, WORKER } from '../kinds.js'
 import { type Composed, Composer, type Layers, NO_LAYERS } from '../../prompts/resolve.js'
+import { plainTitle } from '../../core/plain-words.js'
 import { type Accepted, BranchSchema, type DelegatedTaskJob, type JobInfo, type JobPayload } from './schemas.js'
 
 /** What the worker inherits from the specialist job that delegates. */
@@ -92,6 +93,12 @@ export function composeDelegated(kind: SpecialistKind, parentJobId: string, brie
     .add('delegate.brief', { specialist: SPECIALISTS[kind].title, parent_job: parentJobId })
     .add('delegate.request', { brief: brief.trim(), acceptance: acceptance.map((a, i) => `${i + 1}. ${a.trim()}`) })
     .done()
+}
+
+/** A delegated worker job's title: its brief's first plain sentence, or none for a brief with no words. Pure. */
+export function delegatedHeadline(brief: string): string | null {
+  const t = plainTitle(brief.trim())
+  return /\p{L}/u.test(t) ? t.slice(0, 200) : null
 }
 
 export function delegatedRequest(kind: SpecialistKind, parentJobId: string, brief: string, acceptance: readonly string[], layers: Layers = NO_LAYERS): string {
@@ -158,6 +165,9 @@ export function createDelegations(): Delegations {
       const payload: DelegatedTaskJob = {
         kind: 'task', agent: WORKER, repository: p.repository,
         request: delegatedRequest(p.kind, p.jobId, req.brief, req.acceptance, p.prompts),
+        // its card names the work, the brief's first plain sentence: the request opens with the delegation's framing,
+        // whose first plain sentence is "Meet every acceptance criterion below" (test-esp32-run2 R37)
+        ...(delegatedHeadline(req.brief) ? { headline: delegatedHeadline(req.brief) as string } : {}),
         requestedBy: `the trace ${p.kind} specialist (job ${p.jobId})`,
         // never the default branch: a specialist on it (an issue) gets a branch of its own for the worker
         branch: req.branch ?? (p.branch === p.defaultBranch ? `${p.cfg.worker.own_branch_prefix || 'claude/'}${p.kind}-${p.jobId.replace(/^job-/, '')}` : p.branch),
