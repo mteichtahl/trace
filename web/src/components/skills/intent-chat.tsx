@@ -211,13 +211,22 @@ export type DecideIntentArgs = z.input<typeof DecideIntent>
 
 export const DECIDE_INTENT_DESCRIPTION = 'Change a statement in the person\'s Intent builder draft the way the person does with the Draft intent panel\'s Accept, Edit and Reject: reword it (give a number and unit, make it testable), set an interface\'s missing fields (connector, rate…), reject it with a reason, accept it as worded, or undo a decision. Use it for statements already in the record (from the agents) as well as ones you noted. It goes in the draft at once, shows in the panel as Not submitted, and the quality bar checks it; Submit intent records it as the person\'s decision. No task, branch or change is needed: never offer start_task or a Verification job to fix intent statements. Only make the changes the person asked for or agreed to; say each one back in plain words.'
 
+/**
+ * The interface fields an edit leaves in the draft: an earlier edit's fields with the new edit's changes laid over
+ * them, so a second edit of one field keeps the others the person set. undefined when neither sets any. Pure.
+ */
+export function mergedFields(earlier: Partial<Record<InterfaceField, string>> | undefined, changed: Partial<Record<InterfaceField, string>> | undefined): Partial<Record<InterfaceField, string>> | undefined {
+  const out = { ...(earlier ?? {}), ...(changed ?? {}) }
+  return Object.keys(out).length ? out : undefined
+}
+
 /** A statement as decide_intent reads it from the panel: its words and an interface's fields as shown. */
 export type ShownStatement = Pick<IntentStatement, 'id' | 'text' | 'interface'>
 
 /**
  * decide_intent, run by the app on the person's draft: each decision replaces the draft's decision on that statement,
  * as the panel's Accept, Edit and Reject do (withIntentDecision). An edit keeps the words shown when it gives none,
- * and its fields add to the ones an earlier edit set; only an interface statement takes fields. A reject needs its
+ * and its fields are laid over the ones an earlier edit set (mergedFields), which stay; only an interface statement takes fields. A reject needs its
  * reason. A statement the panel does not show is refused. Pure.
  */
 export function decideStatements(decisions: readonly IntentDecision[], args: unknown, shown: ReadonlyMap<string, ShownStatement>): { decisions: IntentDecision[]; decided: { statement: string; choice: string; words?: string; interface?: Partial<Record<InterfaceField, string>>; reason?: string }[]; refused: string[] } {
@@ -248,8 +257,13 @@ export function decideStatements(decisions: readonly IntentDecision[], args: unk
     if (text.length < 3) { refused.push(`${d.statement} needs its words.`); continue }
     const typed = Object.fromEntries(Object.entries(d.interface ?? {}).filter(([, v]) => typeof v === 'string' && v.trim())) as Partial<Record<InterfaceField, string>>
     if (Object.keys(typed).length && !st.interface) { refused.push(`${d.statement} is not an interface statement: put the detail in its words.`); continue }
-    const fields = st.interface ? changedFields(st.interface, { ...(before?.choice === 'edit' ? before.interface : {}), ...typed }) : undefined
-    if (text === st.text && !fields) { refused.push(`${d.statement}: nothing to change; it reads so already.`); continue }
+    // the panel shows an earlier edit's fields as set (withDecided), so only the fields this edit changes differ from
+    // the shown ones: the earlier edit's fields are kept under them, or a later "direction only" edit dropped the
+    // connector and rate the person had set (test log R17)
+    const changed = st.interface ? changedFields(st.interface, typed) : undefined
+    const fields = st.interface ? mergedFields(before?.choice === 'edit' ? before.interface : undefined, changed) : undefined
+    const wordsBefore = before?.choice === 'edit' && before.text ? before.text : st.text
+    if (text === wordsBefore && !changed) { refused.push(`${d.statement}: nothing to change; it reads so already.`); continue }
     put(d.statement, { choice: 'edit', text, ...(fields ? { interface: fields } : {}) })
     decided.push({ statement: d.statement, choice: 'edit', words: text, ...(fields ? { interface: fields } : {}) })
   }

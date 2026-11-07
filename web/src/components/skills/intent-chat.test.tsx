@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { call } from '@/lib/api'
 import { ChatView } from '@/components/chat/chat-view'
 import { SKILL_BY_ID } from './definitions'
+import { type IntentDecision, withIntentDecision } from './conversation-skills'
 import { DECIDE_INTENT_DESCRIPTION, IntentOpening, NOTE_INTENT_DESCRIPTION, TOPIC_QUESTIONS, decideStatements, decidedAnswer, interfacesCheck, noteStatements, notedAnswer, openingWords, threadKey, useSkillThread, withDecided, withNoted } from './intent-chat'
 
 type Msg = { id: string; role: string; content: string }
@@ -216,5 +217,46 @@ describe('the panel shows an edit\'s interface fields at once (test log R14)', (
     // no edit with fields: the record's view as it is
     expect(withDecided(intent, [{ statement: 'INT-a2', choice: 'accept' }])).toBe(intent)
     expect(interfacesCheck([{}])).toBeUndefined()
+  })
+})
+
+describe('a chat edit keeps a panel edit\'s fields (test log R17)', () => {
+  // I8: a record interface statement the agents left without a connector, a rate or a direction
+  const intent = { topic: 3, answered: ['interfaces'], questions: [], statements: [
+    { id: 'INT-I8', topic: 'Interfaces', text: 'Records over the debug port.', state: 'needs_number' as const, flag: 'Missing connector, rate, direction', interface: { type: 'UART', protocol: '8N1' }, missing: ['connector' as const, 'rate' as const, 'direction' as const] },
+  ] }
+  const panel = (decisions: IntentDecision[]) => withDecided(intent, decisions)!
+  const shownOf = (decisions: IntentDecision[]) => new Map(panel(decisions).statements.map((x) => [x.id, x]))
+
+  it('panel edit with connector, rate and direction, then the chat sets direction only: all three kept, the bar met', () => {
+    // the panel's Save: the fields changed from the ones shown
+    let d = withIntentDecision<{ decisions?: IntentDecision[] }>({}, 'INT-I8', { choice: 'edit', text: 'Records over the debug port.', interface: { connector: '4-pin header', rate: '115200 baud', direction: 'out' } }).decisions!
+    expect(interfacesCheck(panel(d).statements)).toBe('met')
+    // the chat reads the panel as shown (the edit's fields laid over) and sets only Direction
+    const r = decideStatements(d, { decisions: [{ statement: 'INT-I8', choice: 'edit', interface: { direction: 'both' } }] }, shownOf(d))
+    expect(r.refused).toEqual([])
+    d = r.decisions
+    expect(d).toEqual([{ statement: 'INT-I8', choice: 'edit', text: 'Records over the debug port.', interface: { connector: '4-pin header', rate: '115200 baud', direction: 'both' } }])
+    const st = panel(d).statements[0]!
+    expect(st.interface).toMatchObject({ connector: '4-pin header', rate: '115200 baud', direction: 'both' })
+    expect(st.flag).toBeUndefined()
+    expect(interfacesCheck(panel(d).statements)).toBe('met')
+    // the same again through the panel (an edit over an edit) keeps them too
+    const p = withIntentDecision({ decisions: d }, 'INT-I8', { choice: 'edit', text: 'Records over the debug port at 115200 baud.', interface: { rate: '921600 baud' } }).decisions!
+    expect(p).toEqual([{ statement: 'INT-I8', choice: 'edit', text: 'Records over the debug port at 115200 baud.', interface: { connector: '4-pin header', rate: '921600 baud', direction: 'both' } }])
+    // a chat edit that changes nothing is refused, and the earlier edit stands
+    const same = decideStatements(d, { decisions: [{ statement: 'INT-I8', choice: 'edit', interface: { direction: 'both' } }] }, shownOf(d))
+    expect(same.refused[0]).toMatch(/nothing to change/)
+    expect(same.decisions).toEqual(d)
+  })
+
+  it('Undo still drops the whole edit, from the chat and from the panel', () => {
+    const d = withIntentDecision<{ decisions?: IntentDecision[] }>({}, 'INT-I8', { choice: 'edit', text: 'Records over the debug port.', interface: { connector: '4-pin header', rate: '115200 baud', direction: 'out' } }).decisions!
+    expect(decideStatements(d, { decisions: [{ statement: 'INT-I8', choice: 'undo' }] }, shownOf(d)).decisions).toEqual([])
+    expect(withIntentDecision({ decisions: d }, 'INT-I8', null).decisions).toEqual([])
+    // and an edit after an undo starts afresh
+    expect(withIntentDecision({ decisions: [] }, 'INT-I8', { choice: 'edit', text: 'Records over the debug port.', interface: { direction: 'both' } }).decisions).toEqual([{ statement: 'INT-I8', choice: 'edit', text: 'Records over the debug port.', interface: { direction: 'both' } }])
+    // an accept or reject over an edit is not an edit: no fields carried
+    expect(withIntentDecision({ decisions: d }, 'INT-I8', { choice: 'accept' }).decisions).toEqual([{ statement: 'INT-I8', choice: 'accept' }])
   })
 })
