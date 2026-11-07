@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EventType } from '@ag-ui/core'
+import type { ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime'
 import { MAX_ROUNDS, TOOL_RUN_EVENT, toBedrock } from '../../src/web/agui.js'
 import { TOOL_RUN_ID } from '../../src/core/run-logs.js'
 import { API_UNAVAILABLE } from '../../src/web/call.js'
@@ -206,6 +207,24 @@ describe('the trace agent over AG-UI', () => {
       ['assistant', 'Let me look.'], ['tool', '{"stage":"Schematic"}'], ['assistant', 'Schematic.'],
     ])
     expect(w.publisher.sent.map((x) => x.channel).sort()).toEqual(['/trace/users/sub-ada', '/trace/users/sub-bob'])
+  })
+
+  // test-esp32 #85: a reply in several text blocks was kept run together, its list items with no line between them
+  it('keeps a reply\'s text blocks as paragraphs, never run together', async () => {
+    const w = world()
+    w.runtime.answers.set('chats.reply', () => ({ body: { ok: true, result: { ids: ['x'] } } }))
+    w.runtime.answers.set('project.members', () => ({ body: { ok: true, result: [] } }))
+    const block = (i: number, text: string): ConverseStreamOutput[] => [
+      { contentBlockDelta: { contentBlockIndex: i, delta: { text } } }, { contentBlockStop: { contentBlockIndex: i } },
+    ]
+    w.bedrock.scripts = [[
+      { messageStart: { role: 'assistant' } },
+      ...block(0, 'You can change the right one later.'), ...block(1, '- The text is your own wording.\n'), ...block(2, 'All 13 go in as proposals only.'),
+      { messageStop: { stopReason: 'end_turn' } },
+    ]]
+    await w.serve(run(input({ forwardedProps: { repo: 'acme/board', thread: 'abcdefgh12', after: 'm-1' } })))
+    const reply = w.runtime.calls.find((c) => c.action === 'chats.reply')!
+    expect((reply.args.messages as { text: string }[])[0]?.text).toBe('You can change the right one later.\n\n- The text is your own wording.\n\nAll 13 go in as proposals only.')
   })
 
   it('a person runs at most two at once; the third is 429', async () => {
