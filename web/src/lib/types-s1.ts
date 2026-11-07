@@ -366,7 +366,8 @@ export interface ArchitectureRecord {
   blocks: Block[]
   connections: BlockConnection[]
   options?: ArchOption[]
-  criteria?: { id: string; name: string; weight: number; description: string | null }[]
+  /** was: the name it was fixed with, when reworded since; stale: requirements it names changed after its words */
+  criteria?: { id: string; name: string; weight: number; description: string | null; was?: string; stale?: { requirements: string[]; since: string } }[]
   fixed?: { by: string; at: string } | null
   scores?: { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }[]
   recommended?: string | null

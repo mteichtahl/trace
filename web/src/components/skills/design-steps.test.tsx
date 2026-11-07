@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import type { SkillView } from '@/lib/types-s1'
@@ -70,5 +72,24 @@ describe('Architecture choice: Accept the key parts (test-esp32 #38, #96)', () =
     expect(rows[2]).toHaveTextContent('Exception, by Priya: Four from the last build.')
     expect(rows[2]).toHaveTextContent('(off the board)')
     expect(rows[3]).toHaveTextContent('Not checked')
+  })
+})
+
+describe('Architecture choice: fixed criteria follow the requirements they quote (test-esp32 run 2, #173)', () => {
+  const withCriteria = (criteria: unknown[]) => ({ ...view, architecture: { ...view.architecture, criteria } }) as unknown as SkillView
+  const wrap = (n: ReactNode) => <QueryClientProvider client={new QueryClient()}>{n}</QueryClientProvider>
+
+  it('says a criterion may quote old numbers, and offers to reword it', () => {
+    render(wrap(<DesignSteps repo="acme/x" skill="architecture-choice" step="criteria" view={withCriteria([{ id: 'cost', name: 'Cost against 8 USD/board and 100 USD project', weight: 3, description: 'REQ-f3f79d and REQ-4ce9e8.', stale: { requirements: ['REQ-f3f79d', 'REQ-4ce9e8'], since: '2026-11-06T10:00:00Z' } }])} draft={{}} setDraft={() => undefined} />))
+    expect(screen.getByText('May quote old numbers')).toBeInTheDocument()
+    expect(screen.getByText(/names REQ-f3f79d, REQ-4ce9e8, changed on 2026-11-06 after these words were written/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ask trace to reword it' })).toBeInTheDocument()
+  })
+
+  it('reads a criterion reworded after the fix by its new words, with the ones it was fixed with', () => {
+    render(wrap(<DesignSteps repo="acme/x" skill="architecture-choice" step="criteria" view={withCriteria([{ id: 'cost', name: 'Cost against 9 USD/board and 275 USD project', weight: 3, description: null, was: 'Cost against 8 USD/board and 100 USD project' }])} draft={{}} setDraft={() => undefined} />))
+    expect(screen.getByText('Cost against 9 USD/board and 275 USD project')).toBeInTheDocument()
+    expect(screen.getByText(/was fixed as "Cost against 8 USD\/board and 100 USD project" and reworded since/)).toBeInTheDocument()
+    expect(screen.queryByText('May quote old numbers')).toBeNull()
   })
 })

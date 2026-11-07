@@ -23,7 +23,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/status-badge'
-import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
+import { ArchitectureSummary, CriteriaFollow, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagramCanvas } from '@/components/project/block-diagram'
 import { useCall } from '@/lib/queries'
 import type { ArchitectureRecord, KeyPartView } from '@/lib/types-s1'
@@ -187,7 +187,14 @@ function FixCriteria({ repo, view }: { repo: string; view?: SkillView }) {
   const fix = useCall('design.decide', (x) => [['skill.get', x.repo], ['design.get', x.repo], ['journey.get', x.repo]])
   const [weights, setWeights] = useState<Record<string, number>>({})
   if (!a) return null
-  if (a.fixed) return <p className="mt-4 text-sm"><StatusBadge status="met" label="Criteria fixed" /> by {a.fixed.by}. Changing them now means choosing again.</p>
+  if (a.fixed) {
+    return (
+      <div className="mt-4 space-y-2">
+        <p className="text-sm"><StatusBadge status="met" label="Criteria fixed" /> by {a.fixed.by}. Changing their weights now means choosing again; their words follow the requirements they quote.</p>
+        <CriteriaFollow a={a} />
+      </div>
+    )
+  }
   return (
     <section className="mt-6" aria-labelledby="crit">
       <h2 id="crit" className="text-base font-semibold">The criteria and their weights</h2>

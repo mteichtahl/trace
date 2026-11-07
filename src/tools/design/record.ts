@@ -282,7 +282,13 @@ export function requirementDecisions(decisions: readonly DesignDecision[], rows?
 
 // ------------------------------------------------------------------ architecture
 
-export interface CriterionView { id: string; name: string; weight: number; description: string | null }
+export interface CriterionView {
+  id: string; name: string; weight: number; description: string | null
+  /** the name it was fixed with, when its words were changed after the fix (the weight stays the fixed one) */
+  was?: string
+  /** requirements its words name that changed after the words were written: the numbers it quotes may be old */
+  stale?: { requirements: string[]; since: string }
+}
 export interface ScoreView { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }
 export interface OptionView {
   id: string; name: string; summary: string; recommended: boolean; why: string | null; gives_up: string | null; risks: string[]
@@ -316,6 +322,31 @@ function placed(blocks: readonly ArchBlockRow[]): OptionView['blocks'] {
   })
 }
 
+/**
+ * The criteria as they read now. Fixed criteria keep their ids and weights, so the choice made on them stands, but
+ * their words follow the record: a criterion reworded after the fix (a requirement's number changed) reads as reworded,
+ * with the name it was fixed with. A criterion whose words name a requirement that changed after the words were written
+ * says so: the numbers it quotes may be old. After a budget change test-esp32's deciding criteria still read "Cost
+ * against 8 USD/board and 100 USD project" (run 2, #173), because the fixed list was a copy of the words.
+ */
+function criteriaNow(rows: DesignRows, fixed: CriterionView[] | null, fixedAt: number | null): CriterionView[] {
+  const live = rows.criteria.filter((c) => c.status !== 'withdrawn')
+  const base = fixed ?? live.map((c) => ({ id: c.id, name: c.name, weight: c.weight, description: c.description }))
+  const reqs = new Map((rows.requirements ?? []).map((r) => [r.id, r.updated]))
+  return base.map((c) => {
+    const row = live.find((r) => r.id === c.id)
+    const reworded = fixed !== null && fixedAt !== null && row !== undefined && row.updated > fixedAt && (row.name !== c.name || (c.description !== null && row.description !== c.description))
+    const out: CriterionView = reworded ? { ...c, name: row.name, description: row.description, was: c.name } : { ...c, description: c.description ?? row?.description ?? null }
+    // when its words were written: the row's time, or the fix's for a fixed copy not reworded since
+    const wordsAt = reworded || fixed === null ? row?.updated ?? null : fixedAt
+    if (wordsAt === null) return out
+    const words = `${out.name} ${out.description ?? ''}`
+    const changed = [...reqs.keys()].filter((id) => (reqs.get(id) ?? 0) > wordsAt && new RegExp(`(^|[^A-Za-z0-9-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9-])`).test(words))
+    if (changed.length) out.stale = { requirements: changed, since: iso(Math.max(...changed.map((id) => reqs.get(id) ?? 0))) }
+    return out
+  })
+}
+
 export function architectureView(rows: DesignRows, decisions: readonly DesignDecision[]): ArchitectureView {
   const fixedDec = standing(decisions, 'architecture.criteria').get('architecture') ?? null
   const choiceDec = standing(decisions, 'architecture.choice').get('architecture') ?? null
@@ -323,7 +354,7 @@ export function architectureView(rows: DesignRows, decisions: readonly DesignDec
     const x = c as { id?: unknown; name?: unknown; weight?: unknown; description?: unknown }
     return typeof x.id === 'string' ? [{ id: x.id, name: typeof x.name === 'string' ? x.name : x.id, weight: typeof x.weight === 'number' ? x.weight : 1, description: typeof x.description === 'string' ? x.description : null }] : []
   }) : null
-  const criteria: CriterionView[] = fixedList ?? rows.criteria.filter((c) => c.status !== 'withdrawn').map((c) => ({ id: c.id, name: c.name, weight: c.weight, description: c.description }))
+  const criteria: CriterionView[] = criteriaNow(rows, fixedList, fixedDec?.at ?? null)
   const personScores: ScoreView[] = Array.isArray(choiceDec?.detail.scores) ? (choiceDec.detail.scores as unknown[]).flatMap((x) => {
     const s = x as { option?: unknown; criterion?: unknown; score?: unknown; reason?: unknown }
     return typeof s.option === 'string' && typeof s.criterion === 'string' && typeof s.score === 'number' ? [{ option: s.option, criterion: s.criterion, score: s.score, reason: typeof s.reason === 'string' ? s.reason : '', by: 'person' as const }] : []
