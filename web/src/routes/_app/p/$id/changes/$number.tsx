@@ -37,6 +37,8 @@ import { RequirementEditsNotice, acceptWithEdits } from '@/components/changes/re
 import { useChangeActions } from '@/components/changes/use-change-actions'
 import { TabSkeleton, useCoverage } from '@/components/project/shared'
 import { Rich } from '@/components/rich'
+import { Markdown } from '@/components/chat/markdown'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { useCrumb } from '@/components/shell/breadcrumbs'
 import { QueryError } from '@/components/states'
 import { Label } from '@/components/ui/label'
@@ -143,6 +145,17 @@ function Review() {
               </ul>
             ) : (
               <p className="mt-2 text-sm text-muted-foreground">trace did not write a summary for this change; its files are below.</p>
+            )}
+            {/* the agents' own words, as they wrote them for themselves: behind More, never the summary (test-esp32 #24) */}
+            {d.report && (
+              <Collapsible className="mt-3">
+                <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                  <ChevronRight className="size-3 transition-transform group-data-[state=open]:rotate-90" aria-hidden /> More: the agent&apos;s own report
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 border-l pl-3 text-sm text-muted-foreground">
+                  <Markdown text={d.report} />
+                </CollapsibleContent>
+              </Collapsible>
             )}
           </section>
 

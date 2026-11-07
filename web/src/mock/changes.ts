@@ -104,6 +104,8 @@ const CHANGES: Record<string, ChangeDetail[]> = {
         'Chose the **AP2112K-3.3** regulator (600 mA, 4,812 in stock) over the planned MCP1700, which is out of stock.',
         'Added a power-good light and two test points for bring-up.',
       ],
+      // the agent's own report, as it wrote it: behind More (test-esp32 #24)
+      report: '- Added the USB-C input (J1) with a TVS and a P-FET for reverse polarity.\n- MCP1700 out of stock (parts_search run 3c19aa01d4e5f607): chose AP2112K-3.3, `changed_since: false`, flags: [].\n- Power-good LED D3 and test points TP1, TP2.\n- The worker job pushed 3 commits; run ids in the record.',
       files: [
         { path: 'hardware/power.kicad_sch', status: 'modified', additions: 14, deletions: 0, kind: 'schematic' },
         { path: 'hardware/parts-list.csv', status: 'modified', additions: 6, deletions: 1, kind: 'parts' },

@@ -76,7 +76,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFact
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type DiscardView, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
-  askedFor, handoffIdOf, editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, traceChanges,
+  askedFor, handoffIdOf, editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, agentReport, traceChanges,
   jobWorking, traceJob, unfinishedWords, verdictOf, creditedAgent,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
@@ -361,6 +361,9 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   if (pending?.length) facts.answers = [...pending]
   const infra = await infraFailures(ctx, gh, repo, runs)
   if (infra) facts.infra = infra
+  // every job's report on its branch: plain bullets for What trace did, the reports themselves behind More (#24)
+  const earlier = earlierSummaries(found.rows, job, pull.head.ref)
+  const report = agentReport({ jobSummary: job.summary, earlier })
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
   const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body, request: jobRequest(job) })
   if (unfinished) facts.unfinished = unfinished
@@ -396,7 +399,8 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
     // what it holds first: its files, and what its record adds, table by table (log #144, #133, #59, #37); then what
     // every job on its branch reported (log #18)
-    summary: [...contentBullets(content), ...summaryBullets({ jobSummary: job.summary, earlier: earlierSummaries(found.rows, job, pull.head.ref), body: pull.body, commits })].slice(0, 12),
+    summary: [...contentBullets(content), ...summaryBullets({ jobSummary: job.summary, earlier, body: pull.body, commits })].slice(0, 12),
+    ...(report ? { report } : {}),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
     ...(named.unknown.length ? { requirements_unknown: named.unknown } : {}),

@@ -366,6 +366,8 @@ export interface CheckDetail {
 export interface ChangeDetail extends ChangeSummary {
   /** what trace did, plain bullets */
   summary: string[]
+  /** the agents' own reports as they wrote them, behind More (test-esp32 #24); absent: none */
+  report?: string
   files: ChangeFile[]
   checks_list: ChangeCheck[]
   /** the project's requirement ids the change names: ["REQ-9b1b96", "REQ-8fc402"] */

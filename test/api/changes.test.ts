@@ -20,7 +20,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, openChanges, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, reportOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, agentReport, reportOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
   askedFor, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
@@ -183,6 +183,19 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     // a report after the header is the job's own words, without it
     expect(summaryBullets({ jobSummary: 'docs: done in 41 turns: Wrote the protocol specification and its I2C timing figure.', body, commits: [] }))
       .toEqual(['Wrote the protocol specification and its I2C timing figure.'])
+  })
+
+  // test-esp32 #24: Change 2's What trace did was the agent's raw report
+  it('says a job\'s report in plain lines, and keeps the report itself for More', () => {
+    const raw = 'verify: done in 9 turns: - Checked the intent: interface_incomplete was flagged on INT-8dd269.\n- changed_since: false, flags: []\n'
+      + '- Updated INT-8dd269 to name the Wi-Fi rate (802.11 b/g/n) and HTTP on port 80 (design_intent list run 3f2a9c1d4e5f6071).\n'
+      + '- The worker job had nothing to commit on the branch.\n- Bold marks the values I added.'
+    expect(summaryBullets({ jobSummary: raw, body: '', commits: [] })).toEqual(['Updated INT-8dd269 to name the Wi-Fi rate (802.11 b/g/n) and HTTP on port 80.'])
+    expect(agentReport({ jobSummary: raw })).toBe(raw.replace('verify: done in 9 turns: ', ''))
+    expect(agentReport({ jobSummary: '- b', earlier: ['- a'] })).toBe('**Earlier job**\n\n- a\n\n**Latest job**\n\n- b')
+    expect(agentReport({ jobSummary: 'docs: done in 41 turns' })).toBeNull()
+    // a report with nothing plain in it: the change is said from its pull request
+    expect(summaryBullets({ jobSummary: '- changed_since: false, flags: []', body: '- Adds the Wi-Fi rate to INT-8dd269', commits: [] })).toEqual(['Adds the Wi-Fi rate to INT-8dd269'])
   })
 
   // test-esp32 log #47, #105: the project's requirements are REQ-xxxxxx; R1 to R7 are its resistors

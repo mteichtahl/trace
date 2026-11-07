@@ -98,6 +98,22 @@ export function plainSummary(text: string, o: { max?: number } = {}): { summary:
   return { summary: out, same: out === whole }
 }
 
+/** How an agent talks about its own work that a person cannot act on (test-esp32 #24). */
+const AGENT_TALK = /\b(?:worker job|run ids?|nothing to commit|flags: \[|bold marks)\b/i
+
+/**
+ * One line of an agent's report as a person reads it, or null when nothing plain is left (test-esp32 #24: "What trace
+ * did" showed "interface_incomplete", "changed_since: false", "flags: []", "the worker job", "run ids"). Its sentences
+ * that name the agent's internals lose their asides that do; those still naming one are left out. Pure.
+ */
+export function plainLine(line: string): string | null {
+  // code marks (a part, a file) and a file's extension are a person's words here, not the agent's internals
+  const bare = (x: string): string => x.replace(/`([^`]+)`/g, '$1').replace(/\.(?:json|svg|png|md|pdf|step|stl|3mf|py|csv|kicad_\w+)\b/g, '')
+  const kept = sentences(line).map(withoutInternalAsides).filter((s) => s && !internal(bare(s)) && !AGENT_TALK.test(s))
+  const out = kept.join(' ').trim()
+  return out && !/^[^\p{L}]*$/u.test(out) ? out : null
+}
+
 /**
  * A job's request as its card's one line: its first plain sentence, cut at a word (test-esp32 #25: the title was the
  * prompt's first 200 characters, ending "use the a"). The request itself stays where Watch shows it.

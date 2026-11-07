@@ -7,7 +7,7 @@ import { titleOf as queuedTitleOf } from '../../src/api/agent-queue.js'
 import { reopenHeadline, scopedRequest } from '../../src/api/reopen-scope.js'
 import { titleOf } from '../../src/agents/runtime/job-index.js'
 import type { JobRow } from '../../src/core/job-index.js'
-import { jobHeadline, plainSummary, plainTitle, shownJobTitle } from '../../src/core/plain-words.js'
+import { jobHeadline, plainLine, plainSummary, plainTitle, shownJobTitle } from '../../src/core/plain-words.js'
 
 describe('plain words', () => {
   it('keeps the sentences that name none of the agent\'s internals, and drops stack frames', () => {
@@ -99,5 +99,16 @@ describe('a stuck report leads with its point', () => {
     expect(plainSummary('Also: the cable is short. The module is not stocked anywhere.').summary).toBe('The module is not stocked anywhere. Also: the cable is short.')
     expect(plainSummary('Use the header (GND first). It fits.').summary).toBe('Use the header (GND first). It fits.')
     expect(plainSummary('Also: the cable is short.').summary).toBe('Also: the cable is short.')
+  })
+})
+
+// test-esp32 #24: a change's "What trace did" line by line
+describe('plainLine', () => {
+  it('keeps what a person reads, without the agent\'s internals', () => {
+    expect(plainLine('Drew the power sheet (kicad_erc run 3f2a9c1d4e5f6071).')).toBe('Drew the power sheet.')
+    expect(plainLine('New figure `docs/design/figures/timing-i2c.svg`, from the protocol model.')).toBe('New figure `docs/design/figures/timing-i2c.svg`, from the protocol model.')
+    expect(plainLine('changed_since: false, flags: []')).toBeNull()
+    expect(plainLine('The worker job had nothing to commit. Wrote the guide.')).toBe('Wrote the guide.')
+    expect(plainLine('Bold marks the values I added.')).toBeNull()
   })
 })
