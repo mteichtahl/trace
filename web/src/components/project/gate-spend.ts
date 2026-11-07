@@ -55,7 +55,28 @@ export function gateSpendLine(c: CostView): string | null {
     orders ? `${money(orders, c.orderCurrency ?? c.currency)} on orders` : '',
   ].filter(Boolean)
   const b = budgetsOf(c)
-  return [`${parts.join(', ')}.`, b.build ? buildBudgetLine(b.build) : '', cloudLine(b, c.spent.cloud !== null)].filter(Boolean).join(' ')
+  return [`${parts.join(', ')}.`, b.build ? buildBudgetLine(b.build) : '', c.orderEstimate ? estimateLine(c.orderEstimate) : '', cloudLine(b, c.spent.cloud !== null)].filter(Boolean).join(' ')
+}
+
+/**
+ * "Order estimate US$141 to US$244 for 10 boards (parts check of 2026-11-04; fees from published prices, not a quote):
+ * REQ-4ce9e8 over …". Said at every gate once there is a parts check, so a cost requirement the order would break is
+ * seen at Architect or Capture, not first at Sign-off (test-esp32 run 2, #162).
+ */
+export function estimateLine(e: NonNullable<CostView['orderEstimate']>): string {
+  const m = (n: number) => money(n, e.currency)
+  const r = (a: number, b: number) => (a === b ? m(a) : `${m(a)} to ${m(b)}`)
+  const head = `Order estimate ${r(e.low, e.high)} for ${e.quantity} boards, ${r(e.perBoard.low, e.perBoard.high)} per board (parts check of ${e.at.slice(0, 10)}; the fab's fees, case and shipping from its published prices, not a quote)`
+  const named = e.limits.filter((l) => l.verdict !== 'not_compared')
+  if (!named.length) return `${head}.`
+  const said = named.map((l) => {
+    const what = l.requirement ?? (l.kind === 'total' ? 'the build budget' : 'the target unit cost')
+    const got = l.kind === 'total' ? [e.low, e.high] as const : [e.perBoard.low, e.perBoard.high] as const
+    return l.verdict === 'under' ? `under ${what} (${m(l.amount)})`
+      : l.verdict === 'over' ? `over ${what} (${m(l.amount)}) by ${r(got[0] - l.amount, got[1] - l.amount)}`
+        : `at risk against ${what} (${m(l.amount)}): up to ${m(got[1] - l.amount)} over`
+  })
+  return `${head}: ${said.join('; ')}.${e.verdict === 'over' || e.verdict === 'at_risk' ? ' Change the budget, the parts, the case or the quantity now, while it is cheap.' : ''}`
 }
 
 /**

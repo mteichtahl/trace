@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { load } from '../../core/config.js'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { findRoot } from '../../core/store.js'
+import { estimateLine, orderEstimateFrom } from '../../core/order-estimate.js'
 import { recorded } from '../kicad/record.js'
 import { mpnKey } from '../datasheets/mpn.js'
 import type { ResolveHost } from '../datasheets/download.js'
@@ -92,7 +93,7 @@ function keepLines(db: DatabaseSync, run: string, lines: readonly BomLine[]): vo
 
 export const partsBomCheck = defineTool({
   name: 'parts.bom_check',
-  description: 'Check a BOM (a CSV path with MPN/Qty/LCSC columns, or rows) for a build of N boards: per line the best offer, stock, unit price at the quantity bought (qty × boards, at least the MOQ), flags (out of stock, short, low, not found, end of life), the lifecycle and the sellers that have the part in stock (for single-source parts), and the total. Recorded with every line, so the stock criteria (shape.check) read it; returns run_id. Check at the project\'s build quantity.',
+  description: 'Check a BOM (a CSV path with MPN/Qty/LCSC columns, or rows) for a build of N boards: per line the best offer, stock, unit price at the quantity bought (qty × boards, at least the MOQ), flags (out of stock, short, low, not found, end of life), the lifecycle and the sellers that have the part in stock (for single-source parts), and the total. Recorded with every line, so the stock criteria (shape.check) read it; returns run_id. Check at the project\'s build quantity. A check of the whole BOM also gives order_estimate: the order (boards, assembly, parts, case, shipping) from this check, the newest board and case and the fab\'s published prices (not a quote), against the cost requirements. A cost requirement over or at risk is a question for a person now (journey.ask), not at Sign-off.',
   input: z.object({
     path: z.string().optional(), rows: z.array(BomRowArg).max(2000).optional(), boards: z.number().int().min(1).default(1),
     providers: providersArg, fresh: z.boolean().default(false), limit: z.number().int().min(1).max(2000).default(200),
@@ -108,11 +109,17 @@ export const partsBomCheck = defineTool({
       run.measure('boards', r.boards)
       run.measure('blocking', r.blocking)
       run.measure('total', r.total, r.currency)
+      // the order estimate from this check, against the cost requirements: seen at Architect and Capture, not first at
+      // Sign-off (test-esp32 run 2, #162). The whole BOM's check only: a check of a few key parts is not the order
+      const estimate = a.only_problems ? null : orderEstimateFrom(run.db, {
+        parts: { run: run.id, at: Date.now() / 1000, boards: r.boards, total: r.total, currency: r.currency, lines: r.lines.map((l) => estimateLine({ lcsc: l.lcsc, qty_per_board: l.qty_per_board, flags: l.flags })) },
+      })
+      const warn = estimate?.limits.filter((l) => l.verdict === 'over' || l.verdict === 'at_risk') ?? []
       const shown = (a.only_problems ? r.lines.filter((l) => l.status !== 'ok' || l.flags.includes('end-of-life')) : r.lines).slice(0, a.limit)
       return {
         status: r.blocking ? 'fail' as const : 'pass' as const,
-        summary: `${r.lines.length} line${r.lines.length === 1 ? '' : 's'} for ${r.boards} board${r.boards === 1 ? '' : 's'}: ${r.blocking ? `${r.blocking} out, short or not found` : 'every line in stock'}; ${r.total} ${r.currency}`,
-        result: { ...r, lines: shown, line_count: r.lines.length },
+        summary: `${r.lines.length} line${r.lines.length === 1 ? '' : 's'} for ${r.boards} board${r.boards === 1 ? '' : 's'}: ${r.blocking ? `${r.blocking} out, short or not found` : 'every line in stock'}; ${r.total} ${r.currency}${warn.length ? `. Order estimate ${estimate?.low} to ${estimate?.high} USD: ${warn.map((l) => `${l.requirement ?? l.source} ${l.verdict === 'over' ? 'over' : 'at risk'}`).join(', ')}` : ''}`,
+        result: { ...r, lines: shown, line_count: r.lines.length, ...(estimate ? { order_estimate: estimate } : {}) },
       }
     })
   },

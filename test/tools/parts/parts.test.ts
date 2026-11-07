@@ -147,7 +147,8 @@ describe('BOM check', () => {
     expect(a).toMatchObject({ need: 10, buy: 10, unit_price: 1.71, line_total: 17.1, status: 'ok' }) // 2 × 5 boards reaches the 10+ break
     // the sellers with stock, and who answered: one provider alone cannot tell a single-source part
     expect(a).toMatchObject({ sources: ['LCSC/JLCPCB'], asked: ['lcsc'] })
-    expect(b).toMatchObject({ status: 'out', flags: ['out-of-stock'], sources: [] })
+    // an extended part in JLCPCB's library is flagged: the order estimate counts its assembly fee
+    expect(b).toMatchObject({ status: 'out', flags: ['out-of-stock', 'jlc-extended'], sources: [] })
     expect(c).toMatchObject({ need: 20, status: 'short', note: expect.stringContaining('5 short') })
     expect(d).toMatchObject({ status: 'not-found' })
     expect(r.counts).toMatchObject({ ok: 1, out: 1, short: 1, 'not-found': 1 })

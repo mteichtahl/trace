@@ -22,6 +22,10 @@
  *                                                               estimated cost, work done again marked (sent back,
  *                                                               redone, duplicated); per stage what was done again or
  *                                                               lost
+ *                                         orderEstimate         the order estimate (src/core/order-estimate.ts): the
+ *                                                               order from the newest parts check, board and case at
+ *                                                               the fab's published prices, against the cost
+ *                                                               requirements; absent before a parts check
  *                                         budget                the build budget: what the order (boards, parts, case)
  *                                                               may cost; spent orders, committed and forecast count
  *                                                               against it, cloud work never does
@@ -55,7 +59,8 @@ import { type PriceSource, type PriceTable, DEFAULT_PRICES, isStale } from '../c
 import { type PricesInUse, PRICES_PREFIX, pricesFor } from '../core/prices-store.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { SPECIALIST_WORDS, type SpecialistKind, WORKER } from '../agents/kinds.js'
-import { type Context, Repo, def, storeAt, withJourneyDb } from './action-kit.js'
+import { type Context, Repo, def, storeAt, withJourneyDb, withRecordDb } from './action-kit.js'
+import { type OrderEstimate, orderEstimateFrom } from '../core/order-estimate.js'
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
 const DAY = 86400
@@ -78,6 +83,21 @@ async function jobsOf(ctx: Context, repo: string): Promise<{ rows: JobRow[]; bat
 /** The jobs a person's "ask for changes" started (change.asked): work sent back. */
 const sentBackJobs = (r: JourneyRecord): Set<string> =>
   new Set(r.decisions.filter((d) => d.kind === 'change.asked').map((d) => (d.detail as { job_id?: unknown } | null)?.job_id).filter((x): x is string => typeof x === 'string'))
+
+/** The order estimate from the project's record (none when it cannot be read, or there is no parts check yet). */
+async function estimateOf(ctx: Context, repo: string): Promise<OrderEstimate | null> {
+  try { return await withRecordDb(ctx, repo, (db) => orderEstimateFrom(db)) } catch { return null }
+}
+
+/** The order estimate as cost.get answers it: its figures, each limit's verdict, and its date. */
+export function estimateView(e: OrderEstimate) {
+  return {
+    currency: e.currency, quantity: e.quantity, low: e.low, high: e.high, perBoard: e.perBoard, at: iso(e.at) as string, partsRun: e.partsRun,
+    lines: e.lines, notIn: e.notIn, verdict: e.verdict,
+    limits: e.limits.map((l) => ({ requirement: l.requirement, kind: l.kind, amount: l.amount, currency: l.currency, verdict: l.verdict, text: l.text })),
+    text: e.text,
+  }
+}
 
 /** The installation's actuals and the read's status. */
 async function actualsOf(ctx: Context, o: { repo?: string; since?: string } = {}): Promise<{ rows: ActualRow[]; status: ExplorerStatus | null }> {
@@ -202,9 +222,9 @@ export const COST_ACTIONS = {
   'cost.get': def('read', Repo, async ({ repo }, ctx) => {
     const money = isAdmin(ctx.principal)
     // the ledger and the actuals are read only for admins: nobody else's answer carries money
-    const [usage, actuals, prices, jobs] = money
-      ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx), jobsOf(ctx, repo)])
-      : [{ rows: [], error: null }, { rows: [], status: null }, null, { rows: [], batch: [] }]
+    const [usage, actuals, prices, jobs, estimate] = money
+      ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx), jobsOf(ctx, repo), estimateOf(ctx, repo)])
+      : [{ rows: [], error: null }, { rows: [], status: null }, null, { rows: [], batch: [] }, null]
     return withJourneyDb(ctx, repo, (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
@@ -271,6 +291,8 @@ export const COST_ACTIONS = {
         ...(b.budget !== null ? { budget: b.budget } : {}),
         ...(b.cloud_budget !== null ? { cloudBudget: b.cloud_budget } : {}),
         quantity: b.quantity, unit_cost: b.unit_cost,
+        // the order estimate against the cost requirements, from the newest parts check (#162)
+        ...(estimate ? { orderEstimate: estimateView(estimate) } : {}),
         stages,
         lines: [
           ...orders.map((o) => ({ id: o.id, at: iso(o.placedAt) as string, what: `Order ${o.number} with ${o.fab}: ${o.boards} boards of revision ${o.revision}`, kind: 'order' as const, amount: o.paid ?? 0, estimate: false })),
