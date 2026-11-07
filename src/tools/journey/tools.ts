@@ -63,6 +63,9 @@ import { JobIndexStore, indexedHandle, loadJobs } from '../../core/job-index.js'
 import { asksAgain } from '../../core/process-time.js'
 import { recordProcessMetric } from '../../core/telemetry.js'
 import { video } from './video.js'
+import { type DesignRows, withDesign } from '../design/db.js'
+import { loadDesignDecisions } from '../design/decisions.js'
+import { type PinFinding, architectureView, mateCheck, matedParts } from '../design/record.js'
 
 const configured = (): boolean => projectsFromEnv() !== null
 
@@ -379,6 +382,19 @@ async function waitOnTimer<T>(w: Watch<T>, ms: number, why: string, o: WaitOptio
 
 // ------------------------------------------------------------------ journey.check
 
+/**
+ * The open pin order conflicts of the off-board parts (a module's datasheet against the connector it plugs into), not
+ * waived: capture.datasheets is not met over one (test-esp32 #169). None when the design record cannot be read here.
+ */
+async function mateConflicts(s: Scope, r: JourneyRecord | null): Promise<PinFinding[]> {
+  let rows: DesignRows
+  try { rows = withDesign((x) => x.rows()) } catch { return [] }
+  if (!rows.blocks.some((b) => b.parts.some((p) => p.off_board))) return []
+  const decisions = (await s.journey.read((db) => loadDesignDecisions(db))).result
+  const waived = new Set((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
+  return mateCheck(matedParts(architectureView(rows, decisions)), rows.pins).filter((f) => f.kind === 'mate_order' && !waived.has(f.id))
+}
+
 export const check = defineTool({
   name: 'journey.check',
   description: 'Record a gate criterion that trace owns as met or not met, with the evidence that shows it (a run id from this job, an artifact, a file). Only criteria with owner "trace" (journey.status lists them); a person\'s criteria are met only by their own acts. Check again whenever the evidence changes: the newest check of a criterion stands.',
@@ -393,6 +409,10 @@ export const check = defineTool({
     const s = journeyScope()
     checkEvidence(a.evidence)
     const r = await record(s)
+    if (a.criterion === 'capture.datasheets' && a.status === 'met') {
+      const open = await mateConflicts(s, r)
+      if (open.length) throw new ToolError(`journey: capture.datasheets is not met while an off-board part's pins differ from its connector's (the datasheet says otherwise): ${open.map((f) => f.text).join(' ')} Record it not_met, and ask a person (journey.ask) which way to fix it, or for a waiver of ${open.map((f) => f.id).join(', ')}.`)
+    }
     const { result } = await s.facts.update((db) => ({ result: addCriterionCheck(db, s.asker, { criterion: a.criterion, status: a.status, evidence: a.evidence, note: a.note }, r) }))
     // what the gate looks like with it
     const f = await facts(s)

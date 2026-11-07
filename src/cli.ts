@@ -71,6 +71,7 @@ import { join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ConfigError, changed, leaves, load, parseCliValue, resolve, setValue, unset } from './core/config.js'
 import { mergeMain } from './core/dbmerge.js'
+import { recordOnlyReason } from './core/record-only.js'
 import { readOutput } from './core/artifact-store.js'
 // registers the prompts tables of .trace/project.db, so `tracectl db merge` merges them by their rule
 import './prompts/store.js'
@@ -184,15 +185,19 @@ function cmdConfig(argv: string[]): number {
 
 /** ERC and DRC on every KiCad project (DRC skipped, and said so, while a project has no board yet), a build of every firmware target, and with mechanical/case.json the case's
  * build and fit check (mech.build): what a hardware repository's build runs. Exits 1 when any of them reports errors
- * or the fit fails; without build123d here the case is skipped, said so, and not counted as a failure.
+ * or the fit fails; without build123d here the case is skipped, said so, and not counted as a failure. A pull request
+ * that changes only trace's records has nothing to check and passes, saying so (src/core/record-only.ts).
  * Each check opens with a step line (`▸ ERC on hardware/board`, `▸ DRC on …`, `▸ Firmware build <target>`, `▸ Case fit
  * check`) and ends with ✓ or ✗ (src/core/run-logs.ts), so the app can show which step a running check is on. On a
  * CodeBuild runner that names the runs log group, everything it prints also goes to the check's own stream
  * (src/core/check-stream.ts; main() below). */
 async function cmdCheck(): Promise<number> {
   const cfg = load()
-  const reg = allTools()
   const root = cfg.root ?? process.cwd()
+  // a pull request of trace's records only has no design of its own to check (test-esp32 #141)
+  const recordsOnly = recordOnlyReason(root)
+  if (recordsOnly) { out(`Nothing to check: ${recordsOnly}`); return 0 }
+  const reg = allTools()
   const find = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
     e.name.startsWith('.') || e.name === 'node_modules' || e.name.endsWith('-backups') ? [] : e.isDirectory() ? find(join(dir, e.name)) : e.name.endsWith('.kicad_pro') ? [join(dir, e.name)] : [])
   const projectsList = cfg.electronics.projects.length ? cfg.electronics.projects : find(root).map((p) => relative(root, p))

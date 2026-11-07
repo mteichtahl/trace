@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Gate } from '@/lib/types'
-import { lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from './gate-rules'
+import { ApiError } from '@/lib/api'
+import { lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel, signRefusal } from './gate-rules'
 
 const gate: Pick<Gate, 'criteria' | 'waivers'> = {
   criteria: [
@@ -56,5 +57,16 @@ describe('Sign the gate', () => {
     const g = { criteria: [], waivers: [], pending: ['Accept or discard 1 open change first ("Swap the regulator")'] }
     expect(signBlockers(g, { ...base, admin: true }).map((b) => b.id)[0]).toBe('pending')
     expect(signBlockers({ ...g, pending: [] }, base).map((b) => b.id)).not.toContain('pending')
+  })
+})
+
+describe('signRefusal (test-esp32 #179)', () => {
+  it('is the record\'s reason in words, without its own lead', () => {
+    expect(signRefusal(new ApiError('The gate cannot be signed yet. Open the evidence for 2 more criteria.', 200))).toBe('Open the evidence for 2 more criteria.')
+    expect(signRefusal(new ApiError('The gate was not signed: requirement REQ-3 changed after the baseline. Agree it.', 200))).toBe('Requirement REQ-3 changed after the baseline. Agree it.')
+  })
+  it('is null for a failure that is not a refusal: it stays technical detail', () => {
+    expect(signRefusal(new ApiError('Internal Server Error', 500))).toBeNull()
+    expect(signRefusal(new TypeError('Failed to fetch'))).toBeNull()
   })
 })

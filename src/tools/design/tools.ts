@@ -29,7 +29,7 @@ import { type DesignDecision, loadDesignDecisions } from './decisions.js'
 import {
   CONNECTION_KINDS, INTENT_KINDS, INTENT_TOPICS, InterfaceSchema, LimitSchema, PIN_KINDS, PROPOSAL_STATUS, RESERVED_ROLES, STAGES, SourceSchema, withDesign,
 } from './db.js'
-import { architectureView, intentView, linksView, pinCheck } from './record.js'
+import { type MatedPart, architectureView, intentView, linksView, matedParts, pinCheck } from './record.js'
 
 const Id = z.string().regex(/^[A-Za-z][\w.-]{0,63}$/, 'letters, digits, ".", "_" and "-", starting with a letter')
 
@@ -114,6 +114,11 @@ const Part = z.object({
   mpn: z.string().min(1).max(80), role: z.string().max(120).optional(), key: z.boolean().optional().describe('a key part: its stock is checked at the architecture gate'),
   off_board: z.boolean().optional().describe('it sits off the board: a display, sensor module or battery on a header, connector or cable. Always a key part, and give size_mm: the case must hold it'),
   size_mm: z.array(z.number().positive().max(2000)).length(3).optional().describe('its outline in millimetres (x, y, z), from its datasheet'),
+  mates: z.object({
+    connector: z.string().min(1).max(40).describe('the reference of the board connector it plugs into, such as J2'),
+    pins: z.array(z.string().min(1).max(40)).min(1).max(100).describe('its own pin names in order from pin 1, as its datasheet gives them, such as ["VCC", "GND", "SCL", "SDA"]'),
+    source: z.string().max(200).optional().describe('where in its datasheet: the sha256 (8+ digits) and page, such as "ea9a571f p2"'),
+  }).strict().optional().describe('off_board: what it plugs into, with its pin order from its datasheet; design.pins check compares it with the connector\'s pins in the pin plan'),
 }).strict()
   // a part off the board is one the design depends on: a key part (test-esp32 #136: the display module was never
   // chosen, only the header it plugs into)
@@ -128,7 +133,7 @@ const Block = z.object({
 
 export const architectureTool = defineTool({
   name: 'design.architecture',
-  description: 'The architecture record in the project database, for Architecture choice: options compared (set_option: name, summary, recommended with why and what it gives up, risks), the criteria to score them on with weights (set_criteria), trace\'s score of each option on each criterion with a one-line reason (set_scores, 1 worst to 5 best), the blocks of an option (set_blocks: name, role, key part numbers, the requirements each serves, place on the diagram; a part a requirement depends on that sits off the board, such as a display module on a header, is a part of its block with off_board and its size_mm, not only the header) and what flows between them (set_connections: a rail and its voltage, a bus, an RF path), list. Propose at least two options. A person fixes the criteria and chooses; never record a choice yourself.',
+  description: 'The architecture record in the project database, for Architecture choice: options compared (set_option: name, summary, recommended with why and what it gives up, risks), the criteria to score them on with weights (set_criteria), trace\'s score of each option on each criterion with a one-line reason (set_scores, 1 worst to 5 best), the blocks of an option (set_blocks: name, role, key part numbers, the requirements each serves, place on the diagram; a part a requirement depends on that sits off the board, such as a display module on a header, is a part of its block with off_board and its size_mm, not only the header, and with mates: the connector it plugs into and its pin order from its datasheet) and what flows between them (set_connections: a rail and its voltage, a bus, an RF path), list. Propose at least two options. A person fixes the criteria and chooses; never record a choice yourself.',
   input: z.object({
     action: z.enum(['set_option', 'withdraw_option', 'set_criteria', 'set_scores', 'set_blocks', 'set_connections', 'list']),
     option: z.object({
@@ -182,9 +187,15 @@ const Pin = z.object({
   status: z.enum(PROPOSAL_STATUS).optional().describe('withdrawn: take the pin out of the plan'),
 }).strict()
 
+/** The off-board parts of the architecture going ahead, for the pin plan check; with a part named, those plugging into it. */
+async function offBoard(part: string | undefined): Promise<MatedPart[]> {
+  const d = await decisions()
+  return matedParts(withDesign((x) => architectureView(x.rows(), d.list))).filter((m) => !part || m.mates?.connector === part)
+}
+
 export const pinsTool = defineTool({
   name: 'design.pins',
-  description: 'The pin plan in the project database: for each microcontroller or FPGA pin, the function the firmware gives it, its peripheral instance and what that serves, the net it must be on, the role the part reserves for it (boot, reset, debug) and the alternate functions its datasheet allows there. set (rows by part and pin), list, or check: the plan on its own (every used pin has a net and a function the pin supports, no peripheral instance claimed by two uses, reserved pins keep their role) and against the schematic\'s netlist through kicad-cli (each pin on the net it names). check is a recorded run (findings as its artifact). A person agrees the plan in Pin plan review.',
+  description: 'The pin plan in the project database: for each microcontroller or FPGA pin, the function the firmware gives it, its peripheral instance and what that serves, the net it must be on, the role the part reserves for it (boot, reset, debug) and the alternate functions its datasheet allows there. set (rows by part and pin), list, or check: the plan on its own (every used pin has a net and a function the pin supports, no peripheral instance claimed by two uses, reserved pins keep their role, each off-board part\'s pin order from its datasheet the same as the connector it plugs into) and against the schematic\'s netlist through kicad-cli (each pin on the net it names). check is a recorded run (findings as its artifact). A person agrees the plan in Pin plan review.',
   input: z.object({
     action: z.enum(['set', 'list', 'check']),
     pins: z.array(Pin).max(500).optional().describe('set: the pins'),
@@ -200,13 +211,15 @@ export const pinsTool = defineTool({
       })
     }
     const pins = withDesign((x) => x.rows().pins.filter((p) => (!a.part || p.part === a.part) && p.status !== 'withdrawn'))
-    if (a.action === 'list') return { total: pins.length, pins, findings: pinCheck(pins) }
+    if (a.action === 'list') return { total: pins.length, pins, findings: pinCheck(pins, null, await offBoard(a.part)) }
     if (!pins.length) throw new ToolError('check: the pin plan is empty (design.pins set first)')
     const p = await resolveProject(a.project)
+    // the off-board parts of the architecture going ahead, each against the connector it plugs into (test-esp32 #169)
+    const mated = await offBoard(a.part)
     return recorded('design.pins_check', p.sch ?? p.name, a, async (run) => {
       const nl = await netlist(needSch(p))
       const nets = new Map([...nl.nets].map(([n, ns]) => [n, ns.map((x) => `${x.ref}.${x.pin}`)]))
-      const findings = pinCheck(pins, nets)
+      const findings = pinCheck(pins, nets, mated)
       run.artifact('nets.tsv', [...nets].map(([n, ns]) => `${n}\t${ns.join(' ')}`).join('\n'))
       run.artifact('pin-findings.json', JSON.stringify(findings), 'application/json')
       const blocks = findings.filter((f) => f.severity === 'blocks').length

@@ -38,7 +38,7 @@ import { useNow } from '@/components/use-now'
 import { Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { StatusBadge } from '@/components/status-badge'
-import { EmptyState, Loading } from '@/components/states'
+import { EmptyState, Loading, SlowLoad } from '@/components/states'
 import { Explained } from '@/components/term'
 import { WaitLine } from '@/components/wait-line'
 import { OutOfDateNote, ShowDetail } from '@/components/question-notes'
@@ -94,6 +94,8 @@ function Overview() {
     return (
       <Loading loading={j.isLoading}>
         <div className="mt-6 space-y-6">
+          {/* a load that takes long says so, with Try again, rather than grey placeholders alone (test-esp32 #171) */}
+          <SlowLoad loading={j.isLoading} failureReason={j.failureReason} what="this project" onRetry={() => void j.refetch({ cancelRefetch: true })} />
           <Skeleton className="h-32 rounded-xl" />
           <Skeleton className="h-44 rounded-xl" />
         </div>
