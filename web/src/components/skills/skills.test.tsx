@@ -4,7 +4,7 @@ import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { IntentQualityList, answerChecks, arrivingChoice, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
+import { IntentQualityList, answerChecks, arrivingChoice, changedFields, decidedNote, draftCount, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waivableShown, waiverChecks, whereExample, type WaiverDraft } from './form-skills'
@@ -204,6 +204,15 @@ describe('Intent builder decisions', () => {
     const c = intentDraftContext([{ statement: 's5', choice: 'edit', text: 'Sleeps under 20 µA.' }], ['s2'])
     expect(c).toMatchObject({ submitted: false, decisions: [{ statement: 's5', choice: 'edit', words: 'Sleeps under 20 µA.' }], acceptedAtSubmit: ['s2'] })
     expect(c.note).toMatch(/not in the record/)
+    expect(c).not.toHaveProperty('notedInDraft')
+    // what trace noted in the draft, so it rewords one by its id rather than noting it twice (test log R5)
+    expect(intentDraftContext([], [], [{ id: 'INT-000001', topic: 'power', text: 'USB 5 V.' }]).notedInDraft).toEqual([{ id: 'INT-000001', topic: 'power', words: 'USB 5 V.' }])
+  })
+
+  it('counts the panel\'s statements and the ones trace noted in the draft (test log R5: "0 statements · from the record")', () => {
+    expect(draftCount(0, 0)).toBe('0 statements')
+    expect(draftCount(3, 2)).toBe('3 statements · 2 noted in your draft')
+    expect(draftCount(1, 1)).toBe('1 statement · 1 noted in your draft')
   })
 
   it('keeps one decision per statement in the draft, replaced or removed', () => {

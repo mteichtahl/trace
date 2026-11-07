@@ -29,7 +29,7 @@ import { type DesignDecision, loadDesignDecisions } from './decisions.js'
 import {
   CONNECTION_KINDS, INTENT_KINDS, INTENT_TOPICS, InterfaceSchema, LimitSchema, PIN_KINDS, PROPOSAL_STATUS, RESERVED_ROLES, STAGES, SourceSchema, withDesign,
 } from './db.js'
-import { type MatedPart, architectureView, intentView, linksView, matedParts, pinCheck } from './record.js'
+import { type MatedPart, architectureView, intentView, linksView, matedParts, pinCheck, statedRows } from './record.js'
 
 const Id = z.string().regex(/^[A-Za-z][\w.-]{0,63}$/, 'letters, digits, ".", "_" and "-", starting with a letter')
 
@@ -80,9 +80,12 @@ export const intentTool = defineTool({
       return withDesign((x) => {
         const rows = x.rows()
         const view = intentView(rows, d.list).filter((s) => !a.topic || s.topic === a.topic)
-        return { total: view.length, statements: view, links: linksView(rows), ...(d.note ? { note: d.note } : {}) }
+        return { total: view.length, statements: view, links: linksView(rows, d.list), ...(d.note ? { note: d.note } : {}) }
       })
     }
+    // a person's own statements (stated in the Intent builder) are in the journey record, not in these rows: a
+    // requirement may be linked to them too
+    const stated = a.action === 'link' ? new Set(statedRows([], (await decisions()).list).map((s) => s.id)) : new Set<string>()
     return withDesign((x) => {
       switch (a.action) {
         case 'add': {
@@ -98,7 +101,7 @@ export const intentTool = defineTool({
           return { statement: x.updateIntent(a.id, { status: 'withdrawn' }) }
         case 'link':
           if (!a.requirement || !a.intent?.length) throw new ToolError('link: give requirement and intent')
-          return { requirement: a.requirement, derived_from: x.link(a.requirement, a.intent, a.replace).map((l) => l.intent) }
+          return { requirement: a.requirement, derived_from: x.link(a.requirement, a.intent, a.replace, stated).map((l) => l.intent) }
         case 'unlink':
           if (!a.requirement || a.intent?.length !== 1) throw new ToolError('unlink: give requirement and one intent')
           return { requirement: a.requirement, removed: x.unlink(a.requirement, a.intent[0] as string) }

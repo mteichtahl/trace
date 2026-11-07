@@ -5,7 +5,9 @@
  * (src/tools/design/db.ts) by src/tools/design/record.ts.
  *
  *   intent                accepted (as worded: the words seen are kept, so a later change by an agent reopens it),
- *                         edited (the person's own words replace the agent's), or rejected
+ *                         edited (the person's own words replace the agent's), or rejected; or stated: a statement of
+ *                         the person's own (the Intent builder's chat noted it in their draft and Submit recorded it),
+ *                         with its words, topic and kind, read as a row beside the agents' (record.ts statedRows)
  *   intent.uncovered      left out: no requirement will cover this statement, with the reason
  *   requirement           accepted, or struck with the reason (Requirements review keeps the reason with it)
  *   architecture.criteria fixed: the criteria and their weights, before any score is read

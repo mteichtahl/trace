@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { call } from '@/lib/api'
 import { ChatView } from '@/components/chat/chat-view'
 import { SKILL_BY_ID } from './definitions'
-import { IntentOpening, TOPIC_QUESTIONS, openingWords, threadKey, useSkillThread } from './intent-chat'
+import { IntentOpening, NOTE_INTENT_DESCRIPTION, TOPIC_QUESTIONS, noteStatements, notedAnswer, openingWords, threadKey, useSkillThread, withNoted } from './intent-chat'
 
 type Msg = { id: string; role: string; content: string }
 const agent = {
@@ -104,5 +104,43 @@ describe('the conversation is kept', () => {
     result.current.keep('t2')
     await waitFor(() => expect(mockCall).toHaveBeenCalledWith('me.set', { key: 'threads.acme_soil-sensor.intent-builder', value: 't2' }))
     await waitFor(() => expect(result.current.thread).toBe('t2'))
+  })
+})
+
+describe('statements trace notes in the draft (test log R5)', () => {
+  let n = 0
+  const ids = () => `INT-00000${++n}`
+  beforeEach(() => { n = 0 })
+
+  it('note_intent adds each statement to the draft with a new id, rewords one noted before, and withdraws one', () => {
+    const a = noteStatements([], { statements: [{ topic: 'purpose', text: 'A desk clock for one person.' }, { topic: 'power', text: 'USB 5 V, under 0.5 W.' }] }, new Set(), ids)
+    expect(a.proposed.map((x) => x.id)).toEqual(['INT-000001', 'INT-000002'])
+    expect(a.noted).toEqual([{ id: 'INT-000001', topic: 'purpose', text: 'A desk clock for one person.' }, { id: 'INT-000002', topic: 'power', text: 'USB 5 V, under 0.5 W.' }])
+    const b = noteStatements(a.proposed, { statements: [{ id: 'INT-000002', topic: 'power', text: 'USB 5 V, under 1 W.' }], withdraw: ['INT-000001'] }, new Set(), ids)
+    expect(b.proposed).toEqual([{ id: 'INT-000002', topic: 'power', text: 'USB 5 V, under 1 W.' }])
+    expect(b.withdrawn).toEqual(['INT-000001'])
+    expect(notedAnswer(b).note).toMatch(/Draft intent panel now.*Submit intent.*Nothing needs to be started/)
+  })
+
+  it('never touches a statement the record holds: the person decides it in the panel', () => {
+    const r = noteStatements([], { statements: [{ id: 'INT-agent1', topic: 'power', text: 'Runs from 12 V.' }] }, new Set(['INT-agent1']), ids)
+    expect(r.proposed).toEqual([])
+    expect(r.refused[0]).toMatch(/INT-agent1 is in the record/)
+    expect(noteStatements([], { statements: [{ topic: 'nowhere', text: 'x' }] }, new Set(), ids).refused[0]).toMatch(/could not be read/)
+  })
+
+  it('the panel shows a noted statement at once, as Draft, until the saved draft comes back from the record', () => {
+    const noted = [{ id: 'INT-000001', topic: 'purpose', text: 'A desk clock.' }, { id: 'INT-000002', topic: 'compliance', kind: 'dont_care' as const, text: 'No marks.' }, { id: 'INT-000003', topic: 'power', text: 'Rejected.' }]
+    const v = withNoted(undefined, noted, new Set(['INT-000003']))
+    expect(v?.statements).toEqual([{ id: 'INT-000001', topic: 'Purpose', text: 'A desk clock.', state: 'draft' }, { id: 'INT-000002', topic: 'Compliance', text: "Don't care: No marks.", state: 'draft' }])
+    expect(v?.topic).toBe(1)
+    // once the record's view holds it, the record's words and flags are shown, not the draft's
+    const recorded = { topic: 1, answered: ['purpose'], statements: [{ id: 'INT-000001', topic: 'Purpose', text: 'A desk clock.', state: 'vague' as const, flag: 'Vague word' }], questions: [] }
+    expect(withNoted(recorded, noted.slice(0, 1), new Set())).toBe(recorded)
+  })
+
+  it('the opening promise holds: trace notes each statement in the draft', () => {
+    expect(openingWords(def, 0, [])).toMatch(/I note each statement in the draft as you answer/)
+    expect(NOTE_INTENT_DESCRIPTION).toMatch(/never offer start_task to record intent/)
   })
 })

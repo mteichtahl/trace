@@ -174,7 +174,8 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       const v = a.skill === 'order-submit' && v0.order ? { ...v0, order: { ...v0.order, pay: payWithQuote(v0.order.pay) }, checks: quoteCheck(v0.checks ?? []) } : v0
       // the question its link names (test-esp32 #107), else the project's first
       const question = String(a.skill) === 'question-answer' ? (a.question ? QUESTIONS_BY_ID[String(a.question)] : undefined) ?? QUESTIONS[repo] : undefined
-      const d = drafts[`${repo}|${String(a.skill)}`]
+      // VITE_MOCK_INTENT=noted: the statements trace's chat noted in the panel controller's draft (test log R5)
+      const d = drafts[`${repo}|${String(a.skill)}`] ?? (import.meta.env.VITE_MOCK_INTENT === 'noted' && fresh.intent ? { step: 0, data: { done: [], proposed: NOTED_INTENT }, saved: new Date().toISOString() } : undefined)
       return ok({ skill: a.skill, ...v, ...(question ? { question } : {}), ...(d ? { draft: d.data, step: d.step, saved: d.saved } : {}) })
     }
     case 'skill.submit': {
@@ -229,3 +230,12 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       return undefined
   }
 }
+
+/** What trace's chat noted from the panel controller's first answers (VITE_MOCK_INTENT=noted). */
+const NOTED_INTENT = [
+  { id: 'INT-3fa201', topic: 'purpose', text: 'A panel controller that reads 24 switches and drives 16 annunciator LEDs for a home cockpit, used by one pilot.' },
+  { id: 'INT-3fa202', topic: 'environment', text: 'Indoors on a desk, 10 to 35 °C, no enclosure rating.' },
+  { id: 'INT-3fa203', topic: 'power', text: 'Powered from USB at 5 V, under 2.5 W with every LED on.' },
+  { id: 'INT-3fa204', topic: 'interfaces', text: 'USB-C receptacle to the PC, USB 2.0 full speed, 12 Mbit/s, both directions.' },
+  { id: 'INT-3fa205', topic: 'performance', text: 'Reports a switch change fast.' },
+]
