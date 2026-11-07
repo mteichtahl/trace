@@ -73,4 +73,84 @@ describe('stack.yml', () => {
     await run(g, 'closed', { ...pr(1, 'claude/a', 'main', { merged: true }), head: { ref: 'claude/a', sha: SHA('1'), repo: { full_name: 'someone/trace' } } }).done
     expect(g.calls).toHaveLength(0)
   })
+
+  // #237: #361 merged into #356's branch seconds after #356 had merged, before this workflow moved it to main, so its
+  // commits reached no branch that merges on and missed main
+  describe('a pull request merged into a branch already merged', () => {
+    const T0 = '2026-11-07T03:00:00Z'
+    const T1 = '2026-11-07T03:00:20Z'
+    const child = pr(4, 'claude/b', 'claude/a', { merged: true, merged_at: T1, merge_commit_sha: SHA('9') })
+    const parent = pr(1, 'claude/a', 'main', { merged: true, merged_at: T0 })
+    const lists = (closed: Record<string, unknown[]>, extra: (a: Record<string, unknown>) => unknown[] = () => []) => (a: Record<string, unknown>) => {
+      if (a.head && a.state === 'closed') return closed[String(a.head)] ?? []
+      if (a.head) return []
+      return extra(a)
+    }
+
+    it('opens a pull request carrying its commits on to main, says so on it, and moves the ones built on it to main', async () => {
+      const f = fakeGithub({
+        'pulls.list': lists({ 'mteichtahl:claude/a': [parent] }, (a) => (a.base === 'claude/b' ? [pr(5, 'claude/c', 'claude/b')] : [])),
+        'repos.compareCommits': { ahead_by: 2, behind_by: 0 },
+        'pulls.create': { number: 99 },
+      })
+      const { core, done } = run(f, 'closed', child)
+      await done
+      expect(f.called('git.createRef')[0]!.args).toMatchObject({ ref: 'refs/heads/stack/carry-4', sha: SHA('9') })
+      expect(f.called('repos.compareCommits')[0]!.args).toMatchObject({ base: 'main', head: SHA('9') })
+      expect(f.called('pulls.create')[0]!.args).toMatchObject({ head: 'stack/carry-4', base: 'main', title: 'Carry #4 on to main' })
+      expect(f.called('issues.createComment')[0]!.args).toMatchObject({ issue_number: 4 })
+      expect(String(f.called('issues.createComment')[0]!.args.body)).toMatch(/after #1 had merged, so its commits did not reach `main`\. #99 carries them on/)
+      // #5, built on #4, goes where the commits go, not onto the merged branch
+      expect(f.called('pulls.update')[0]!.args).toMatchObject({ pull_number: 5, base: 'main' })
+      expect(f.called('repos.merge')[0]!.args).toMatchObject({ base: 'claude/c', head: 'main' })
+      expect(core.text).toMatch(/#4 merged into `claude\/a` after #1 had merged: #99 carries its commits on to `main`/)
+    })
+
+    it('goes up the stack past every branch that merged, to the first still open', async () => {
+      const f = fakeGithub({
+        'pulls.list': lists({ 'mteichtahl:claude/a': [pr(1, 'claude/a', 'claude/x', { merged: true, merged_at: T0 })], 'mteichtahl:claude/x': [pr(7, 'claude/x', 'claude/y', { merged: true, merged_at: T0 })] }),
+        'repos.compareCommits': { ahead_by: 1, behind_by: 0 },
+        'pulls.create': { number: 99 },
+      })
+      await run(f, 'closed', child).done
+      expect(f.called('pulls.create')[0]!.args).toMatchObject({ base: 'claude/y' })
+    })
+
+    it('does nothing more when the commits are there already, the base merged after it, or the base is still open', async () => {
+      const there = fakeGithub({ 'pulls.list': lists({ 'mteichtahl:claude/a': [parent] }), 'repos.compareCommits': { ahead_by: 0, behind_by: 3 } })
+      const t = run(there, 'closed', child)
+      await t.done
+      expect(there.called('pulls.create')).toHaveLength(0)
+      expect(t.core.text).toMatch(/its commits are on `main` already/)
+      // merged into its base before the base merged: its commits went with the base
+      const before = fakeGithub({ 'pulls.list': lists({ 'mteichtahl:claude/a': [{ ...parent, merged_at: '2026-11-07T03:01:00Z' }] }) })
+      await run(before, 'closed', child).done
+      expect(before.called('repos.compareCommits')).toHaveLength(0)
+      expect(before.called('git.createRef')).toHaveLength(0)
+      // the base's pull request is open: the normal case
+      const open = fakeGithub({ 'pulls.list': (a: Record<string, unknown>) => (a.head === 'mteichtahl:claude/a' && a.state === 'open' ? [pr(1, 'claude/a', 'main')] : []) })
+      await run(open, 'closed', child).done
+      expect(open.called('git.createRef')).toHaveLength(0)
+    })
+
+    it('run again, it keeps the pull request it opened', async () => {
+      const f = fakeGithub({
+        'pulls.list': (a: Record<string, unknown>) => (a.head === 'mteichtahl:claude/a' && a.state === 'closed' ? [parent] : a.head === 'mteichtahl:stack/carry-4' ? [{ number: 99 }] : []),
+        'repos.compareCommits': { ahead_by: 2, behind_by: 0 },
+        'git.createRef': () => Object.assign(new Error('Reference already exists'), { status: 422 }),
+      })
+      await run(f, 'closed', child).done
+      expect(f.called('pulls.create')).toHaveLength(0)
+      expect(String(f.called('issues.createComment')[0]!.args.body)).toMatch(/#99 carries them on/)
+      // and says it once
+      const said = fakeGithub({
+        'pulls.list': (a: Record<string, unknown>) => (a.head === 'mteichtahl:claude/a' && a.state === 'closed' ? [parent] : a.head === 'mteichtahl:stack/carry-4' ? [{ number: 99 }] : []),
+        'repos.compareCommits': { ahead_by: 2, behind_by: 0 },
+        'git.createRef': () => Object.assign(new Error('Reference already exists'), { status: 422 }),
+        'issues.listComments': [{ body: 'x\n<!-- stack: carried by #99 -->' }],
+      })
+      await run(said, 'closed', child).done
+      expect(said.called('issues.createComment')).toHaveLength(0)
+    })
+  })
 })
