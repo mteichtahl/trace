@@ -76,7 +76,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFact
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type DiscardView, type ChangeSummary, type StackLink, type TraceRule, stacksOf, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
-  askedFor, handoffIdOf, editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, updatingJob, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, agentReport, traceChanges,
+  askedFor, askingJob, handoffIdOf, editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, type InfraFailure, infraReason, jobRequest, jobsByBranch, readySince, updatingJob, recommendationOf, requirementsNamed, settleUnfinished, summaryBullets, agentReport, traceChanges,
   jobWorking, traceJob, unfinishedWords, verdictOf, creditedAgent,
 } from './changes.js'
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
@@ -299,7 +299,7 @@ export async function openChanges(ctx: Context, repo: string, o: { max?: number 
   // a change titled by a record or a merge commit is named by what it holds, as its review page names it (log #154)
   const titles = await Promise.all(mine.map(({ pull, job }) => listTitle(ctx, gh, repo, pull, job, rows, stacks.get(pull.number)?.stacked?.base ?? null)))
   const works = mine.map(({ pull, job }, i) => ({
-    change: { ...changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head), stuck: stuckFor(look, pull.sha), updating: !!updatingJob(rows, pull.head, job) }), title: titles[i] ?? pull.title },
+    change: { ...changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given, stack: stacks.get(pull.number), answers: answers.get(pull.head), stuck: stuckFor(look, pull.sha), updating: !!updatingJob(rows, pull.head, job), asker: askingJob(job, rows) }), title: titles[i] ?? pull.title },
     criteria: criteriaNamed(jobRequest(job), job.title),
     ...(contents[i] ? { content: contents[i] } : {}),
   }))
@@ -352,7 +352,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const stuck = pull.state === 'open' ? stuckFor(look, sha) : null
   // a later work item on its branch ("Bring it up to date", a fix for its checks) is working on it too (test-esp32 #243)
   const updating = !!updatingJob(found.rows, pull.head.ref, job)
-  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack, answers: pending, stuck, updating })
+  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given, stack, answers: pending, stuck, updating, asker: askingJob(job, found.rows) })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   if (stack.stacked) facts.stacked = stack.stacked
   // its checks cannot start: no runner picks them up (test-esp32 log #146)
