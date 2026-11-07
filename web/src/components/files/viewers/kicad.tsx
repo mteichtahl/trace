@@ -22,10 +22,12 @@ import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerProps } fr
 // ------------------------------------------------------------------ the parts of KiCanvas we reach into
 
 export interface KcPoint { x: number; y: number }
-interface KcLayer { name: string; visible: boolean; color: { to_css(): string } }
+/** KiCanvas's bounding box (x, y, width, height in mm) */
+export interface KcBox { x: number; y: number; w: number; h: number; valid?: boolean; grow(d: number): KcBox }
+interface KcLayer { name: string; visible: boolean; color: { to_css(): string }; bbox?: KcBox }
 export interface KcViewer {
-  viewport: { camera: { matrix: { transform(p: KcPoint): KcPoint }; flipped: boolean } }
-  layers: { in_ui_order(): Iterable<KcLayer>; by_name(n: string): KcLayer | undefined }
+  viewport: { camera: { matrix: { transform(p: KcPoint): KcPoint }; flipped: boolean; bbox?: KcBox } }
+  layers: { in_ui_order(): Iterable<KcLayer>; in_order?: () => Iterable<KcLayer>; by_name(n: string): KcLayer | undefined }
   flip_view?: () => void
   draw(): void
   paint(): void
@@ -53,6 +55,41 @@ export function waitForViewer(embed: HTMLElement, board: boolean, timeoutMs = 20
     }
     tick()
   })
+}
+
+/** Layers that are not the drawing: the sheet's frame and title block, the grid, and KiCanvas's own overlays. */
+const NOT_DRAWN = /^:(DrawingSheet|Grid|Overlay|Interactive|Marks|Anchors)$/
+
+/**
+ * The box around what is drawn on a schematic sheet (symbols, wires, labels, text), not the page: a sheet drawn in one
+ * corner of an A4 page opens on its parts, readable, instead of the whole page (test-esp32 #50). Null when nothing is.
+ */
+export function contentBox(layers: Iterable<{ name: string; bbox?: Pick<KcBox, 'x' | 'y' | 'w' | 'h' | 'valid'> | undefined }>): { x: number; y: number; w: number; h: number } | null {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+  for (const l of layers) {
+    const b = l.bbox
+    if (NOT_DRAWN.test(l.name) || !b || b.valid === false || !(b.w > 0 || b.h > 0) || ![b.x, b.y, b.w, b.h].every(Number.isFinite)) continue
+    x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h)
+  }
+  return x1 < x2 || y1 < y2 ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } : null
+}
+
+/**
+ * Open a schematic on what is drawn, and make KiCanvas's own fit button do the same: the page when nothing is drawn.
+ * The margin is a twentieth of the drawing, at least 5 mm.
+ */
+function fitSchematic(v: KcViewer): void {
+  const toPage = v.zoom_to_page?.bind(v)
+  const fit = () => {
+    const layers = [...(v.layers.in_order?.() ?? v.layers.in_ui_order())]
+    const b = contentBox(layers)
+    const Box = layers.find((l) => l.bbox)?.bbox?.constructor as (new (x: number, y: number, w: number, h: number) => KcBox) | undefined
+    if (!b || !Box) return toPage?.()
+    v.viewport.camera.bbox = new Box(b.x, b.y, b.w, b.h).grow(Math.max(5, Math.max(b.w, b.h) / 20))
+    v.draw()
+  }
+  v.zoom_to_page = fit
+  fit()
 }
 
 const SEV: Record<FileFinding['severity'], { ring: string; word: 'blocks' | 'fix' | 'waived' }> = {
@@ -139,7 +176,7 @@ export function KiCanvasView({ text, name, findings, size, board, fill, classNam
         if (board) {
           v.viewer?.zoom_to_board?.()
           v.viewer?.draw()
-        }
+        } else if (v.viewer) fitSchematic(v.viewer)
         setEl(v)
       })
       .catch((e: Error) => live && setErr(e.message))
