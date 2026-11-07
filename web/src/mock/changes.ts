@@ -76,7 +76,8 @@ const FILES: Record<string, { before: string | Uint8Array | null; after: string 
   'hardware/sensor.kicad_sch': { before: sch, after: sch, mime: 'text/plain' },
   'docs/renders/front.svg': { before: DRAWING_SVG, after: RENDER_AFTER, mime: 'image/svg+xml' },
   'mechanical/case.py': { before: null, after: '# The sensor board\'s case: two printed parts, the board screwed to its four holes.\nOUTER = (59.4, 44.4, 19.6)  # mm\nWALL = 1.6\nLID_WINDOW = (24.0, 13.0)  # the display, on the lid\'s underside\n\ndef build():\n    return shell(OUTER, WALL), lid(OUTER, WALL, window=LID_WINDOW)\n', mime: 'text/x-python' },
-  'docs/design/protocol-specification.md': { before: null, after: '# Protocol specification\n\n## I2C display bus\n\n- Address 0x3C, 400 kHz.\n- 4.7 kΩ pull-ups to 3V3 on SCL and SDA.\n', mime: 'text/markdown' },
+  // as trace writes a document: front matter, and hidden markers for its sections and figures (test-esp32 #41)
+  'docs/design/protocol-specification.md': { before: null, after: '---\nproject: soil-sensor\ndocument: Protocol specification\nrevision: A\ncommit: 7f3e21a9c04b\nupdated: 2026-11-06\n---\n\n# Protocol specification\n\n<!-- scribe:section id="i2c" -->\n## I2C display bus\n\n- Address 0x3C, 400 kHz.\n- 4.7 kΩ pull-ups to 3V3 on SCL and SDA.\n\n<!-- scribe:figure kind="data-flow" source="ontology:architecture" -->\n```mermaid\ngraph LR\n  MCU -- SCL, SDA --> OLED\n```\n<!-- scribe:end id="i2c" -->\n', mime: 'text/markdown' },
 }
 
 /** A changed file's bytes at the change's base (before) or head (after). */

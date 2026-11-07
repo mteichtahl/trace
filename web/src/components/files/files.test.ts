@@ -9,7 +9,7 @@ import { describeDiff, diffParts } from './parts-diff'
 import { sanitizeSvg } from './sanitize'
 import { lineDiff } from './text-diff'
 import { busLabel, parseVcd, timeLabel, valueAt } from './vcd'
-import { firstSection, headingsOf } from './viewers/markdown'
+import { firstSection, headingsOf, splitFrontMatter, withoutComments } from './viewers/markdown'
 
 describe('kind detection', () => {
   it.each([
@@ -308,5 +308,33 @@ describe('markdown contents', () => {
   it('cuts the first section for the card', () => {
     expect(firstSection(md)).toContain('intro')
     expect(firstSection(md)).not.toContain('Power')
+  })
+})
+
+// test-esp32 #41: the front matter read as one bold paragraph, and the scribe markers showed as text
+describe('a document trace writes', () => {
+  const doc = [
+    '---', 'project: test-esp32', 'document: High level design', 'revision: A', 'commit: 76017175e1d9', 'updated: 2026-11-06', '---', '',
+    '# test-esp32: High level design', '', '<!-- scribe:section id="overview" -->', '## Overview', '', 'Text with `<!-- kept -->` in code.  ', 'Next line.', '',
+    '<!-- scribe:figure kind="data-flow" source="ontology:architecture" -->', '```mermaid', 'graph LR', '  a --> b', '<!-- in a fence -->', '```',
+    '<!-- scribe:end id="overview" -->', '', 'Before <!-- an aside --> after.', '<!-- one', 'over lines -->', 'End.',
+  ].join('\n')
+  it('reads the front matter as fields, not text', () => {
+    const { front, body } = splitFrontMatter(doc)
+    expect(front).toEqual([['project', 'test-esp32'], ['document', 'High level design'], ['revision', 'A'], ['commit', '76017175e1d9'], ['updated', '2026-11-06']])
+    expect(body.startsWith('# test-esp32: High level design')).toBe(true)
+    expect(splitFrontMatter('# No front matter\n---\n').front).toBeNull()
+  })
+  it('leaves out HTML comments outside code, and the lines that held only one', () => {
+    const body = withoutComments(splitFrontMatter(doc).body)
+    expect(body).not.toContain('scribe:')
+    expect(body).not.toContain('an aside')
+    expect(body).not.toContain('over lines')
+    expect(body).toContain('Before  after.')
+    expect(body).toContain('`<!-- kept -->`')
+    expect(body).toContain('<!-- in a fence -->')
+    expect(body).toContain('in code.  \nNext line.')
+    expect(body).toContain('End.')
+    expect(headingsOf(body).map((h) => h.text)).toEqual(['test-esp32: High level design', 'Overview'])
   })
 })
