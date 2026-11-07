@@ -240,6 +240,26 @@ describe('design.architecture', () => {
   })
 })
 
+describe('fixed criteria follow the requirements they quote (test-esp32 run 2, #173)', () => {
+  const empty = { intent: [], links: [], options: [], scores: [], blocks: [], connections: [], pins: [], sheets: [] }
+  const fix = (at: number): DesignDecision => ({ id: 'f', kind: 'architecture.criteria', target: 'architecture', choice: 'fixed', detail: { criteria: [{ id: 'cost', name: 'Cost against 8 USD/board and 100 USD project', weight: 3 }] }, by: 'marc', byHash: 'h', at, supersededAt: null })
+  const row = (name: string, updated: number) => ({ id: 'cost', name, weight: 3, description: 'REQ-f3f79d (per board) and REQ-4ce9e8 (the project).', status: 'proposed' as const, updated, by: 'impl' })
+
+  it('reads the criterion as reworded after the fix, keeping its fixed weight', () => {
+    const a = architectureView({ ...empty, criteria: [row('Cost against 9 USD/board and 275 USD project', 300)], requirements: [{ id: 'REQ-f3f79d', updated: 250 }, { id: 'REQ-4ce9e8', updated: 250 }] }, [fix(100)])
+    expect(a.criteria).toEqual([expect.objectContaining({ id: 'cost', name: 'Cost against 9 USD/board and 275 USD project', weight: 3, was: 'Cost against 8 USD/board and 100 USD project' })])
+    expect(a.criteria[0]!.stale).toBeUndefined()
+  })
+
+  it('says a criterion may quote old numbers when a requirement it names changed after its words', () => {
+    const a = architectureView({ ...empty, criteria: [row('Cost against 8 USD/board and 100 USD project', 50)], requirements: [{ id: 'REQ-f3f79d', updated: 250 }, { id: 'REQ-4ce9e8', updated: 90 }] }, [fix(100)])
+    expect(a.criteria[0]).toMatchObject({ name: 'Cost against 8 USD/board and 100 USD project', stale: { requirements: ['REQ-f3f79d'], since: new Date(250_000).toISOString() } })
+    expect(a.criteria[0]!.was).toBeUndefined()
+    // before any fix, the proposed row's own time counts
+    expect(architectureView({ ...empty, criteria: [row('Cost', 300)], requirements: [{ id: 'REQ-f3f79d', updated: 250 }] }, []).criteria[0]!.stale).toBeUndefined()
+  })
+})
+
 describe('the pin plan', () => {
   const pins = [
     { part: 'U1', pin: '30', name: 'PA9', function: 'USART1_TX', peripheral: 'USART1', use: 'GPS', net: '/GPS_RX', alternates: ['USART1_TX', 'TIM1_CH2', 'GPIO'] },

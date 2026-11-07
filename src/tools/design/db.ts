@@ -108,6 +108,8 @@ export interface DesignRows {
   intent: IntentStatementRow[]; links: RequirementIntentRow[]
   options: ArchOptionRow[]; criteria: ArchCriterionRow[]; scores: ArchScoreRow[]; blocks: ArchBlockRow[]; connections: ArchConnectionRow[]
   pins: PinRow[]; sheets: SheetRow[]
+  /** the requirements' ids and when each last changed, for criteria that name them (absent: not read) */
+  requirements?: { id: string; updated: number }[]
 }
 
 // ------------------------------------------------------------------ schema
@@ -274,6 +276,7 @@ export function readDesignRows(db: DatabaseSync): DesignRows {
       alternates: strs(r.alternates), constraints: s(r.constraints), note: s(r.note), status: status(r.status), updated: Number(r.updated), by: s(r.by),
     })),
     sheets: all(db, 'sheet_requirements', 'sheet').map((r) => ({ sheet: String(r.sheet), block: s(r.block), requirements: strs(r.requirements), reason: s(r.reason), updated: Number(r.updated), by: s(r.by) })),
+    requirements: hasTable(db, 'requirements') ? (db.prepare('SELECT id, updated FROM requirements').all() as Record<string, unknown>[]).map((r) => ({ id: String(r.id), updated: Number(r.updated ?? 0) })) : [],
   }
 }
 

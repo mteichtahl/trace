@@ -6,6 +6,8 @@
  * choice when there is one. A requirement served by no block shows here before the architecture gate, not after.
  */
 import { useState } from 'react'
+import { askTrace } from '@/components/chat/chat-state'
+import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { StatusBadge } from '@/components/status-badge'
 import type { ArchOption, ArchitectureRecord, Block } from '@/lib/types-s1'
@@ -97,9 +99,37 @@ export function ArchitectureSummary({ a, current, requirements }: { a: Architect
       {rec && (
         <p><span className="font-medium">trace recommends option {rec.id}</span>{rec.why ? `: ${rec.why}` : '.'}{rec.gives_up ? <span className="text-muted-foreground"> It gives up {rec.gives_up.replace(/^./, (c) => c.toLowerCase())}</span> : null}</p>
       )}
+      <CriteriaFollow a={a} />
       {o && o.risks.length > 0 && <p className="text-muted-foreground">Risks of option {o.id}: {o.risks.join('; ')}.</p>}
       {missing.length > 0 && <p><StatusBadge status="warning" label={`${missing.length} not served`} /> No block of option {o?.id} serves {missing.join(', ')}: map each to a block, or take it back to Requirements review.</p>}
     </div>
+  )
+}
+
+/**
+ * The criteria whose words moved since they were fixed, one line each: reworded (with the name it was fixed with; the
+ * weight and the choice stand), or naming a requirement that changed after its words were written, so the numbers it
+ * quotes may be old, with Ask trace to reword it from the requirement (test-esp32 run 2, #173). Nothing when none did.
+ */
+export function CriteriaFollow({ a }: { a: Pick<ArchitectureRecord, 'criteria'> }) {
+  const moved = (a.criteria ?? []).filter((c) => c.was || c.stale)
+  if (!moved.length) return null
+  return (
+    <ul className="space-y-1.5 text-sm" aria-label="Criteria changed since they were fixed">
+      {moved.map((c) => (
+        <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {c.stale ? (
+            <>
+              <StatusBadge status="warning" label="May quote old numbers" />
+              <span><span className="font-medium">{c.name}</span> names {c.stale.requirements.join(', ')}, changed on {c.stale.since.slice(0, 10)} after these words were written.</span>
+              <Button size="sm" variant="outline" onClick={() => askTrace(`Reword the architecture criterion ${c.id} ("${c.name}") from the current text of ${c.stale!.requirements.join(' and ')}: record its new name and description with design.architecture, keeping its weight.`)}>Ask trace to reword it</Button>
+            </>
+          ) : (
+            <span className="text-muted-foreground"><span className="font-medium text-foreground">{c.name}</span> was fixed as "{c.was}" and reworded since; its weight, and the choice made on it, stand.</span>
+          )}
+        </li>
+      ))}
+    </ul>
   )
 }
 

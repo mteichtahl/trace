@@ -49,7 +49,8 @@ function architecture(): ArchitectureRecord {
   const o = OPTIONS.find((x) => x.id === current)!
   return {
     option: `Option ${o.id}: ${o.name}`, id: o.id, state: chosen ? 'chosen' : 'proposed', blocks: o.blocks, connections: o.connections, options: OPTIONS,
-    criteria: [{ id: 'cost', name: 'Cost', weight: 2, description: null }, { id: 'power', name: 'Power', weight: 2, description: null }, { id: 'risk', name: 'Risk', weight: 1, description: null }, { id: 'availability', name: 'Part availability', weight: 1, description: null }],
+    // once fixed, the cost criterion names a requirement changed since: its numbers may be old (#173)
+    criteria: [{ id: 'cost', name: 'Cost', weight: 2, description: 'R-014: at most US$12 a board.', ...(fixed ? { stale: { requirements: ['R-014'], since: new Date(Date.now() - 3_600_000).toISOString() } } : {}) }, { id: 'power', name: 'Power', weight: 2, description: null }, { id: 'risk', name: 'Risk', weight: 1, description: null }, { id: 'availability', name: 'Part availability', weight: 1, description: null }],
     fixed, recommended: 'B', chosen,
     scores: [
       { option: 'A', criterion: 'cost', score: 3, reason: 'Two chips cost US$1.40 more.', by: 'trace' }, { option: 'B', criterion: 'cost', score: 5, reason: 'One chip.', by: 'trace' },
