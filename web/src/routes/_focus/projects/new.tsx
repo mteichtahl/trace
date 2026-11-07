@@ -171,7 +171,7 @@ function NewProject() {
             {d.name.trim().length >= 2 && <p className={cn('text-xs', all[0]!.ok ? 'text-verified' : 'text-destructive')}>{all[0]!.ok ? '✓ No other project uses this name' : 'Another project already uses this name'}</p>}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="np-desc">Short description</Label>
+            <Label htmlFor="np-desc">Short description <span className="font-normal text-muted-foreground">(optional)</span></Label>
             <Textarea id="np-desc" rows={3} value={d.description} maxLength={280} onChange={(e) => set({ description: e.target.value, icon: d.icon.image ? d.icon : { ...d.icon, glyph: recommendGlyph(`${d.name} ${e.target.value}`) } })} />
             <p className="text-xs text-muted-foreground">One or two sentences: what it is and who it is for. trace's agents read this first. {d.description.length} of 280 characters.</p>
           </div>

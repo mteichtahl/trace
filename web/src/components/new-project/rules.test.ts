@@ -17,6 +17,13 @@ describe('New project', () => {
   })
   it('refuses a name another project uses', () => expect(stepOk({ ...d, name: 'soil sensor' }, 'about', { taken: ['Soil sensor'] })).toBe(false))
   it('wants a description to be a full sentence', () => expect(checks({ ...d, description: 'a sensor' }, { taken: [] }).find((c) => c.id === 'desc')!.ok).toBe(false))
+  // test-esp32 log #1, #79: with the description empty, "Description is a full sentence" showed as met
+  it('says nothing of a description that is not written yet, and does not hold Continue for it', () => {
+    expect(checks(d, { taken: [] }).find((c) => c.id === 'desc')).toBeUndefined()
+    expect(checks({ ...d, description: '   ' }, { taken: [] }).find((c) => c.id === 'desc')).toBeUndefined()
+    expect(checks({ ...d, description: 'A soil sensor.' }, { taken: [] }).find((c) => c.id === 'desc')!.ok).toBe(true)
+    expect(stepOk(d, 'about', { taken: [] })).toBe(true)
+  })
   it('locks a Guest to Reviewer and leaves admins out of the choice', () => {
     expect(partsFor('guest')).toEqual(['reviewer'])
     expect(partsFor('user')).toEqual(['contributor', 'reviewer'])
