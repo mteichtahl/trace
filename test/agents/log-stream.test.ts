@@ -108,6 +108,21 @@ describe('streamJobs', () => {
     jobs.dispose()
   })
 
+  it('ends a failed job on its ✗ line even when the clock moves between reads', async () => {
+    // every clock read is a millisecond later: the job's last log line was stamped after endedAt, so the
+    // time-ordered writer put "failed: no token" after "✗ no token" (seen in CI on PR #342 and #366)
+    let t = Date.parse('2026-11-07T03:00:00.000Z')
+    const api = fakeLogs()
+    const writer = runLogWriter({ group: 'g', api, everyMs: 60_000 })
+    const jobs = createJobs(async () => { throw new Error('no token') }, { echo: () => undefined, now: () => t++ })
+    streamJobs(jobs, writer)
+    const { jobId } = jobs.startJob(TASK)
+    await jobs.waitForEnd(jobId)
+    await writer.flush()
+    expect(api.lines(`job/mteichtahl/potroller/${jobId}`).pop()).toBe('✗ no token')
+    jobs.dispose()
+  })
+
   it('writes a failure as ✗ <why>, and skips a job without a repository', async () => {
     const api = fakeLogs()
     const writer = runLogWriter({ group: 'g', api, everyMs: 60_000 })
