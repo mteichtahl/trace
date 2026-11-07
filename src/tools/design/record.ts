@@ -420,7 +420,7 @@ export interface PinFinding {
   id: string
   /** pin: <part>.<pin>, or peripheral:<instance>, or net:<name> */
   target: string
-  kind: 'no_net' | 'no_function' | 'unsupported' | 'unknown_alternates' | 'claimed_twice' | 'function_twice' | 'reserved' | 'mismatch' | 'not_on_schematic' | 'missing_pin' | 'mate_order' | 'mate_unknown'
+  kind: 'no_net' | 'no_function' | 'unsupported' | 'unknown_alternates' | 'claimed_twice' | 'function_twice' | 'reserved' | 'mismatch' | 'not_on_schematic' | 'missing_pin' | 'mate_order' | 'mate_unknown' | 'strap_pull'
   severity: 'blocks' | 'fix'
   text: string
 }
@@ -559,6 +559,46 @@ export function pinCheck(pins: readonly PinRow[], nets?: ReadonlyMap<string, rea
       if (!parts.has(part) || live.some((p) => p.part === part && p.pin === pin) || /^(unconnected-|Net-\()/i.test(bare(net))) continue
       out.push({ id: `pin:${part}.${pin}:missing_pin`, target: `pin:${part}.${pin}`, kind: 'missing_pin', severity: 'fix', text: `${part} pin ${pin} is on ${net} in the schematic but is not in the pin plan.` })
     }
+    out.push(...strapPulls(live, nets))
+  }
+  return out
+}
+
+/** A supply or ground net, by its name: +3V3, 3V3, VCC, VDD_IO, VBUS, GND, AGND, VSS. */
+const RAIL_NET = /^(\+?\d+(\.\d+)?V\d*|\+?\d*V\d+|VCC\w*|VDD\w*|VBUS|VBAT|VSYS|VIN|\w*GND\w*|VSS\w*)$/i
+/** A resistor's reference: R7, R12A (not RN arrays or RV pots, whose pins are not one resistor). */
+const RESISTOR = /^R\d+[A-Z]?$/
+
+/**
+ * Boot strapping pins (reserved: boot) that something else on the board drives, with no resistor from their net to a
+ * supply or ground (test-esp32 #104: ESP32 IO0 on the auto-reset transistor's collector, held only by the chip's
+ * internal pull of about 45 kOhm). The level read at reset then rests on the weak internal pull against whatever
+ * leaks or couples onto the net. A strap left unconnected, or tied straight to a rail, is not a finding.
+ */
+export function strapPulls(pins: readonly PinRow[], nets: ReadonlyMap<string, readonly string[]>): PinFinding[] {
+  const onPin = new Map<string, string>()
+  for (const [net, nodes] of nets) for (const n of nodes) onPin.set(n, net)
+  const refOf = (node: string): string => node.slice(0, node.lastIndexOf('.'))
+  const out: PinFinding[] = []
+  for (const p of pins.filter((x) => x.status !== 'withdrawn' && x.reserved === 'boot')) {
+    const net = onPin.get(`${p.part}.${p.pin}`)
+    if (net === undefined || /^(unconnected-|Net-\()/i.test(bare(net)) || RAIL_NET.test(bare(net))) continue
+    const others = (nets.get(net) ?? []).filter((n) => n !== `${p.part}.${p.pin}`)
+    if (!others.length) continue
+    // a resistor on the net whose other pin is on a rail: the external pull
+    const pulled = others.some((n) => {
+      const ref = refOf(n)
+      if (!RESISTOR.test(ref)) return false
+      return [...onPin].some(([node, other]) => refOf(node) === ref && node !== n && other !== net && RAIL_NET.test(bare(other)))
+    })
+    if (pulled) continue
+    const id = `pin:${p.part}.${p.pin}`
+    const name = `${p.part} pin ${p.pin}${p.name ? ` (${p.name})` : ''}`
+    const on = [...new Set(others.map(refOf))]
+    out.push({
+      id: `${id}:strap_pull`, target: id, kind: 'strap_pull', severity: 'fix',
+      text: `${name} is a boot strapping pin on ${bare(net)} with ${on.join(', ')}, and no resistor pulls ${bare(net)} to a supply or ground: its level at reset rests on the part's weak internal pull. Add an external pull (10 kOhm is usual) or waive it with the reason.`,
+    })
   }
   return out
 }

@@ -8,11 +8,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { type CheckInput, checkSkill } from '../../src/api/skill-checks.js'
 import { merge } from '../../src/core/dbmerge.js'
 import '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../../src/tools/design/decisions.js'
-import { DesignDb, readDesignRows } from '../../src/tools/design/db.js'
+import { DesignDb, type PinRow, readDesignRows } from '../../src/tools/design/db.js'
 import { architectureView, decidedFields, intentDraft, intentView, interfaceFromWords, linksView, missingFields, ownSignatures, parseNets, pinCheck, pinPlanPrint } from '../../src/tools/design/record.js'
 import { drawingArtifacts, sheetOfSvg, sheetPlaces, svgSizeMm } from '../../src/tools/kicad/export.js'
 import { VerifyDb } from '../../src/tools/verify/db.js'
@@ -292,6 +293,40 @@ describe('the pin plan', () => {
     // the agreement's fingerprint changes with the plan
     const before = pinPlanPrint(rows.pins, 'U1')
     expect(pinPlanPrint(rows.pins.map((p) => (p.pin === '30' ? { ...p, net: '/OTHER' } : p)), 'U1')).not.toBe(before)
+  })
+
+  it('a boot strapping pin something else drives needs an external pull (test-esp32 #104)', () => {
+    const pin = (o: Partial<PinRow>): PinRow => ({ part: 'U1', pin: '25', name: 'IO0', function: 'BOOT_STRAP', peripheral: null, use: null, net: '/IO0', kind: 'boot', reserved: 'boot', alternates: [], constraints: null, note: null, status: 'proposed', updated: 0, by: null, ...o })
+    const io0 = pin({})
+    // the e2e board: IO0 on the auto-reset transistor's collector only, EN pulled up by R3
+    const bare = parseNets(['/IO0\tQ2.3 U1.25', '/EN\tC5.1 Q1.3 R3.2 U1.3', '+3V3\tR3.1 U1.2', 'GND\tU1.1 C5.2'].join('\n'))
+    const f = pinCheck([io0, pin({ pin: '3', name: 'EN', function: 'CHIP_EN', net: '/EN', kind: 'reset', reserved: 'reset' })], bare).filter((x) => x.kind === 'strap_pull')
+    expect(f.map((x) => x.target)).toEqual(['pin:U1.25'])
+    expect(f[0]?.severity).toBe('fix')
+    expect(f[0]?.text).toMatch(/^U1 pin 25 \(IO0\) is a boot strapping pin on IO0 with Q2, and no resistor pulls IO0 to a supply or ground/)
+    // a 10 kOhm to +3V3 (run 1's board), or a pull-down to GND, is the pull
+    for (const rail of ['+3V3', 'GND']) {
+      const pulled = parseNets([`/IO0\tQ2.3 R5.2 U1.25`, `${rail}\tR5.1 U1.2`].join('\n'))
+      expect(pinCheck([io0], pulled).filter((x) => x.kind === 'strap_pull')).toEqual([])
+    }
+    // a resistor in series to another signal is not a pull; a strap left unconnected, or tied to a rail, is not a finding
+    expect(pinCheck([io0], parseNets('/IO0\tR5.2 U1.25\n/BTN\tR5.1 SW1.1')).filter((x) => x.kind === 'strap_pull')).toHaveLength(1)
+    expect(pinCheck([io0], parseNets('unconnected-(U1-IO0-Pad25)\tU1.25')).filter((x) => x.kind === 'strap_pull')).toEqual([])
+    expect(pinCheck([io0], parseNets('+3V3\tU1.25 U1.2')).filter((x) => x.kind === 'strap_pull')).toEqual([])
+  })
+
+  it('Pin plan review\'s boot check is not met over a strap with no pull, until it is waived', () => {
+    const io0: PinRow = { part: 'U1', pin: '25', name: 'IO0', function: 'BOOT_STRAP', peripheral: null, use: null, net: '/IO0', kind: 'boot', reserved: 'boot', alternates: [], constraints: null, note: null, status: 'proposed', updated: 0, by: null }
+    const design = { intent: [], links: [], options: [], criteria: [], scores: [], blocks: [], connections: [], pins: [io0], sheets: [] }
+    const input = (nets: string, waived: string[] = []): CheckInput => ({
+      r: waived.length ? { waivers: waived.map((target) => ({ targetKind: 'finding', target, closedAt: null })) } as unknown as CheckInput['r'] : null,
+      viewer: { admin: false } as CheckInput['viewer'], requirements: [], struck: [], erc: null, drc: null, bom: null, board: null, placement: null,
+      instruments: [], orders: [], tests: [], draft: null, gate: null, question: null, design: { rows: design, decisions: [] }, nets: parseNets(nets),
+    } as CheckInput)
+    const boot = (i: CheckInput) => checkSkill('pin-plan-review', i)?.find((c) => c.id === 'boot')
+    expect(boot(input('/IO0\tQ2.3 U1.25'))).toMatchObject({ status: 'not_met', detail: expect.stringContaining('no resistor pulls IO0') })
+    expect(boot(input('/IO0\tQ2.3 U1.25', ['pin:U1.25:strap_pull']))).toMatchObject({ status: 'waived' })
+    expect(boot(input('/IO0\tQ2.3 R5.2 U1.25\n+3V3\tR5.1'))).toMatchObject({ status: 'met' })
   })
 })
 

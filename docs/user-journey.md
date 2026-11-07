@@ -771,7 +771,8 @@ Quality bar:
 
 - Every used pin has a net and a function the part supports on that pin.
 - No peripheral instance is claimed twice.
-- Boot, reset and debug pins keep their roles, or the change is waived.
+- Boot, reset and debug pins keep their roles, and a boot strapping pin something else drives has an external pull
+  (not the part's internal pull alone), or the change is waived.
 - Every off-board part (a display module, a sensor board, a battery) has the pin order its datasheet gives, pin for pin
   the same as the connector it plugs into, or the difference is waived (a straight cable would reverse its supply).
 - The firmware pin configuration matches the schematic.
