@@ -258,6 +258,8 @@ async function evidenceFiles(ctx: Context, repo: string, r: JourneyRecord): Prom
 /** Each requirement's words and acceptance as the record has them: a decision on one keeps what it was made on. */
 const requirementTexts = (db: import('node:sqlite').DatabaseSync): Map<string, RequirementWords> => new Map(hasTable(db, 'requirements') ? (db.prepare('SELECT id, text, acceptance FROM requirements').all() as { id: string; text: string; acceptance: string | null }[]).map((x) => [String(x.id), { text: String(x.text), acceptance: x.acceptance === null ? null : String(x.acceptance) }]) : [])
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+/** Words without their closing full stop, so a line built from them ends with one ("From … JLCPCB.", not "JLCPCB.."). */
+const noStop = (s: string): string => s.trim().replace(/(?<!\.\.)\.$/, '')
 
 /** A number followed by its unit (2 layers, 5.1 kΩ, ±10 %, 40 °C, 0.5 Hz). */
 const NUMBER_WITH_UNIT = /\d[\d.,]*\s?(%|°\s?[CF]|[A-Za-zµΩ])/
@@ -515,7 +517,7 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
           // its acceptance criterion and, for one an agent changed after a person decided it, what changed
           ...(i.reviewBefore?.requirements ?? i.requirements).filter((q) => q.status !== 'accepted').map((q) => {
             const was = changedSince(i.reviewBefore ? standing(i.reviewBefore.decisions, 'requirement').get(q.id) : undefined, q)
-            return { id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => v.find((x) => x.id === l.intent)?.words ?? l.intent).join('; ') || q.source || 'no source given'}.`, status: 'open' as const, criterion: q.acceptance, ...(was ? { was } : {}) }
+            return { id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => noStop(v.find((x) => x.id === l.intent)?.words ?? l.intent)).join('; ') || noStop(q.source ?? '') || 'no source given'}.`, status: 'open' as const, criterion: q.acceptance, ...(was ? { was } : {}) }
           }),
           // as the record has it, so a line the draft leaves out stays listed with its reason (and Undo)
           ...(i.reviewBefore ? intentView(i.design.rows, i.reviewBefore.decisions) : v).filter((x) => x.state !== 'rejected' && x.kind === 'statement' && x.uncovered === null && !links.some((l) => l.intent === x.id)).map((x) => ({ id: `intent:${x.id}`, title: `Not covered: ${x.words}`, detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' as const })),
