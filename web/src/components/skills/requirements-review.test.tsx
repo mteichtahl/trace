@@ -254,3 +254,34 @@ describe('Requirements review, the whole screen', () => {
     act(() => saves[1]!.resolve())
   })
 })
+
+// test-esp32-run2 R27: saving the criterion of an accepted row moved the bar only once the draft was saved and checked
+// again (about 5 s); the row reads "Accepted, edited" and the bar counts the edit at once
+describe('Requirements review, an accepted row edited on Make it testable', () => {
+  const wrap = (ui: ReactNode) => render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider>{ui}</TooltipProvider></QueryClientProvider>)
+  beforeEach(() => {
+    mockCall.mockReset()
+    mockCall.mockImplementation((async (action: string) => {
+      // the save never answers: what the screen shows is its own, not the record's next check
+      if (action === 'skill.draft') return new Promise(() => undefined)
+      if (action === 'skill.get') {
+        const checks = [{ id: 'criterion', status: 'not_met', detail: '1 accepted requirement without a criterion with a number: REQ-7ec888.' }, { id: 'sources', status: 'met' }, { id: 'covered', status: 'met' }, { id: 'struck', status: 'met' }, conflictsCheck({ no_conflicts: true })]
+        return { skill: def.id, items: [accepted], checks, draft: { done: ['source', 'decide'], no_conflicts: true }, step: 2, saved: '2026-11-06T00:00:00Z' }
+      }
+      if (action === 'journey.get') return { repo: REPO, name: 'soil-sensor', stages: [], gates: [] }
+      return {}
+    }) as unknown as typeof call)
+  })
+
+  it('shows the edit and counts it in the bar before the draft is saved', async () => {
+    wrap(<SteppedSkill repo={REPO} def={def} />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit REQ-7ec888' }))
+    expect(screen.getAllByText('5 of 6 met').length).toBeGreaterThan(0)
+    const box = screen.getByLabelText('Acceptance criterion')
+    await userEvent.clear(box)
+    await userEvent.type(box, 'Within ±3 % VWC from 0 to 50 % VWC at 25 °C')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('Accepted, edited')).toBeInTheDocument()
+    expect(screen.getAllByText('6 of 6 met').length).toBeGreaterThan(0)
+  })
+})
