@@ -5,7 +5,7 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { betterTitle, changeTitle, contentBullets, contentPhrase, designAreas, mergeTitle, plumbingTitle, recordChanges, recordKind, recordRequirementIds, recordTitle } from '../../src/core/change-contents.js'
+import { betterTitle, changeTitle, contentBullets, contentPhrase, designAreas, mergeTitle, oneRowTitle, plumbingTitle, recordChanges, recordKind, recordRequirementIds, recordTitle, type RecordChanges } from '../../src/core/change-contents.js'
 
 const DOCS = 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)'
 const IMPL = 'trace: the impl specialist\'s record (job-mw3awisf-29f0f73e)\n\nWhat its tools wrote to the project\'s record.'
@@ -77,6 +77,31 @@ describe('what a change holds', () => {
     expect(contentBullets({ paths: ['.trace/project.db'], record: null })).toEqual([])
     expect(contentBullets({ paths: ['.trace/project.db'], record: { intent: { added: [], changed: [] }, requirements: { added: [], changed: [] } } })).toEqual([])
     expect(contentBullets({ paths: ['docs/guide.md', '.trace/project.db'], record: null })).toEqual(['Changes 1 other file: docs/guide.md'])
+  })
+})
+
+// test-esp32 #87 (test-esp32-e2e #2): the fix to one intent statement was titled "trace: the verify specialist's record
+// (job-mw2z45d1-28a54551)", then "The verification specialist's record: 1 intent statement"
+describe('a record that holds one intent statement or requirement', () => {
+  const WIFI = { id: 'INT-8dd269', text: "(4) Wi-Fi 2.4 GHz 802.11 b/g/n on the module's PCB antenna, NTP in, HTTP on port 80.", status: 'proposed' }
+  const none = { added: [], changed: [] }
+  const record = (o: Partial<RecordChanges>): RecordChanges => ({ intent: none, requirements: none, tables: [], options: null, ...o })
+  const RECORD = 'trace: the verify specialist\'s record (job-mw2z45d1-28a54551)'
+
+  it('is titled by what it does to it', () => {
+    const one = oneRowTitle({ paths: ['.trace/project.db'], record: record({ intent: { added: [], changed: [WIFI] } }) })
+    expect(one).toBe("Changes intent statement INT-8dd269: (4) Wi-Fi 2.4 GHz 802.11 b/g/n on the module's PCB antenna, NTP in, HTTP on port 80.")
+    expect(betterTitle(RECORD, [RECORD], { holds: '1 intent statement', one })).toBe(one)
+    expect(oneRowTitle({ paths: ['.trace/project.db'], record: record({ requirements: { added: [{ id: 'REQ-1', text: 'Boots in 2 s', status: 'proposed' }], changed: [] }, tables: [{ table: 'requirement_intent', one: 'l', many: 'ls', added: 1, changed: 0, statuses: {} }] }) }))
+      .toBe('Adds requirement REQ-1: Boots in 2 s')
+  })
+
+  it('is named as before when it holds more, or other files', () => {
+    expect(oneRowTitle({ paths: ['.trace/project.db'], record: record({ intent: { added: [WIFI], changed: [WIFI] } }) })).toBeNull()
+    expect(oneRowTitle({ paths: ['.trace/project.db'], record: record({ intent: { added: [], changed: [WIFI] }, tables: [{ table: 'test_items', one: 'test', many: 'tests', added: 2, changed: 0, statuses: {} }] }) })).toBeNull()
+    expect(oneRowTitle({ paths: ['.trace/project.db', 'docs/design/high-level-design.md'], record: record({ intent: { added: [], changed: [WIFI] } }) })).toBeNull()
+    expect(oneRowTitle({ paths: ['.trace/project.db'], record: null })).toBeNull()
+    expect(betterTitle(RECORD, [RECORD], { holds: '2 tests', one: null })).toBe("The verification specialist's record: 2 tests")
   })
 })
 

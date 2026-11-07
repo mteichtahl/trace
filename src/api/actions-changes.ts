@@ -92,7 +92,7 @@ import { backToDefine, changedRequirements, pastDefine } from './pending-changes
 import { hasTable } from './record-read.js'
 import { type RequirementEditsView, editsView, requirementAsked, requirementEdits, withRequirementEdits } from './requirement-edits.js'
 import { type PendingAnswer, loadFollowups, pendingAnswers } from '../core/answer-followups.js'
-import { type RecordChanges, betterTitle, changeContent, contentBullets, contentPhrase, plumbingTitle, recordChanges, recordRequirementIds } from '../core/change-contents.js'
+import { type RecordChanges, betterTitle, changeContent, contentBullets, contentPhrase, oneRowTitle, plumbingTitle, recordChanges, recordRequirementIds } from '../core/change-contents.js'
 import { type RestartResult, type StuckLook, restartStuck, stuckFor, stuckLook } from './stuck-checks.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
@@ -391,7 +391,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     ...sum,
     // named by the work in it, not by the record it started as or a merge commit; a record by what it holds (log
     // #144, #154, #14)
-    title: betterTitle(sum.title, commits, { holds: contentPhrase(content), kind: job.agent }),
+    title: betterTitle(sum.title, commits, { holds: contentPhrase(content), one: oneRowTitle(content), kind: job.agent }),
     verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
     // what it holds first: its files, and what its record adds, table by table (log #144, #133, #59, #37); then what
@@ -473,7 +473,8 @@ async function listTitle(ctx: Context, raw: GitHubApi, repo: string, pull: PullS
     const t = betterTitle(pull.title, commits, { kind: job.agent })
     if (!plumbingTitle(t)) return t
     const read = await cached(ctx.deps.githubCache, repo, `record-edits:${pull.number}:${sha}`, () => recordEditsOf(ctx, gh, repo, { head: { sha, ref: pull.head } }, rows, base)).catch(() => null)
-    return betterTitle(pull.title, commits, { kind: job.agent, holds: contentPhrase({ paths: [], record: read?.record ?? null }) })
+    const held = { paths: [], record: read?.record ?? null }
+    return betterTitle(pull.title, commits, { kind: job.agent, holds: contentPhrase(held), one: oneRowTitle(held) })
   }, LIST_TITLE_TTL_MS).catch(() => pull.title)
 }
 
