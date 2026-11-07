@@ -1,9 +1,10 @@
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { answerChecks, arrivingChoice, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
+import { IntentQualityList, answerChecks, arrivingChoice, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waivableShown, waiverChecks, whereExample, type WaiverDraft } from './form-skills'
@@ -245,5 +246,34 @@ describe('traceability: a line left out on purpose', () => {
     expect(l.intents.map((i) => [i.id, i.uncovered, i.left])).toEqual([
       ['I-1', false, undefined], ['I-2', false, "don't care"], ['I-3', false, 'Checked by Board setup against the outline.'], ['I-4', true, undefined],
     ])
+  })
+})
+
+// #10: with no intent statement recorded, the panel drew each check's reason in a column beside its name, so the name
+// wrapped a word a line, and all seven said the same reason. The name has its own line; a shared reason is said once
+describe('the Draft intent panel\'s quality bar', () => {
+  const def = SKILLS.find((d) => d.id === 'intent-builder')!
+  const NONE = 'No intent statements are recorded yet: answer the topics and trace drafts them.'
+
+  it('gives each check its name and reason apart', () => {
+    const c = qualityChecks(def, { checks: [{ id: 'vague', status: 'not_met', detail: '1 left' }, { id: 'conflicts', status: 'met' }] })
+    expect(c.find((x) => x.id === 'vague')).toMatchObject({ name: 'No vague words', detail: '1 left', text: 'No vague words (1 left)' })
+    expect(c.find((x) => x.id === 'conflicts')!.detail).toBeUndefined()
+  })
+
+  it('says a reason every check shares once, under the list, each name on its own line', () => {
+    const checks = qualityChecks(def, { checks: checksOf(def).map((x) => ({ id: x.id, status: 'not_met' as const, detail: NONE })) })
+    render(<IntentQualityList checks={checks} topic={0} />)
+    expect(screen.getAllByText(NONE)).toHaveLength(1)
+    const name = screen.getByText('Every topic answered or marked')
+    expect(name.tagName).toBe('P')
+    expect(name.textContent).toBe('Every topic answered or marked')
+  })
+
+  it('puts a check\'s own reason under its name', () => {
+    const checks = qualityChecks(def, { checks: [{ id: 'vague', status: 'not_met', detail: '1 left' }, { id: 'interfaces', status: 'not_met', detail: 's6 lacks protocol' }] })
+    render(<IntentQualityList checks={checks} topic={0} />)
+    const name = screen.getByText('No vague words')
+    expect(name.nextElementSibling).toHaveTextContent('1 left')
   })
 })

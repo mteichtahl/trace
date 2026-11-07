@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { QualityBar } from './quality-bar'
+import { QualityBar, sharedReason } from './quality-bar'
 import { contextStore } from '@/components/chat/context'
 import { SKILLS } from '@/components/skills/definitions'
 
@@ -82,5 +82,45 @@ describe('a long check on a wide screen', () => {
     expect(item.className).not.toMatch(/whitespace-nowrap/)
     expect(item.className).toMatch(/max-w-full/)
     expect(item).toHaveTextContent(text)
+  })
+})
+
+// #10: before any intent statement is recorded, all seven checks gave the same reason, and the bar said it seven
+// times, once after each check. A reason every check left shares is said once
+describe('a reason every check left shares', () => {
+  const NONE = 'No intent statements are recorded yet: answer the topics and trace drafts them.'
+  const same = ['Every topic answered or marked', 'No vague words', 'No conflicts'].map((name, i) => ({ id: `c${i}`, name, detail: NONE, text: `${name} (${NONE})`, status: 'not_met' as const }))
+
+  it('is the shared reason only when two or more checks are left and all give it', () => {
+    expect(sharedReason(same)).toBe(NONE)
+    expect(sharedReason(same.slice(0, 1))).toBeNull()
+    expect(sharedReason([...same, { id: 'x', name: 'Owners', detail: '1 left', text: 'Owners (1 left)', status: 'not_met' as const }])).toBeNull()
+    // a met check does not count against it
+    expect(sharedReason([...same, { id: 'm', name: 'Testable', text: 'Testable', status: 'met' as const }])).toBe(NONE)
+  })
+
+  for (const on of [true, false]) {
+    it(`${on ? 'on a wide screen' : 'on a phone, in the list'}: each check by its name, the reason once`, () => {
+      wide(on)
+      render(<TooltipProvider><QualityBar checks={same} onSubmit={() => {}} /></TooltipProvider>)
+      if (!on) fireEvent.click(screen.getByRole('button', { name: /0 of 3 met/ }))
+      expect(screen.getByRole('button', { name: /^Not met:\s*Every topic answered or marked$/ })).toBeInTheDocument()
+      expect(screen.getAllByText(NONE)).toHaveLength(1)
+    })
+  }
+
+  it('in "Not submitted", the reason once too', () => {
+    wide(true)
+    render(<TooltipProvider><QualityBar checks={same} onSubmit={() => {}} /></TooltipProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent!.split(NONE)).toHaveLength(2)
+  })
+
+  it('different reasons stay with their checks', () => {
+    wide(true)
+    const mixed = [{ id: 'a', name: 'No vague words', detail: '1 left', text: 'No vague words (1 left)', status: 'not_met' as const }, { id: 'b', name: 'Interfaces', detail: 's6 lacks protocol', text: 'Interfaces (s6 lacks protocol)', status: 'not_met' as const }]
+    render(<TooltipProvider><QualityBar checks={mixed} onSubmit={() => {}} /></TooltipProvider>)
+    expect(screen.getByRole('button', { name: /^Not met:\s*No vague words \(1 left\)$/ })).toBeInTheDocument()
   })
 })
