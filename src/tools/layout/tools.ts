@@ -16,7 +16,7 @@ import { LENGTH_DEFINITION, netNames } from '../kicad/pcb.js'
 import { needPcb, resolveProject, type Project } from '../kicad/project.js'
 import { cap, recorded } from '../kicad/record.js'
 import { readLayout } from './board.js'
-import { druRules, floorplan, GROUND, lengthMatch, netClasses, PAIR_CLASSES, placementCheck, POWER, usbSpeedFrom, type PairClass, type UsbSpeed } from './checks.js'
+import { druRules, floorplan, GROUND, lengthMatch, netClasses, PAIR_CLASSES, placementCheck, placementSummary, POWER, usbSpeedFrom, type PairClass, type UsbSpeed } from './checks.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -71,7 +71,7 @@ export const placementCheckTool = defineTool({
       const passed = errors.length === 0
       return {
         status: passed ? 'pass' as const : 'fail' as const,
-        summary: `${errors.length} error(s), ${warnings.length} warning(s): ${Object.entries(r.counts).map(([k, n]) => `${k} ${n}`).join(', ') || 'clean'}`,
+        summary: placementSummary(r.findings),
         result: {
           passed, footprints: L.footprints.length, outline: L.outline ? 'Edge.Cuts loop' : 'none found (edge checks skipped)', cutouts: L.cutouts.length, keepouts: L.keepouts.length,
           counts: r.counts, findings: c.items, findings_omitted: c.omitted, decoupling: r.decoupling, connectors: r.connectors,

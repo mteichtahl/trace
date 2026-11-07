@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { capacitanceUf, diffPairs, druRules, usbPair, usbSpeedFrom, type DruArea, type DruItem, type DruRule } from '../../src/tools/layout/checks.js'
+import { capacitanceUf, diffPairs, druRules, placementSummary, usbPair, usbSpeedFrom, type DruArea, type DruItem, type DruRule, type Finding } from '../../src/tools/layout/checks.js'
 import { Work } from '../../src/core/store.js'
 import { arcPoints, area, clip, hull, inside, loops, overlapArea, overlaps, rectPoly } from '../../src/tools/layout/geom.js'
 import { pointInPolygon, polygonOverlapArea, polygonsOverlap, segmentsCross, triangulate } from '../../src/tools/pcb/geometry.js'
@@ -283,6 +283,8 @@ describe('pcb.placement_check', () => {
     expect(of('no_courtyard')).toEqual([['R4']])
     // C2 is within 3 mm of U1.1; U1.5, the other +3V3 pin, has none (C2 is 5.6 mm away, C1 farther)
     expect(f.filter((x) => x.check === 'power_pin_without_decoupling').map((x) => (x as unknown as { message: string }).message)).toEqual([expect.stringMatching(/^U1\.5 \(\+3V3\)/)])
+    // the pin is named, with the nearest capacitor on its rail, so a reviewer can judge it (test-esp32 #130)
+    expect(f.find((x) => x.check === 'power_pin_without_decoupling')).toMatchObject({ pin: 'U1.5', message: expect.stringMatching(/the nearest is C2, 5\.\d+ mm away$/) })
     const dec = r.decoupling as { cap: string; ok: boolean | null }[]
     expect(dec.map((d) => [d.cap, d.ok])).toEqual([['C1', false], ['C2', true]]) // C3 is on a signal: not decoupling
     const fine = await call('pcb.placement_check', { project: join(dir, 'board.kicad_pcb'), ignore: ['R*'], interior_connectors: ['J2'], decap_max_mm: 10 })
@@ -294,6 +296,24 @@ describe('pcb.placement_check', () => {
     expect(r.passed).toBe(true)
     expect(r.counts).toEqual({})
     expect((r.connectors as { ok: boolean }[]).every((c) => c.ok)).toBe(true)
+  })
+})
+
+describe('a placement check in one line (test-esp32 #130)', () => {
+  // the render run's check: "3 warning(s): edge_clearance 1, decoupling_distance 2, power_pin_without_decoupling 4"
+  const f = (check: Finding['check'], severity: Finding['severity'], refs: string[], pin?: string): Finding => ({ check, severity, refs, message: '', ...(pin ? { pin } : {}) })
+  const run: Finding[] = [
+    f('edge_clearance', 'warning', ['U1']),
+    f('decoupling_distance', 'warning', ['C6', 'U2']), f('decoupling_distance', 'warning', ['C2', 'U3']),
+    f('power_pin_without_decoupling', 'info', ['U2'], 'U2.4'), f('power_pin_without_decoupling', 'info', ['U2'], 'U2.16'), f('power_pin_without_decoupling', 'info', ['U3'], 'U3.2'),
+  ]
+  it('names the pins and parts of each check, and keeps notes apart from warnings', () => {
+    expect(placementSummary(run)).toBe('0 error(s), 3 warning(s): edge_clearance 1 (U1), decoupling_distance 2 (C6/U2, C2/U3); 3 note(s): power_pin_without_decoupling 3 (U2.4, U2.16, U3.2)')
+  })
+  it('counts past six names, and says clean when there is nothing', () => {
+    const many = Array.from({ length: 8 }, (_, i) => f('power_pin_without_decoupling', 'info', ['U1'], `U1.${i + 1}`))
+    expect(placementSummary(many)).toBe('0 error(s), 0 warning(s); 8 note(s): power_pin_without_decoupling 8 (U1.1, U1.2, U1.3, U1.4, U1.5, U1.6 and 2 more)')
+    expect(placementSummary([])).toBe('0 error(s), 0 warning(s): clean')
   })
 })
 
