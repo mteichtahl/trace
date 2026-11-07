@@ -63,6 +63,7 @@ import { AccessDenied, isAdmin, require_, standing } from '../core/access.js'
 import {
   type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, heardOf, indexedHandle, isLive, lastWords, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
 } from '../core/job-index.js'
+import { type JobLook, refKey } from '../core/job-refs.js'
 import { type AgentFacts, type JourneyRecord, type NextStep, type StageView, type Viewer, decide, loadJourney } from '../core/journey.js'
 import { type HandoffView, declineHandoff, handoffViews } from '../core/handoffs.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
@@ -203,6 +204,29 @@ export function settledOf(j: Pick<JobRow, 'resumedBy'>, c: JobControl | undefine
   return null
 }
 
+/** What kind of step a tool call is, in words. */
+const TOOL_STEPS: [RegExp, string][] = [
+  [/^memory\.remember$/, 'Saving notes'],
+  [/^memory\./, 'Reading its notes'],
+  [/^(Read|Glob|Grep|LS|NotebookRead)$/, 'Reading the project\'s files'],
+  [/^(Edit|Write|MultiEdit|NotebookEdit)$/, 'Editing files'],
+  [/^Bash$/, 'Running a command'],
+  [/^(WebFetch|WebSearch)$/, 'Looking something up on the web'],
+  [/^(kicad|erc|drc|design|schematic|pcb)\./, 'Checking the design'],
+  [/^(spice|verilog|calc)\./, 'Running a calculation or simulation'],
+  [/^(parts|bom|datasheet|datasheets|stock|lcsc)\./, 'Looking up parts'],
+  [/^(journey|shape|requirements|intent)\./, 'Recording its work in the project'],
+  [/^(kb|docs)\./, 'Reading the project\'s documents'],
+  [/^(agent\.delegate|Task|Agent)$/, 'Handing part of the work to a worker'],
+]
+
+/** A tool call's step in words: what kind of step it is, still running, or one that failed. Pure. */
+export function toolStep(name: string, still = false, failed = false): string {
+  const what = TOOL_STEPS.find(([re]) => re.test(name))?.[1] ?? 'Using its tools'
+  if (failed) return `${what}: a step failed, and the agent carries on`
+  return still ? `${what} (a long step)` : what
+}
+
 /**
  * A job's latest log line as its card says it. The runtime's own lines name the repository, the branch and the job's
  * limits ("running the impl specialist on acme/x claude/y (max 120 turns, 40 tools)": test-esp32 #40): the card says
@@ -215,6 +239,10 @@ export function stepWords(step: string | null): string | null {
   if (worker) return `The worker is doing the ${who(worker[1]!)} specialist's work on the repository`
   const running = /^running the ([\w-]+) specialist on \S/.exec(step)
   if (running) return `The ${who(running[1]!)} specialist is working`
+  // a tool call's line (src/agents/runtime/tool-steps.ts) names the tool and what it was given: the card says what kind
+  // of step it is, Watch keeps the line (test-esp32-run2 log R18: "tool: memory.remember (2026-11-07: Drafted …)")
+  const tool = /^(?:tool:|still running:|tool) ([\w.:-]+)/.exec(step)
+  if (tool) return toolStep(tool[1]!, /^still running:/.test(step), / returned an error$/.test(step))
   return step.replace(/\s*\(max \d+ turns[^)]*\)/, '').trim() || null
 }
 
@@ -406,6 +434,50 @@ export async function lostMerged(ctx: Context, repo: string, rows: readonly JobR
     // GitHub cannot be reached: nothing is known merged, and the lost jobs stay as they are
   }
   return out
+}
+
+/**
+ * What the views know of the project's jobs, by any id an agent may name one by (src/core/job-refs.ts): a job index id,
+ * its API handle, a queued start's handle or own id (the job it became, once started). `openJobs`: the jobs with an
+ * open change now, or null when not known (then no job counts as landed). Pure.
+ */
+export function jobLook(repo: string, rows: readonly Pick<JobRow, 'id' | 'handle' | 'session' | 'title' | 'state'>[], queue: QueueFile | null | undefined, openJobs: ReadonlySet<string> | null): JobLook {
+  type Row = Pick<JobRow, 'id' | 'handle' | 'session' | 'title' | 'state'>
+  const byId = new Map<string, Row>()
+  // (an open change names its job by the API's handle for it: changes.ts)
+  const handles = new Map<Row, string>(rows.map((r) => [r, indexedHandle(repo, r.session, r.id)]))
+  for (const r of rows) {
+    byId.set(r.id.toLowerCase(), r)
+    byId.set((handles.get(r) as string).toLowerCase(), r)
+    if (r.handle) byId.set(r.handle.toLowerCase(), r)
+  }
+  const queued = new Map((queue?.queued ?? []).map((q) => [q.id, q.title] as const))
+  const started = new Map((queue?.started ?? []).map((s) => [s.id, s] as const))
+  const row = (ref: string) => {
+    const k = refKey(ref)
+    const s = started.get(k)
+    return byId.get(k) ?? byId.get(ref.toLowerCase()) ?? (s?.job ? byId.get(s.job.toLowerCase()) : undefined)
+  }
+  return {
+    title: (ref) => row(ref)?.title ?? queued.get(refKey(ref)) ?? started.get(refKey(ref))?.title ?? null,
+    landed: (ref) => {
+      if (queued.has(refKey(ref))) return false
+      const r = row(ref)
+      if (!r || !openJobs) return null
+      return ENDED_STATES.has(r.state) && !openJobs.has(r.id) && !openJobs.has(handles.get(r) as string) && !(r.handle && openJobs.has(r.handle))
+    },
+  }
+}
+const ENDED_STATES: ReadonlySet<string> = new Set(['succeeded', 'failed', 'aborted'])
+
+/** The titles of the project's jobs, for the words of a view that has no job list of its own; none when unreadable. */
+export async function jobTitles(ctx: Context, repo: string): Promise<JobLook | null> {
+  try {
+    const [{ result }, queue] = await Promise.all([jobIndex(ctx, repo).read((db) => loadJobs(db)), readQueue(storeAt(ctx, PROJECTS_PREFIX), repo).catch(() => null)])
+    return jobLook(repo, result, queue, null)
+  } catch {
+    return null
+  }
 }
 
 /** A queued start claimed this long ago with no job recorded did not start. */

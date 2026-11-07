@@ -53,6 +53,7 @@ import type { DesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, decidedFields, intentDraft, intentView, linksView, outscoredBy, outscoredWords, matedParts, pinCheck } from '../tools/design/record.js'
 import { type PendingDecision, type StatedInput, Decision, Stated, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
+import { jobTitles } from './actions-jobs.js'
 import { artifactText, checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
 import { keyPartsView } from '../tools/design/key-parts.js'
 import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuantity, loadIds, loadReadings, unionIds, unionReadings } from '../core/bench.js'
@@ -136,7 +137,9 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
   // the agents' questions and checks (src/core/agent-facts.ts), merged in as every view of the journey does
-  const facts = await agentFacts(ctx, repo)
+  // (with the jobs' titles, read in place of the ids an agent's words name them by: src/core/job-refs.ts)
+  const [read, look] = await Promise.all([agentFacts(ctx, repo), jobTitles(ctx, repo)])
+  const facts: AgentFacts = look ? { ...read, jobs: look } : read
   // Schematic finish names every sheet's requirements: the schematic files of the default branch
   const sheetFiles = skill === 'schematic-finish' ? await kicadFiles(ctx, repo).then((f) => f.sch, () => null) : null
   // what the bench measured and who answered, as taken (the bench's live copy beside the facts: src/core/bench.ts)

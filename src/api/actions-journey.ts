@@ -78,7 +78,7 @@ import { editorName, recordEdit } from './edits.js'
 import { RULES_PATH, proposeRule } from './rule-answers.js'
 import { recommendationOf } from './changes.js'
 import { REQUIREMENT_CHANGE_SAID } from './requirement-edits.js'
-import { AGENT_WORDS, jobIndex, listJobs, lostJobStep, openLostJobs, projectHandoffs, restartLostJobs, restartable, stoppedSteps } from './actions-jobs.js'
+import { AGENT_WORDS, jobIndex, jobLook, listJobs, lostJobStep, openLostJobs, projectHandoffs, restartLostJobs, restartable, stoppedSteps } from './actions-jobs.js'
 import { editReviewItems, reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { evidenceStaleness } from './evidence-freshness.js'
@@ -267,15 +267,16 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
   // the job still runs, waits or is paused: it reads the answer itself (and is kept as the job that applies it)
   if (row && (row.state === 'queued' || row.state === 'paused' || isLive(row, at))) { await keep(row.id, 0); return {} }
   // never say the agent carries on when nothing will: the answer waits for whichever job asks next
-  if (!row || !agent || !branch) return { summary: `Answered. The job that asked (${asked.jobId}) has ended and could not be started again${!row ? ' (it is not in the project\'s job list)' : !agent ? ` (${row.agent ?? 'no'} agent is not a specialist)` : ' (it has no branch)'}: the answer is kept for its next job.` }
+  if (!row || !agent || !branch) return { summary: `Answered. The job that asked has ended and could not be started again${!row ? ' (it is not in the project\'s job list)' : !agent ? ` (${row.agent ?? 'no'} agent is not a specialist)` : ' (it has no branch)'}: the answer is kept for its next job.` }
   const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: answered.answer, reason: answered.reason, by: answered.by, lasts, ...(stacked ? { stacked: { owner: stacked.owner } } : {}) })
   const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, ...(stacked ? { stackOn: branch } : { branch }), requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
   // a start that was not accepted is kept too, with no job: trace starts it again (keepAnswers)
   await keep(r.accepted ? workerJobId(r.jobId) : null, 1)
   const who = `the ${SPECIALIST_WORDS[agent]} specialist`
-  const where = stacked ? `a change of its own, on top of ${branch}` : branch
+  // (in words: a branch name means nothing to a person; test-esp32-run2 log R18)
+  const where = stacked ? ', in a change of its own on top of the one it checked' : ''
   return r.accepted
-    ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer on ${where}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it on ${where}.` }
+    ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer${where}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it${where}.` }
     : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started yet: ${r.reason ?? 'trace did not accept the job'}. trace tries again, and the change is not recommended for accepting until the answer is in it.` }
 }
 
@@ -667,7 +668,7 @@ export const JOURNEY_ACTIONS = {
     const viewer = await viewerOf(ctx.principal, repo)
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
-    const [{ result: { record: r0, followups }, version: v0 }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => ({ record: loadJourney(db), followups: loadFollowups(db) })), agentFacts(ctx, repo),
+    const [{ result: { record: r0, followups }, version: v0 }, facts0, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => ({ record: loadJourney(db), followups: loadFollowups(db) })), agentFacts(ctx, repo),
       listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, queue: x.queue, error: null }), (e: unknown) => ({ jobs: [], rows: [], queue: undefined, error: e instanceof Error ? e.message : String(e) }))])
     // a requirement changed after the baseline takes the project back to Define before a gate past it can be signed
     // (returnForChange). The record is read only when a gate is the next step, as changedFirst did
@@ -680,7 +681,7 @@ export const JOURNEY_ACTIONS = {
     // the answers trace still has to apply: one whose job was lost or stopped is started again, never dropped
     const kept = followups.length && !jobs.error ? await keepAnswers(ctx, repo, followups, jobs.rows).catch(() => [] as string[]) : []
     // the hand-offs between specialists (jobs.list's): who asked whom, for what, and the answer
-    const handoffs = projectHandoffs(repo, facts, r, jobs.rows)
+    const handoffs = projectHandoffs(repo, facts0, r, jobs.rows)
     if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
@@ -693,6 +694,9 @@ export const JOURNEY_ACTIONS = {
     // cache as changes.list (src/api/github-cache.ts), so a journey and a list together cost one look; when it cannot be reached the
     // journey is answered without them, and says so in changes_unavailable, rather than guessing
     const open = await openChanges(ctx, repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
+    // the jobs' titles in place of the ids an agent's words name them by, and a stuck note retired once the jobs it
+    // waits on have ended and left no open change (src/core/job-refs.ts; test-esp32-run2 log R18)
+    const facts = facts0 && !jobs.error ? { ...facts0, jobs: jobLook(repo, jobs.rows, jobs.queue, open.error ? null : new Set(open.list.map((c) => c.change.job_id).filter((x): x is string => x !== null))) } : facts0
     // evidence that has gone out of date since it was checked: the criterion reads as not met until checked again
     const merged = facts ? mergeAgentFacts(r, facts) : r
     const staleRun = await evidenceStaleness(ctx, repo, merged)

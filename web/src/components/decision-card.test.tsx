@@ -25,6 +25,12 @@ describe('DecisionCard', () => {
     expect(screen.getByText('Records a waiver')).toBeInTheDocument()
   })
 
+  it('shows no stray 0 when there is no why and no evidence (test-esp32-run2 log R18)', () => {
+    const { container } = render(<DecisionCard decision={{ ...decision, why: undefined, evidence: [], givesUp: undefined }} onChoose={() => undefined} />)
+    expect([...container.querySelectorAll('*')].some((e) => e.childNodes.length === 1 && e.textContent === '0')).toBe(false)
+    expect(container.textContent).not.toMatch(/0\s*1 alternative/)
+  })
+
   it('puts the recommendation first and marked', () => {
     render(<DecisionCard decision={decision} onChoose={() => undefined} />)
     expect(screen.getByText('trace recommends')).toBeInTheDocument()

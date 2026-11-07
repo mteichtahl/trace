@@ -363,7 +363,7 @@ describe('the agents\' facts in the journey', () => {
     const [ended, live] = asked.result
     const before = startedJobs.length
     expect(await run(USER, 'question.answer', { repo: 'acme/other', question: ended, option: 'a' }))
-      .toMatchObject({ jobId: 'j', summary: 'Answered. The Implementation specialist carries on with it on claude/task-draw.' })
+      .toMatchObject({ jobId: 'j', summary: 'Answered. The Implementation specialist carries on with it.' })
     expect(startedJobs.slice(before)).toEqual([expect.objectContaining({
       repository: 'acme/other', agent: 'impl', branch: 'claude/task-draw',
       request: expect.stringMatching(/Which USB-C socket should J1 be\?[\s\S]*answered: Use the internal oscillator[\s\S]*push to the same branch/),
@@ -392,14 +392,14 @@ describe('the agents\' facts in the journey', () => {
     }))).result
     const before = startedJobs.length
     expect(await run(USER, 'question.answer', { repo: 'acme/other', question: stuck, option: 'a' }))
-      .toMatchObject({ jobId: 'j', summary: 'Answered. The Rendering specialist carries on with it on claude/task-rerender.' })
+      .toMatchObject({ jobId: 'j', summary: 'Answered. The Rendering specialist carries on with it.' })
     expect(startedJobs.slice(before)).toEqual([expect.objectContaining({
       repository: 'acme/other', agent: 'render', branch: 'claude/task-rerender',
       request: expect.stringMatching(/The tracks render darker than the solder mask\.[\s\S]*answered: Use the internal oscillator/),
     })])
     // its job is not in the project's list: nothing starts, and the answer does not claim the agent carries on
     const out = await run(USER, 'question.answer', { repo: 'acme/other', question: gone, option: 'a' }) as { summary: string }
-    expect(out.summary).toMatch(/^Answered\. The job that asked \(job-unknown\) has ended and could not be started again \(it is not in the project's job list\)/)
+    expect(out.summary).toMatch(/^Answered\. The job that asked has ended and could not be started again \(it is not in the project's job list\)/)
     expect(out).not.toHaveProperty('jobId')
     expect(startedJobs.length).toBe(before + 1)
   })
@@ -418,7 +418,7 @@ describe('the agents\' facts in the journey', () => {
     for (const q of open) await run(USER, 'question.answer', { repo: 'acme/other', question: q.id, option: (q.options.find((o) => o.recommended) ?? q.options[0])!.id })
     const before = startedJobs.length
     const out = await run(USER, 'skill.submit', { repo: 'acme/other', skill: 'question-answer', draft: { option: 'a', lasts: 'requirement' } }) as { jobId?: string; summary?: string; started: string[] }
-    expect(out).toMatchObject({ jobId: 'j', summary: expect.stringMatching(/carries on with it on claude\/task-flash/), started: [expect.stringMatching(/Analog/)] })
+    expect(out).toMatchObject({ jobId: 'j', summary: expect.stringMatching(/carries on with it\.$/), started: [expect.stringMatching(/Analog/)] })
     expect(startedJobs.slice(before)).toEqual([expect.objectContaining({ agent: 'ams', branch: 'claude/task-flash', request: expect.stringMatching(/changes a requirement[\s\S]*Requirements review/) })])
   })
 
