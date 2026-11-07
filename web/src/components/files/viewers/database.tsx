@@ -3,7 +3,8 @@
  * table to see its rows in the shared Data table (sort, search, filter, resize, choose columns), its structure
  * (columns, keys, the statement that made it), or ask your own read-only question in SQL. Any table or answer
  * downloads as CSV. The card lists the tables and their row counts. Comparing two versions shows which tables
- * changed and, row by row, what was added, removed or changed.
+ * changed and, row by row, what was added, removed or changed. A trace project record's tool runs and the files they
+ * made are said by tool and by file, with the repeats counted, before their rows (test-esp32 log #49).
  */
 import { useQuery } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -19,7 +20,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { type FileRef, useFileBytes } from '../data'
 import { baseName } from '../kinds'
-import { type DbTable, type TableDiff, all, cellText, describeDbDiff, diffDb, loadSql, openDb, readOnly, readRows, summarise, toCsv } from '../sqlite'
+import { type DbTable, type RunsDigest, type TableDiff, all, cellText, describeDbDiff, describeRuns, diffDb, loadSql, openDb, readOnly, readRows, resultWord, runsDigest, summarise, toCsv } from '../sqlite'
 import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerProps, type ViewerSize } from './common'
 
 const ROW_LIMIT = 5000
@@ -271,25 +272,57 @@ const BADGE: Record<TableDiff['status'] | 'added' | 'removed' | 'changed', { sta
 
 const MATCHED = { key: 'Rows matched by their key.', rowid: 'Rows matched by their position (the table has no key).', row: 'Rows matched by their whole contents (the table has no key).' }
 
-function TableChanges({ d }: { d: TableDiff }) {
+/** A trace record's tables of what its tools ran, beside the design. */
+const BOOKKEEPING = new Set(['runs', 'artifacts', 'measurements'])
+
+const RUN_STATUS = (s: string): 'passed' | 'failing' | 'warning' | 'idle' => (s === 'pass' ? 'passed' : s === 'fail' || s === 'error' ? 'failing' : s === 'running' ? 'warning' : 'idle')
+
+/**
+ * The tool runs a trace project record adds, by kind with the newest one's result, and the files they made, by name
+ * with how many are the same file again (test-esp32 log #49): what a reviewer reads instead of one row per copy.
+ */
+export function RunsSummary({ runs, table }: { runs: RunsDigest; table: 'runs' | 'artifacts' }) {
+  return (
+    <div className="space-y-2 px-3 pt-2 text-xs">
+      <p className="text-muted-foreground">These are trace's own record of what its tools ran, not the design: {table === 'runs' ? 'by tool, with the newest run of each' : 'by file, with how many copies are the same file again'}.</p>
+      {table === 'runs' && runs.kinds.length > 0 && (
+        <ul className="divide-y rounded-md border" aria-label="Tool runs by kind">
+          {runs.kinds.map((k) => (
+            <li key={k.kind} className="space-y-1 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-mono font-medium">{k.kind}</span>
+                <span className="text-muted-foreground">{count(k.runs, 'run')}{k.runs > 1 && Object.keys(k.statuses).length > 1 ? ` (${Object.entries(k.statuses).map(([st, c]) => `${c} ${resultWord(st)}`).join(', ')})` : ''}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-muted-foreground">{k.runs > 1 ? 'The newest:' : 'It:'}</span>
+                <StatusBadge plain status={RUN_STATUS(k.last.status)} label={resultWord(k.last.status)} />
+                {k.last.summary && <span className="min-w-0 break-words">{k.last.summary}</span>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {table === 'artifacts' && runs.names.length > 0 && (
+        <ul className="divide-y rounded-md border" aria-label="Files the runs made">
+          {runs.names.map((f) => (
+            <li key={f.name} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
+              <span className="min-w-0 break-all font-mono font-medium">{f.name}</span>
+              <span className="text-muted-foreground">{f.copies === 1 ? '1 copy' : f.different === 1 ? `${f.copies} copies, all the same` : `${f.copies} copies, ${f.different} different`}</span>
+              {f.kind && <><span className="text-muted-foreground">· newest from</span><span className="font-mono">{f.kind}</span><StatusBadge plain status={RUN_STATUS(f.status)} label={resultWord(f.status)} /></>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function TableChanges({ d, runs }: { d: TableDiff; runs?: RunsDigest | null }) {
   const n = d.counts.added + d.counts.removed + d.counts.changed
   const show = (v: SqlValue[] | undefined) => (v ?? []).map((x, i) => `${d.columns[i] ?? i}: ${x === null ? 'empty' : cellText(x)}`).join(' · ')
-  return (
-    <div className="space-y-2">
-      <p className="px-3 pt-2 text-xs text-muted-foreground">
-        {d.status === 'added' ? `A new table with ${count(d.counts.added, 'row')}.` : d.status === 'removed' ? `This change removes the table and its ${count(d.counts.removed, 'row')}.` : n ? `${d.counts.added} added, ${d.counts.removed} removed, ${d.counts.changed} changed; ${count(d.counts.same, 'row')} the same.` : `All ${count(d.counts.same, 'row')} are the same.`}{' '}
-        {d.status === 'changed' && MATCHED[d.matchedBy]}
-      </p>
-      {d.schemaChanged && (
-        <details className="px-3 text-xs" open>
-          <summary className="cursor-pointer font-medium">The table's columns changed</summary>
-          <div className="mt-2 grid gap-2 md:grid-cols-2">
-            <pre className="overflow-auto rounded-md bg-destructive/5 p-2 font-mono"><span className="text-muted-foreground">Before</span>{'\n'}{d.beforeSql}</pre>
-            <pre className="overflow-auto rounded-md bg-verified/5 p-2 font-mono"><span className="text-muted-foreground">After</span>{'\n'}{d.afterSql}</pre>
-          </div>
-        </details>
-      )}
-      {d.rows.length > 0 && (
+  // a trace record's runs and the files they made: said by kind and file, every row one click away
+  const grouped = runs && (d.name === 'runs' || d.name === 'artifacts') && d.status !== 'same' ? d.name : null
+  const rows = d.rows.length > 0 && (
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-background">
             <tr className="border-b text-left text-xs text-muted-foreground">
@@ -316,7 +349,31 @@ function TableChanges({ d }: { d: TableDiff }) {
             ))}
           </tbody>
         </table>
+  )
+  return (
+    <div className="space-y-2">
+      {grouped && runs && <RunsSummary runs={runs} table={grouped} />}
+      <p className="px-3 pt-2 text-xs text-muted-foreground">
+        {d.status === 'added' ? `A new table with ${count(d.counts.added, 'row')}.` : d.status === 'removed' ? `This change removes the table and its ${count(d.counts.removed, 'row')}.` : n ? `${d.counts.added} added, ${d.counts.removed} removed, ${d.counts.changed} changed; ${count(d.counts.same, 'row')} the same.` : `All ${count(d.counts.same, 'row')} are the same.`}{' '}
+        {d.status === 'changed' && MATCHED[d.matchedBy]}
+      </p>
+      {d.schemaChanged && (
+        <details className="px-3 text-xs" open>
+          <summary className="cursor-pointer font-medium">The table's columns changed</summary>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            <pre className="overflow-auto rounded-md bg-destructive/5 p-2 font-mono"><span className="text-muted-foreground">Before</span>{'\n'}{d.beforeSql}</pre>
+            <pre className="overflow-auto rounded-md bg-verified/5 p-2 font-mono"><span className="text-muted-foreground">After</span>{'\n'}{d.afterSql}</pre>
+          </div>
+        </details>
       )}
+      {grouped ? (
+        rows && (
+          <details className="px-3 text-xs">
+            <summary className="cursor-pointer py-1 font-medium">Every row ({n.toLocaleString()})</summary>
+            {rows}
+          </details>
+        )
+      ) : rows}
       {d.truncated && <Note>Showing the first {d.rows.length.toLocaleString()} of {n.toLocaleString()} changed rows.</Note>}
     </div>
   )
@@ -327,6 +384,7 @@ export function DatabaseCompare({ before, after, size }: { before: { file: FileR
   const a = useDatabase(before?.file ?? null, before?.commit)
   const b = useDatabase(after?.file ?? null, after?.commit)
   const diff = useMemo(() => ((!before || a.db) && (!after || b.db) ? diffDb(a.db ?? null, b.db ?? null) : null), [a.db, b.db, before, after])
+  const runs = useMemo(() => (diff ? runsDigest(a.db ?? null, b.db ?? null) : null), [diff, a.db, b.db])
   const [pick, setPick] = useState<string | null>(null)
   const err = a.error ?? b.error
   if (err) {
@@ -335,12 +393,15 @@ export function DatabaseCompare({ before, after, size }: { before: { file: FileR
   }
   if (!diff) return <ViewerLoading size={size} label="Opening both versions of the database" />
   const changed = diff.filter((d) => d.status !== 'same')
-  const current = diff.find((d) => d.name === pick) ?? changed[0] ?? diff[0]
+  // a trace record opens on a design table it changes, not on its tool runs' bookkeeping
+  const design = runs ? changed.find((d) => !BOOKKEEPING.has(d.name)) : undefined
+  const current = diff.find((d) => d.name === pick) ?? design ?? changed[0] ?? diff[0]
   return (
     <div className={cn('flex flex-col', AREA[size])}>
       <Controls>
         <span className="font-medium">{describeDbDiff(diff)}</span>
         {diff.length > changed.length && <span className="text-muted-foreground">{count(diff.length - changed.length, 'table')} unchanged</span>}
+        {runs && <span className="text-muted-foreground">{describeRuns(runs)}</span>}
       </Controls>
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[220px_1fr]">
         <ul className="max-h-[160px] overflow-auto border-b text-xs md:max-h-none md:border-r md:border-b-0" aria-label="Tables">
@@ -353,7 +414,7 @@ export function DatabaseCompare({ before, after, size }: { before: { file: FileR
             </li>
           ))}
         </ul>
-        <div className="min-h-0 overflow-auto">{current ? <TableChanges key={current.name} d={current} /> : <Note>Neither version has any tables.</Note>}</div>
+        <div className="min-h-0 overflow-auto">{current ? <TableChanges key={current.name} d={current} runs={runs} /> : <Note>Neither version has any tables.</Note>}</div>
       </div>
     </div>
   )

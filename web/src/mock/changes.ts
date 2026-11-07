@@ -5,7 +5,7 @@
  * memory for the session. The files a change touches have a before (base) and an after (head) version, served by
  * files.url through `changeFileContent`.
  */
-import { PARTS_DB_AFTER, PARTS_DB_BEFORE } from './fixtures-db'
+import { PARTS_DB_AFTER, PARTS_DB_BEFORE, RECORD_DB_AFTER, RECORD_DB_BEFORE } from './fixtures-db'
 import type { ChangeDetail, Journey, StageGuide, StageStep, StuckChecks } from '@/lib/types'
 import type { GateMore } from '@/lib/types-s1'
 import { JOURNEYS, PROJECTS } from './fixtures'
@@ -69,6 +69,8 @@ const RENDER_AFTER = DRAWING_SVG.replace('Soil sensor enclosure outline', 'Soil 
 
 const FILES: Record<string, { before: string | Uint8Array | null; after: string | Uint8Array | null; mime: string }> = {
   'hardware/parts.db': { before: PARTS_DB_BEFORE, after: PARTS_DB_AFTER, mime: 'application/vnd.sqlite3' },
+  // the project's record: a change adding tool runs and the same files again beside its tests (test-esp32 log #49)
+  '.trace/project.db': { before: RECORD_DB_BEFORE, after: RECORD_DB_AFTER, mime: 'application/vnd.sqlite3' },
   'hardware/power.kicad_sch': { before: SCH_BEFORE, after: sch, mime: 'text/plain' },
   'docs/decisions.md': { before: DECISIONS_BEFORE, after: DECISIONS_AFTER, mime: 'text/markdown' },
   'hardware/sensor.kicad_sch': { before: sch, after: sch, mime: 'text/plain' },
