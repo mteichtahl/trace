@@ -81,6 +81,8 @@ export interface ChangeSummary {
   built_on_by?: StackLink[]
   /** the job behind it is still working (ChangeFacts.working): what is reviewed may still change */
   working?: boolean
+  /** the job working on it is one bringing it up to date or fixing its checks, not the one that made it (ChangeFacts.updating) */
+  updating?: boolean
   /** its checks cannot start: no runner picks them up (ChangeFacts.stuck, src/api/stuck-checks.ts) */
   stuck?: StuckChecks
 }
@@ -224,6 +226,12 @@ export interface ChangeFacts {
    */
   working?: boolean
   /**
+   * The job working on it is a later work item on its branch (updatingJob): "Bring it up to date", or a fix for its
+   * checks. The change is still credited to the task that made it (jobsByBranch), so `working` is set too (test-esp32
+   * #243).
+   */
+  updating?: boolean
+  /**
    * The answers a person gave to its specialist's questions that no job has applied to it yet (src/core/answer-
    * followups.ts pendingAnswers): accepted now, the change would go in without them (test-esp32 log #131).
    */
@@ -246,6 +254,9 @@ export const jobWorking = (job: Pick<JobRow, 'state' | 'beatAt' | 'startedAt' | 
 
 /** What a change whose job is still working says, wherever it is shown. */
 export const STILL_WORKING = 'trace is still working on this change.'
+
+/** What a change a later job is bringing up to date (or fixing) says, wherever it is shown. */
+export const UPDATING = 'trace is updating this change.'
 
 // a specialist that says its work is not ready for a person, in its title (each clause) or in its summary or the pull
 // request's description (only the plainest phrases there: a word like "incomplete" in a description is often about
@@ -380,6 +391,20 @@ export function jobsByBranch(jobs: readonly JobRow[], rule?: Pick<TraceRule, 'de
     byBranch.set(j.branch, made)
   }
   return byBranch
+}
+
+/**
+ * The work item working on `branch` now when it is not `credited`, the job the change is credited to (jobsByBranch): a
+ * conflict work item bringing it up to date, or a ci-red one fixing its checks, through its own worker or itself. The
+ * change stays the task's, yet it is being worked on (test-esp32 #243). Null when none is.
+ */
+export function updatingJob(jobs: readonly JobRow[], branch: string, credited: Pick<JobRow, 'id'> | null, at = Date.now() / 1000): JobRow | null {
+  for (const j of jobs) {
+    if (j.branch !== branch || !CHANGE_JOB_KINDS.has(j.kind) || !jobWorking(j, at)) continue
+    const made = (j.parentJob ? jobs.find((x) => x.id === j.parentJob) : undefined) ?? j
+    if (made.id !== credited?.id && made.kind === 'work-item') return made
+  }
+  return null
 }
 
 /** What the rule reads of a pull request: its head branch and where it lives, and who opened it. */
@@ -650,7 +675,7 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
   else if (f.state === 'closed') out.push('It was discarded.')
   else {
     if (f.draft) out.push('It is a draft: trace has not finished it yet.')
-    if (f.working) out.push(`${STILL_WORKING} Wait for its job to finish.`)
+    if (f.working) out.push(`${f.updating ? UPDATING : STILL_WORKING} Wait for its job to finish.`)
     if (f.mergeable === 'dirty') out.push('It conflicts with changes accepted since it was made. trace will bring it up to date.')
     if (f.mergeable === 'behind') out.push('It is behind changes accepted since it was made. trace will bring it up to date.')
     const failing = f.checks?.failing ?? []
@@ -928,12 +953,15 @@ export function changeSummary(o: {
   answers?: readonly PendingAnswer[] | undefined
   /** its checks cannot start (src/api/stuck-checks.ts stuckFor) */
   stuck?: StuckChecks | null | undefined
+  /** a later work item is working on its branch (updatingJob): bringing it up to date, or fixing its checks */
+  updating?: boolean | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
   if (o.stack?.stacked) facts.stacked = o.stack.stacked
   if (o.stuck && facts.state === 'open') facts.stuck = o.stuck
   if (jobWorking(o.job, o.at)) facts.working = true
+  else if (o.updating) Object.assign(facts, { working: true, updating: true })
   if (o.answers?.length) facts.answers = [...o.answers]
   const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary, request: jobRequest(o.job) })
   if (unfinished) facts.unfinished = unfinished
@@ -949,6 +977,7 @@ export function changeSummary(o: {
     ...(o.stack?.stacked?.on ? { builds_on: o.stack.stacked.on } : {}),
     ...(o.stack?.built_on_by.length ? { built_on_by: o.stack.built_on_by } : {}),
     ...(facts.working ? { working: true } : {}),
+    ...(facts.updating ? { updating: true } : {}),
     ...(facts.stuck ? { stuck: facts.stuck } : {}),
   }
 }
