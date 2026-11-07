@@ -14,7 +14,8 @@ import { assign, seen } from '../../src/core/access.js'
 import { BenchStore, insertIds, insertReadings, newReading } from '../../src/core/bench.js'
 import { backendFor } from '../../src/core/central.js'
 import { ActualsStore, CostLedger, insertUsage, jobRow, modelRows, writeActuals } from '../../src/core/cost.js'
-import { buildCost } from '../../src/api/actions-cost.js'
+import { buildCost, orderForecast } from '../../src/api/actions-cost.js'
+import type { OrderEstimate } from '../../src/core/order-estimate.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { IntegrationStore, type SecretsApi } from '../../src/core/integrations.js'
 import { signGate, startJourney } from '../../src/core/journey.js'
@@ -303,5 +304,15 @@ describe('cost', () => {
     expect(buildCost({ planned: 90, placed: true, paid: false })).toEqual({ committed: 90, forecast: 0 })
     expect(buildCost({ planned: 90, placed: true, paid: true })).toEqual({ committed: 0, forecast: 0 })
     expect(buildCost({ planned: null, placed: false, paid: false })).toEqual({ committed: 0, forecast: null })
+  })
+
+  it('forecasts the order from the newest order estimate when there is one, saying so (#178)', () => {
+    // test-esp32 run 2: "US$90 (10 boards at US$9 each, the build plan's target)" with an estimate of US$141 to 244
+    const estimate = { currency: 'USD', low: 141, high: 244, at: 1_793_922_893, partsRun: 'p1' } as unknown as OrderEstimate
+    expect(orderForecast({ target: 90, estimate, currency: 'USD' })).toEqual({ planned: 244, basis: { kind: 'estimate', low: 141, high: 244, at: new Date(1_793_922_893_000).toISOString(), partsRun: 'p1' } })
+    expect(orderForecast({ target: 90, estimate: null, currency: 'USD' })).toEqual({ planned: 90, basis: { kind: 'target' } })
+    // an estimate in US$ is not a forecast for a build in A$
+    expect(orderForecast({ target: 90, estimate, currency: 'AUD' })).toEqual({ planned: 90, basis: { kind: 'target' } })
+    expect(orderForecast({ target: null, estimate: null, currency: 'USD' })).toEqual({ planned: null, basis: null })
   })
 })
