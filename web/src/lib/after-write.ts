@@ -58,8 +58,10 @@ const BY_ACTION: Partial<Record<ActionName, (r: string, a: Args) => QueryKey[]>>
   // work trace starts: its job, the lists of what trace is doing
   task: (r) => [...project(r), ['health.get', r]],
   'job.control': (r) => [...project(r), ['job']],
-  // a change: its page and lists, and the journey whose steps its open changes are
-  'change.accept': (r) => [...project(r), ...changes(r), ['documents.get', r], ['files.list', r]],
+  // a change: its page and lists, and the journey whose steps its open changes are. Accepting one changes the default
+  // branch, which the tools read through the `tool` action: the coverage behind Requirements and its traceability
+  // view (verify.coverage) is one (test-esp32 #65: an accepted verify record's 17 passing tests showed "No test yet")
+  'change.accept': (r) => [...project(r), ...changes(r), ['documents.get', r], ['files.list', r], ['tool', r]],
   'change.ask': (r) => [...project(r), ...changes(r)],
   'change.discard': (r) => [...project(r), ...changes(r)],
   'change.resolve': (r) => [...project(r), ...changes(r)],

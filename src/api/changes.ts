@@ -151,6 +151,11 @@ export interface ChangeDetail extends ChangeSummary {
   /** the accepted requirements its database edits, said before it is accepted (src/api/requirement-edits.ts) */
   requirement_edits?: RequirementEditsView
   /**
+   * The hand-off its job answered (askedFor): the specialist that asked, and what it asked, so a person sees why a
+   * specialist they did not start made it (test-esp32 #141, #234). Absent: a person or a stage started its job.
+   */
+  handoff?: AskedFor
+  /**
    * Every check that failed, failed for a reason outside the work (GitHub busy or down, the runner lost: infraReason):
    * which ones, by checks_list id, and why in plain words. The page offers to run them again (change.rerun). Absent:
    * no check failed, or one failed on the work itself.
@@ -488,6 +493,39 @@ export function fromWords(job: Pick<JobRow, 'agent' | 'payload'> | null, agentWo
   return `the ${agentWords[a] ?? a} specialist${routed}`
 }
 
+/** Who asked for a change's work, and what, when a specialist asked another (a hand-off). */
+export interface AskedFor { by: string; question: string; blocks?: string }
+
+const HANDOFF_BRANCH = /(?:^|\/)handoff-(ho[0-9a-f]{14})$/
+const ASKED_TITLE = /^Asked by (the .+? specialist): (.+)$/s
+
+/** The hand-off a change's work answered, by its id: the job's, else its branch's ("claude/handoff-<id>"). */
+export const handoffIdOf = (job: Pick<JobRow, 'handoff'> | null, branch: string): string | null => job?.handoff ?? HANDOFF_BRANCH.exec(branch)?.[1] ?? null
+
+/**
+ * The hand-off a change's work answered (src/core/handoffs.ts): its id from the job, else from the branch a hand-off's
+ * job works on ("claude/handoff-<id>"); what was asked from the agents' facts when they were read, else from the job's
+ * title ("Asked by the Implementation specialist: …", cut at 200 characters). Null: no hand-off made it. Pure.
+ */
+export function askedFor(o: {
+  job: Pick<JobRow, 'handoff' | 'title'> | null; branch: string
+  rows?: readonly Pick<JobRow, 'handoff' | 'title'>[]
+  handoffs?: readonly { id: string; fromAgent: string; question: string; blocks?: string | null }[] | null
+  agentWords: Readonly<Record<string, string>>
+}): AskedFor | null {
+  const id = handoffIdOf(o.job, o.branch)
+  if (!id) return null
+  const flat = (x: string): string => x.replace(/\s+/g, ' ').trim()
+  const h = o.handoffs?.find((x) => x.id === id)
+  if (h && flat(h.question)) {
+    const blocks = flat(h.blocks ?? '')
+    return { by: `the ${o.agentWords[h.fromAgent] ?? h.fromAgent} specialist`, question: flat(h.question), ...(blocks ? { blocks } : {}) }
+  }
+  const row = o.job?.handoff === id ? o.job : o.rows?.find((r) => r.handoff === id) ?? null
+  const m = row ? ASKED_TITLE.exec(row.title) : null
+  return m ? { by: m[1]!, question: flat(m[2]!) } : null
+}
+
 // ------------------------------------------------------------------ verdict, recommendation, may_accept
 
 const CAN_MERGE = new Set(['clean', 'has_hooks'])
@@ -513,7 +551,9 @@ function verdictOfOwn(f: ChangeFacts): Verdict {
   // person should hear first
   if (f.unfinished || f.answers?.length) return 'unfinished'
   if ((f.checks?.running ?? 0) > 0 || f.mergeable === 'unknown') return 'checking'
-  if (f.mergeable === 'behind' || f.mergeable === 'blocked') return 'blocked'
+  // "blocked" before any check reported is GitHub waiting for the required ones (a change just brought up to date):
+  // checking, as below, not stopped by a rule (test-esp32 #76)
+  if (f.mergeable === 'behind' || (f.mergeable === 'blocked' && (f.checks?.total ?? 0) > 0)) return 'blocked'
   // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance). A token
   // that may not read checks will not fix itself by waiting: blocked, not checking
   if (f.checks === null && f.checks_denied) return 'blocked'
@@ -569,8 +609,10 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.mergeable === 'unknown') return { verdict: 'wait', why: 'GitHub is still working out whether it can be merged. Look again in a minute.' }
   if (f.mergeable === 'behind') return { verdict: 'none', why: 'It is behind changes accepted since it was made. trace will bring it up to date.' }
   // its checks are done, yet GitHub says the repository's rules stop it: almost always a required approving review,
-  // which trace cannot give (GitHub refuses an approval from the account that opened it)
-  if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
+  // which trace cannot give (GitHub refuses an approval from the account that opened it). A change just brought up to
+  // date is "blocked" too, until its required checks report: none have run, so it is not that (test-esp32 #76: the
+  // page said "Its checks passed, but …" beside "No checks have run on it yet")
+  if (f.mergeable === 'blocked' && (f.checks?.total ?? 0) > 0) return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
   if (f.checks === null) return f.checks_denied ? { verdict: 'none', why: CHECKS_DENIED } : { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
   if (f.stacked) return { verdict: 'wait', why: `${stackedWords(f.stacked)} Its checks passed: it follows that change into the design once it is accepted.` }

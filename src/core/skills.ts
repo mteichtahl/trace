@@ -77,7 +77,7 @@ export const SKILL_DEFS: readonly SkillDef[] = [
       { id: 'instances', text: 'No peripheral claimed twice', step: 'conflicts' },
       { id: 'boot', text: 'Boot, reset and debug pins keep their roles', step: 'conflicts' },
       { id: 'mates', text: 'Every off-board part\'s pins match its connector', step: 'conflicts' },
-      { id: 'match', text: 'Firmware matches the schematic', step: 'agree' },
+      { id: 'match', text: 'The schematic matches the pin plan', step: 'agree' },
       { id: 'reasons', text: 'Every choice against the recommendation has a reason' },
     ],
   },
