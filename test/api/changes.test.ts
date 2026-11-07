@@ -643,6 +643,21 @@ describe('changes.list and change.get', () => {
     expect(d.recommendation.why).toMatch(/^All 3 checks passed \(automerge, check and tests pass\), and it can be merged\./)
   })
 
+  it('the list says what the change\'s page says of its checks: each workflow as its jobs, not GitHub\'s status (test-esp32 #16)', async () => {
+    // GitHub's status still counts the workflow as one check running; its jobs, which the page lists, have all passed
+    github.add(1, 'claude/task-reqs', { checks: { total: 1, passed: 0, failed: 0, running: 1, skipped: 0, failing: [] } })
+    github.pulls.get(1)!.runs = [
+      { name: 'check', status: 'completed', conclusion: 'success', summary: null, id: 'job:1' },
+      { name: 'tests pass', status: 'completed', conclusion: 'success', summary: null, id: 'job:2' },
+    ]
+    const listed = ((await run(USER, 'changes.list', { repo: REPO })).changes as { number: number; verdict: string; checks: Record<string, unknown> }[]).find((c) => c.number === 1)
+    const page = await run(USER, 'change.get', { repo: REPO, number: 1 }) as { verdict: string; checks: Record<string, unknown> }
+    expect(listed?.checks).toEqual(page.checks)
+    expect(listed?.checks).toMatchObject({ total: 2, passed: 2, running: 0 })
+    expect(listed?.verdict).toBe(page.verdict)
+    expect(listed?.verdict).not.toBe('checking')
+  })
+
   it('a change its specialist calls unfinished is listed as that, and its page recommends asking for changes', async () => {
     github.add(1, 'claude/task-reqs', { title: 'trace: board renders, incomplete export, not for approval' })
     const listed = ((await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]).find((c) => c.number === 1)
