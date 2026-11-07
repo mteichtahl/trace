@@ -26,7 +26,8 @@
  *   apply    after publishing, `hook.apply { repo }` (src/api/actions-hooks.ts) with the same token: the project's app edits
  *            that are ready are applied (docs/stay-in-trace.md "Applying"). Once per window, like the event
  *   conflict a push to the project's default branch (event `push`; a push to any other branch is dropped: its change's
- *            own events say so) is when other changes fall into conflict, and GitHub sends nothing when they do. So
+ *            own events say so) is when other changes fall into conflict, and GitHub sends nothing when they do; a
+ *            change opened (pull_request opened or reopened) may be in conflict from the start. So
  *            beside the debounce, that delivery asks the API `hook.conflicts { repo }` (src/api/conflicts.ts), which
  *            waits for GitHub to settle, makes trace's own edits again and starts the worker for the rest; when any
  *            were in conflict, the people on the project get `record.changed { repo, kind: 'change', conflicts,
@@ -113,14 +114,16 @@ const Delivery = z.object({
   repository: z.object({ full_name: Slug, default_branch: z.string().optional() }).loose(),
   ref: z.string().optional(),
   deleted: z.boolean().optional(),
+  action: z.string().optional(),
   pull_request: z.object({ number: Num }).loose().optional(),
   number: Num.optional(),
   check_run: z.object({ pull_requests: Prs }).loose().optional(),
   check_suite: z.object({ pull_requests: Prs }).loose().optional(),
 }).loose()
 
-/** `base`: a push to the repository's default branch, after which other changes may be in conflict. */
-export interface HookEvent { repo: string; number: number | null; event: string; base?: boolean }
+/** `base`: a push to the repository's default branch, after which other changes may be in conflict. `opened`: a change
+ * opened (or reopened), which may be in conflict from the start: cut before the change accepted just before it. */
+export interface HookEvent { repo: string; number: number | null; event: string; base?: boolean; opened?: boolean }
 
 /** Whether trace takes this kind of event at all (X-GitHub-Event). */
 export const takes = (event: string | undefined): event is (typeof HOOK_EVENTS)[number] => Boolean(event) && (HOOK_EVENTS as readonly string[]).includes(event ?? '')
@@ -141,6 +144,8 @@ export function readDelivery(event: string | undefined, body: string): HookEvent
   }
   // a status names a commit, not a change; a check names the changes it ran for (same-repository ones only)
   const number = v.pull_request?.number ?? v.number ?? v.check_run?.pull_requests?.[0]?.number ?? v.check_suite?.pull_requests?.[0]?.number ?? null
+  // a change opened already in conflict (its branch cut before the last accept): no push follows to find it (log #213)
+  if (event === 'pull_request' && (v.action === 'opened' || v.action === 'reopened')) return { repo: v.repository.full_name.toLowerCase(), number, event, opened: true }
   return { repo: v.repository.full_name.toLowerCase(), number, event }
 }
 
@@ -256,6 +261,7 @@ const ApplyAnswer = z.object({ result: z.object({ applied: z.array(z.object({ br
 /** hook.conflicts' answer: numbers only (src/api/conflicts.ts ConflictReport). */
 const ConflictAnswer = z.object({ result: z.object({
   conflicts: z.array(z.number()), remade: z.array(z.number()), worker: z.array(z.number()), left: z.array(z.number()), started: z.string(),
+  record: z.array(z.number()).default([]),
 }).loose() })
 /** hook.docs' answer: the records the push changed, and whether Scribe was started (src/api/actions-hooks.ts). */
 const DocsAnswer = z.object({ result: z.object({ records: z.array(z.string()), started: z.string().nullable() }).loose() })
@@ -413,11 +419,12 @@ function hooksCore(deps: WebDeps, o: HooksOptions) {
       if (!r.success) { deps.log({ hook: 'conflicts failed', repo, status: a.status }); return }
       const c = r.data.result
       if (!c.conflicts.length) return
-      deps.log({ hook: 'conflicts', repo, conflicts: c.conflicts, remade: c.remade, worker: c.worker, left: c.left, started: c.started })
+      deps.log({ hook: 'conflicts', repo, conflicts: c.conflicts, remade: c.remade, record: c.record, worker: c.worker, left: c.left, started: c.started })
       const on = await whoIsOn(cfg, repo)
       if (!on.project) return
       const resolving = c.started === 'yes' || c.started === 'without-retry' ? c.worker : []
-      const e: LiveEvent = { type: 'record.changed', repo, kind: 'change', conflicts: c.conflicts, remade: c.remade, resolving, at: new Date(deps.now()).toISOString() }
+      // a change whose record trace merged was brought up to date already, like one made again
+      const e: LiveEvent = { type: 'record.changed', repo, kind: 'change', conflicts: c.conflicts, remade: [...c.remade, ...c.record], resolving, at: new Date(deps.now()).toISOString() }
       const pub = o.publisher?.() ?? appsyncPublisher(cfg, deps.credentials, deps.fetch)
       await publishToEach(pub, on.subs, e)
     } catch (e) {
@@ -527,7 +534,7 @@ function hooksCore(deps: WebDeps, o: HooksOptions) {
             debounce ??= new Debounce(deps.hookStore?.(cfg) ?? memoryStore(), { now: deps.now, log: deps.log })
             // a push to the default branch: the conflicts it made are found beside the debounce, not after it (the
             // function's time is bounded, and a holder may keep its window for MAX_ROUNDS)
-            const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base ? conflicts(cfg, d.repo) : undefined, d.base ? documents(cfg, d.repo) : undefined])
+            const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base || d.opened ? conflicts(cfg, d.repo) : undefined, d.base ? documents(cfg, d.repo) : undefined])
             if (how === 'joined') deps.log({ hook: 'debounced', repo: d.repo, event: d.event, number: d.number })
           } catch (e) {
             deps.log({ warning: 'hooks: not published', repo: d.repo, event: d.event, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
