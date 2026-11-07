@@ -11,6 +11,19 @@ import {
 import type { Gate } from '@/lib/types'
 import type { GateMore, JourneyMore } from '@/lib/types-s1'
 
+/**
+ * VITE_MOCK_ORDER=empty: the order at Fabricate before the release package is built and the parts checked again (test-esp32
+ * run 2, #217): build.get says it is not ready and what is missing, and its cost is the target.
+ */
+const UNPACKAGED = {
+  ...BUILD,
+  orders: BUILD.orders.map((o) => ({
+    ...o, ready: false, files: [], options: [], parts: [], render: null, checkedAt: undefined, checkRun: undefined, hardware: undefined,
+    cost: o.cost.filter((c) => c.kind === 'target'),
+    missing: ['The release package is not built yet: kicad.fab builds the Gerbers, BOM and placement file.', 'There is no parts check yet: parts.bom_check checks stock and price at 10 boards.'],
+  })),
+}
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const ok = (result: unknown) => json({ ok: true, result })
 const fail = (error: string, status = 200) => json({ ok: false, error }, status)
@@ -119,7 +132,7 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'files.url':
       return FILE_URLS[String(a.path)] ? ok({ url: FILE_URLS[String(a.path)] }) : fail('no such file')
     case 'build.get':
-      return repo === 'acme/soil-sensor' ? ok(BUILD) : ok({ releases: [], orders: [], boards: [] })
+      return repo === 'acme/soil-sensor' ? ok(import.meta.env.VITE_MOCK_ORDER === 'empty' ? UNPACKAGED : BUILD) : ok({ releases: [], orders: [], boards: [] })
     case 'order.record': {
       const o = BUILD.orders.find((x) => x.id === a.order)
       if (o) Object.assign(o, { state: 'placed', number: a.number, paid: a.paid, ship: a.ship })

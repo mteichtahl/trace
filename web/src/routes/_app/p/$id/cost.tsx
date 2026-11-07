@@ -74,7 +74,7 @@ function Cost() {
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Tile label="Cloud work to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate · ${money(d.spent.detail.actual.total, d.currency)} billed by AWS` : 'Estimate · AWS has billed nothing tagged yet') : undefined} />
         <Tile label="Orders paid" value={m(d.spent.orders)} />
-        <Tile label="Committed" value={m(d.committed)} hint="Orders ready to place" />
+        <Tile label="Committed" value={m(d.committed)} hint="Orders placed, not paid yet" />
         <Tile label="Forecast for the order" value={m(d.forecast)} hint={forecastSource(d, d.orderCurrency ?? d.currency) ?? 'Boards × the target unit cost'} />
       </div>
       {d.warning && <SpendWarningCard warning={d.warning} currency={d.currency} id={id} link={false} className="mt-4" />}

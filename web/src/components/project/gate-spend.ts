@@ -2,8 +2,9 @@
  * The gate's cost line (admins): what the project has spent so far, the cloud part an estimate with what AWS billed
  * beside it, and the project's two budgets, each by its own name:
  *
- *   the build budget          what the order may cost (boards, parts, case): the orders paid, the order committed and
- *                             the order forecast (boards x the build plan's target unit cost) count against it
+ *   the build budget          what the order may cost (boards, parts, case): the orders paid, orders placed and not
+ *                             paid yet (committed) and the order forecast (boards x the build plan's target unit cost,
+ *                             until an order is placed: an order being prepared is a forecast, #218) count against it
  *   the cloud-work allowance  what trace's own cloud work (agents, graphics card and CPU jobs) may cost
  *
  * They were one number, so with US$1.59 of cloud work spent the gate said "US$18.41 left after what is committed and
@@ -65,7 +66,7 @@ export function buildBudgetLine(b: NonNullable<Budgets['build']>): string {
   const m = (n: number) => money(n, b.currency)
   const held = [
     b.orders ? `${m(cents(b.orders))} paid for orders` : '',
-    b.committed ? `${m(b.committed)} committed for the order ready to place` : '',
+    b.committed ? `${m(b.committed)} committed for orders placed but not paid yet` : '',
     b.forecast ? `${m(b.forecast)} forecast for the order${b.forecastSource ? ` (${b.forecastSource})` : ''}` : '',
   ].filter(Boolean)
   const head = `Build budget ${m(b.budget)} (boards, parts and case)`

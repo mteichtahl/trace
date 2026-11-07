@@ -10,10 +10,10 @@
  *                                                               the dated price table; actuals from Cost Explorer by the
  *                                                               project's tag, a day behind (the screen says so)
  *                                         spent.orders          what the recorded orders cost
- *                                         committed             the order ready to place (its expected total) until it
- *                                                               is recorded
- *                                         forecast              the build: quantity x unit cost, for the revision not
- *                                                               ordered yet
+ *                                         committed             an order of the revision placed with no cost given yet
+ *                                                               (its target); nothing before an order is placed
+ *                                         forecast              the build: quantity x target unit cost, for the revision
+ *                                                               not ordered yet (an order being prepared included)
  *                                         stages[].cloud        the estimated cloud spend of each stage: its jobs' (by
  *                                                               the stage the project was in when each started), and the
  *                                                               spend no job claims, by when it ran
@@ -162,13 +162,14 @@ export function pricesView(p: PricesInUse, o: { now?: number; by?: PricedBySourc
 }
 
 /**
- * The build's cost against the build budget: committed once the project is at Fabricate with its order not placed yet, else
- * forecast until it is placed; never both (counted twice, the budget showed the order's cost twice from Fabricate on).
+ * The build's cost against the build budget, counted once: a forecast (the build plan's target) until an order of the
+ * revision is placed; then the order's paid cost (spent), or, placed but with no cost given yet, committed. Nothing is
+ * committed before an order is placed: an order being prepared at Fabricate is still a forecast from the target, not a
+ * quote (test-esp32 run 2, #218: "Committed: the order ready to place US$90" and "Forecast US$0" with nothing ordered).
  * Pure.
  */
-export function buildCost(o: { planned: number | null; placed: boolean; atFabricate: boolean }): { committed: number; forecast: number | null } {
-  if (o.placed) return { committed: 0, forecast: 0 }
-  if (o.atFabricate && o.planned !== null) return { committed: o.planned, forecast: 0 }
+export function buildCost(o: { planned: number | null; placed: boolean; paid: boolean }): { committed: number; forecast: number | null } {
+  if (o.placed) return { committed: o.paid || o.planned === null ? 0 : o.planned, forecast: 0 }
   return { committed: 0, forecast: o.planned }
 }
 
@@ -236,8 +237,8 @@ export const COST_ACTIONS = {
       const unpaid = orders.filter((o) => o.paid === null).length
       if (unpaid) notes.push(`${unpaid} recorded order${unpaid === 1 ? ' has' : 's have'} no cost given.`)
       const planned = b.unit_cost !== null ? Math.round(b.unit_cost * b.quantity * 100) / 100 : null
-      const placedThisRevision = orders.some((o) => o.revision === r.journey.revision)
-      const { committed, forecast } = buildCost({ planned, placed: placedThisRevision, atFabricate: cur >= stageOrd(r, 'fabricate') && stageOrd(r, 'fabricate') >= 0 })
+      const placedThisRevision = orders.filter((o) => o.revision === r.journey.revision)
+      const { committed, forecast } = buildCost({ planned, placed: placedThisRevision.length > 0, paid: placedThisRevision.every((o) => o.paid !== null) })
       if (planned === null) notes.push('No unit cost is set in the build plan, so the build\'s forecast is unknown.')
       const e = estimateTotals(usage.rows)
       const a = actuals.rows.length ? actualTotals(actuals.rows) : null
