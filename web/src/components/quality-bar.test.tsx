@@ -70,3 +70,17 @@ describe('the quality bar in trace\'s assistant\'s context (test-esp32 #53)', ()
     expect(pins.checks.map((c) => c.text).join(' ')).not.toMatch(/firmware/i)
   })
 })
+
+// #239: a long check (the checker's reason after it) ran on one line under Submit and "2 checks left", so the end of
+// the sentence was hidden. Every item wraps within the bar
+describe('a long check on a wide screen', () => {
+  it('wraps within the bar instead of running on under Submit', () => {
+    wide(true)
+    const text = 'Boot, reset and debug pins keep their roles (GPIO12 is a boot strap: pulled high at reset it sets the flash voltage to 1.8 V, and the off-board pins are not in the connector order)'
+    render(<TooltipProvider><QualityBar checks={[...checks, { id: 'boot', text, status: 'not_met' }]} onSubmit={() => {}} /></TooltipProvider>)
+    const item = screen.getByRole('button', { name: /GPIO12 is a boot strap/ })
+    expect(item.className).not.toMatch(/whitespace-nowrap/)
+    expect(item.className).toMatch(/max-w-full/)
+    expect(item).toHaveTextContent(text)
+  })
+})

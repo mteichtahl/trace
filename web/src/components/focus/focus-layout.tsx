@@ -30,6 +30,17 @@ export interface FocusStep {
   state: 'done' | 'current' | 'todo'
 }
 
+/** A step as the rail draws it: `visited` is a step passed with a check of its own still not met. */
+export type RailState = FocusStep['state'] | 'visited'
+
+/**
+ * How the rail shows each step. A step passed (Continue, or a later one reached) is done only once its own checks are
+ * met: one passed while a check of it is still not met says Visited, not Done (test-esp32 #232). Pure.
+ */
+export function railStates(steps: readonly FocusStep[], checks: readonly QualityCheck[]): RailState[] {
+  return steps.map((s) => (s.state === 'done' && checks.some((c) => c.step === s.id && c.status === 'not_met') ? 'visited' : s.state))
+}
+
 export interface FocusLayoutProps {
   /** the skill's name ("Schematic finish") */
   title: string
@@ -38,6 +49,8 @@ export interface FocusLayoutProps {
   variant?: 'stepped' | 'conversational' | 'checklist'
   steps: FocusStep[]
   onStep?: (id: string) => void
+  /** every step on the rail opens with a click, later ones too; else only the steps already reached */
+  anyStep?: boolean
   /** below the steps (e.g. the sheets list) */
   stepsExtra?: ReactNode
   /** the centre */
@@ -66,7 +79,7 @@ export interface FocusLayoutProps {
 }
 
 export function FocusLayout({
-  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, draftSaving = false, stop, centre = 'padded', outcome,
+  title, context, variant = 'stepped', steps, onStep, anyStep = false, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, draftSaving = false, stop, centre = 'padded', outcome,
 }: FocusLayoutProps) {
   const now = useNow(5000)
   const notice = useContext(FocusNotice)
@@ -74,6 +87,7 @@ export function FocusLayout({
   const [stepsDrawer, setStepsDrawer] = useState(false)
   const [traceDrawer, setTraceDrawer] = useState(false)
   const idx = steps.findIndex((s) => s.state === 'current')
+  const rail = railStates(steps, checks)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -91,33 +105,39 @@ export function FocusLayout({
     <nav aria-label="Steps">
       <p className="px-2 pb-2 text-xs text-muted-foreground">{variant === 'checklist' ? 'Checklist' : 'Steps'}</p>
       <ol className="space-y-0.5">
-        {steps.map((s, i) => (
-          <li key={s.id}>
-            <button
-              type="button"
-              disabled={s.state === 'todo' || !onStep}
-              onClick={() => onStep?.(s.id)}
-              aria-current={s.state === 'current' ? 'step' : undefined}
-              className={cn(
-                'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm',
-                s.state === 'current' ? 'bg-primary/10 font-medium text-foreground' : s.state === 'done' ? 'hover:bg-accent' : 'text-muted-foreground',
-              )}
-            >
-              <span
+        {steps.map((s, i) => {
+          const state = rail[i]!
+          return (
+            <li key={s.id}>
+              <button
+                type="button"
+                disabled={!onStep || (state === 'todo' && !anyStep)}
+                onClick={() => onStep?.(s.id)}
+                aria-current={state === 'current' ? 'step' : undefined}
                 className={cn(
-                  'flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px]',
-                  s.state === 'done' && 'border-foreground bg-foreground text-background',
-                  s.state === 'current' && 'border-primary text-primary',
+                  'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm',
+                  state === 'current' ? 'bg-primary/10 font-medium text-foreground' : state === 'todo' ? 'text-muted-foreground' : '',
+                  state !== 'current' && onStep && (state !== 'todo' || anyStep) && 'hover:bg-accent hover:text-foreground',
                 )}
-                aria-hidden
               >
-                {s.state === 'done' ? <Check className="size-3" strokeWidth={3} /> : i + 1}
-              </span>
-              <span className="sr-only">{s.state === 'done' ? 'Done: ' : s.state === 'current' ? 'Current: ' : ''}</span>
-              {s.title}
-            </button>
-          </li>
-        ))}
+                <span
+                  className={cn(
+                    'flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px]',
+                    state === 'done' && 'border-foreground bg-foreground text-background',
+                    state === 'current' && 'border-primary text-primary',
+                    state === 'visited' && 'border-dashed border-foreground',
+                  )}
+                  aria-hidden
+                >
+                  {state === 'done' ? <Check className="size-3" strokeWidth={3} /> : i + 1}
+                </span>
+                <span className="sr-only">{state === 'done' ? 'Done: ' : state === 'current' ? 'Current: ' : state === 'visited' ? 'Visited, a check still not met: ' : ''}</span>
+                <span className="min-w-0 flex-1">{s.title}</span>
+                {state === 'visited' && <span className="shrink-0 text-xs text-muted-foreground" aria-hidden>Visited</span>}
+              </button>
+            </li>
+          )
+        })}
       </ol>
       {stepsExtra && <div className="mt-6">{stepsExtra}</div>}
     </nav>
