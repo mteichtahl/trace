@@ -42,7 +42,7 @@ export interface IntentView extends IntentStatementRow {
   uncovered: string | null
 }
 
-/** The topics where a statement is about a quantity, so it needs a number with its unit. */
+/** The topics where a statement that states a quantity needs a number with its unit. */
 const QUANTITY_TOPICS = new Set(['environment', 'power', 'performance', 'physical', 'build'])
 /** Words that say nothing measurable on their own (docs/user-journey.md Intent builder). */
 export const VAGUE_WORDS = /\b(fast|faster|quick(ly)?|small|smaller|tiny|compact|low[- ]power|low[- ]cost|cheap|robust|reliable|rugged|lightweight|high[- ]performance|long[- ]lasting|long battery life|efficient|accurate|precise|responsive|easy|simple|good|best|large|big|soon|minimal|sufficient|adequate)\b/i
@@ -50,8 +50,24 @@ export const VAGUE_WORDS = /\b(fast|faster|quick(ly)?|small|smaller|tiny|compact
 const iso = (t: number): string => new Date(t * 1000).toISOString()
 /** A number with its unit: the extractor's limits (3.3 V, ±2 %), or any number followed by a unit word (2 km, 2 years,
  * 2,000 mAh, 15 minutes, IP67 is not one). */
-const NUMBER_UNIT = /(^|[^\w.])[-+±]?\d[\d,]*(\.\d+)?\s?(%|°\s?[CF]|[A-Za-zµΩ]{1,12})\b/
-const quantity = (s: { words: string; limits: readonly unknown[] }): boolean => s.limits.length > 0 || limitsOf(s.words).length > 0 || NUMBER_UNIT.test(s.words)
+const NUMBER_UNIT = /(^|[^\w.])[-+±]?\d[\d,]*(\.\d+)?(\s|-)?(%|°\s?[CF]|(?!(?:and|or|of|to|the|a|an|in|on|at|for|with|from|by|per|than|is|are|if|when)\b)[A-Za-zµΩ]{1,12})\b/
+/** A number written as a word, with a unit after it (two years, ten minutes). */
+const WORD_NUMBER_UNIT = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|hundred|thousand)[\s-](?!(?:and|or|of|to|the|a|an|in|on|at|for|with|from|by|than|is|are)\b)[a-z]{2,12}\b/i
+const quantity = (s: { words: string; limits: readonly unknown[] }): boolean => s.limits.length > 0 || limitsOf(s.words).length > 0 || NUMBER_UNIT.test(s.words) || WORD_NUMBER_UNIT.test(s.words)
+/** A number on its own, not part of a name like ESP32 or IP67. */
+const BARE_NUMBER = /(^|[^\w.])[-+±]?\d[\d,]*(\.\d+)?(?![\w.]*\d)/
+/** A range with one end: "between 10 and" with no number after. */
+const ONE_ENDED = /\bbetween\s+[-+±]?\d[\d,.]*\s*\S*\s+and\b(?!\s+[-+±]?\d)/i
+/** A measurable property named without its value (docs/user-journey.md: every quantity has a number and a unit). */
+const PROPERTY = /\b(battery life|run ?time|lifetime|operating temperature|temperature range|ambient temperature|storage temperature|humidity|(low|high|max(imum)?|min(imum)?|peak|idle|sleep|standby|quiescent) current|current (draw|consumption)|power (draw|consumption|budget)|voltage|board size|enclosure size|size|dimensions|thickness|weight|mass|latency|response time|accuracy|precision|range|update rate|refresh rate|sample rate|sampling rate|data rate|throughput|bandwidth|battery capacity)\b/i
+/** A statement that states a quantity without its number or unit: a bare number, a range with one end, or a measurable
+ * property or a vague size word with no number. A statement that is not about a quantity (24-hour format, the time
+ * shown as HH:MM, one USB-C cable) is not flagged. */
+const needsNumber = (s: { words: string; limits: readonly unknown[] }): boolean => {
+  if (ONE_ENDED.test(s.words)) return true
+  if (quantity(s)) return false
+  return BARE_NUMBER.test(s.words) || PROPERTY.test(s.words) || VAGUE_WORDS.test(s.words)
+}
 /** The five fields of an interface statement, in the order the person reads them. */
 export const INTERFACE_FIELDS = ['type', 'connector', 'protocol', 'rate', 'direction'] as const
 export type InterfaceField = (typeof INTERFACE_FIELDS)[number]
@@ -234,7 +250,7 @@ export function intentView(rows: DesignRows, decisions: readonly DesignDecision[
   for (const s of base) {
     if (s.state === 'rejected') continue
     if (s.kind === 'statement') {
-      if (QUANTITY_TOPICS.has(s.topic) && !quantity(s)) s.flags.push('needs_number')
+      if (QUANTITY_TOPICS.has(s.topic) && needsNumber(s)) s.flags.push('needs_number')
       if (VAGUE_WORDS.test(s.words) && !quantity(s)) s.flags.push('vague')
       if (s.testable === false) s.flags.push('not_testable')
       if (s.topic === 'interfaces' && missingFields(s.interface).length) s.flags.push('interface_incomplete')

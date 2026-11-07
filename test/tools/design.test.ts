@@ -13,7 +13,7 @@ import { merge } from '../../src/core/dbmerge.js'
 import '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../../src/tools/design/decisions.js'
-import { DesignDb, type PinRow, readDesignRows } from '../../src/tools/design/db.js'
+import { DesignDb, type IntentInput, type PinRow, readDesignRows } from '../../src/tools/design/db.js'
 import { architectureView, decidedFields, intentDraft, intentView, interfaceFromWords, linksView, missingFields, ownSignatures, parseNets, pinCheck, pinPlanPrint } from '../../src/tools/design/record.js'
 import { drawingArtifacts, sheetOfSvg, sheetPlaces, svgSizeMm } from '../../src/tools/kicad/export.js'
 import { VerifyDb } from '../../src/tools/verify/db.js'
@@ -62,6 +62,61 @@ describe('design.intent', () => {
     await expect(call('design.intent', { action: 'add', statements: [{ topic: 'compliance', kind: 'unknown', text: 'Which standard.' }] })).rejects.toThrow(/decide_by/)
     const w = await call('design.intent', { action: 'withdraw', id: 'INT-sleep' }) as { statement: { status: string } }
     expect(w.statement.status).toBe('withdrawn')
+  })
+})
+
+describe('Needs a number: only a quantity stated without its number or unit', () => {
+  const flagsOf = (rows: IntentInput[]): Record<string, string[]> => {
+    const dir = freshDb()
+    const d = new DesignDb(dir)
+    d.addIntent(rows)
+    const out = Object.fromEntries(intentView(d.rows(), []).map((s) => [s.id, s.flags]))
+    d.close()
+    return out
+  }
+
+  it('does not flag statements that are not quantities (the desk gadget\'s own words)', () => {
+    const f = flagsOf([
+      { id: 'q1', topic: 'performance', text: 'Time is shown in 24-hour format.' },
+      { id: 'q2', topic: 'performance', text: 'The time zone is set from the web page, and the time follows daylight saving changes.' },
+      { id: 'q3', topic: 'performance', text: 'Until the first NTP sync, the time is shown as "--:--".' },
+      { id: 'q4', topic: 'performance', text: 'Time is shown as HH:MM.' },
+      { id: 'q5', topic: 'performance', text: 'The display shows connected or not connected, plus signal strength in dBm.' },
+      { id: 'q6', topic: 'power', text: 'One USB-C cable powers and programs the gadget.' },
+      { id: 'q7', topic: 'physical', text: 'A 10-bit ADC reads the 5-V rail.' },
+      { id: 'q8', topic: 'power', text: 'Runs two years on one cell.' },
+      { id: 'q9', topic: 'environment', text: 'Indoors only, on a desk.' },
+    ])
+    for (const [id, flags] of Object.entries(f)) expect(flags, id).not.toContain('needs_number')
+  })
+
+  it('flags a bare number, a range with one end, and a measurable property or size word with no number', () => {
+    const f = flagsOf([
+      { id: 'n1', topic: 'performance', text: 'Shows the temperature to within 5 of the real value.' },
+      { id: 'n2', topic: 'build', text: 'At most 500 per run.' },
+      { id: 'n3', topic: 'environment', text: 'Works between 10 °C and room temperature.' },
+      { id: 'n4', topic: 'power', text: 'Low current in sleep.' },
+      { id: 'n5', topic: 'power', text: 'Good battery life.' },
+      { id: 'n6', topic: 'environment', text: 'Operating temperature to be agreed.' },
+      { id: 'n7', topic: 'physical', text: 'Board size to fit the shelf.' },
+      { id: 'n8', topic: 'physical', text: 'Weight matters.' },
+      { id: 'n9', topic: 'performance', text: 'Latency and accuracy as the sensor allows.' },
+      { id: 'n10', topic: 'performance', text: 'Radio range to reach the shed.' },
+      { id: 'n11', topic: 'power', text: 'The voltage comes from the dock.' },
+      { id: 'n12', topic: 'physical', text: 'A small board.' },
+    ])
+    for (const [id, flags] of Object.entries(f)) expect(flags, id).toContain('needs_number')
+  })
+
+  it('a quantity with its number and unit, or a range with both ends, passes', () => {
+    const f = flagsOf([
+      { id: 'ok1', topic: 'environment', text: 'Indoors, 10 to 35 °C.' },
+      { id: 'ok2', topic: 'environment', text: 'Works between 10 and 35 °C.' },
+      { id: 'ok3', topic: 'power', text: 'Sleep current under 50 µA.' },
+      { id: 'ok4', topic: 'build', text: '5 boards per run, under 20 USD each.' },
+      { id: 'ok5', topic: 'performance', text: 'Battery life of 2 years.' },
+    ])
+    for (const [id, flags] of Object.entries(f)) expect(flags, id).not.toContain('needs_number')
   })
 })
 
