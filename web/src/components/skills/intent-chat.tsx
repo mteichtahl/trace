@@ -12,12 +12,17 @@
  *   No job, no branch, no change: Submit intent records them (actions-skills.ts pendingDecisions). Before this the chat
  *   could only offer a Verification job per answer to record them, and the panel stayed at "0 statements" (test log
  *   R5; #7, #11, #84).
+ * - trace makes the same decisions on a statement already in the record that the person makes in the panel, with its
+ *   `decide_intent` tool (decideStatements): Accept, Edit (its words and an interface's five fields) or Reject with a
+ *   reason. Each goes into the draft's decisions, as the panel's do, so it shows there as Not submitted, the quality bar
+ *   checks it and Submit intent records it. Before this the chat offered a Verification job to fix a missing connector
+ *   or unit (test log R12). A topic that does not matter is marked with a "don't care" statement noted in it.
  */
 import { useCallback } from 'react'
 import { z } from 'zod'
 import { Rich } from '@/components/rich'
 import { getPath, useMe, useSetMe } from '@/lib/prefs'
-import type { IntentDraft, InterfaceField } from '@/lib/types-s1'
+import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import type { SkillDef } from './definitions'
 
 /** trace's question for each topic of the intent, asked one at a time. */
@@ -93,6 +98,19 @@ export interface NotedStatement {
   decide_by?: string
 }
 
+/** An interface's five fields, in the panel's order. */
+export const INTERFACE_FIELDS: readonly InterfaceField[] = ['type', 'connector', 'protocol', 'rate', 'direction']
+
+/**
+ * The fields of an interface a person changed, trimmed: what Save sends beside the words. The fields left as shown are
+ * not sent, so trace reads them from the new words (a reworded rate is not held back by the old one). Pure.
+ */
+export function changedFields(shown: Partial<Record<InterfaceField, string>>, typed: Partial<Record<InterfaceField, string>>): Partial<Record<InterfaceField, string>> | undefined {
+  const out: Partial<Record<InterfaceField, string>> = {}
+  for (const f of INTERFACE_FIELDS) { const v = typed[f]?.trim(); if (v && v !== (shown[f] ?? '').trim()) out[f] = v }
+  return Object.keys(out).length ? out : undefined
+}
+
 const Iface = z.object({ type: z.string(), connector: z.string(), protocol: z.string(), rate: z.string(), direction: z.string() }).partial()
 
 /** note_intent's arguments: what the chat model sends. */
@@ -110,7 +128,7 @@ export const NoteIntent = z.object({
 })
 export type NoteIntentArgs = z.input<typeof NoteIntent>
 
-export const NOTE_INTENT_DESCRIPTION = 'Note the intent statements you drafted from the person\'s answers in their Intent builder draft. They show at once in the Draft intent panel as Draft, the quality bar checks them, and the person can accept, edit or reject each there; Submit intent records them. No task, branch or change is needed: never offer start_task to record intent. One statement per line of intent, in the person\'s words where you can, with its number and unit. To reword one you noted before, give its id; to take one back, list it in withdraw. A statement already in the record is the person\'s to decide in the panel.'
+export const NOTE_INTENT_DESCRIPTION = 'Note the intent statements you drafted from the person\'s answers in their Intent builder draft. They show at once in the Draft intent panel as Draft, the quality bar checks them, and the person can accept, edit or reject each there; Submit intent records them. No task, branch or change is needed: never offer start_task to record intent. One statement per line of intent, in the person\'s words where you can, with its number and unit. To reword one you noted before, give its id; to take one back, list it in withdraw. To mark a topic that does not matter for this product (References, say), note one statement in it with kind dont_care and a few words why: a topic counts as answered once it holds a statement. A statement already in the record is changed with decide_intent, not noted again.'
 
 /** A new statement id, as the record's (INT-<6 hex>). */
 export function newStatementId(): string {
@@ -133,7 +151,7 @@ export function noteStatements(proposed: readonly NotedStatement[], args: unknow
   for (const st of a.data.statements) {
     const text = st.text.trim()
     if (text.length < 3) { refused.push(`A ${st.topic} statement has no words.`); continue }
-    if (st.id && record.has(st.id) && !out.some((x) => x.id === st.id)) { refused.push(`${st.id} is in the record: the person accepts, edits or rejects it in the Draft intent panel.`); continue }
+    if (st.id && record.has(st.id) && !out.some((x) => x.id === st.id)) { refused.push(`${st.id} is in the record: change its words or fields, or reject it, with decide_intent.`); continue }
     const id = st.id && out.some((x) => x.id === st.id) ? st.id : newId()
     const iface = st.interface ? Object.fromEntries(Object.entries(st.interface).filter(([, v]) => typeof v === 'string' && v.trim())) as NotedStatement['interface'] : undefined
     const row: NotedStatement = {
@@ -172,4 +190,113 @@ export function withNoted(intent: IntentDraft | undefined, proposed: readonly No
   const answered = [...new Set([...(intent?.answered ?? []), ...add.filter((x) => x.kind !== 'question').map((x) => x.topic)])]
   const next = TOPICS.findIndex((t) => !answered.includes(t))
   return { topic: next === -1 ? TOPICS.length - 1 : next, answered, statements, questions }
+}
+
+// ------------------------------------------------------------------ decisions on the record's statements
+
+/** A person's decision on one statement, kept in the draft until Submit records it (actions-skills pendingDecisions). */
+export interface IntentDecision { statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string; interface?: Partial<Record<InterfaceField, string>> }
+
+/** decide_intent's arguments: what the chat model sends. */
+export const DecideIntent = z.object({
+  decisions: z.array(z.object({
+    statement: z.string().describe('the statement\'s id, as the Intent draft context lists it (INT-…)'),
+    choice: z.enum(['accept', 'edit', 'reject', 'undo']).describe('accept as worded; edit: new words and/or interface fields; reject: with a reason; undo: take back the draft\'s decision on it'),
+    text: z.string().optional().describe('edit: the whole statement in its new words, with its number and unit; leave out to keep the words and set only interface fields'),
+    interface: Iface.optional().describe('edit, an interface statement only: the fields to set (type, connector, protocol, rate, direction). The ones left out are read from the words'),
+    reason: z.string().optional().describe('reject: why, in one line'),
+  })).min(1),
+})
+export type DecideIntentArgs = z.input<typeof DecideIntent>
+
+export const DECIDE_INTENT_DESCRIPTION = 'Change a statement in the person\'s Intent builder draft the way the person does with the Draft intent panel\'s Accept, Edit and Reject: reword it (give a number and unit, make it testable), set an interface\'s missing fields (connector, rate…), reject it with a reason, accept it as worded, or undo a decision. Use it for statements already in the record (from the agents) as well as ones you noted. It goes in the draft at once, shows in the panel as Not submitted, and the quality bar checks it; Submit intent records it as the person\'s decision. No task, branch or change is needed: never offer start_task or a Verification job to fix intent statements. Only make the changes the person asked for or agreed to; say each one back in plain words.'
+
+/** A statement as decide_intent reads it from the panel: its words and an interface's fields as shown. */
+export type ShownStatement = Pick<IntentStatement, 'id' | 'text' | 'interface'>
+
+/**
+ * decide_intent, run by the app on the person's draft: each decision replaces the draft's decision on that statement,
+ * as the panel's Accept, Edit and Reject do (withIntentDecision). An edit keeps the words shown when it gives none,
+ * and its fields add to the ones an earlier edit set; only an interface statement takes fields. A reject needs its
+ * reason. A statement the panel does not show is refused. Pure.
+ */
+export function decideStatements(decisions: readonly IntentDecision[], args: unknown, shown: ReadonlyMap<string, ShownStatement>): { decisions: IntentDecision[]; decided: { statement: string; choice: string; words?: string; interface?: Partial<Record<InterfaceField, string>>; reason?: string }[]; refused: string[] } {
+  const a = DecideIntent.safeParse(args)
+  if (!a.success) return { decisions: [...decisions], decided: [], refused: [`The decisions could not be read: ${a.error.issues[0]?.message ?? 'bad arguments'}.`] }
+  let out = [...decisions]
+  const decided: ReturnType<typeof decideStatements>['decided'] = []
+  const refused: string[] = []
+  const put = (statement: string, d: Omit<IntentDecision, 'statement'> | null) => { out = [...out.filter((x) => x.statement !== statement), ...(d ? [{ statement, ...d }] : [])] }
+  for (const d of a.data.decisions) {
+    const st = shown.get(d.statement)
+    if (!st) { refused.push(`${d.statement} is not in the Draft intent panel: use the ids the Intent draft context lists.`); continue }
+    const before = out.find((x) => x.statement === d.statement)
+    if (d.choice === 'undo') {
+      if (before) { put(d.statement, null); decided.push({ statement: d.statement, choice: 'undo' }) }
+      continue
+    }
+    if (d.choice === 'accept') { put(d.statement, { choice: 'accept' }); decided.push({ statement: d.statement, choice: 'accept' }); continue }
+    if (d.choice === 'reject') {
+      const reason = d.reason?.trim() ?? ''
+      if (reason.length < 3) { refused.push(`Rejecting ${d.statement} needs a reason in a few words.`); continue }
+      put(d.statement, { choice: 'reject', reason })
+      decided.push({ statement: d.statement, choice: 'reject', reason })
+      continue
+    }
+    // edit: the words as they stand (an earlier edit's) when none are given
+    const text = d.text?.trim() || (before?.choice === 'edit' && before.text ? before.text : st.text)
+    if (text.length < 3) { refused.push(`${d.statement} needs its words.`); continue }
+    const typed = Object.fromEntries(Object.entries(d.interface ?? {}).filter(([, v]) => typeof v === 'string' && v.trim())) as Partial<Record<InterfaceField, string>>
+    if (Object.keys(typed).length && !st.interface) { refused.push(`${d.statement} is not an interface statement: put the detail in its words.`); continue }
+    const fields = st.interface ? changedFields(st.interface, { ...(before?.choice === 'edit' ? before.interface : {}), ...typed }) : undefined
+    if (text === st.text && !fields) { refused.push(`${d.statement}: nothing to change; it reads so already.`); continue }
+    put(d.statement, { choice: 'edit', text, ...(fields ? { interface: fields } : {}) })
+    decided.push({ statement: d.statement, choice: 'edit', words: text, ...(fields ? { interface: fields } : {}) })
+  }
+  return { decisions: out, decided, refused }
+}
+
+/** What decide_intent answers the chat. Pure. */
+export function decidedAnswer(r: Pick<ReturnType<typeof decideStatements>, 'decided' | 'refused'>) {
+  return {
+    decided: r.decided, ...(r.refused.length ? { refused: r.refused } : {}),
+    note: 'In the person\'s Draft intent panel now, marked Not submitted, and the quality bar checks it. Submit intent records it as the person\'s decision, as the panel\'s own edits. Nothing needs to be started.',
+  }
+}
+
+/**
+ * The statements as the panel shows them, with the draft's edits laid over them at once: an edit's interface fields
+ * are shown as set, and the "Missing …" flag names only the fields still empty (cleared when none are). The record's
+ * view says the same once the saved draft is read again; until then the panel kept "Connector: not given" after Save
+ * (test log R14). Pure.
+ */
+export function withDecided(intent: IntentDraft | undefined, decisions: readonly IntentDecision[]): IntentDraft | undefined {
+  if (!intent) return intent
+  const edits = new Map(decisions.filter((d) => d.choice === 'edit' && d.interface && Object.keys(d.interface).length).map((d) => [d.statement, d.interface!]))
+  if (!edits.size) return intent
+  let changed = false
+  const statements = intent.statements.map((st) => {
+    const f = edits.get(st.id)
+    if (!f || !st.interface) return st
+    const iface = { ...st.interface, ...f }
+    const missing = INTERFACE_FIELDS.filter((k) => !iface[k]?.trim())
+    const wasMissing = !!st.flag?.startsWith('Missing ')
+    const flag = wasMissing ? (missing.length ? { flag: `Missing ${missing.join(', ')}` } : {}) : st.flag ? { flag: st.flag } : {}
+    const state = wasMissing && !missing.length ? 'draft' as const : st.state
+    changed = true
+    const { flag: _old, ...rest } = st
+    return { ...rest, interface: iface, missing, state, ...flag }
+  })
+  return changed ? { ...intent, statements } : intent
+}
+
+/**
+ * The interfaces check as the panel shows the draft: met once every interface statement on screen has its five
+ * fields, not met while one lacks any; undefined (the record's verdict stands) when no statement shows its fields.
+ * Pure.
+ */
+export function interfacesCheck(statements: readonly Pick<IntentStatement, 'interface' | 'missing'>[]): 'met' | 'not_met' | undefined {
+  const ifaces = statements.filter((s) => s.interface)
+  if (!ifaces.length) return undefined
+  return ifaces.some((s) => (s.missing ?? INTERFACE_FIELDS.filter((k) => !s.interface?.[k]?.trim())).length) ? 'not_met' : 'met'
 }
