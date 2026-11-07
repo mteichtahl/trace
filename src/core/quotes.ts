@@ -12,6 +12,13 @@
  *           when it was recorded (its run and total), a link or reference, the person's why, and the order placed
  *           against it (order.record links the newest quote of the revision with no order yet, or the one named)
  *
+ *   quote_notes (journey table)
+ *           what happened to a quote after it was recorded, each kept (quote.correct, quote.withdraw, quote.confirm):
+ *           corrected by a new quote with what was wrong (the old values stay to see), withdrawn as a mistake with the
+ *           reason, or an agent's quote confirmed by the person into the journey record, so an order can be linked to
+ *           it. A corrected or withdrawn quote is kept out of the totals, the newest quote and the changes between
+ *           quotes; an agent's quote that was confirmed is shown once, as the person's copy (test-esp32 #241).
+ *
  * What changed between two quotes is worked out on read (quoteChanges): the total's change in amount and per cent,
  * and what trace can tell moved: the quantity, the options, the revision, the parts at the checked prices between
  * the two parts checks, and each breakdown line. The person's why is shown beside it. Pure over the rows.
@@ -57,7 +64,18 @@ export interface QuoteRow {
   link: string | null; why: string | null; orderId: string | null; by: string; at: number
   /** the person's own, or an agent's from the person's words (`said`) */
   source: 'person' | 'agent'; said: string | null
+  /** the quote this one corrects, with what was wrong (quote_notes) */
+  corrects?: { id: string; reason: string | null; by: string } | null
+  /** the correction that took this one's place */
+  correctedBy?: string | null
+  /** withdrawn as a mistake: kept, but out of the totals */
+  withdrawn?: { reason: string; by: string; at: number } | null
+  /** the agent's quote this one confirms into the journey record, with the person's words it was from */
+  confirms?: { id: string; said: string | null; by: string } | null
 }
+
+/** A quote that counts: not corrected by another and not withdrawn. */
+export const live = (q: Pick<QuoteRow, 'correctedBy' | 'withdrawn'>): boolean => !q.correctedBy && !q.withdrawn
 
 /** What a quote is for unless the person says otherwise: the journey's revision and build plan, and the record's runs. */
 export interface QuoteDefaults {
@@ -90,10 +108,21 @@ function rowOf(r: Record<string, unknown>, source: 'person' | 'agent'): QuoteRow
 /** Oldest first: by the quote's date, then when it was recorded. */
 const byTime = (a: QuoteRow, b: QuoteRow): number => (a.on === b.on ? a.at - b.at : a.on < b.on ? -1 : 1)
 
-/** Every quote in the journey record, oldest first (none for a record that predates quotes). */
+/** Every quote in the journey record, oldest first, with what happened to it since (none for a record that predates quotes). */
 export function loadQuotes(db: DatabaseSync): QuoteRow[] {
   if (!has(db, 'quotes')) return []
-  return (db.prepare('SELECT * FROM quotes').all() as Record<string, unknown>[]).map((r) => rowOf(r, 'person')).sort(byTime)
+  const rows = (db.prepare('SELECT * FROM quotes').all() as Record<string, unknown>[]).map((r) => rowOf(r, 'person'))
+  const byId = new Map(rows.map((q) => [q.id, q]))
+  const notes = has(db, 'quote_notes') ? db.prepare('SELECT * FROM quote_notes ORDER BY at, id').all() as Record<string, unknown>[] : []
+  for (const n of notes) {
+    const about = byId.get(String(n.quote_id))
+    const next = n.by_quote ? byId.get(String(n.by_quote)) : undefined
+    const reason = str(n.reason)
+    if (n.kind === 'withdrawn' && about) about.withdrawn = { reason: reason ?? '', by: String(n.by), at: Number(n.at) }
+    if (n.kind === 'corrected' && about && next) { about.correctedBy = next.id; next.corrects = { id: about.id, reason, by: String(n.by) } }
+    if (n.kind === 'confirmed' && next) next.confirms = { id: String(n.quote_id), said: reason, by: String(n.by) }
+  }
+  return rows.sort(byTime)
 }
 
 /** Every quote an agent recorded from a person's words (the agents' facts), oldest first. */
@@ -102,11 +131,14 @@ export function loadAgentQuotes(db: DatabaseSync): QuoteRow[] {
   return (db.prepare('SELECT * FROM agent_quotes').all() as Record<string, unknown>[]).map((r) => rowOf(r, 'agent')).sort(byTime)
 }
 
-/** The person's quotes and the agents' together, oldest first. */
-export const allQuotes = (person: readonly QuoteRow[], agent: readonly QuoteRow[]): QuoteRow[] => [...person, ...agent].sort(byTime)
+/** The person's quotes and the agents' together, oldest first: an agent's the person confirmed is there once, as the person's. */
+export function allQuotes(person: readonly QuoteRow[], agent: readonly QuoteRow[]): QuoteRow[] {
+  const confirmed = new Set(person.flatMap((q) => (q.confirms ? [q.confirms.id] : [])))
+  return [...person, ...agent.filter((q) => !confirmed.has(q.id))].sort(byTime)
+}
 
-/** The newest quote of a revision, or null. */
-export const latestQuote = (quotes: readonly QuoteRow[], revision: string): QuoteRow | null => [...quotes].filter((q) => q.revision === revision).sort(byTime).at(-1) ?? null
+/** The newest quote of a revision that counts (not corrected or withdrawn), or null. */
+export const latestQuote = (quotes: readonly QuoteRow[], revision: string): QuoteRow | null => [...quotes].filter((q) => q.revision === revision && live(q)).sort(byTime).at(-1) ?? null
 
 /**
  * What a quote is for by default, from the record database: the journey's revision and build plan, the release
@@ -150,7 +182,7 @@ export function quoteRuns(db: DatabaseSync): Pick<QuoteDefaults, 'options' | 'op
  * package's every time read as "Options changed" back to the package's values after a quote with the person's own.
  */
 export function carryOptions(d: QuoteDefaults, before: readonly QuoteRow[]): QuoteDefaults {
-  const prev = before.filter((x) => x.revision === d.revision).sort(byTime).at(-1)
+  const prev = before.filter((x) => x.revision === d.revision && live(x)).sort(byTime).at(-1)
   return prev && prev.options.length ? { ...d, options: prev.options, optionsFrom: prev.optionsFrom } : d
 }
 
@@ -191,7 +223,7 @@ export function recordQuote(db: DatabaseSync, input: QuoteInput, d: QuoteDefault
     db.prepare(`INSERT INTO quotes (${COLS}, by, at, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...values(id, q) as never[], by.label, t, t)
     // the quote before it in time (a quote can be entered late, with its own date)
     const all = loadQuotes(db)
-    const before = all.slice(0, all.findIndex((x) => x.id === id)).filter((x) => x.revision === q.revision).at(-1)
+    const before = all.slice(0, all.findIndex((x) => x.id === id)).filter((x) => x.revision === q.revision && live(x)).at(-1)
     decide(db, {
       kind: 'quote.recorded', stage: 'fabricate', ref: id, by: by.label,
       summary: `${q.fab} quote recorded: ${amount(q.total, q.currency)} for ${q.quantity} boards of ${q.revision}, quoted ${q.on}${before && before.currency === q.currency ? ` (${signed(q.total - before.total, q.currency)} on the quote before)` : ''}.`,
@@ -222,18 +254,119 @@ export function recordAgentQuote(db: DatabaseSync, input: QuoteInput & { said: s
 
 /**
  * Link an order to the quote it was placed against: the one named, else the newest quote of the order's revision
- * with no order yet. Returns the quote linked, or null when there is none. Only the person's quotes are linked (the
- * API may not write the agents' facts): a quote an agent recorded is entered by the person to link it.
+ * with no order yet that counts. Returns the quote linked, or null when there is none. Only the journey record's quotes
+ * are linked (the API may not write the agents' facts): a quote an agent recorded is confirmed by the person first.
  */
 export function linkOrderQuote(db: DatabaseSync, order: Pick<OrderRow, 'id' | 'revision'>, quote?: string | undefined): QuoteRow | null {
   const qs = loadQuotes(db)
-  const q = quote ? qs.find((x) => x.id === quote) : qs.filter((x) => x.revision === order.revision && (x.orderId === null || x.orderId === order.id)).at(-1)
-  if (quote && !q) throw new JourneyError(`No quote ${quote} is recorded.`)
+  // an agent's quote the person confirmed is linked by either id
+  const q = quote ? qs.find((x) => x.id === quote || x.confirms?.id === quote) : qs.filter((x) => x.revision === order.revision && live(x) && (x.orderId === null || x.orderId === order.id)).at(-1)
+  if (quote && !q) throw new JourneyError(`No quote ${quote} is in the journey record. A quote an agent recorded is confirmed first (quote.confirm).`)
   if (!q) return null
+  if (q.correctedBy) throw new JourneyError(`Quote ${q.id} was corrected by ${q.correctedBy}: link that one.`)
+  if (q.withdrawn) throw new JourneyError(`Quote ${q.id} was withdrawn (${q.withdrawn.reason}).`)
   if (q.orderId === order.id) return q
   if (q.orderId !== null) throw new JourneyError(`Quote ${q.id} is already linked to another order.`)
   db.prepare('UPDATE quotes SET order_id=?, updated=? WHERE id=?').run(order.id, now(), q.id)
   return { ...q, orderId: order.id }
+}
+
+// ------------------------------------------------------------------ correcting, withdrawing, confirming
+
+const note = (db: DatabaseSync, n: { quote: string; kind: 'corrected' | 'withdrawn' | 'confirmed'; byQuote: string | null; reason: string | null; by: string }): void => {
+  db.prepare('INSERT INTO quote_notes (id, quote_id, kind, by_quote, reason, by, at) VALUES (?,?,?,?,?,?,?)').run(`n${randomUUID().replaceAll('-', '').slice(0, 15)}`, n.quote, n.kind, n.byQuote, n.reason, n.by, now())
+}
+
+/** A quote of the journey record by its id, or by the id of the agent's quote it confirms. */
+const findQuote = (db: DatabaseSync, id: string): QuoteRow | undefined => loadQuotes(db).find((x) => x.id === id || x.confirms?.id === id)
+
+const said = (q: Pick<QuoteRow, 'on' | 'total' | 'currency'>): string => `${amount(q.total, q.currency)} of ${q.on}`
+
+/** Copy an agent's quote into the journey record as the person's, kept with the words it was from. Logged. */
+function adopt(db: DatabaseSync, a: QuoteRow, by: Signer): QuoteRow {
+  const id = newId()
+  // the agent's own time, so it keeps its place among the quotes
+  db.prepare(`INSERT INTO quotes (${COLS}, by, at, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...values(id, a) as never[], a.by, a.at, now())
+  note(db, { quote: a.id, kind: 'confirmed', byQuote: id, reason: a.said, by: by.label })
+  decide(db, { kind: 'quote.confirmed', stage: 'fabricate', ref: id, by: by.label, summary: `${by.label} confirmed the ${a.fab} quote ${a.by} recorded from their words: ${said(a)} for ${a.quantity} boards of ${a.revision}.` })
+  return findQuote(db, id)!
+}
+
+/**
+ * Confirm a quote an agent recorded from the person's words into the journey record, so an order can be linked to it.
+ * The agent's stays in its facts; the screens show the person's copy in its place. Confirming twice is a no-op.
+ */
+export function confirmAgentQuote(db: DatabaseSync, id: string, agent: readonly QuoteRow[], by: Signer): QuoteRow {
+  const had = findQuote(db, id)
+  if (had) return had
+  const a = agent.find((x) => x.id === id)
+  if (!a) throw new JourneyError(`No quote ${id} is recorded by an agent.`)
+  let out: QuoteRow | undefined
+  transaction(db, () => { out = adopt(db, a, by) })
+  return out!
+}
+
+/**
+ * Correct a quote that was entered wrong: a new quote takes its place, for the same revision and parts check, linked to
+ * the order the old one was (if any). The old one is kept with its values, marked corrected, out of the totals. What is
+ * not given is the old quote's. An agent's quote is confirmed first, then corrected.
+ */
+export function correctQuote(db: DatabaseSync, id: string, input: QuoteInput & { reason?: string | undefined }, agent: readonly QuoteRow[], by: Signer): QuoteRow {
+  let out: QuoteRow | undefined
+  transaction(db, () => {
+    const a = agent.find((x) => x.id === id)
+    const old = findQuote(db, id) ?? (a ? adopt(db, a, by) : undefined)
+    if (!old) throw new JourneyError(`No quote ${id} is recorded.`)
+    if (old.correctedBy) throw new JourneyError(`Quote ${old.id} was already corrected by ${old.correctedBy}: correct that one.`)
+    if (old.withdrawn) throw new JourneyError(`Quote ${old.id} was withdrawn: record a new quote instead.`)
+    const d: QuoteDefaults = { revision: old.revision, fab: old.fab, currency: old.currency, quantity: old.quantity, options: old.options, optionsFrom: old.optionsFrom, partsRun: old.partsRun, partsTotal: old.partsTotal }
+    const q = quoteOf({
+      on: input.on ?? old.on, total: input.total, currency: input.currency ?? old.currency, quantity: input.quantity ?? old.quantity,
+      lines: input.lines ?? old.lines, options: input.options, link: input.link ?? old.link ?? undefined, why: input.why ?? old.why ?? undefined,
+    }, d)
+    const key = (x: Pick<QuoteRow, 'on' | 'total' | 'currency' | 'quantity' | 'lines' | 'options' | 'link' | 'why'>): string => JSON.stringify([x.on, x.total, x.currency, x.quantity, x.lines, x.options, x.link, x.why])
+    if (key(q) === key(old)) throw new JourneyError('Nothing changed: give the figures as they should be.')
+    const nid = newId()
+    const t = now()
+    db.prepare(`INSERT INTO quotes (${COLS}, by, at, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...values(nid, q) as never[], by.label, t, t)
+    // the order placed against the old one is placed against its correction
+    if (old.orderId) {
+      db.prepare('UPDATE quotes SET order_id=NULL, updated=? WHERE id=?').run(t, old.id)
+      db.prepare('UPDATE quotes SET order_id=? WHERE id=?').run(old.orderId, nid)
+    }
+    const reason = input.reason?.trim() || null
+    note(db, { quote: old.id, kind: 'corrected', byQuote: nid, reason, by: by.label })
+    decide(db, {
+      kind: 'quote.corrected', stage: 'fabricate', ref: nid, by: by.label,
+      summary: `${q.fab} quote of ${old.on} corrected: ${amount(old.total, old.currency)} to ${amount(q.total, q.currency)}${reason ? ` (${reason})` : ''}.`,
+      detail: { quote: old.id, total: q.total, was: old.total, currency: q.currency, ...(reason ? { reason } : {}) },
+    })
+    out = findQuote(db, nid)
+  })
+  return out!
+}
+
+/**
+ * Withdraw a quote recorded by mistake, with the reason: it is kept and shown, but out of the totals, the newest quote
+ * and the changes between quotes. A quote an order was placed against is corrected, not withdrawn.
+ */
+export function withdrawQuote(db: DatabaseSync, id: string, reason: string, agent: readonly QuoteRow[], by: Signer): QuoteRow {
+  const why = reason.trim()
+  if (why.length < 3) throw new JourneyError('Say why the quote is withdrawn (for example, "entered for the wrong revision").')
+  let out: QuoteRow | undefined
+  transaction(db, () => {
+    const a = agent.find((x) => x.id === id)
+    const q = findQuote(db, id) ?? (a ? adopt(db, a, by) : undefined)
+    if (!q) throw new JourneyError(`No quote ${id} is recorded.`)
+    if (q.withdrawn) { out = q; return }
+    if (q.correctedBy) throw new JourneyError(`Quote ${q.id} was corrected by ${q.correctedBy}: withdraw that one if it is a mistake too.`)
+    if (q.orderId) throw new JourneyError(`An order was placed against quote ${q.id}: correct it instead of withdrawing it.`)
+    note(db, { quote: q.id, kind: 'withdrawn', byQuote: null, reason: why, by: by.label })
+    db.prepare('UPDATE quotes SET updated=? WHERE id=?').run(now(), q.id)
+    decide(db, { kind: 'quote.withdrawn', stage: 'fabricate', ref: q.id, by: by.label, summary: `${q.fab} quote ${said(q)} withdrawn: ${why}.`, detail: { total: q.total, currency: q.currency, reason: why } })
+    out = findQuote(db, q.id)
+  })
+  return out!
 }
 
 // ------------------------------------------------------------------ what changed between two quotes
@@ -297,22 +430,44 @@ export interface QuoteView {
   link: string | null; why: string | null; by: string
   /** recorded by an agent from the person's words */
   said?: string
-  /** the change from the quote before (oldest first), with what trace can tell moved; null for the first */
+  /** an agent's, not yet in the journey record: the person confirms it to link an order to it (quote.confirm) */
+  agent?: true
+  /** an agent's the person confirmed, by whom */
+  confirmedBy?: string
+  /** the quote it corrects: its date and total, and what was wrong */
+  corrects?: { id: string; on: string; total: number; reason: string | null; by: string }
+  /** corrected by another quote: kept to see, out of the totals */
+  correctedBy?: string
+  /** withdrawn as a mistake: kept to see, out of the totals */
+  withdrawn?: { reason: string; by: string; at: string }
+  /** the change from the quote before that counts (oldest first), with what trace can tell moved; null for the first */
   change: QuoteChange | null
   /** the order placed against it, and what was paid against the quote */
   order: { id: string; number: string; paid: number | null; difference: number | null } | null
 }
 
-/** Every quote as the screens and agents read it, newest first, each with its change from the one before. Pure. */
+/**
+ * Every quote as the screens and agents read it, newest first, each that counts with its change from the one before
+ * that counts; a corrected or withdrawn one is kept with no change. Pure.
+ */
 export function quoteViews(quotes: readonly QuoteRow[], orders: readonly Pick<OrderRow, 'id' | 'number' | 'paid' | 'currency'>[]): QuoteView[] {
   const sorted = [...quotes].sort(byTime)
-  return sorted.map((q, i) => {
+  const counted = sorted.filter((q) => live(q))
+  const byId = new Map(sorted.map((q) => [q.id, q]))
+  return sorted.map((q) => {
     const o = q.orderId ? orders.find((x) => x.id === q.orderId) ?? null : null
+    const i = counted.indexOf(q)
+    const was = q.corrects ? byId.get(q.corrects.id) : undefined
     return {
       id: q.id, on: q.on, at: new Date(q.at * 1000).toISOString(), total: q.total, currency: q.currency, quantity: q.quantity, revision: q.revision, fab: q.fab,
       lines: q.lines.map((l) => ({ ...l, label: QUOTE_LINE_WORDS[l.kind] })), options: q.options, optionsFrom: q.optionsFrom, partsRun: q.partsRun,
       link: q.link, why: q.why, by: q.by, ...(q.source === 'agent' && q.said ? { said: q.said } : {}),
-      change: i > 0 ? quoteChanges(sorted[i - 1]!, q) : null,
+      ...(q.source === 'agent' ? { agent: true as const } : {}),
+      ...(q.confirms ? { confirmedBy: q.confirms.by, ...(q.confirms.said ? { said: q.confirms.said } : {}) } : {}),
+      ...(q.corrects && was ? { corrects: { id: was.id, on: was.on, total: was.total, reason: q.corrects.reason, by: q.corrects.by } } : {}),
+      ...(q.correctedBy ? { correctedBy: q.correctedBy } : {}),
+      ...(q.withdrawn ? { withdrawn: { reason: q.withdrawn.reason, by: q.withdrawn.by, at: new Date(q.withdrawn.at * 1000).toISOString() } } : {}),
+      change: i > 0 ? quoteChanges(counted[i - 1]!, q) : null,
       order: o ? { id: o.id, number: o.number, paid: o.paid, difference: o.paid !== null && o.currency === q.currency ? cents(o.paid - q.total) : null } : null,
     }
   }).reverse()

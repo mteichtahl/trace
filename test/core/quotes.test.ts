@@ -9,7 +9,8 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { applyAgentFactsSchema } from '../../src/core/agent-facts.js'
 import { loadJourney, recordOrder, startJourney } from '../../src/core/journey.js'
 import {
-  type QuoteDefaults, type QuoteRow, linkOrderQuote, loadAgentQuotes, loadQuotes, quoteChanges, quoteDefaults, quoteViews, recordAgentQuote, recordQuote,
+  type QuoteDefaults, type QuoteRow, allQuotes, confirmAgentQuote, correctQuote, latestQuote, linkOrderQuote, loadAgentQuotes, loadQuotes, quoteChanges, quoteDefaults,
+  quoteViews, recordAgentQuote, recordQuote, withdrawQuote,
 } from '../../src/core/quotes.js'
 import { open, openProject } from '../../src/core/store.js'
 
@@ -126,5 +127,93 @@ describe('what changed between two quotes', () => {
     expect(quoteChanges(row({}), row({ total: 104 }))).toEqual({ amount: 4, pct: 4, reasons: [] })
     expect(quoteChanges(row({ lines: [{ kind: 'pcb', amount: 10 }] }), row({ lines: [{ kind: 'pcb', amount: 10 }, { kind: 'stencil', amount: 7 }] })).reasons).toEqual(['Stencil +US$7.00 (new).'])
     expect(quoteChanges(row({}), row({ currency: 'EUR', total: 90 }))).toEqual({ amount: null, pct: null, reasons: ['In EUR, not USD: the change is not worked out across currencies.'] })
+  })
+})
+
+describe('correcting, withdrawing and confirming a quote (#241)', () => {
+  it('a correction takes the old quote\'s place, keeps the old values to see, and moves its order', () => {
+    const db = project()
+    const a = recordQuote(db, { on: '2026-11-01', total: 120, why: 'First quote.' }, D, by)
+    const b = recordQuote(db, { on: '2026-11-03', total: 1105, why: 'Cheaper shipping.' }, D, by)
+    const { order } = recordOrder(db, { number: 'Y1-0001', paid: 113, ship_date: null }, by)
+    linkOrderQuote(db, order)
+    // a typo: 1105 for 110.50; what is not given stays the old quote's (date, why, options)
+    const c = correctQuote(db, b.id, { total: 110.5, reason: 'Typed 1105 for 110.50.' }, [], by)
+    expect(c).toMatchObject({ on: '2026-11-03', total: 110.5, why: 'Cheaper shipping.', options: D.options, orderId: order.id, corrects: { id: b.id, reason: 'Typed 1105 for 110.50.' } })
+    const qs = loadQuotes(db)
+    expect(qs.find((q) => q.id === b.id)).toMatchObject({ total: 1105, correctedBy: c.id, orderId: null })
+    expect(latestQuote(qs, 'A')?.id).toBe(c.id)
+    const v = quoteViews(qs, [order])
+    expect(v.map((q) => q.id)).toEqual([c.id, b.id, a.id])
+    // the change is from the quote that counts before it, and the corrected one has none
+    expect(v[0]).toMatchObject({ change: { amount: -9.5 }, corrects: { id: b.id, on: '2026-11-03', total: 1105 }, order: { number: 'Y1-0001', difference: 2.5 } })
+    expect(v[1]).toMatchObject({ correctedBy: c.id, change: null, order: null })
+    expect(loadJourney(db)!.decisions.find((d) => d.kind === 'quote.corrected')?.summary).toBe('JLCPCB quote of 2026-11-03 corrected: US$1105.00 to US$110.50 (Typed 1105 for 110.50.).')
+    expect(() => correctQuote(db, b.id, { total: 99 }, [], by)).toThrow(/already corrected/)
+    expect(() => correctQuote(db, c.id, { total: 110.5 }, [], by)).toThrow(/Nothing changed/)
+    // the options can be corrected too
+    const d = correctQuote(db, c.id, { total: 110.5, options: [{ option: 'Layers', value: '4' }] }, [], by)
+    expect(d).toMatchObject({ options: [{ option: 'Layers', value: '4' }], optionsFrom: null })
+    db.close()
+  })
+
+  it('a withdrawn quote is kept with its reason, out of the totals; one an order was placed against is corrected instead', () => {
+    const db = project()
+    const a = recordQuote(db, { on: '2026-11-01', total: 120 }, D, by)
+    const b = recordQuote(db, { on: '2026-11-02', total: 999, why: 'oops' }, D, by)
+    expect(() => withdrawQuote(db, b.id, ' ', [], by)).toThrow(/Say why/)
+    const w = withdrawQuote(db, b.id, 'Entered for the wrong project.', [], by)
+    expect(w.withdrawn).toMatchObject({ reason: 'Entered for the wrong project.', by: 'ann@example.com' })
+    const qs = loadQuotes(db)
+    expect(latestQuote(qs, 'A')?.id).toBe(a.id)
+    const v = quoteViews(qs, [])
+    expect(v[0]).toMatchObject({ id: b.id, total: 999, withdrawn: { reason: 'Entered for the wrong project.' }, change: null })
+    // the next quote is compared with the one that counts, and its options carry from it
+    const c = recordQuote(db, { on: '2026-11-03', total: 118 }, D, by)
+    expect(quoteViews(loadQuotes(db), [])[0]).toMatchObject({ id: c.id, change: { amount: -2 } })
+    expect(loadJourney(db)!.decisions.find((d) => d.kind === 'quote.recorded' && d.ref === c.id)?.summary).toMatch(/−US\$2\.00 on the quote before/)
+    // an order goes to the newest that counts
+    const { order } = recordOrder(db, { number: 'Y1-0002', paid: 118, ship_date: null }, by)
+    expect(linkOrderQuote(db, order)?.id).toBe(c.id)
+    expect(() => linkOrderQuote(db, { id: 'o2', revision: 'A' }, b.id)).toThrow(/withdrawn/)
+    expect(() => withdrawQuote(db, c.id, 'Not a mistake', [], by)).toThrow(/correct it instead/)
+    db.close()
+  })
+
+  it('an agent\'s quote confirmed by the person is in the journey record once, and an order links to it', () => {
+    const fdb = open(join(dir, 'facts-confirm.db'))
+    applyAgentFactsSchema(fdb)
+    const ag = recordAgentQuote(fdb, { on: '2026-11-04', total: 182.4, said: 'The JLCPCB cart says US$182.40 with DHL.' }, D, { agent: 'worker', label: 'the worker agent', jobId: 'j1' })
+    const aq = loadAgentQuotes(fdb)
+    fdb.close()
+    const db = project()
+    // before: an order cannot be linked to it
+    expect(() => linkOrderQuote(db, { id: 'o', revision: 'A' }, ag.id)).toThrow(/confirmed first/)
+    const c = confirmAgentQuote(db, ag.id, aq, by)
+    expect(c).toMatchObject({ total: 182.4, by: 'the worker agent', source: 'person', confirms: { id: ag.id, said: 'The JLCPCB cart says US$182.40 with DHL.', by: 'ann@example.com' } })
+    expect(confirmAgentQuote(db, ag.id, aq, by).id).toBe(c.id)
+    const all = allQuotes(loadQuotes(db), aq)
+    expect(all.map((q) => q.id)).toEqual([c.id])
+    expect(quoteViews(all, [])[0]).toMatchObject({ confirmedBy: 'ann@example.com', said: 'The JLCPCB cart says US$182.40 with DHL.' })
+    expect(quoteViews(aq, [])[0]).toMatchObject({ agent: true })
+    const { order } = recordOrder(db, { number: 'Y1-0003', paid: 182.4, ship_date: null }, by)
+    expect(linkOrderQuote(db, order, ag.id)?.id).toBe(c.id)
+    expect(loadJourney(db)!.decisions.some((d) => d.kind === 'quote.confirmed')).toBe(true)
+    db.close()
+  })
+
+  it('withdrawing an agent\'s quote confirms it first, so it is kept with the reason', () => {
+    const fdb = open(join(dir, 'facts-withdraw.db'))
+    applyAgentFactsSchema(fdb)
+    const ag = recordAgentQuote(fdb, { on: '2026-11-04', total: 82.4, said: 'JLCPCB says 82.40 for five.' }, D, { agent: 'worker', label: 'the worker agent', jobId: 'j1' })
+    const aq = loadAgentQuotes(fdb)
+    fdb.close()
+    const db = project()
+    const w = withdrawQuote(db, ag.id, 'That was the other board.', aq, by)
+    expect(w).toMatchObject({ confirms: { id: ag.id }, withdrawn: { reason: 'That was the other board.' } })
+    const all = allQuotes(loadQuotes(db), aq)
+    expect(all).toHaveLength(1)
+    expect(latestQuote(all, 'A')).toBeNull()
+    db.close()
   })
 })
