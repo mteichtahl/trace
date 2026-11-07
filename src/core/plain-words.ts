@@ -118,8 +118,17 @@ export function plainLine(line: string): string | null {
  * A job's request as its card's one line: its first plain sentence, cut at a word (test-esp32 #25: the title was the
  * prompt's first 200 characters, ending "use the a"). The request itself stays where Watch shows it.
  */
+/**
+ * A request's opening that says why the job was started, not what it does: "The requirements baseline gate was signed:
+ * the project is in Architect." (test-esp32-run2 R28: the Architect job's card was titled with it), "The project is in
+ * Architect."
+ */
+const WHY_STARTED = /^(?:The [^.:]+ (?:gate was signed|is accepted)(?::[^.]*)?|The project is in [A-Z][\w-]*)\.?$/
+
 export function plainTitle(request: string, max = 100): string {
-  const first = sentences(request).find((s) => !internal(s)) ?? sentences(request)[0] ?? request
+  const all = sentences(request)
+  const own = all.filter((s) => !WHY_STARTED.test(s.trim()))
+  const first = own.find((s) => !internal(s)) ?? all.find((s) => !internal(s)) ?? all[0] ?? request
   return atWord(stripped(first), max).replace(/\.$/, '')
 }
 

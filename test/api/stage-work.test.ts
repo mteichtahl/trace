@@ -4,13 +4,29 @@
  * working on it.
  */
 import { describe, expect, it } from 'vitest'
-import { STAGE_WORK, ownedWork } from '../../src/api/actions-journey.js'
+import { FOLLOW_ON, STAGE_WORK, ownedWork } from '../../src/api/actions-journey.js'
+import { jobHeadline, plainTitle } from '../../src/core/plain-words.js'
 import { SPECIALISTS } from '../../src/agents/index.js'
 import { API_HIDDEN_TOOLS } from '../../src/agents/runtime/tool.js'
 import { SHARED_TOOLS } from '../../src/agents/specialist.js'
 import { GATES } from '../../src/core/journey.js'
 
 describe('STAGE_WORK', () => {
+  // test-esp32-run2 R28: the Architect job's card read "The requirements baseline gate was signed: the project is in
+  // Architect", the signature that started it, not what it does
+  it('names each stage\'s job by what it does, never by the signature that started it', () => {
+    expect(STAGE_WORK.architect?.headline).toBe('Proposing architecture options')
+    for (const [stage, w] of [...Object.entries(STAGE_WORK), ...Object.entries(FOLLOW_ON)]) {
+      expect(jobHeadline({ request: w!.request, headline: w!.headline }), stage).not.toMatch(/was signed|is accepted|the project is in/i)
+      // a row started before it had one: its request's first sentence that says what to do
+      expect(plainTitle(w!.request), stage).not.toMatch(/was signed|is accepted|the project is in/i)
+    }
+    expect(plainTitle(STAGE_WORK.architect!.request)).toBe('Propose the architecture for Architecture choice')
+    const owned = ownedWork('architect', 'architect.stock', 'Every key part is in stock for the build quantity, or its exception is signed.')
+    expect(owned.headline).toBe('Architect: every key part is in stock for the build quantity, or its exception is signed')
+    expect(plainTitle(owned.request)).not.toMatch(/^The project is in/)
+  })
+
   it('Capture draws the schematic and runs each check the schematic review gate needs, leaving people their calls', () => {
     const c = STAGE_WORK.capture
     expect(c?.agent).toBe('impl')
