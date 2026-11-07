@@ -96,6 +96,10 @@ test-esp32_rev-B_2026-11-04_exploded.png
 test-esp32_rev-B_2026-11-04_turntable.mp4
 ```
 
+- **The project** is the project's name in its record (test-esp32 #215: the pictures were once named after the
+  agent's working folder). In order: the `project_name` given to the tool, the journey's name, the KiCad project's
+  name, the repository's name, and the folder the run is in only when there is nothing else. The result's `name` says
+  which it was.
 - **The date** is the day of the `journey.snapshot` decision, in the installation's time zone (UTC when none is set).
 - **In the run record**, they are kept as artifacts of one `render.showcase` run, with the device, the time each
   shot took, and the commits of the board and the case. On an installation the pictures themselves (about 5 MB each)
@@ -112,6 +116,17 @@ test-esp32_rev-B_2026-11-04_turntable.mp4
    - It exports the board with `exportBoard` (GLB), and reads the case as mech.build's `mechanical/out/case-base.stl` and
      `case-lid.stl`, which are already in the case frame.
    - It names the files as above and stores them as one run.
+   - **Parts without a body** (test-esp32 #214). A footprint whose model KiCad's 3D library does not have, or that
+     names none, gets its vendor's model: by its LCSC part code, the STEP EasyEDA keeps for the part
+     (`src/tools/kicad/vendor3d.ts`). EasyEDA's footprint is matched to KiCad's by their pads (a quarter turn at a
+     time), and the model goes where EasyEDA puts it on its own footprint. The export reads a copy of the board that
+     names the model; the board itself is not changed. Without the network, without an LCSC code, or when the pads
+     do not match, the part stays without a body. The result's `bodies` lists the parts drawn with a vendor model and
+     those still without a body, with why, and the notes say so.
+   - **Off-board parts.** A case part beyond the base and lid (an off-board module that mech.build placed at its
+     mount, `mechanical/out/case-<part>.stl`) is drawn with the part it is mounted to: with the lid when it sits above
+     the board, else with the base. The architecture's off-board parts (`off_board` in its blocks) that the case does
+     not place, and their cables, are not drawn: the result's `off_board.not_drawn` lists them, with why.
 3. **`brand.palette` tool and the logo upload.**
    - The tool works out the palette from the logo on the tools function, using Pillow.
    - The web app gets a "Logo" field in project settings, with screen renders shown before it is built.
