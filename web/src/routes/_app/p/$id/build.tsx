@@ -84,7 +84,7 @@ function Build() {
       {data.quotes && (
         <QuoteHistory
           repo={repo} quotes={data.quotes} estimate={ready?.estimate ?? null}
-          defaults={{ quantity: ready?.boards ?? data.orders[0]?.boards ?? 1, currency: ready?.currency ?? data.orders[0]?.currency ?? 'USD', release: ready?.release ?? data.orders[0]?.release ?? 'this revision', options: ready?.options.filter((x) => !/quantity$/i.test(x.option)).length ?? 0 }}
+          defaults={{ quantity: ready?.boards ?? data.orders[0]?.boards ?? 1, currency: ready?.currency ?? data.orders[0]?.currency ?? 'USD', release: ready?.release ?? data.orders[0]?.release ?? 'this revision', options: ready?.options.filter((x) => !/quantity$/i.test(x.option)).map(({ option, value }) => ({ option, value })) ?? [] }}
         />
       )}
 

@@ -18,6 +18,13 @@
  *                            person read it off JLCPCB (trace never signs in there), any time at Fabricate; its options
  *                            default to the release package's, and the newest parts check is kept with it. build.get's
  *                            `quotes` lists every one, newest first, with its change from the one before and why
+ *   quote.correct    write   { quote, reason?, total, …the quote.record fields }: a quote entered wrong. A new quote takes
+ *                            its place (what is not given is the old one's), linked to the order the old one was; the
+ *                            old one is kept with its values, marked corrected, out of the totals
+ *   quote.withdraw   write   { quote, reason }: a quote recorded by mistake, kept with the reason, out of the totals (a
+ *                            quote an order was placed against is corrected instead)
+ *   quote.confirm    write   { quote }: an agent's quote (from the person's words) into the journey record, so an order
+ *                            can be linked to it. Correcting or withdrawing an agent's quote confirms it first
  *   order.update     write   { order, state?, carrier?, tracking?, ship?, note? }: what the person saw on the fab's or
  *                            carrier's page: shipped with a tracking number (and the order is watched with its carrier
  *                            when trace can check that carrier), delivered, cancelled, a corrected ship date. trace
@@ -41,7 +48,7 @@ import { hasTable, latestRun, runResult } from './record-read.js'
 import { readRenders } from './actions-renders.js'
 import { orderOptionsOf } from '../tools/kicad/order-options.js'
 import { orderEstimateFrom } from '../core/order-estimate.js'
-import { type QuoteRow, QuoteFields, allQuotes, latestQuote, linkOrderQuote, loadAgentQuotes, loadQuotes, quoteDefaults, quoteViews, recordQuote } from '../core/quotes.js'
+import { type QuoteRow, QuoteFields, allQuotes, confirmAgentQuote, correctQuote, latestQuote, linkOrderQuote, loadAgentQuotes, loadQuotes, quoteDefaults, quoteViews, recordQuote, withdrawQuote } from '../core/quotes.js'
 
 const signer = (ctx: Context): Signer => ({ hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal) })
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -60,6 +67,18 @@ async function projectWatches(ctx: Context, repo: string): Promise<Watch[]> {
 /** The quotes agents recorded from people's words (none when the agents' facts cannot be read). */
 async function agentQuotes(ctx: Context, repo: string): Promise<QuoteRow[]> {
   try { return (await agentFactsStore(ctx, repo).read((db) => loadAgentQuotes(db))).result } catch { return [] }
+}
+
+const QuoteRef = z.string().trim().min(1).max(40).describe('the quote\'s id (build.get quotes[].id)')
+
+/** A change to a quote in the journey record (correct, withdraw, confirm), answered with the quote as build.get shows it. */
+async function quoteChange(ctx: Context, repo: string, change: (db: DatabaseSync, agent: QuoteRow[]) => QuoteRow) {
+  const aq = await agentQuotes(ctx, repo)
+  const out = await plainly(() => writeJourney(ctx, repo, (db) => {
+    const q = change(db, aq)
+    return { result: { id: q.id, quotes: quoteViews(allQuotes(loadQuotes(db), aq), loadOrders(db)) } }
+  }))
+  return { ok: true as const, repo, version: out.version, quote: out.quotes.find((x) => x.id === out.id)! }
 }
 
 /** Whether the carrier's key is set (an admin's integration). Unknown (cannot be listed): taken as set. */
@@ -365,6 +384,17 @@ export const BUILD_ACTIONS = {
     const v = out.quotes.find((x) => x.id === out.quote.id)!
     return { ok: true, repo, version: out.version, quote: v }
   }),
+
+  'quote.correct': def('write', Repo.extend({ quote: QuoteRef, reason: z.string().trim().max(500).optional().describe('what was wrong'), ...QuoteFields.shape }), async (a, ctx) => {
+    const { repo, quote, ...input } = a
+    return quoteChange(ctx, repo, (db, aq) => correctQuote(db, quote, input, aq, signer(ctx)))
+  }),
+
+  'quote.withdraw': def('write', Repo.extend({ quote: QuoteRef, reason: z.string().trim().min(3).max(500).describe('why it is withdrawn') }), async (a, ctx) =>
+    quoteChange(ctx, a.repo, (db, aq) => withdrawQuote(db, a.quote, a.reason, aq, signer(ctx)))),
+
+  'quote.confirm': def('write', Repo.extend({ quote: QuoteRef }), async (a, ctx) =>
+    quoteChange(ctx, a.repo, (db, aq) => confirmAgentQuote(db, a.quote, aq, signer(ctx)))),
 
   'order.update': def('write', Repo.extend({
     order: OrderRef,

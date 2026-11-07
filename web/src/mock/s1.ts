@@ -8,7 +8,7 @@ import { OPS_RUNS } from './fixtures-admin'
 import {
   BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, PANEL_GATE, QUESTIONS, QUESTIONS_BY_ID, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
 } from './fixtures-s1'
-import { QUOTES, payWithQuote, quoteCheck, recordQuote, withQuotes } from './quotes'
+import { QUOTES, confirmQuote, correctQuote, payWithQuote, quoteCheck, recordQuote, withQuotes, withdrawQuote } from './quotes'
 import type { Gate } from '@/lib/types'
 import type { GateMore, JourneyMore } from '@/lib/types-s1'
 
@@ -137,7 +137,7 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'order.record': {
       const o = BUILD.orders.find((x) => x.id === a.order)
       // linked to the newest quote, with what was paid against it
-      const q = QUOTES.find((x) => x.order === null)
+      const q = QUOTES.find((x) => x.order === null && !x.correctedBy && !x.withdrawn && !x.agent)
       if (o) Object.assign(o, { state: 'placed', number: a.number, paid: a.paid, ship: a.ship, total: a.paid ?? 0, ...(q ? { quote: { id: q.id, on: q.on, total: q.total, currency: q.currency, difference: typeof a.paid === 'number' ? Math.round((a.paid - q.total) * 100) / 100 : null } } : {}) })
       if (o && q) q.order = { id: o.id, number: String(a.number), paid: (a.paid as number | null) ?? null, difference: typeof a.paid === 'number' ? Math.round((a.paid - q.total) * 100) / 100 : null }
       return later(ok({ ok: true, wait: o?.wait }))
@@ -145,6 +145,19 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'quote.record': {
       if (!(Number(a.total) > 0)) return fail('Give the quote\'s total, as JLCPCB shows it.')
       return later(ok({ ok: true, quote: recordQuote(a as never) }))
+    }
+    case 'quote.correct': {
+      const q = correctQuote(a as never)
+      return q ? later(ok({ ok: true, quote: q })) : fail(`No quote ${String(a.quote)} that counts is recorded.`)
+    }
+    case 'quote.withdraw': {
+      if (String(a.reason ?? '').trim().length < 3) return fail('Say why the quote is withdrawn.')
+      const q = withdrawQuote(String(a.quote), String(a.reason))
+      return q ? later(ok({ ok: true, quote: q })) : fail('An order was placed against this quote: correct it instead of withdrawing it.')
+    }
+    case 'quote.confirm': {
+      const q = confirmQuote(String(a.quote))
+      return q ? later(ok({ ok: true, quote: q })) : fail(`No quote ${String(a.quote)} is recorded.`)
     }
     case 'cost.get':
       return repo === 'acme/soil-sensor' ? ok(COST) : fail('cost.get: no record yet')
