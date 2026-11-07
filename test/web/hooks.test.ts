@@ -361,7 +361,19 @@ describe('conflicts after a push to the default branch', () => {
     expect(w.publisher.sent.flatMap((s) => s.events as Record<string, unknown>[]).find((e) => e.conflicts)).toMatchObject({ conflicts: [4], resolving: [] })
   })
 
-  it('a pull request or check delivery never asks about conflicts', async () => {
+  it('a change opened (or reopened) asks too: it may be in conflict from the start (log #213); its record merged is said as brought up to date', async () => {
+    for (const action of ['opened', 'reopened']) {
+      const w = hooksWorld()
+      w.runtime.answers.set('hook.conflicts', () => report({ conflicts: [7], remade: [], record: [7], worker: [] }))
+      expect((await w.deliver('pull_request', pr('acme/board', 7, action))).status).toBe(202)
+      expect(w.runtime.calls.map((c) => [c.action, c.args])).toContainEqual(['hook.conflicts', { repo: 'acme/board' }])
+      expect(w.runtime.calls.map((c) => c.action)).not.toContain('hook.docs')
+      expect(w.publisher.sent.flatMap((s) => s.events as Record<string, unknown>[]).find((e) => e.conflicts)).toMatchObject({ conflicts: [7], remade: [7], resolving: [] })
+    }
+    expect(readDelivery('pull_request', pr('Acme/Board', 7, 'opened'))).toEqual({ repo: 'acme/board', number: 7, event: 'pull_request', opened: true })
+  })
+
+  it('a pull request pushed to or a check delivery never asks about conflicts', async () => {
     const w = hooksWorld()
     await w.deliver('pull_request', pr('acme/board', 7))
     await w.deliver('check_run', checkRun('acme/board', 7))
