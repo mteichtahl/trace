@@ -16,7 +16,7 @@
  *                                        turn. The asking specialist reads the decline in journey.status and may ask a
  *                                        person instead. A running one is refused: cancel its job. Reviewers cannot
  *   job.control   write on its project   { id, op, reason?, repo? }: pause | resume | cancel | move_up | restart |
- *                                        dismiss → { ok, kept? } or { ok: false, reason } in plain words. Reviewers
+ *                                        dismiss | send → { ok, kept? } or { ok: false, reason } in plain words. Reviewers
  *                                        cannot (write is needed); another project's job, and one that does not exist,
  *                                        get "no access"
  *
@@ -40,6 +40,10 @@
  *                            two presses start it once; recorded in the decisions (job.restarted)
  *   dismiss   lost job       with an optional reason: it leaves the overview's "Ended without finishing" and the next
  *                            step; recorded in the decisions (job.dismissed). Nothing runs or stops
+ *   send      declined task  its specialist changed nothing and said it is another's work (src/agents/declines.ts,
+ *                            test log R26): the same request as a new task for the specialist it named. Claimed in the
+ *                            journey record first (job_controls.restarted_by), so two presses send it once; recorded
+ *                            in the decisions (job.sent)
  *
  * STARTED AGAIN ONCE (test-esp32 log #45, #46): a lost task that left no change behind is started again by trace on
  * its own, once, on the next journey.get (restartLostJobs), with a note in the decisions. If that attempt is lost too,
@@ -67,6 +71,7 @@ import { type JobLook, refKey } from '../core/job-refs.js'
 import { type AgentFacts, type JourneyRecord, type NextStep, type StageView, type Viewer, decide, loadJourney } from '../core/journey.js'
 import { type HandoffView, declineHandoff, handoffViews } from '../core/handoffs.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
+import { declinedOf } from '../agents/declines.js'
 import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { TaskPayload } from '../agents/runtime/schemas.js'
 import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
@@ -77,7 +82,7 @@ import { draftingJobs } from './drafting.js'
 import { shownJobTitle } from '../core/plain-words.js'
 import { type QueueFile, queuedHandle, readQueue, startQueued, startsWhen } from './agent-queue.js'
 
-export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'] as const
+export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss', 'send'] as const
 export type JobOp = (typeof JOB_OPS)[number]
 
 /** The agents, in words (src/agents/<kind>/index.ts titles, and the worker). */
@@ -134,6 +139,11 @@ export interface IndexedJob extends JobView {
    * finishing" and the next step
    */
   settled: { how: 'dismissed' | 'restarted' | 'merged'; by: string; at: string; reason: string | null; number?: number } | null
+  /**
+   * a person's task its specialist declined (src/agents/declines.ts): it changed nothing and said the work is `to`'s.
+   * Not a plain success: its card says so, and offers Send it to <toName> (the `send` control) until it is sent
+   */
+  declined: { from: string; to: string; toName: string; why: string; sent: { by: string; at: string } | null } | null
   controls: JobOp[]
 }
 
@@ -246,6 +256,22 @@ export function stepWords(step: string | null): string | null {
   return step.replace(/\s*\(max \d+ turns[^)]*\)/, '').trim() || null
 }
 
+/**
+ * A finished person's task its specialist declined as another's work (declinedOf its summary), and whether a person
+ * sent it on (the claim in job_controls). Null for any other job. Pure.
+ */
+export function declinedView(j: Pick<JobRow, 'kind' | 'state' | 'summary' | 'parentJob'> & Partial<Pick<JobRow, 'handoff'>>, c: JobControl | undefined): IndexedJob['declined'] {
+  if (j.kind !== 'task' || j.state !== 'succeeded' || j.parentJob || j.handoff) return null
+  const d = declinedOf(j.summary)
+  if (!d) return null
+  const sent = c?.restartedBy && c.restartedAt !== null ? { by: c.restartedBy, at: iso(c.restartedAt) as string } : null
+  return { from: d.from, to: d.to, toName: SPECIALIST_WORDS[d.to], why: d.why, sent }
+}
+
+/** A declined job's line on its card, in words. */
+export const declinedStep = (d: NonNullable<IndexedJob['declined']>): string =>
+  `Declined: the ${SPECIALIST_WORDS[d.from as keyof typeof SPECIALIST_WORDS] ?? d.from} specialist changed nothing; it says this is the ${d.toName} specialist's work.${d.sent ? ` ${d.sent.by} sent it to them.` : ''}`
+
 /** A lost job's summary once its change was merged: its own, or what is known. */
 const mergedSummary = (j: Pick<JobRow, 'summary'>, number: number | undefined): string =>
   j.summary ?? `Its change${number ? ` (#${number})` : ''} was accepted into the design. trace stopped hearing from its runtime after it opened it, so it is counted as finished.`
@@ -279,17 +305,18 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
     const done = settled?.how === 'merged'
     const said = lost && !done ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : null
     const state: ViewState = done ? 'succeeded' : lost ? 'lost' : discarded ? 'aborted' : j.state
+    const declined = declinedView(j, c)
     out.push({
       id: indexedHandle(repo, j.session, j.id), workerJobId: j.id, kind: j.kind, repository: repo, agent: j.agent, agentName: j.agent ? AGENT_WORDS[j.agent] ?? j.agent : null,
       title: j.title, number: j.number, startedBy: j.requestedBy, yours: j.requestedBySub !== null && j.requestedBySub === o.sub, state,
-      step: done ? null : said ?? (discarded ? `discarded by ${c?.by ?? 'a person'}` : stepWords(j.step)), held: Boolean(c?.held),
+      step: done ? null : said ?? (discarded ? `discarded by ${c?.by ?? 'a person'}` : declined ? declinedStep(declined) : stepWords(j.step)), held: Boolean(c?.held),
       queuedAt: iso(j.queuedAt), startedAt: iso(j.state === 'queued' ? null : j.startedAt), endedAt: done ? iso(heardOf(j).heardAt) : iso(j.endedAt),
       typicalS: typicalSeconds(rows, j), where: j.where, branch: j.branch, queue,
       parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: done ? mergedSummary(j, settled.number) : j.summary, error: done ? null : said ?? j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
       heard: state === 'running' ? (({ heardAt, overdueAt, lostAt }) => ({ at: iso(heardAt) as string, overdueAt: iso(overdueAt) as string, lostAt: iso(lostAt) as string }))(heardOf(j)) : null,
-      handoff: j.handoff ? handoffOf(j) : null, settled,
-      controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first, settled: settled !== null }, o),
+      handoff: j.handoff ? handoffOf(j) : null, settled, declined,
+      controls: [...controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first, settled: settled !== null }, o), ...(declined && !declined.sent && o.write && restartable(j) ? ['send' as const] : [])],
       ...headlineOf(j),
     })
   }
@@ -504,7 +531,7 @@ export function queuedJobViews(repo: string, q: QueueFile, o: { at: number; sub:
   const base = (id: string, title: string, agent: string | null, by: string | null, bySub: string | null, queuedAt: string) => ({
     workerJobId: id, kind: 'task', repository: projectSlug(repo), agent, agentName: agent ? AGENT_WORDS[agent] ?? agent : null, title, number: null,
     startedBy: by, yours: bySub !== null && bySub === o.sub, held: false, queuedAt, typicalS: null, where: null, branch: null,
-    parentJob: null, resumeOf: null, resumedBy: null, summary: null, pausedBy: null, pausedAt: null, heard: null, handoff: null, settled: null,
+    parentJob: null, resumeOf: null, resumedBy: null, summary: null, pausedBy: null, pausedAt: null, heard: null, handoff: null, settled: null, declined: null,
     ...headlineOf({ kind: 'task', title, parentJob: null, payload: null }),
   })
   const waiting = q.queued.map((s, i): IndexedJob => ({
@@ -595,6 +622,48 @@ export async function restartLost(ctx: Context, repo: string, row: JobRow, rows:
   }).catch(() => undefined)
   if (!started.accepted) return { ok: false, reason: `trace could not start it again: ${started.reason ?? 'the job was not accepted'}.` }
   return { ok: true, jobId: started.jobId, kept: `It starts again${where}, from what the lost attempt left there.` }
+}
+
+/**
+ * Send a declined task on (test log R26): its recorded request, as a new task for the specialist its report named, on
+ * a new branch (it changed nothing, so there is nothing to carry on). Claimed in the journey record first, so two
+ * presses send it once; a start that is refused takes the claim back. Noted in the decisions once it has started.
+ */
+export async function sendDeclined(ctx: Context, repo: string, row: JobRow, to: string, by: string):
+  Promise<{ ok: true; jobId: string; kept: string } | { ok: false; reason: string }> {
+  const p = row.payload ? Resumable.safeParse(JSON.parse(row.payload)) : null
+  const agent = SPECIALIST_KINDS.find((k) => k === to)
+  if (!restartable(row) || !p?.success || !agent) return { ok: false, reason: 'Its request was not recorded, so it cannot be sent on. Ask trace for the work again, naming the specialist.' }
+  const words = SPECIALIST_WORDS[agent]
+  const at = Date.now() / 1000
+  const claim = await plainly(() => writeJourney(ctx, repo, (db) => {
+    const c = loadControls(db).get(row.id)
+    if (c?.restartedBy) return { result: { claimed: false, why: `${c.restartedBy} sent it to the ${words} specialist already: follow the new job.` }, changed: false }
+    putControl(db, { job: row.id, by, at, restartedBy: by, restartedAt: at })
+    return { result: { claimed: true, why: '' } }
+  }))
+  if (!claim.claimed) return { ok: false, reason: claim.why }
+  const started = await (await ctx.deps.jobs()).startJob({
+    kind: 'task', repository: repo, request: p.data.request, requestedBy: p.data.requestedBy, ...(p.data.requestedBySub ? { requestedBySub: p.data.requestedBySub } : {}),
+    ...(p.data.headline ? { headline: p.data.headline } : {}), agent,
+  }).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) }))
+  await writeJourney(ctx, repo, (db) => {
+    if (!started.accepted) {
+      putControl(db, { job: row.id, by, at: Date.now() / 1000, restartedBy: null, restartedAt: null })
+      return { result: {} }
+    }
+    const rec = loadJourney(db)
+    const from = SPECIALIST_KINDS.find((k) => k === row.agent)
+    if (rec) {
+      decide(db, {
+        kind: 'job.sent', stage: rec.journey.currentStage, ref: row.id, by, detail: { job: row.id, to: agent, new_job: started.jobId },
+        summary: `${by} sent "${shownJobTitle(row)}" to the ${words} specialist: the ${from ? SPECIALIST_WORDS[from] : 'first'} specialist changed nothing and said it is their work.`,
+      })
+    }
+    return { result: {} }
+  }).catch(() => undefined)
+  if (!started.accepted) return { ok: false, reason: `trace could not send it on: ${started.reason ?? 'the job was not accepted'}.` }
+  return { ok: true, jobId: started.jobId, kept: `The ${words} specialist takes it on a new branch.` }
 }
 
 /**
@@ -715,7 +784,7 @@ export const JOB_ACTIONS = {
   'job.control': def('job', z.object({ id: z.string().min(1).max(400), op: z.enum(JOB_OPS), reason: z.string().trim().max(300).optional(), repo: z.string().max(140).optional() }), async (a, ctx) => {
     const { jobs, repo } = await writeAccess(a.id, ctx, a.repo)
     // a paused or retired project: its work can be paused or cancelled, but nothing resumed or moved up
-    if (a.op === 'resume' || a.op === 'move_up' || a.op === 'restart') await assertNotHeld(repo)
+    if (a.op === 'resume' || a.op === 'move_up' || a.op === 'restart' || a.op === 'send') await assertNotHeld(repo)
     const by = label(ctx.principal)
     const at = Date.now() / 1000
     const { jobs: views, rows } = await listJobs(ctx, repo, { at })
@@ -783,6 +852,12 @@ export const JOB_ACTIONS = {
         const r = await restartLost(ctx, repo, row, rows, { by, auto: false })
         return answer(r.ok ? { ok: true, state: 'queued', jobId: r.jobId, kept: r.kept } : { ok: false, state: view.state, reason: r.reason })
       }
+      case 'send': {
+        const row = rows.find((r) => r.id === view.workerJobId)
+        if (!row || !view.declined) return answer({ ok: false, state: view.state, reason: 'It is no longer in the project\'s job list.' })
+        const r = await sendDeclined(ctx, repo, row, view.declined.to, by)
+        return answer(r.ok ? { ok: true, state: 'queued', jobId: r.jobId, kept: r.kept } : { ok: false, state: view.state, reason: r.reason })
+      }
       case 'dismiss': {
         const why = a.reason?.replace(/\s+/g, ' ').trim() || null
         const done = await plainly(() => writeJourney(ctx, repo, (db) => {
@@ -804,7 +879,7 @@ export const JOB_ACTIONS = {
 }
 
 /** Why an op cannot be done for this job now, in plain words. */
-export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parentJob' | 'resumedBy' | 'queue'> & Partial<Pick<IndexedJob, 'handoff' | 'settled'>>, jobs: Pick<JobsApi, 'cancel' | 'pause'>): string {
+export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parentJob' | 'resumedBy' | 'queue'> & Partial<Pick<IndexedJob, 'handoff' | 'settled' | 'declined'>>, jobs: Pick<JobsApi, 'cancel' | 'pause'>): string {
   if (j.parentJob) return 'A worker job belongs to the specialist that asked for it: pause or cancel that job instead.'
   if (op === 'pause' && j.handoff && j.state === 'running') return 'A job another specialist asked for is not paused: cancel it, and the asking specialist is told it was not answered.'
   if (j.state === 'lost') {
@@ -812,6 +887,7 @@ export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parent
     if (op === 'restart') return 'Only a person\'s task whose request trace recorded can be started again from here. Ask trace to do the work again with "Ask trace to fix something", or dismiss it.'
     return 'trace lost contact with this job: there is nothing to pause, resume or cancel. Start it again if it is still needed, or dismiss it.'
   }
+  if (op === 'send') return j.declined?.sent ? `It was sent to the ${j.declined.toName} specialist already: follow the new job.` : 'Only a person\'s task its specialist declined as another\'s work can be sent on.'
   if (op === 'restart' || op === 'dismiss') return 'Only a job that ended without finishing can be started again or dismissed.'
   switch (op) {
     case 'pause':

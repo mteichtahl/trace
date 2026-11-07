@@ -24,7 +24,10 @@
  *                                       only: `change` is its number); never the default branch
  *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
  *                                       agent: verify, impl, ams, emc, render, thermal or docs (a specialist), or left out to be
- *                                       routed (src/agents/router.ts). It runs on the project's own worker
+ *                                       routed (src/agents/router.ts). A change to a requirement, its criterion,
+ *                                       the test plan or an intent statement goes to the Verification specialist
+ *                                       whatever was picked (agents/owners.ts): the answer then says so (`agent`,
+ *                                       `routed`). It runs on the project's own worker
  *                                       runtime (src/api/workers.ts), never in this process: the API runs no model
  *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session
  *                                       summaries), newest first, from that project's own memory; agent narrows
@@ -156,6 +159,8 @@ import {
 } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
 import { TASK_AGENTS } from '../agents/runtime/schemas.js'
+import { recordOwner } from '../agents/owners.js'
+import { SPECIALIST_WORDS } from '../agents/kinds.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
 import { artifactBytes, artifactSize } from './artifact-read.js'
@@ -635,10 +640,21 @@ export const ACTIONS = {
     if (a.stack_on && !(await openPulls(ctx, a.repo)).some((p) => p.head === a.stack_on && p.headRepo?.toLowerCase() === a.repo.toLowerCase())) {
       throw new ActionError(`${a.stack_on} is not an open change of ${a.repo}: stack_on names the branch of one of trace's open changes.`)
     }
-    return (await ctx.deps.jobs()).startJob({
-      kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
+    // a change to a record one specialist owns (a requirement, its criterion, the test plan, an intent statement) goes
+    // to that owner, whichever agent was picked (test log R26: Implementation was picked, said so, and changed nothing).
+    // New work only: carrying on a branch stays with the specialist whose work is on it. The person is told.
+    const owner = !a.branch && !a.stack_on ? recordOwner(a.request) : null
+    const sentTo = owner && a.agent && a.agent !== owner.kind ? owner.kind : null
+    const agent = sentTo ?? a.agent
+    const r = await (await ctx.deps.jobs()).startJob({
+      kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(agent ? { agent } : {}),
       ...(a.branch ? { branch: a.branch } : {}), ...(a.stack_on ? { stackOn: a.stack_on } : {}),
     })
+    if (!sentTo || !owner || !a.agent) return r
+    return {
+      ...r, agent: sentTo,
+      routed: `It went to the ${SPECIALIST_WORDS[sentTo]} specialist, not ${SPECIALIST_WORDS[a.agent]}: the request changes ${owner.what}, and only the ${SPECIALIST_WORDS[sentTo]} specialist changes the requirements, the test plan and the intent statements.`,
+    }
   }),
 
   'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50), includeInactive: z.boolean().default(false) }), async (a, ctx) => {

@@ -136,6 +136,21 @@ describe('start_task: trace asks, the person confirms', () => {
       expect(await screen.findByText('Run ERC on the power sheet')).toBeInTheDocument()
     })
 
+    it('a request sent to another specialist than the one offered says so on the card, in the toast and to trace (test log R26)', async () => {
+      const routed = 'It went to the Verification specialist, not Implementation: the request changes a requirement\'s acceptance criterion, and only the Verification specialist changes the requirements, the test plan and the intent statements.'
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_u, init) => {
+        const b = JSON.parse(String((init as RequestInit).body)) as { action: string }
+        if (b.action === 'task') return answer({ accepted: true, jobId: 'acme--board--j9', agent: 'verify', routed })
+        return answer({ repo: 'acme/board', jobs: [{ id: 'acme--board--j9', repo: 'acme/board', title: 'Change the criterion', state: 'queued' }], agents: [], handoffs: [], batch: [], updatedAt: '' })
+      })
+      const respond = vi.fn()
+      render(<ChatRepo.Provider value="acme/board"><StartTaskCard args={{ ...args, request: 'Change REQ-7ec888\'s acceptance criterion', agent: 'impl' }} status="executing" respond={respond} toolCallId="tc9" /></ChatRepo.Provider>, { wrapper })
+      await userEvent.click(screen.getByRole('button', { name: /Confirm and start/ }))
+      expect(await screen.findByText(routed)).toBeInTheDocument()
+      expect(toast).toHaveBeenCalledWith('trace started the work.', { description: `${routed} It shows under Trace is doing on the project.` })
+      expect(respond).toHaveBeenCalledWith({ confirmed: true, accepted: true, jobId: 'acme--board--j9', agent: 'verify', routed })
+    })
+
     it('a failure is never silent: the card and a toast say why, and a second click starts nothing more', async () => {
       const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: false, error: 'the project is paused' }), { status: 200, headers: { 'content-type': 'application/json' } }))
       render(<ChatRepo.Provider value="acme/board"><StartTaskCard args={args} status="executing" respond={vi.fn()} toolCallId="tc2" /></ChatRepo.Provider>, { wrapper })

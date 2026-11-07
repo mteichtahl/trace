@@ -411,7 +411,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
 // ------------------------------------------------------------------ jobs (jobs.list, journey.get's jobs)
 
 const RUN_STATE: Record<string, RunSummary['state']> = { running: 'running', queued: 'queued', paused: 'paused', succeeded: 'done', failed: 'failed', aborted: 'cancelled', lost: 'lost' }
-const OPS = new Set(['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss'])
+const OPS = new Set(['pause', 'resume', 'cancel', 'move_up', 'restart', 'dismiss', 'send'])
 type Op = NonNullable<RunSummary['controls']>[number]
 
 /** One job view of the API (src/api/actions-jobs.ts IndexedJob) as a run line's summary. */
@@ -436,6 +436,10 @@ export function readJob(j: Obj): RunSummary {
     ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.error) ? { error: String(j.error) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
     ...(isObj(j.handoff) && str(j.handoff.id) ? { handoff: { id: String(j.handoff.id), ...(str(j.handoff.from) ? { from: String(j.handoff.from) } : {}), ...(str(j.handoff.fromName) ? { fromName: String(j.handoff.fromName) } : {}) } } : {}),
     ...(isObj(j.settled) && (j.settled.how === 'dismissed' || j.settled.how === 'restarted' || j.settled.how === 'merged') ? { settled: { how: j.settled.how, by: String(j.settled.by ?? ''), at: String(j.settled.at ?? ''), ...(str(j.settled.reason) ? { reason: String(j.settled.reason) } : {}), ...(typeof j.settled.number === 'number' ? { number: j.settled.number } : {}) } } : {}),
+    ...(isObj(j.declined) && str(j.declined.to) ? { declined: {
+      from: String(j.declined.from ?? ''), to: String(j.declined.to), toName: String(j.declined.toName ?? j.declined.to), why: String(j.declined.why ?? ''),
+      ...(isObj(j.declined.sent) ? { sent: { by: String(j.declined.sent.by ?? ''), at: String(j.declined.sent.at ?? '') } } : {}),
+    } } : {}),
     ...(isObj(j.heard) && str(j.heard.at) && str(j.heard.overdueAt) && str(j.heard.lostAt) ? { heard: { at: String(j.heard.at), overdueAt: String(j.heard.overdueAt), lostAt: String(j.heard.lostAt) } } : {}),
   }
 }

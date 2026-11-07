@@ -83,6 +83,7 @@ import { systemAppend } from '../../prompts/system.js'
 import { projectPath } from '../../core/store.js'
 import { WORKER_TOOLS } from '../specialist.js'
 import { type Route, WORKER } from '../kinds.js'
+import { declineIn, declinedSummary } from '../declines.js'
 import { type Classifier, type QueryFn, type RouteInput, routeJob, sdkClassifier } from '../router.js'
 import { readProjectNotes, readRules } from '../rules.js'
 import type { SpecialistJob } from '../specialist.js'
@@ -885,6 +886,9 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         ...(mem.context ? provenanceOf(['memory.block']) : [])]
       logPrompts(used, log)
       ctx.prompts?.(record(used))
+      // a person's task: where its branch stood before the specialist ran, so a report that declines the job as another
+      // specialist's can be told from one that did part of the work (declines.ts)
+      const before = p.kind === 'task' && !answering && !isDelegated(p) ? await branchMarks(g, branch) : null
       log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns${settings.max_usd ? `, US$${settings.max_usd}` : ''}, ${tools.length} tools)`)
       const out = await runClaude(d, {
         prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system, jobId: ctx.jobId,
@@ -941,6 +945,13 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       if (answering && handoffs) {
         const next = await handoffs.carryOn(answering.id, branch, ctx.startJob).catch((e: unknown) => { log(`could not start the asker again: ${redact(errText(e))}`); return null })
         if (next) log(`hand-off ${answering.id} answered: the ${answering.from} specialist carries on on ${branch} (job ${next})`)
+      }
+      // declined as another specialist's work, and nothing left behind: not a plain success (test log R26). The job
+      // view reads it back and offers to send the request to that specialist
+      const declined = before && !kept && !escalation(summary) ? declineIn(summary, r.kind) : null
+      if (declined && before && await leftNothing(g, branch, before)) {
+        log(`declined: the ${r.kind} specialist changed nothing and says this is the ${declined.to} specialist's work`)
+        return declinedSummary(r.kind, declined, summary, REPORT_MAX)
       }
       return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, REPORT_MAX)}`}`
     } finally {
@@ -1073,6 +1084,30 @@ export async function keepRecord(o: { g: GitOpts; branch: string; defaultBranch:
   } catch (e) {
     return { text: `could not commit the project's record on ${o.branch}: ${errText(e).slice(0, 300)}`, lost: true }
   }
+}
+
+/** Where a job's branch stands: its checkout's HEAD, and the branch on GitHub ('' when it is not there). */
+interface BranchMarks { head: string; remote: string }
+
+async function branchMarks(g: GitOpts, branch: string): Promise<BranchMarks | null> {
+  const git = gitIn({ ...g, signal: undefined })
+  try {
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim()
+    const remote = await git(['ls-remote', 'origin', `refs/heads/${branch}`]).then((x) => x.stdout.trim().split(/\s+/)[0] ?? '').catch(() => '')
+    return { head, remote }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether a job left its branch as it found it: no commit in its checkout and none pushed (a delegated worker pushes
+ * from a checkout of its own). Anything unreadable counts as left something: the job then ends as it says, never as a
+ * decline on a guess.
+ */
+async function leftNothing(g: GitOpts, branch: string, before: BranchMarks): Promise<boolean> {
+  const now = await branchMarks(g, branch)
+  return now !== null && now.head === before.head && now.remote === before.remote
 }
 
 /**

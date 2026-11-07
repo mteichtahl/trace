@@ -56,8 +56,8 @@ export function useTaskConfirm(key: string | undefined): TaskConfirm | undefined
 /** What the person is told of the answer, at once, wherever they are in the app. */
 export function tellAnswer(a: TaskAnswer): void {
   if (!a.confirmed) return
-  if (a.accepted && a.queued) toast('The work is queued.', { description: a.reason ?? 'It starts by itself once the project\'s agent is ready.' })
-  else if (a.accepted) toast('trace started the work.', { description: 'It shows under Trace is doing on the project.' })
+  if (a.accepted && a.queued) toast('The work is queued.', { description: [a.routed, a.reason ?? 'It starts by itself once the project\'s agent is ready.'].filter(Boolean).join(' ') })
+  else if (a.accepted) toast('trace started the work.', { description: a.routed ? `${a.routed} It shows under Trace is doing on the project.` : 'It shows under Trace is doing on the project.' })
   else toast.error('trace could not start the work.', { description: a.reason ?? 'The job was not accepted.' })
 }
 
@@ -75,7 +75,11 @@ export async function confirmTask(key: string, t: ConfirmTask, respond?: (a: Tas
   let answer: TaskAnswer
   try {
     const r = await call('task', { repo: t.repo, request: t.request, ...(t.agent ? { agent: t.agent } : {}), ...(t.branch ? { branch: t.branch } : {}) })
-    answer = { confirmed: true, accepted: r.accepted, ...(r.jobId ? { jobId: r.jobId } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.queued ? { queued: true } : {}) }
+    answer = {
+      confirmed: true, accepted: r.accepted, ...(r.jobId ? { jobId: r.jobId } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.queued ? { queued: true } : {}),
+      // sent to the specialist that owns the record it changes, not the one offered (test log R26)
+      ...(r.agent ? { agent: r.agent } : {}), ...(r.routed ? { routed: r.routed } : {}),
+    }
   } catch (e) {
     answer = { confirmed: true, accepted: false, reason: e instanceof Error ? e.message : 'the task could not be started' }
   }

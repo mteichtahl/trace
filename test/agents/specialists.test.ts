@@ -8,6 +8,7 @@ import {
 } from '../../src/agents/index.js'
 import { mcpName as specialistMcpName } from '../../src/agents/specialist.js'
 import { type RouteInput, classificationPrompt, labelKind, route, routeJob, sdkClassifier } from '../../src/agents/router.js'
+import { recordOwner } from '../../src/agents/owners.js'
 import { createDelegations, delegatedRequest } from '../../src/agents/runtime/delegation.js'
 import { createWaitRelay } from '../../src/agents/runtime/wait-relay.js'
 import { taskPrompt } from '../../src/agents/worker/prompt.js'
@@ -220,6 +221,28 @@ describe('router', () => {
     const capture = 'Draft the schematic for the chosen architecture (option A): a KiCad 10 project in hw/ with one sheet per block, parts with MPN and LCSC fields from the key-parts list, each sheet naming the requirements it serves. Then run the electrical rule check and the BOM stock check on it.'
     expect(route({ kind: 'impl', text: capture, checkPick: true }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
     expect(route({ text: 'add the footprints to the schematic symbols' }, cfg)).toMatchObject({ kind: 'impl', source: 'keyword' })
+  })
+
+  it('sends a change to a requirement, its criterion, the test plan or an intent statement to the Verification specialist', () => {
+    // test log R26: "change REQ-7ec888's acceptance criterion" went to impl, which said it was not its work and stopped
+    const asked = 'Change REQ-7ec888\'s acceptance criterion to: the LED blinks at 1 Hz ± 10 % with 50 % duty cycle, measured with the scope over 10 s of timing.'
+    const moved = route({ kind: 'impl', text: asked, checkPick: true }, cfg)
+    expect(moved).toMatchObject({ kind: 'verify', source: 'keyword', confidence: 0.9 })
+    expect(moved.reason).toMatch(/^impl was picked, but the request changes a requirement's acceptance criterion, and the Verification specialist keeps the requirements/)
+    // with no pick, and even though "timing" is an impl word
+    expect(route({ text: asked }, cfg)).toMatchObject({ kind: 'verify', source: 'keyword' })
+    // verify's own pick stands, though the criterion's words point elsewhere
+    expect(route({ kind: 'verify', text: 'Reword the requirement REQ-1a2b3c: the board placement keeps the USB connector at the edge', checkPick: true }, cfg)).toMatchObject({ kind: 'verify', source: 'explicit' })
+    for (const t of ['reword the requirement about the supply', 'Add a test plan item for REQ-0f0f0f', 'update the intent statement INT-a1b2c3 to say 5 V', 'relax REQ-123abc to 3 %']) expect(recordOwner(t)?.kind, t).toBe('verify')
+    // a design change made to meet a requirement is not a change to it
+    for (const t of [
+      'Change the layout so REQ-7ec888 is met', 'Update the LED resistor to meet the acceptance criterion of REQ-7ec888', 'change the board per requirement REQ-1', 'route the board',
+      'Draft the schematic for the chosen architecture, each sheet naming the requirements it serves',
+    ]) expect(recordOwner(t), t).toBeNull()
+    // not a person's pick (a delegation, a resumed task): where it says
+    expect(route({ kind: 'impl', text: asked }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
+    // verify not enabled: nothing is forced
+    expect(route({ text: asked }, cfgOf({ agents: { enabled: ['impl'], default: 'impl' } }))).toMatchObject({ kind: 'impl' })
   })
 
   it('maps the agent:<kind> labels from the settings', () => {
