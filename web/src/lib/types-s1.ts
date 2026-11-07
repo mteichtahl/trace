@@ -649,8 +649,10 @@ export interface CostView {
   explorer?: ExplorerView
   prices?: PricesView
   committed: number | null
-  /** the build: quantity × unit cost; null without a unit cost */
+  /** the build: the newest order estimate's high end, else quantity × unit cost; null without either */
   forecast: number | null
+  /** where the forecast comes from: the order estimate (its range, its parts check's date), or the build plan's target */
+  forecastBasis?: { kind: 'estimate'; low: number; high: number; at: string; partsRun: string } | { kind: 'target' }
   /** the build budget: what the order (boards, parts, case) may cost; cloud work never counts against it */
   budget?: number
   /** the cloud-work allowance: what trace's own cloud work may cost (US$); absent while none is set */

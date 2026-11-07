@@ -12,8 +12,11 @@
  *                                         spent.orders          what the recorded orders cost
  *                                         committed             an order of the revision placed with no cost given yet
  *                                                               (its target); nothing before an order is placed
- *                                         forecast              the build: quantity x target unit cost, for the revision
- *                                                               not ordered yet (an order being prepared included)
+ *                                         forecast              the build, for the revision not ordered yet (an order
+ *                                                               being prepared included): the newest order estimate's
+ *                                                               high end, else quantity x target unit cost
+ *                                         forecastBasis         which: { kind: 'estimate', low, high, at, partsRun } or
+ *                                                               { kind: 'target' }
  *                                         stages[].cloud        the estimated cloud spend of each stage: its jobs' (by
  *                                                               the stage the project was in when each started), and the
  *                                                               spend no job claims, by when it ran
@@ -193,6 +196,16 @@ export function buildCost(o: { planned: number | null; placed: boolean; paid: bo
   return { committed: 0, forecast: o.planned }
 }
 
+/**
+ * What the order is forecast to cost before it is placed: the newest order estimate's high end when there is one in the
+ * build's currency, else the build plan's target, with which it is. Pure.
+ */
+export function orderForecast(o: { target: number | null; estimate: OrderEstimate | null; currency: string }) {
+  const e = o.estimate
+  if (e && e.currency === o.currency) return { planned: e.high, basis: { kind: 'estimate' as const, low: e.low, high: e.high, at: iso(e.at) as string, partsRun: e.partsRun } }
+  return { planned: o.target, basis: o.target !== null ? { kind: 'target' as const } : null }
+}
+
 /** One job's spend as the screens show it: its stage and specialist in words, its times as dates. */
 function jobLine(j: SpendByJob['jobs'][number]) {
   return {
@@ -258,8 +271,14 @@ export const COST_ACTIONS = {
       if (unpaid) notes.push(`${unpaid} recorded order${unpaid === 1 ? ' has' : 's have'} no cost given.`)
       const planned = b.unit_cost !== null ? Math.round(b.unit_cost * b.quantity * 100) / 100 : null
       const placedThisRevision = orders.filter((o) => o.revision === r.journey.revision)
-      const { committed, forecast } = buildCost({ planned, placed: placedThisRevision.length > 0, paid: placedThisRevision.every((o) => o.paid !== null) })
-      if (planned === null) notes.push('No unit cost is set in the build plan, so the build\'s forecast is unknown.')
+      // the order's forecast: the newest order estimate's high end when there is one in the build's currency, else the
+      // build plan's target (test-esp32 run 2, #178: "10 boards at US$9 each, the build plan's target" with an
+      // estimate of US$141 to 244 on record)
+      const of = orderForecast({ target: planned, estimate, currency: b.currency })
+      const { committed, forecast } = buildCost({ planned: of.planned, placed: placedThisRevision.length > 0, paid: placedThisRevision.every((o) => o.paid !== null) })
+      const forecastBasis = of.basis
+      const useEstimate = of.basis?.kind === 'estimate'
+      if (planned === null && !useEstimate) notes.push('No unit cost is set in the build plan and there is no order estimate yet, so the build\'s forecast is unknown.')
       const e = estimateTotals(usage.rows)
       const a = actuals.rows.length ? actualTotals(actuals.rows) : null
       if (usage.error) notes.push(`The cost ledger could not be read (${usage.error.slice(0, 160)}), so cloud estimates are missing.`)
@@ -287,6 +306,7 @@ export const COST_ACTIONS = {
         spent: { cloud: cents(e.total), orders: Math.round(paid * 100) / 100, detail: cloud },
         committed,
         forecast,
+        ...(forecastBasis ? { forecastBasis } : {}),
         // two budgets: the build's (the order: boards, parts, case) and the cloud-work allowance (trace's own spend)
         ...(b.budget !== null ? { budget: b.budget } : {}),
         ...(b.cloud_budget !== null ? { cloudBudget: b.cloud_budget } : {}),

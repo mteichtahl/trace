@@ -249,8 +249,8 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
           if (children.get(parentId)?.size === 0) children.delete(parentId)
         }
       }
-      const log = (line: string): void => {
-        const l = `${new Date(now()).toISOString()} ${line}`
+      const log = (line: string, at: number = now()): void => {
+        const l = `${new Date(at).toISOString()} ${line}`
         info.log.push(l)
         info.step = line.slice(0, 300)
         if (info.log.length > LOG_LINES) info.log.splice(0, info.log.length - LOG_LINES)
@@ -315,8 +315,11 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
             info.error = e instanceof Error ? e.message : String(e)
           }
         } finally {
-          info.endedAt = new Date(now()).toISOString()
-          log(`${info.state}${info.error ? `: ${info.error}` : info.summary ? `: ${info.summary}` : ''}`)
+          // one clock read for both: the stream writer orders by time, and a last line a millisecond after endedAt
+          // landed after the stream's end line ("✗ <why>"), so the run read as ending on "failed: <why>"
+          const endedAt = now()
+          info.endedAt = new Date(endedAt).toISOString()
+          log(`${info.state}${info.error ? `: ${info.error}` : info.summary ? `: ${info.summary}` : ''}`, endedAt)
           unlink()
           // a specialist that ended (however) takes any worker it delegated to with it
           for (const kid of children.get(id) ?? []) void abortOne(kid, `cancelled: its specialist job ${id} ended (${info.state})`)

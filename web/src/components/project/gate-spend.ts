@@ -3,8 +3,9 @@
  * beside it, and the project's two budgets, each by its own name:
  *
  *   the build budget          what the order may cost (boards, parts, case): the orders paid, orders placed and not
- *                             paid yet (committed) and the order forecast (boards x the build plan's target unit cost,
- *                             until an order is placed: an order being prepared is a forecast, #218) count against it
+ *                             paid yet (committed) and the order forecast (the newest order estimate's high end, else
+ *                             boards x the build plan's target unit cost, until an order is placed: an order being
+ *                             prepared is a forecast, #218, #178) count against it
  *   the cloud-work allowance  what trace's own cloud work (agents, graphics card and CPU jobs) may cost
  *
  * They were one number, so with US$1.59 of cloud work spent the gate said "US$18.41 left after what is committed and
@@ -17,7 +18,7 @@ import type { CostView } from '@/lib/types-s1'
 
 const cents = (n: number): number => Math.round(n * 100) / 100
 
-type Costs = Pick<CostView, 'currency' | 'orderCurrency' | 'spent' | 'committed' | 'forecast' | 'budget' | 'cloudBudget' | 'quantity' | 'unit_cost'>
+type Costs = Pick<CostView, 'currency' | 'orderCurrency' | 'spent' | 'committed' | 'forecast' | 'forecastBasis' | 'budget' | 'cloudBudget' | 'quantity' | 'unit_cost'>
 
 export interface Budgets {
   /** the build budget against the order; null without one */
@@ -26,8 +27,14 @@ export interface Budgets {
   cloud: { allowance: number | null; spent: number; left: number | null; currency: string }
 }
 
-/** Where the order's forecast comes from, in words: "10 boards at US$8 each, the build plan's target unit cost". */
-export function forecastSource(c: Pick<CostView, 'quantity' | 'unit_cost'>, currency: string): string | null {
+/**
+ * Where the order's forecast comes from, in words: the newest order estimate when there is one ("the high end of the
+ * order estimate of 2026-11-06, US$141 to US$244"), else "10 boards at US$8 each, the build plan's target unit cost".
+ * The target was said with an estimate on record (test-esp32 run 2, #178).
+ */
+export function forecastSource(c: Pick<CostView, 'quantity' | 'unit_cost' | 'forecastBasis'>, currency: string): string | null {
+  const e = c.forecastBasis
+  if (e?.kind === 'estimate') return `the high end of the order estimate of ${e.at.slice(0, 10)}, ${money(e.low, currency)} to ${money(e.high, currency)}, from its parts check and the fab's published prices`
   return c.quantity && c.unit_cost ? `${c.quantity} boards at ${money(c.unit_cost, currency)} each, the build plan's target unit cost` : null
 }
 

@@ -46,3 +46,17 @@ describe('the order estimate against the cost requirements (#162)', () => {
     expect(est).toHaveTextContent('No case yet')
   })
 })
+
+describe('the order forecast (#178)', () => {
+  it('is the newest order estimate when there is one, and says so', () => {
+    const c: CostView = {
+      money: true, currency: 'USD', spent: { cloud: 12, orders: 0 }, committed: 0, forecast: 244, budget: 275, quantity: 10, unit_cost: 9, stages: [], lines: [],
+      forecastBasis: { kind: 'estimate', low: 141, high: 244, at: '2026-11-06T10:00:00.000Z', partsRun: 'p1' },
+    }
+    const line = gateSpendLine(c)
+    expect(line).toMatch(/US\$31 left after US\$244 forecast for the order \(the high end of the order estimate of 2026-11-06, US\$141 to US\$244, from its parts check and the fab's published prices\)/)
+    expect(line).not.toMatch(/the build plan's target/)
+    // without an estimate: the target, as before
+    expect(gateSpendLine({ ...c, forecast: 90, forecastBasis: { kind: 'target' } })).toMatch(/US\$90 forecast for the order \(10 boards at US\$9 each, the build plan's target unit cost\)/)
+  })
+})
