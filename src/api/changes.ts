@@ -825,15 +825,24 @@ export function firstList(text: string): string[] {
 }
 
 /**
- * What trace did, as plain bullets (at most 12): the job's result summary (its list, else its lines), else the pull
- * request body's first list (trace's own pull requests list their commits: their short ids are dropped), else the
+ * A job's report without the runtime's header: a specialist's job ends "docs: done in 41 turns: <its report>", and with
+ * no report (one posted on its work item instead, or none written) it is only "docs: done in 41 turns", which says
+ * nothing of the work (test-esp32 #73). Empty then, so the change is said from its pull request instead.
+ */
+export function reportOf(summary: string | null | undefined): string {
+  return (summary ?? '').trim().replace(/^[\w-]+: done in \d+ turns?(?: \(escalated\))?(?::\s*|\s*$)/, '').trim()
+}
+
+/**
+ * What trace did, as plain bullets (at most 12): the job's result summary (its list, else its lines; reportOf), else the
+ * pull request body's first list (trace's own pull requests list their commits: their short ids are dropped), else the
  * commit subjects.
  */
 export function summaryBullets(o: { jobSummary: string | null; body: string; commits: readonly string[]; earlier?: readonly (string | null)[] }): string[] {
   // a record's or a merge commit's subject says nothing of the work: never a bullet (test-esp32 log #59, #154)
   const clean = (xs: readonly string[]): string[] => [...new Set(xs.map((x) => x.replace(/^[0-9a-f]{7,40}\s+/, '').replace(/<!--[\s\S]*?-->/g, '').trim()).filter((x) => x && !plumbingTitle(x)))].slice(0, 12)
   // every job's on the branch, oldest first: a change two jobs made is not said by the second one's alone (log #18)
-  const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => s?.trim() ?? '').filter(Boolean)
+  const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => reportOf(s)).filter(Boolean)
   if (jobs.length) {
     const lines = jobs.map((job) => {
       const l = firstList(job)

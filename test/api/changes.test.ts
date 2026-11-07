@@ -20,7 +20,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, openChanges, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, reportOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
   askedFor, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
@@ -164,6 +164,25 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(summaryBullets({ jobSummary: '- c', earlier: ['- a', '- b'], body: '', commits: [] })).toEqual(['**Job 1 of 3:** a', '**Job 2 of 3:** b', '**Latest job:** c'])
     // a job that said nothing is not counted
     expect(summaryBullets({ jobSummary: later, earlier: [null, '  '], body: '', commits: [] })).toEqual(['Changes 2 requirements: REQ-1 and REQ-2'])
+  })
+
+  // test-esp32 #73: the docs job that drew the I2C timing figure in the end said only "docs: done in 41 turns"
+  it('reads a job\'s report without the runtime\'s header; with nothing else, from the pull request', () => {
+    expect(reportOf('docs: done in 41 turns')).toBe('')
+    expect(reportOf('verify: done in 3 turns (escalated)')).toBe('')
+    expect(reportOf('impl: done in 12 turns: Drew the power sheet.\n- R1 sized')).toBe('Drew the power sheet.\n- R1 sized')
+    expect(reportOf('Drew it in 3 turns.')).toBe('Drew it in 3 turns.')
+    const body = 'Requested by the trace docs specialist, who asked:\n\n> Commit the documentation changes.\n\n## Sections and the records behind them\n'
+      + '- **Protocol specification, all 7 sections (new document):** the I2C link to the SSD1306 at 0x3C.\n'
+      + '  - New figure `docs/design/figures/timing-i2c.svg`, from the protocol model.\n- **LLD Verification:** the test plan has 40 items.\n'
+    expect(summaryBullets({ jobSummary: 'docs: done in 41 turns', body, commits: ['trace: the docs specialist\'s record (job-a)'] })).toEqual([
+      '**Protocol specification, all 7 sections (new document):** the I2C link to the SSD1306 at 0x3C.',
+      'New figure `docs/design/figures/timing-i2c.svg`, from the protocol model.',
+      '**LLD Verification:** the test plan has 40 items.',
+    ])
+    // a report after the header is the job's own words, without it
+    expect(summaryBullets({ jobSummary: 'docs: done in 41 turns: Wrote the protocol specification and its I2C timing figure.', body, commits: [] }))
+      .toEqual(['Wrote the protocol specification and its I2C timing figure.'])
   })
 
   // test-esp32 log #47, #105: the project's requirements are REQ-xxxxxx; R1 to R7 are its resistors
