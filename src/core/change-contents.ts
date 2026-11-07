@@ -82,12 +82,14 @@ export function changeTitle(messages: readonly string[]): string {
 /**
  * The title to show: `title`, unless it says nothing of the work (a record's or a merge commit's, log #144, #154).
  * Then the work its commits name; else the record's name, from its commits or `kind` (the specialist whose change it
- * is), with what it holds (`holds`: contentPhrase).
+ * is), with what it holds (`holds`: contentPhrase); or `one` (oneRowTitle) when it holds one row only.
  */
-export function betterTitle(title: string, messages: readonly string[], o: { holds?: string | null; kind?: string | null } = {}): string {
+export function betterTitle(title: string, messages: readonly string[], o: { holds?: string | null; kind?: string | null; one?: string | null } = {}): string {
   if (!plumbingTitle(title)) return title
   const t = changeTitle(messages)
   if (t && !plumbingTitle(t)) return t
+  // a record that holds one intent statement or requirement is named by what it does to it (oneRowTitle, #87)
+  if (o.one) return o.one
   const kind = [title, ...messages.map(subjectOf)].map(recordKind).find(Boolean) ?? o.kind ?? null
   return recordName(kind, o.holds)
 }
@@ -389,6 +391,25 @@ export function contentPhrase(o: { paths: readonly string[]; record: RecordChang
   for (const t of r?.tables ?? []) if (!along(t.table)) parts.push(count(t.added + t.changed, t.one, t.many))
   for (const a of designAreas(o.paths)) parts.push(count(a.files.length, `${a.area} file`, `${a.area} files`))
   return andList(parts.slice(0, 3))
+}
+
+/**
+ * A title for a change that holds one intent statement or one requirement and nothing else: what it does to it
+ * ("Changes intent statement INT-8dd269: (4) Wi-Fi 2.4 GHz 802.11 b/g/n …"), not "The verification specialist's record:
+ * 1 intent statement" (test-esp32 #87). Null when it holds anything more (a link to its intent goes with it).
+ */
+export function oneRowTitle(o: { paths: readonly string[]; record: RecordChanges | null }): string | null {
+  const r = o.record
+  if (!r || o.paths.some((p) => !p.startsWith('.trace/')) || r.options?.options.length) return null
+  if ((r.tables ?? []).some((t) => t.table !== 'requirement_intent')) return null
+  const rows = [
+    ...r.intent.added.map((x) => ['Adds', 'intent statement', x] as const), ...r.intent.changed.map((x) => ['Changes', 'intent statement', x] as const),
+    ...r.requirements.added.map((x) => ['Adds', 'requirement', x] as const), ...r.requirements.changed.map((x) => ['Changes', 'requirement', x] as const),
+  ]
+  if (rows.length !== 1) return null
+  const [verb, what, row] = rows[0]!
+  const text = row.text.replace(/\s+/g, ' ').trim()
+  return `${verb} ${what} ${row.id}${text ? `: ${clip(text, 90)}` : ''}`
 }
 
 /**

@@ -1549,8 +1549,9 @@ describe('a change says what it holds (test-esp32 log #144, #133)', () => {
     p.files = p.files.filter((f) => f.path === DB)
     p.commits = [RECORD]
     const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
-    // log #14, #59: "trace: the docs specialist's record (job-…)" was its title and its whole summary
-    expect(d.title).toBe('The docs specialist\'s record: 1 intent statement')
+    // log #14, #59: "trace: the docs specialist's record (job-…)" was its title and its whole summary; #87: then "The docs
+    // specialist's record: 1 intent statement", which does not say what changed
+    expect(d.title).toBe('Adds intent statement INT-wifiprov: The setup access point reopens after 60 s without the saved network')
     expect((d.summary as string[])[0]).toMatch(/^Adds intent statement INT-wifiprov/)
     expect((d.summary as string[]).join('\n')).not.toMatch(/job-|specialist's record/)
   })
@@ -1564,10 +1565,10 @@ describe('a change says what it holds (test-esp32 log #144, #133)', () => {
     p.files = p.files.filter((f) => f.path === DB)
     p.commits = [MERGE, RECORD, MERGE]
     const d = await run(USER, 'change.get', { repo: REPO, number: 20 })
-    expect(d.title).toBe('The docs specialist\'s record: 1 intent statement')
+    expect(d.title).toBe('Adds intent statement INT-wifiprov: The setup access point reopens after 60 s without the saved network')
     expect((d.summary as string[]).join('\n')).not.toMatch(/Merge claude/)
     const listed = ((await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]).find((c) => c.number === 20)
-    expect(listed?.title).toBe('The docs specialist\'s record: 1 intent statement')
+    expect(listed?.title).toBe('Adds intent statement INT-wifiprov: The setup access point reopens after 60 s without the saved network')
     // with work in it, by the work
     p.commits = [MERGE, RECORD, 'Case: printed two-part shell']
     const work = ((await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]).find((c) => c.number === 20)
