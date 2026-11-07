@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { call } from '@/lib/api'
 import { ChatView } from '@/components/chat/chat-view'
 import { SKILL_BY_ID } from './definitions'
-import { IntentOpening, NOTE_INTENT_DESCRIPTION, TOPIC_QUESTIONS, noteStatements, notedAnswer, openingWords, threadKey, useSkillThread, withNoted } from './intent-chat'
+import { DECIDE_INTENT_DESCRIPTION, IntentOpening, NOTE_INTENT_DESCRIPTION, TOPIC_QUESTIONS, decideStatements, decidedAnswer, interfacesCheck, noteStatements, notedAnswer, openingWords, threadKey, useSkillThread, withDecided, withNoted } from './intent-chat'
 
 type Msg = { id: string; role: string; content: string }
 const agent = {
@@ -142,5 +142,79 @@ describe('statements trace notes in the draft (test log R5)', () => {
   it('the opening promise holds: trace notes each statement in the draft', () => {
     expect(openingWords(def, 0, [])).toMatch(/I note each statement in the draft as you answer/)
     expect(NOTE_INTENT_DESCRIPTION).toMatch(/never offer start_task to record intent/)
+  })
+})
+
+describe('trace makes the panel\'s edits on a record statement (test log R12)', () => {
+  const usb = { id: 'INT-a1', text: 'Talks to the PC over USB.', interface: { type: 'USB device', protocol: 'USB 2.0 full speed', direction: 'both' } }
+  const temp = { id: 'INT-a2', text: 'Runs warm.' }
+  const risk = { id: 'INT-a3', text: 'Risk: the supplier may drop the part.' }
+  const shown = new Map([[usb.id, usb], [temp.id, temp], [risk.id, risk]])
+
+  it('edits words and interface fields, rejects with a reason, accepts: the decisions the panel writes', () => {
+    const r = decideStatements([], { decisions: [
+      { statement: 'INT-a1', choice: 'edit', interface: { connector: 'USB-C receptacle', rate: '12 Mbit/s', protocol: 'USB 2.0 full speed' } },
+      { statement: 'INT-a2', choice: 'edit', text: 'Runs from 0 to 40 °C ambient.' },
+      { statement: 'INT-a3', choice: 'reject', reason: 'a project risk, not a product requirement' },
+    ] }, shown)
+    expect(r.refused).toEqual([])
+    // the words kept when none are given; only the fields that change are sent, as the panel's Save does
+    expect(r.decisions).toEqual([
+      { statement: 'INT-a1', choice: 'edit', text: 'Talks to the PC over USB.', interface: { connector: 'USB-C receptacle', rate: '12 Mbit/s' } },
+      { statement: 'INT-a2', choice: 'edit', text: 'Runs from 0 to 40 °C ambient.' },
+      { statement: 'INT-a3', choice: 'reject', reason: 'a project risk, not a product requirement' },
+    ])
+    expect(decidedAnswer(r).note).toMatch(/Not submitted.*Submit intent records it.*Nothing needs to be started/)
+    // a later edit adds to the fields set before; undo takes a decision back
+    const b = decideStatements(r.decisions, { decisions: [{ statement: 'INT-a1', choice: 'edit', interface: { type: 'USB 2.0 device' } }, { statement: 'INT-a3', choice: 'undo' }, { statement: 'INT-a2', choice: 'accept' }] }, shown)
+    expect(b.decisions).toEqual([
+      { statement: 'INT-a1', choice: 'edit', text: 'Talks to the PC over USB.', interface: { connector: 'USB-C receptacle', rate: '12 Mbit/s', type: 'USB 2.0 device' } },
+      { statement: 'INT-a2', choice: 'accept' },
+    ])
+  })
+
+  it('refuses what the panel would not take', () => {
+    const r = decideStatements([], { decisions: [
+      { statement: 'INT-zz', choice: 'accept' },
+      { statement: 'INT-a3', choice: 'reject' },
+      { statement: 'INT-a2', choice: 'edit', interface: { connector: 'none' } },
+      { statement: 'INT-a2', choice: 'edit', text: 'Runs warm.' },
+    ] }, shown)
+    expect(r.decisions).toEqual([])
+    expect(r.refused).toEqual([
+      expect.stringMatching(/INT-zz is not in the Draft intent panel/),
+      expect.stringMatching(/Rejecting INT-a3 needs a reason/),
+      expect.stringMatching(/INT-a2 is not an interface statement/),
+      expect.stringMatching(/INT-a2: nothing to change/),
+    ])
+    expect(decideStatements([], { decisions: [] }, shown).refused[0]).toMatch(/could not be read/)
+  })
+
+  it('note_intent sends a record statement to decide_intent, and marks a topic "don\'t care"', () => {
+    expect(noteStatements([], { statements: [{ id: 'INT-a1', topic: 'interfaces', text: 'x y z' }] }, new Set(['INT-a1'])).refused[0]).toMatch(/with decide_intent/)
+    expect(NOTE_INTENT_DESCRIPTION).toMatch(/kind dont_care/)
+    expect(DECIDE_INTENT_DESCRIPTION).toMatch(/never offer start_task or a Verification job/)
+    const v = withNoted({ topic: 9, answered: ['purpose'], statements: [], questions: [] }, [{ id: 'INT-000009', topic: 'references', kind: 'dont_care', text: 'No prior designs or documents.' }], new Set())
+    expect(v?.answered).toContain('references')
+  })
+})
+
+describe('the panel shows an edit\'s interface fields at once (test log R14)', () => {
+  const intent = { topic: 3, answered: ['interfaces'], questions: [], statements: [
+    { id: 'INT-a1', topic: 'Interfaces', text: 'Talks to the PC over USB.', state: 'needs_number' as const, flag: 'Missing connector, rate', interface: { type: 'USB device', protocol: 'USB 2.0 full speed', direction: 'both' }, missing: ['connector' as const, 'rate' as const] },
+    { id: 'INT-a2', topic: 'Power', text: 'Runs from USB.', state: 'draft' as const },
+  ] }
+
+  it('lays the fields set over the record\'s, and names only the ones still empty', () => {
+    const half = withDecided(intent, [{ statement: 'INT-a1', choice: 'edit', text: 'Talks to the PC over USB.', interface: { connector: 'USB-C receptacle' } }])
+    expect(half?.statements[0]).toMatchObject({ flag: 'Missing rate', missing: ['rate'], state: 'needs_number', interface: { connector: 'USB-C receptacle' } })
+    expect(interfacesCheck(half!.statements)).toBe('not_met')
+    const full = withDecided(intent, [{ statement: 'INT-a1', choice: 'edit', text: 'Talks to the PC over USB.', interface: { connector: 'USB-C receptacle', rate: '12 Mbit/s' } }])
+    expect(full?.statements[0]).toMatchObject({ missing: [], state: 'draft' })
+    expect(full?.statements[0]?.flag).toBeUndefined()
+    expect(interfacesCheck(full!.statements)).toBe('met')
+    // no edit with fields: the record's view as it is
+    expect(withDecided(intent, [{ statement: 'INT-a2', choice: 'accept' }])).toBe(intent)
+    expect(interfacesCheck([{}])).toBeUndefined()
   })
 })

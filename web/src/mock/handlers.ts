@@ -220,6 +220,22 @@ function agui(body: { threadId: string; runId: string; messages: { role: string;
       { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
     ])
   }
+  // asked to fix the intent in the Intent builder, trace edits the record's statements in the person's draft, as the
+  // panel's Edit does (decide_intent, run by the app: test log R12)
+  if (/\bfix\b/i.test(q) && /\b(intent|statement|protocol|interface|draft)/i.test(q)) {
+    const say = crypto.randomUUID()
+    const call = `call_${id.slice(0, 8)}`
+    return sse([
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: say, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: say, delta: 'I set the LoRa link\'s protocol to LoRaWAN 1.0.3 and gave the sleep mode a number, in your draft. Submit intent records both.' },
+      { type: 'TEXT_MESSAGE_END', messageId: say },
+      { type: 'TOOL_CALL_START', toolCallId: call, toolCallName: 'decide_intent', parentMessageId: say },
+      { type: 'TOOL_CALL_ARGS', toolCallId: call, delta: JSON.stringify({ decisions: [{ statement: 's6', choice: 'edit', text: 'LoRa radio, u.FL antenna, LoRaWAN 1.0.3, 5.5 kbit/s, both directions.', interface: { protocol: 'LoRaWAN 1.0.3' } }, { statement: 's5', choice: 'edit', text: 'Sleeps under 20 µA between readings.' }] }) },
+      { type: 'TOOL_CALL_END', toolCallId: call },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
+    ])
+  }
   // a question about a simulation runs a tool for a while, with its run named (docs/progress-and-logs.md, "Chat")
   if (/simulat|settle/i.test(q)) {
     const call = `call_${id.slice(0, 8)}`

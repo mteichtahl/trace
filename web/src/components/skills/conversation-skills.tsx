@@ -35,7 +35,7 @@ import { useCall } from '@/lib/queries'
 import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import type { SkillDef } from './definitions'
-import { IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, noteStatements, notedAnswer, openingWords, useSkillThread, withNoted } from './intent-chat'
+import { DECIDE_INTENT_DESCRIPTION, DecideIntent, type IntentDecision, IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, type ShownStatement, changedFields, decideStatements, decidedAnswer, interfacesCheck, noteStatements, notedAnswer, openingWords, TOPIC_QUESTIONS, useSkillThread, withDecided, withNoted } from './intent-chat'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
 import { type SkillDraftBase, draftChecks, focusSteps, qualityChecks, useSkill } from './use-skill'
 
@@ -58,8 +58,7 @@ const STATE_WORD: Record<IntentStatement['state'], { status: 'met' | 'yours' | '
 
 // ------------------------------------------------------------------ intent builder
 
-/** A person's decision on one statement, kept in the draft until Submit records it (actions-skills pendingDecisions). */
-export interface IntentDecision { statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string; interface?: Partial<Record<InterfaceField, string>> }
+export { changedFields, type IntentDecision }
 /** `proposed`: the statements trace's chat noted from the person's answers (intent-chat.tsx noteStatements). */
 interface IntentLocal extends SkillDraftBase { topic?: number; decisions?: IntentDecision[]; proposed?: NotedStatement[] }
 
@@ -105,7 +104,7 @@ export function intentSubmitLabel(submit: string, undecided: number): string {
  * chat says the same as the panel (test-esp32 #22: it said the edits had not reached the record while the badge said
  * Accepted). Pure.
  */
-export function intentDraftContext(decisions: readonly IntentDecision[], undecided: readonly string[], noted: readonly NotedStatement[] = []) {
+export function intentDraftContext(decisions: readonly IntentDecision[], undecided: readonly string[], noted: readonly NotedStatement[] = [], shown?: Pick<IntentDraft, 'answered' | 'statements'>) {
   return {
     submitted: false,
     note: 'These decisions are in the person\'s Intent builder draft, not in the record. They are recorded when the person presses Submit intent; until then the record still has the statements as the agents wrote them. Submit intent also accepts, as worded, every statement still in draft.',
@@ -113,8 +112,16 @@ export function intentDraftContext(decisions: readonly IntentDecision[], undecid
     acceptedAtSubmit: undecided,
     // what trace noted in the draft (note_intent), so it rewords one by its id rather than noting it twice
     ...(noted.length ? { notedInDraft: noted.map((x) => ({ id: x.id, topic: x.topic, words: x.text, ...(x.kind ? { kind: x.kind } : {}) })) } : {}),
+    // every statement the panel shows, with what the quality bar flags on it, so trace changes one by its id
+    // (decide_intent), and the topics not answered yet, which a "don't care" statement can mark (note_intent)
+    ...(shown ? {
+      statements: shown.statements.map((x) => ({ id: x.id, topic: x.topic, words: x.text, ...(x.flag ? { flag: x.flag } : {}), ...(x.interface ? { interface: x.interface } : {}) })),
+      topicsNotAnswered: TOPIC_IDS.filter((t) => !shown.answered.includes(t)),
+    } : {}),
   }
 }
+
+const TOPIC_IDS = Object.keys(TOPIC_QUESTIONS)
 
 const FIELDS: { id: InterfaceField; label: string; hint: string }[] = [
   { id: 'type', label: 'Type', hint: 'USB device, I2C, antenna' },
@@ -123,16 +130,6 @@ const FIELDS: { id: InterfaceField; label: string; hint: string }[] = [
   { id: 'rate', label: 'Rate', hint: '12 Mbit/s, 400 kHz' },
   { id: 'direction', label: 'Direction', hint: 'in, out or both' },
 ]
-
-/**
- * The fields of an interface a person changed, trimmed: what Save sends beside the words. The fields left as shown are
- * not sent, so trace reads them from the new words (a reworded rate is not held back by the old one). Pure.
- */
-export function changedFields(shown: Partial<Record<InterfaceField, string>>, typed: Partial<Record<InterfaceField, string>>): Partial<Record<InterfaceField, string>> | undefined {
-  const out: Partial<Record<InterfaceField, string>> = {}
-  for (const f of FIELDS) { const v = typed[f.id]?.trim(); if (v && v !== (shown[f.id] ?? '').trim()) out[f.id] = v }
-  return Object.keys(out).length ? out : undefined
-}
 
 /** An interface statement's five fields, as the check reads them: the empty ones named. */
 function InterfaceFields({ st }: { st: IntentStatement }) {
@@ -157,7 +154,7 @@ function InterfaceFields({ st }: { st: IntentStatement }) {
  * Statements left undecided are accepted at Submit, and Submit's words say how many. Until Submit a decision reads
  * "Not submitted" (statementBadge), the way trace's chat is told it (intentDraftContext).
  */
-function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; decision?: IntentDecision; onDecide: (d: Omit<IntentDecision, 'statement'> | null) => void }) {
+export function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; decision?: IntentDecision; onDecide: (d: Omit<IntentDecision, 'statement'> | null) => void }) {
   const [mode, setMode] = useState<'edit' | 'reject' | null>(null)
   const [words, setWords] = useState('')
   const [fields, setFields] = useState<Partial<Record<InterfaceField, string>>>({})
@@ -178,14 +175,16 @@ function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; d
       {mode ? (
         <div className="space-y-2">
           <Label className="sr-only" htmlFor={`intent-${st.id}`}>{mode === 'edit' ? `Statement ${st.id} in your words` : `Why ${st.id} is rejected`}</Label>
-          <Input id={`intent-${st.id}`} className="h-8 min-w-0" autoFocus placeholder={mode === 'edit' ? 'The statement in your words' : 'Why it is rejected'} value={words} onChange={(e) => setWords(e.target.value)} />
+          {/* the words in full, on as many lines as they take; not a login field, so no password manager offers itself
+              (test log R13, #23) */}
+          <Textarea id={`intent-${st.id}`} className="min-h-16 w-full min-w-0 resize-y" autoFocus autoComplete="off" data-1p-ignore data-lpignore="true" data-form-type="other" placeholder={mode === 'edit' ? 'The statement in your words' : 'Why it is rejected'} value={words} onChange={(e) => setWords(e.target.value)} />
           {mode === 'edit' && st.interface && (
             <fieldset className="grid gap-2 rounded-md border p-2">
               <legend className="px-1 text-xs text-muted-foreground">The interface. Change a field to set it; the ones you leave are read from your words.</legend>
               {FIELDS.map((f) => (
                 <div key={f.id} className="flex min-w-0 items-center gap-2">
                   <Label htmlFor={`intent-${st.id}-${f.id}`} className="w-20 shrink-0 text-xs">{f.label}</Label>
-                  <Input id={`intent-${st.id}-${f.id}`} className="h-8 min-w-0 flex-1" placeholder={f.hint} value={fields[f.id] ?? ''} onChange={(e) => setFields((x) => ({ ...x, [f.id]: e.target.value }))} />
+                  <Input id={`intent-${st.id}-${f.id}`} className="h-8 min-w-0 flex-1" autoComplete="off" data-1p-ignore data-lpignore="true" data-form-type="other" placeholder={f.hint} value={fields[f.id] ?? ''} onChange={(e) => setFields((x) => ({ ...x, [f.id]: e.target.value }))} />
                 </div>
               ))}
             </fieldset>
@@ -254,13 +253,17 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const recorded = live ?? s.view.data?.intent
   // the statements trace noted in the draft show at once, before the saved draft comes back laid over the record
   const rejectedIds = new Set(decisions.filter((d) => d.choice === 'reject').map((d) => d.statement))
-  const intent = withNoted(recorded, proposed, rejectedIds)
+  // the draft's edits show at once too: an interface's fields set in Edit, not "not given" until the bar is read
+  // again (test log R14)
+  const intent = withDecided(withNoted(recorded, proposed, rejectedIds), decisions)
   const v = s.view.data
   // the agent drives the topic; the person can revisit an answered one
   const topic = intent?.topic ?? s.stepIndex
   const answered = intent?.answered ?? s.draft.data.done
   const steps = focusSteps(def, topic, answered)
-  const checks = qualityChecks(def, v, draftChecks(v, s.draft.data))
+  // the interfaces check follows the fields on screen, so it moves with an edit at once, as the panel does (R14)
+  const ifaces = interfacesCheck((intent?.statements ?? []).filter((x) => x.topic === 'Interfaces' && !rejectedIds.has(x.id)))
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(ifaces && intent ? { interfaces: ifaces } : {}) })
   const left = checks.filter((c) => c.status === 'not_met').length
   const t = def.steps[topic] ?? def.steps[0]!
   // a statement rejected in the draft drops out of the record's view (skill.get lays the draft over it): listed here
@@ -268,7 +271,7 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const rejected = decisions.filter((d) => d.choice === 'reject' && !shown.has(d.statement))
   const decide = (statement: string, d: Omit<IntentDecision, 'statement'> | null) => s.draft.setData((x) => withIntentDecision(x, statement, d))
   const undecided = undecidedStatements(intent?.statements ?? [], decisions)
-  useTraceContext(decisions.length || undecided.length || proposed.length ? { label: 'Intent draft', description: 'The person\'s Intent builder draft, not submitted yet', value: intentDraftContext(decisions, undecided, proposed) } : null, 'intent-draft')
+  useTraceContext(decisions.length || intent?.statements.length || proposed.length ? { label: 'Intent draft', description: 'The person\'s Intent builder draft, not submitted yet', value: intentDraftContext(decisions, undecided, proposed, intent) } : null, 'intent-draft')
 
   // trace's chat notes the statements it drafts in this draft at once (note_intent): no job, no branch, no change
   const latest = useRef({ draft: s.draft, proposed, record: new Set<string>() })
@@ -285,6 +288,26 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
         draft.setData((d) => ({ ...d, proposed: r.proposed }))
       }
       return notedAnswer(r)
+    },
+  }, [])
+
+  // and changes a statement the way the person does in the panel (decide_intent): the same decisions, in the draft
+  const shownNow = useRef({ decisions, shown: new Map<string, ShownStatement>() })
+  shownNow.current = { decisions, shown: new Map((intent?.statements ?? []).map((x) => [x.id, x])) }
+  useFrontendTool({
+    name: 'decide_intent', agentId: FOCUS_AGENT_ID, description: DECIDE_INTENT_DESCRIPTION, parameters: DecideIntent,
+    handler: async (args) => {
+      const { draft } = latest.current
+      if (!draft.loaded) return { decided: [], refused: ['The draft is still loading: make the change again in a moment.'] }
+      // a statement rejected in the draft has left the panel's list: it can still be undone or decided again
+      const shown = new Map(shownNow.current.shown)
+      for (const d of shownNow.current.decisions) if (!shown.has(d.statement)) shown.set(d.statement, { id: d.statement, text: d.text ?? '' })
+      const r = decideStatements(shownNow.current.decisions, args, shown)
+      if (r.decided.length) {
+        shownNow.current.decisions = r.decisions
+        draft.setData((d) => ({ ...d, decisions: r.decisions }))
+      }
+      return decidedAnswer(r)
     },
   }, [])
 

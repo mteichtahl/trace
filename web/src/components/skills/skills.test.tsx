@@ -1,10 +1,11 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it, vi } from 'vitest'
 import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { IntentQualityList, answerChecks, arrivingChoice, changedFields, decidedNote, draftCount, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
+import { IntentQualityList, IntentStatementRow, answerChecks, arrivingChoice, changedFields, decidedNote, draftCount, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waivableShown, waiverChecks, whereExample, type WaiverDraft } from './form-skills'
@@ -284,5 +285,25 @@ describe('the Draft intent panel\'s quality bar', () => {
     render(<IntentQualityList checks={checks} topic={0} />)
     const name = screen.getByText('No vague words')
     expect(name.nextElementSibling).toHaveTextContent('1 left')
+  })
+})
+
+// R13 (#23 again): Edit was a one-line input for a statement of several lines, and 1Password offered itself on it
+describe('Edit on a statement', () => {
+  it('opens the words in a multi-line box no password manager takes for a login field, and saves the fields changed', async () => {
+    const onDecide = vi.fn()
+    const st = { id: 'INT-a1', topic: 'Interfaces', text: 'Talks to the PC over USB, as a HID device, and draws its power from the same port.', state: 'needs_number' as const, flag: 'Missing connector, rate', interface: { type: 'USB device' }, missing: ['connector' as const, 'rate' as const] }
+    render(<IntentStatementRow st={st} onDecide={onDecide} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Edit INT-a1' }))
+    const box = screen.getByLabelText('Statement INT-a1 in your words')
+    expect(box.tagName).toBe('TEXTAREA')
+    expect(box).toHaveValue(st.text)
+    expect(box).toHaveAttribute('autocomplete', 'off')
+    expect(box).toHaveAttribute('data-1p-ignore')
+    expect(box).toHaveAttribute('data-lpignore', 'true')
+    expect(screen.getByLabelText('Connector')).toHaveAttribute('data-1p-ignore')
+    await userEvent.type(screen.getByLabelText('Connector'), 'USB-C receptacle')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onDecide).toHaveBeenCalledWith({ choice: 'edit', text: st.text, interface: { connector: 'USB-C receptacle' } })
   })
 })
