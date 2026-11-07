@@ -89,7 +89,11 @@ export interface ArchScoreRow { option: string; criterion: string; score: number
 /** A part of a block. `off_board`: it sits off the board (a display, sensor module or battery on a header, connector or
  *  cable), so the case must hold it and the board's own parts do not include it; `size_mm`: its outline, from its
  *  datasheet (x, y, z). */
-export interface BlockPart { mpn: string; role?: string | undefined; key?: boolean | undefined; off_board?: boolean | undefined; size_mm?: number[] | undefined }
+export interface BlockPart { mpn: string; role?: string | undefined; key?: boolean | undefined; off_board?: boolean | undefined; size_mm?: number[] | undefined; mates?: PartMate | undefined }
+/** What an off-board part plugs into: the board connector (its reference), the part's own pin names in order from pin
+ *  1, as its datasheet gives them, and where in the datasheet (sha256 and page). The pin plan's rows of that connector
+ *  are checked against it (record.ts mateCheck). */
+export interface PartMate { connector: string; pins: string[]; source?: string | undefined }
 export interface ArchBlockRow { option: string; id: string; name: string; role: string | null; parts: BlockPart[]; requirements: string[]; x: number | null; y: number | null; status: (typeof PROPOSAL_STATUS)[number]; updated: number; by: string | null }
 export interface ArchConnectionRow { option: string; id: string; from: string; to: string; kind: (typeof CONNECTION_KINDS)[number]; label: string; status: (typeof PROPOSAL_STATUS)[number]; updated: number; by: string | null }
 export interface PinRow {
@@ -104,6 +108,8 @@ export interface DesignRows {
   intent: IntentStatementRow[]; links: RequirementIntentRow[]
   options: ArchOptionRow[]; criteria: ArchCriterionRow[]; scores: ArchScoreRow[]; blocks: ArchBlockRow[]; connections: ArchConnectionRow[]
   pins: PinRow[]; sheets: SheetRow[]
+  /** the requirements' ids and when each last changed, for criteria that name them (absent: not read) */
+  requirements?: { id: string; updated: number }[]
 }
 
 // ------------------------------------------------------------------ schema
@@ -175,7 +181,7 @@ ensureProjectSchema({ table: 'arch_blocks', sql: `
 CREATE TABLE IF NOT EXISTS arch_blocks (
   option TEXT NOT NULL, id TEXT NOT NULL,
   name TEXT NOT NULL, role TEXT,
-  parts TEXT NOT NULL,            -- JSON [{ mpn, role?, key?, off_board?, size_mm? }]
+  parts TEXT NOT NULL,            -- JSON [{ mpn, role?, key?, off_board?, size_mm?, mates? }]
   requirements TEXT NOT NULL,     -- JSON list of requirement ids it serves
   x REAL, y REAL,                 -- where on the diagram, 0..1 of the frame
   status TEXT NOT NULL DEFAULT 'proposed',
@@ -270,6 +276,7 @@ export function readDesignRows(db: DatabaseSync): DesignRows {
       alternates: strs(r.alternates), constraints: s(r.constraints), note: s(r.note), status: status(r.status), updated: Number(r.updated), by: s(r.by),
     })),
     sheets: all(db, 'sheet_requirements', 'sheet').map((r) => ({ sheet: String(r.sheet), block: s(r.block), requirements: strs(r.requirements), reason: s(r.reason), updated: Number(r.updated), by: s(r.by) })),
+    requirements: hasTable(db, 'requirements') ? (db.prepare('SELECT id, updated FROM requirements').all() as Record<string, unknown>[]).map((r) => ({ id: String(r.id), updated: Number(r.updated ?? 0) })) : [],
   }
 }
 

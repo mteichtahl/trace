@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { baselineCriteria, baselineWhy, recordedWords } from '../../src/api/actions-skills.js'
+import { questionParts } from '../../src/api/skill-checks.js'
 import { agentFactsStore, journeyStore } from '../../src/api/action-kit.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -265,13 +266,22 @@ describe('the guided skills read the design record', () => {
     await facts.update((db) => ({ result: addAgentQuestion(db, { agent: 'verify', label: 'the Verification specialist', jobId: null }, {
       text: 'Which ambient temperature should the thermal test use?', options: [{ id: 'a', label: '40 °C', recommended: true, why: 'the intent' }, { id: 'b', label: '25 °C', recommended: false, why: 'a lab' }],
     }, record) }))
-    const held = await run(USER, 'skill.get', { repo: REPO, skill: 'pin-plan-review' }) as { pending_errors?: string[] }
+    const held = await run(USER, 'skill.get', { repo: REPO, skill: 'pin-plan-review' }) as { pending_errors?: string[]; items: { id: string; title: string; status: string; question?: string }[] }
     expect(held.pending_errors).toEqual(['Answer the open question first: the Implementation specialist asks "Which pin order does U1\'s debug header need?" Its answer may change what Pin plan review agrees.'])
+    // the review lists it first, to answer, and the pin map shows it on the part's pins, not "agreed"
+    expect(held.items[0]).toMatchObject({ id: `question:${asked.result}`, status: 'open', question: asked.result, title: 'Open question about U1: Which pin order does U1\'s debug header need?' })
+    expect(held.items.filter((x) => x.question)).toHaveLength(1)
+    const mapped = await run(USER, 'design.get', { repo: REPO }) as { pins: { part: string; status: string; question?: string; note?: string }[] }
+    const u1 = mapped.pins.filter((x) => x.part === 'U1' && x.status !== 'spare')
+    expect(u1.length).toBeGreaterThan(0)
+    for (const x of u1) expect(x).toMatchObject({ status: 'asked', question: asked.result, note: expect.stringMatching(/^Open question: Which pin order/) })
     await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'pin-plan-review', draft: {} })).rejects.toThrow(/cannot be submitted yet: Answer the open question first: the Implementation specialist asks "Which pin order/)
     await run(USER, 'question.answer', { repo: REPO, question: asked.result, option: 'a' })
     expect(await run(USER, 'skill.submit', { repo: REPO, skill: 'pin-plan-review', draft: {} })).toMatchObject({ ok: true })
-    const d = await run(USER, 'design.get', { repo: REPO }) as { pin_plan: { parts: { part: string; agreed: { by: string; stale: boolean } }[] } }
+    const d = await run(USER, 'design.get', { repo: REPO }) as { pin_plan: { parts: { part: string; agreed: { by: string; stale: boolean } }[] }; pins: { status: string }[] }
     expect(d.pin_plan.parts[0]).toMatchObject({ part: 'U1', agreed: { by: USER.email, stale: false } })
+    // answered: its pins are agreed again
+    expect(d.pins.some((x) => x.status === 'asked')).toBe(false)
     // the agreement is what the schematic review's pin plan criterion waits for
     const g = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string; evidence: { ref: string; label: string }[] }[] }[] }
     expect(g.gates.find((x) => x.id === 'capture')?.criteria.find((x) => x.id === 'capture.pins')).toMatchObject({ status: 'met', evidence: [{ ref: 'pin-plan-review', label: expect.stringMatching(/U1 agreed/) }] })
@@ -466,5 +476,15 @@ describe('the requirements baseline from the record', () => {
     expect(recordedWords([{ kind: 'requirement', choice: 'accepted' }, { kind: 'requirement', choice: 'accepted' }, { kind: 'requirement', choice: 'struck' }, { kind: 'intent.uncovered', choice: 'left_out' }]))
       .toBe('2 requirements accepted, 1 requirement struck, 1 intent line left out')
     expect(recordedWords([{ kind: 'pins.agreed', choice: 'agreed' }])).toBe("1 part's pin plan agreed")
+  })
+})
+
+describe('questionParts (test-esp32 #106)', () => {
+  const pin = (part: string) => ({ part, pin: '1', name: null, function: null, peripheral: null, use: null, net: null, kind: 'signal' as const, reserved: null, alternates: [], constraints: null, note: null, status: 'proposed' as const, updated: 0, by: null })
+  const design = { intent: [], links: [], options: [], criteria: [], scores: [], blocks: [], connections: [], sheets: [], pins: [pin('J2'), pin('U1'), pin('U10')] }
+  it('names the plan\'s parts the question names, whole words only', () => {
+    expect(questionParts({ text: 'Which pin order should the 4-pin OLED header J2 have?', blocks: 'its pin plan rows (capture.pins)' }, design)).toEqual(['J2'])
+    expect(questionParts({ text: 'Is U10 the right regulator?', blocks: null }, design)).toEqual(['U10'])
+    expect(questionParts({ text: 'Which pin order?', blocks: null }, design)).toEqual([])
   })
 })

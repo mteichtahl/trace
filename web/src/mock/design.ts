@@ -49,7 +49,8 @@ function architecture(): ArchitectureRecord {
   const o = OPTIONS.find((x) => x.id === current)!
   return {
     option: `Option ${o.id}: ${o.name}`, id: o.id, state: chosen ? 'chosen' : 'proposed', blocks: o.blocks, connections: o.connections, options: OPTIONS,
-    criteria: [{ id: 'cost', name: 'Cost', weight: 2, description: null }, { id: 'power', name: 'Power', weight: 2, description: null }, { id: 'risk', name: 'Risk', weight: 1, description: null }, { id: 'availability', name: 'Part availability', weight: 1, description: null }],
+    // once fixed, the cost criterion names a requirement changed since: its numbers may be old (#173)
+    criteria: [{ id: 'cost', name: 'Cost', weight: 2, description: 'R-014: at most US$12 a board.', ...(fixed ? { stale: { requirements: ['R-014'], since: new Date(Date.now() - 3_600_000).toISOString() } } : {}) }, { id: 'power', name: 'Power', weight: 2, description: null }, { id: 'risk', name: 'Risk', weight: 1, description: null }, { id: 'availability', name: 'Part availability', weight: 1, description: null }],
     fixed, recommended: 'B', chosen,
     scores: [
       { option: 'A', criterion: 'cost', score: 3, reason: 'Two chips cost US$1.40 more.', by: 'trace' }, { option: 'B', criterion: 'cost', score: 5, reason: 'One chip.', by: 'trace' },
@@ -64,8 +65,11 @@ const SHEET_SERVES: Record<string, { serves?: string[]; block?: string; serves_n
   power: { serves: ['R-004', 'R-014'], block: 'b-power' }, mcu: { serves: ['R-006', 'R-011'], block: 'b-mcu' }, radio: { serves: ['R-006'], block: 'b-antenna' }, sensor: { serves: ['R-001'], block: 'b-sensor' },
 }
 
+const PIN_QUESTION = 'Which pin order should the OLED header have on U1\'s I2C pins: GND, VCC, SCL, SDA or VCC, GND, SCL, SDA? A wrong order reverses the module\'s supply.'
+
 function design(): DesignView {
-  const pins = (DESIGN.pins ?? []).map((p) => ({ ...p, part: 'U1' }))
+  // an open question about the I2C pins: not agreed until it is answered (test-esp32 #106)
+  const pins = (DESIGN.pins ?? []).map((p) => ({ ...p, part: 'U1', ...(/^I2C1_/.test(p.fn) ? { status: 'asked' as const, question: 'q-pins', note: `Open question: ${PIN_QUESTION}` } : {}) }))
   pins.splice(4, 0, { part: 'U1', pin: 'PA9', name: 'PA9', net: 'GPS_RX', fn: 'USART2_TX', peripheral: 'USART2', use: 'GPS', status: 'conflict', note: "U1's USART2 is claimed by 2 uses: debug console, gps." })
   return {
     ...DESIGN, architecture: architecture(),
@@ -217,7 +221,8 @@ const SKILLS: Record<string, (draft?: ReviewDraft) => Partial<SkillView>> = {
   }),
   'pin-plan-review': () => ({
     summary: 'The pin plan matches the schematic except one conflict: USART2 is planned for both the debug console and the GPS.',
-    items: [{ id: 'finding:peripheral:U1:USART2:claimed_twice', title: "U1's USART2 is claimed by 2 uses: debug console, gps.", detail: 'Fix it in the plan or the schematic, or waive it.', status: 'open' }],
+    pending_errors: [`Answer the open question first: the Firmware specialist asks "${PIN_QUESTION}" Its answer may change what Pin plan review agrees.`],
+    items: [{ id: 'question:q-pins', title: `Open question about U1: ${PIN_QUESTION}`, detail: 'the Firmware specialist asks. Answer it before agreeing the plan; it holds back the I2C rows of the pin plan (capture.pins).', status: 'open', label: 'Unanswered', question: 'q-pins' }, { id: 'finding:peripheral:U1:USART2:claimed_twice', title: "U1's USART2 is claimed by 2 uses: debug console, gps.", detail: 'Fix it in the plan or the schematic, or waive it.', status: 'open' }],
     checks: [{ id: 'functions', status: 'met' }, { id: 'instances', status: 'not_met', detail: "U1's USART2 is claimed by 2 uses: debug console, gps." }, { id: 'boot', status: 'waived', detail: '1 finding waived.' }, { id: 'match', status: 'met' }],
   }),
 }

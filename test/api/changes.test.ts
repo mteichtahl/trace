@@ -137,6 +137,21 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(summaryBullets({ jobSummary: 'Did it:\n- drew the regulator sheet\n- ran the rule check', body: '- other', commits: [] })).toEqual(['drew the regulator sheet', 'ran the rule check'])
     expect(summaryBullets({ jobSummary: null, body: 'Opened automatically.\n\n### Commits\n- abc1234 design: sheets\n- def5678 erc: clean', commits: ['x'] })).toEqual(['design: sheets', 'erc: clean'])
     expect(summaryBullets({ jobSummary: null, body: '', commits: ['first line\n\nbody', 'second'] })).toEqual(['first line', 'second'])
+
+  })
+
+  // test-esp32 #166: "Changes 2 requirements", then an earlier job's "I did not touch any requirement's words": read as
+  // one report they contradict each other, so each job's report says which job it is from
+  it('labels each job\'s report when several jobs worked on the branch; one job\'s is left as it is', () => {
+    const later = '- Changes 2 requirements: REQ-1 and REQ-2'
+    const earlier = 'I did not touch any requirement\'s words, acceptance criterion or status.'
+    expect(summaryBullets({ jobSummary: later, earlier: [earlier], body: '', commits: [] })).toEqual([
+      '**Earlier job:** I did not touch any requirement\'s words, acceptance criterion or status.',
+      '**Latest job:** Changes 2 requirements: REQ-1 and REQ-2',
+    ])
+    expect(summaryBullets({ jobSummary: '- c', earlier: ['- a', '- b'], body: '', commits: [] })).toEqual(['**Job 1 of 3:** a', '**Job 2 of 3:** b', '**Latest job:** c'])
+    // a job that said nothing is not counted
+    expect(summaryBullets({ jobSummary: later, earlier: [null, '  '], body: '', commits: [] })).toEqual(['Changes 2 requirements: REQ-1 and REQ-2'])
   })
 
   // test-esp32 log #47, #105: the project's requirements are REQ-xxxxxx; R1 to R7 are its resistors
@@ -641,6 +656,21 @@ describe('changes.list and change.get', () => {
     expect(d.checks).toMatchObject({ total: 5, passed: 3, skipped: 2, failed: 0, running: 0 })
     expect(d.checks_list).toHaveLength(5)
     expect(d.recommendation.why).toMatch(/^All 3 checks passed \(automerge, check and tests pass\), and it can be merged\./)
+  })
+
+  it('the list says what the change\'s page says of its checks: each workflow as its jobs, not GitHub\'s status (test-esp32 #16)', async () => {
+    // GitHub's status still counts the workflow as one check running; its jobs, which the page lists, have all passed
+    github.add(1, 'claude/task-reqs', { checks: { total: 1, passed: 0, failed: 0, running: 1, skipped: 0, failing: [] } })
+    github.pulls.get(1)!.runs = [
+      { name: 'check', status: 'completed', conclusion: 'success', summary: null, id: 'job:1' },
+      { name: 'tests pass', status: 'completed', conclusion: 'success', summary: null, id: 'job:2' },
+    ]
+    const listed = ((await run(USER, 'changes.list', { repo: REPO })).changes as { number: number; verdict: string; checks: Record<string, unknown> }[]).find((c) => c.number === 1)
+    const page = await run(USER, 'change.get', { repo: REPO, number: 1 }) as { verdict: string; checks: Record<string, unknown> }
+    expect(listed?.checks).toEqual(page.checks)
+    expect(listed?.checks).toMatchObject({ total: 2, passed: 2, running: 0 })
+    expect(listed?.verdict).toBe(page.verdict)
+    expect(listed?.verdict).not.toBe('checking')
   })
 
   it('a change its specialist calls unfinished is listed as that, and its page recommends asking for changes', async () => {
@@ -1490,7 +1520,8 @@ describe('a change says what it holds (test-esp32 log #144, #133)', () => {
     expect(d.requirements).toContain('REQ-a1b2c3')
     const summary = d.summary as string[]
     expect(summary).toContain('Adds requirement REQ-a1b2c3 (proposed): "The board fits 50 x 35 mm"')
-    expect(summary.indexOf('drafted 12 intent statements from your answers')).toBeGreaterThan(-1)
-    expect(summary.indexOf('drafted 12 intent statements from your answers')).toBeLessThan(summary.indexOf('set the board size'))
+    // each job's report is labelled with its job, oldest first (log #166)
+    expect(summary.indexOf('**Earlier job:** drafted 12 intent statements from your answers')).toBeGreaterThan(-1)
+    expect(summary.indexOf('**Earlier job:** drafted 12 intent statements from your answers')).toBeLessThan(summary.indexOf('**Latest job:** set the board size'))
   })
 })

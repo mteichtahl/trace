@@ -92,6 +92,8 @@ export interface SkillItem {
   status: 'open' | 'done' | 'waived'
   /** the badge's word, when the status's own word does not fit (a case design not offered) */
   label?: string
+  /** an open question it is: answered with Answer it, never resolved here (Pin plan review, test-esp32 #106) */
+  question?: string
   evidence?: EvidenceRef
   /** Requirements review: the requirement's acceptance criterion */
   criterion?: string | null
@@ -366,7 +368,8 @@ export interface ArchitectureRecord {
   blocks: Block[]
   connections: BlockConnection[]
   options?: ArchOption[]
-  criteria?: { id: string; name: string; weight: number; description: string | null }[]
+  /** was: the name it was fixed with, when reworded since; stale: requirements it names changed after its words */
+  criteria?: { id: string; name: string; weight: number; description: string | null; was?: string; stale?: { requirements: string[]; since: string } }[]
   fixed?: { by: string; at: string } | null
   scores?: { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }[]
   recommended?: string | null
@@ -382,7 +385,10 @@ export interface PinView {
   use?: string
   alt?: string
   reserved?: string
-  status: 'ok' | 'conflict' | 'spare' | 'waived'
+  /** asked: an open question names its part (design.get), so it is not agreed until it is answered */
+  status: 'ok' | 'conflict' | 'spare' | 'waived' | 'asked'
+  /** the open question about it, to answer (status asked) */
+  question?: string
   note?: string
   findings?: { id: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
 }
@@ -615,6 +621,23 @@ export interface CloudSpend {
   basis: 'estimate'
 }
 
+/** The order (boards, assembly, parts, case, shipping) estimated from the record at the fab's published prices, not a quote. */
+export interface OrderEstimateView {
+  currency: string
+  quantity: number
+  low: number
+  high: number
+  perBoard: { low: number; high: number }
+  /** when its parts check ran */
+  at: string
+  partsRun: string
+  lines: { key: string; what: string; low: number; high: number; source: string }[]
+  notIn: string[]
+  verdict: 'under' | 'at_risk' | 'over' | null
+  limits: { requirement: string | null; kind: 'total' | 'per_board'; amount: number; currency: string; verdict: 'under' | 'at_risk' | 'over' | 'not_compared'; text: string }[]
+  text: string
+}
+
 /** cost.get. Money is for admins only (`money: false`: every amount is null); what is not recorded is null, with notes. */
 export interface CostView {
   money?: boolean
@@ -634,6 +657,8 @@ export interface CostView {
   cloudBudget?: number
   quantity?: number
   unit_cost?: number | null
+  /** the order estimate against the cost requirements, from the newest parts check; absent before one */
+  orderEstimate?: OrderEstimateView
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
   lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'tools' | 'order'; amount: number; estimate?: boolean }[]
   /** spend by job, grouped by stage, work done again marked (admins; null when nothing is recorded) */

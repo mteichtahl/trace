@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, resolve } from 'node:path'
 import { z } from 'zod'
+import type { DatabaseSync } from 'node:sqlite'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { type Json, Work } from '../../core/store.js'
 import { loadAgentFacts } from '../../core/agent-facts.js'
@@ -27,6 +28,10 @@ import { journeyScope } from '../journey/tools.js'
 import { Recorder } from '../sim/record.js'
 import { ExpectSchema, METHODS, POINT_KINDS, REQ_KINDS, REQ_STATUS, TEST_STATUS, withVerify, type TestItem } from './db.js'
 import { extractCandidates } from './extract.js'
+import { unmarkedNote } from './inferred.js'
+import { readDesignRows } from '../design/db.js'
+import { loadDesignDecisions } from '../design/decisions.js'
+import { intentView } from '../design/record.js'
 import { tail } from './job.js'
 import { buildMatrix, reportMarkdown } from './matrix.js'
 import { releaseFacts, type ReleaseFacts } from './release.js'
@@ -60,6 +65,18 @@ async function documentPages(path: string): Promise<string[]> {
   }
   // text: form feeds separate pages (pdftotext's output); otherwise one page
   return readFileSync(p, 'utf8').split('\f')
+}
+
+/**
+ * The intent's words as people decided them (edited words over the agent's, rejected statements left out), for telling
+ * a person's numbers from trace's (inferred.ts).
+ */
+function intentWords(db: DatabaseSync): string[] {
+  try {
+    return intentView(readDesignRows(db), loadDesignDecisions(db)).filter((s) => s.state !== 'rejected').map((s) => s.words)
+  } catch {
+    return [] // no intent here (a project imported from its design): nothing to compare with
+  }
 }
 
 export const requirementsTool = defineTool({
@@ -101,11 +118,14 @@ export const requirementsTool = defineTool({
       if (a.action === 'add') {
         if (!a.requirements?.length) throw new ToolError('add: give requirements')
         const added = a.requirements.map((r) => v.addRequirement(r))
-        return { added: added.map((r) => r.id), requirements: added }
+        const unmarked = unmarkedNote(added, intentWords(v.db))
+        return { added: added.map((r) => r.id), requirements: added, ...(unmarked ? { unmarked_numbers: unmarked } : {}) }
       }
       if (a.action === 'update') {
         if (!a.id || !a.set) throw new ToolError('update: give id and set')
-        return { requirement: v.updateRequirement(a.id, a.set) }
+        const requirement = v.updateRequirement(a.id, a.set)
+        const unmarked = a.set.acceptance !== undefined ? unmarkedNote([requirement], intentWords(v.db)) : null
+        return { requirement, ...(unmarked ? { unmarked_numbers: unmarked } : {}) }
       }
       const list = v.requirements({ kind: a.kind, status: a.status })
       const notes = v.mergeNotes()

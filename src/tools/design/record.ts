@@ -20,7 +20,7 @@
  */
 import { limitsOf } from '../verify/extract.js'
 import { type DesignDecision, fingerprint, standing } from './decisions.js'
-import { type ArchBlockRow, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_TOPICS, type PinRow, TOPIC_NAMES } from './db.js'
+import { type ArchBlockRow, type BlockPart, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_TOPICS, type PinRow, TOPIC_NAMES } from './db.js'
 
 // ------------------------------------------------------------------ intent
 
@@ -282,11 +282,17 @@ export function requirementDecisions(decisions: readonly DesignDecision[], rows?
 
 // ------------------------------------------------------------------ architecture
 
-export interface CriterionView { id: string; name: string; weight: number; description: string | null }
+export interface CriterionView {
+  id: string; name: string; weight: number; description: string | null
+  /** the name it was fixed with, when its words were changed after the fix (the weight stays the fixed one) */
+  was?: string
+  /** requirements its words name that changed after the words were written: the numbers it quotes may be old */
+  stale?: { requirements: string[]; since: string }
+}
 export interface ScoreView { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }
 export interface OptionView {
   id: string; name: string; summary: string; recommended: boolean; why: string | null; gives_up: string | null; risks: string[]
-  blocks: { id: string; name: string; role: string | null; parts: { mpn: string; role?: string | undefined; key?: boolean | undefined; off_board?: boolean | undefined; size_mm?: number[] | undefined }[]; serves: string[]; x: number; y: number }[]
+  blocks: { id: string; name: string; role: string | null; parts: BlockPart[]; serves: string[]; x: number; y: number }[]
   connections: { id: string; from: string; to: string; kind: string; label: string }[]
   /** weighted total of its scores on the criteria (the person's where given, else trace's), 0 when unscored */
   total: number
@@ -316,6 +322,31 @@ function placed(blocks: readonly ArchBlockRow[]): OptionView['blocks'] {
   })
 }
 
+/**
+ * The criteria as they read now. Fixed criteria keep their ids and weights, so the choice made on them stands, but
+ * their words follow the record: a criterion reworded after the fix (a requirement's number changed) reads as reworded,
+ * with the name it was fixed with. A criterion whose words name a requirement that changed after the words were written
+ * says so: the numbers it quotes may be old. After a budget change test-esp32's deciding criteria still read "Cost
+ * against 8 USD/board and 100 USD project" (run 2, #173), because the fixed list was a copy of the words.
+ */
+function criteriaNow(rows: DesignRows, fixed: CriterionView[] | null, fixedAt: number | null): CriterionView[] {
+  const live = rows.criteria.filter((c) => c.status !== 'withdrawn')
+  const base = fixed ?? live.map((c) => ({ id: c.id, name: c.name, weight: c.weight, description: c.description }))
+  const reqs = new Map((rows.requirements ?? []).map((r) => [r.id, r.updated]))
+  return base.map((c) => {
+    const row = live.find((r) => r.id === c.id)
+    const reworded = fixed !== null && fixedAt !== null && row !== undefined && row.updated > fixedAt && (row.name !== c.name || (c.description !== null && row.description !== c.description))
+    const out: CriterionView = reworded ? { ...c, name: row.name, description: row.description, was: c.name } : { ...c, description: c.description ?? row?.description ?? null }
+    // when its words were written: the row's time, or the fix's for a fixed copy not reworded since
+    const wordsAt = reworded || fixed === null ? row?.updated ?? null : fixedAt
+    if (wordsAt === null) return out
+    const words = `${out.name} ${out.description ?? ''}`
+    const changed = [...reqs.keys()].filter((id) => (reqs.get(id) ?? 0) > wordsAt && new RegExp(`(^|[^A-Za-z0-9-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9-])`).test(words))
+    if (changed.length) out.stale = { requirements: changed, since: iso(Math.max(...changed.map((id) => reqs.get(id) ?? 0))) }
+    return out
+  })
+}
+
 export function architectureView(rows: DesignRows, decisions: readonly DesignDecision[]): ArchitectureView {
   const fixedDec = standing(decisions, 'architecture.criteria').get('architecture') ?? null
   const choiceDec = standing(decisions, 'architecture.choice').get('architecture') ?? null
@@ -323,7 +354,7 @@ export function architectureView(rows: DesignRows, decisions: readonly DesignDec
     const x = c as { id?: unknown; name?: unknown; weight?: unknown; description?: unknown }
     return typeof x.id === 'string' ? [{ id: x.id, name: typeof x.name === 'string' ? x.name : x.id, weight: typeof x.weight === 'number' ? x.weight : 1, description: typeof x.description === 'string' ? x.description : null }] : []
   }) : null
-  const criteria: CriterionView[] = fixedList ?? rows.criteria.filter((c) => c.status !== 'withdrawn').map((c) => ({ id: c.id, name: c.name, weight: c.weight, description: c.description }))
+  const criteria: CriterionView[] = criteriaNow(rows, fixedList, fixedDec?.at ?? null)
   const personScores: ScoreView[] = Array.isArray(choiceDec?.detail.scores) ? (choiceDec.detail.scores as unknown[]).flatMap((x) => {
     const s = x as { option?: unknown; criterion?: unknown; score?: unknown; reason?: unknown }
     return typeof s.option === 'string' && typeof s.criterion === 'string' && typeof s.score === 'number' ? [{ option: s.option, criterion: s.criterion, score: s.score, reason: typeof s.reason === 'string' ? s.reason : '', by: 'person' as const }] : []
@@ -389,9 +420,86 @@ export interface PinFinding {
   id: string
   /** pin: <part>.<pin>, or peripheral:<instance>, or net:<name> */
   target: string
-  kind: 'no_net' | 'no_function' | 'unsupported' | 'unknown_alternates' | 'claimed_twice' | 'function_twice' | 'reserved' | 'mismatch' | 'not_on_schematic' | 'missing_pin'
+  kind: 'no_net' | 'no_function' | 'unsupported' | 'unknown_alternates' | 'claimed_twice' | 'function_twice' | 'reserved' | 'mismatch' | 'not_on_schematic' | 'missing_pin' | 'mate_order' | 'mate_unknown'
   severity: 'blocks' | 'fix'
   text: string
+}
+
+// ------------------------------------------------------------------ off-board parts and their connectors
+
+/** An off-board part of the architecture going ahead, with what it plugs into when recorded. */
+export interface MatedPart { mpn: string; block: string; mates: BlockPart['mates'] | null }
+
+/** The off-board parts of the option the diagram draws (chosen, else recommended): what mateCheck checks. */
+export function matedParts(a: Pick<ArchitectureView, 'options' | 'current'> | null | undefined): MatedPart[] {
+  const o = a?.options.find((x) => x.id === a.current)
+  return (o?.blocks ?? []).flatMap((b) => b.parts.filter((p) => p.off_board).map((p) => ({ mpn: p.mpn, block: b.name, mates: p.mates?.connector && p.mates.pins?.length ? p.mates : null })))
+}
+
+const GROUND_PIN = /^(A|D|P|S)?GND\d*$|^(VSS|VSSA|0V|GROUND|COM|V-)$/
+const POWER_PIN = /^(VCC|VDD|VDDIO|VIN|VBUS|VBAT|VSYS|VS|PWR|POWER|V\+|\d+V\d*|\d*V\d+|\d+(\.\d+)?V)$/
+
+/** A pin's name as a role to compare: ground, power, or the bare name ("/I2C_SCL" is I2CSCL). */
+function pinRole(name: string): string {
+  const n = name.trim().toUpperCase().replace(/^.*\//, '').replace(/^\+/, '')
+  if (GROUND_PIN.test(n)) return 'ground'
+  if (POWER_PIN.test(n) || /^(VCC|VDD)[_-]?\w*$/.test(n) || /^\+?\d+V\d*$/.test(name.trim().toUpperCase())) return 'power'
+  return n.replace(/[^A-Z0-9]/g, '')
+}
+const SUPPLY = new Set(['ground', 'power'])
+/** Whether a connector pin (its name, function or net) and a module pin are the same: equal roles, or one signal name
+ * ending the other ("I2C_SCL" and "SCL"). */
+function samePin(c: PinRow, m: string): boolean {
+  const mr = pinRole(m)
+  const names = [c.name, c.function, c.net].filter((x): x is string => Boolean(x?.trim())).map(pinRole)
+  return names.some((cr) => cr === mr || (!SUPPLY.has(cr) && !SUPPLY.has(mr) && cr.length > 0 && mr.length > 0 && (cr.endsWith(mr) || mr.endsWith(cr))))
+}
+
+/**
+ * Each off-board part against the connector it plugs into, pin by pin on a straight cable: the part's pin order from
+ * its datasheet (its block's mates) beside the pin plan's rows of that connector. test-esp32 #169: the OLED module's
+ * datasheet gives pin 1 VCC, pin 2 GND, the reverse of J2's GND, VCC, SCL, SDA, and no check caught it: the module's
+ * supply would be reversed. A supply pin meeting another pin blocks; a signal meeting the wrong signal is to fix; a
+ * part whose order or connector is not recorded is to fix too, since nothing can be checked. Pure.
+ */
+export function mateCheck(parts: readonly MatedPart[], pins: readonly PinRow[]): PinFinding[] {
+  const out: PinFinding[] = []
+  const live = pins.filter((p) => p.status !== 'withdrawn')
+  for (const p of parts) {
+    const key = p.mpn.replace(/[^\w.-]+/g, '-')
+    if (!p.mates) {
+      out.push({ id: `mate:${key}:unknown`, target: `part:${p.mpn}`, kind: 'mate_unknown', severity: 'fix', text: `${p.mpn} (${p.block}) sits off the board, but the connector it plugs into and its pin order from its datasheet are not recorded (design.architecture set_blocks, the part's mates), so a reversed supply on its cable cannot be caught.` })
+      continue
+    }
+    const { connector, pins: order, source } = p.mates
+    const rows = live.filter((r) => r.part === connector)
+    const theirs = `${order.map((n, i) => `${i + 1} ${n}`).join(', ')}${source ? ` (its datasheet ${source})` : ''}`
+    if (!rows.length) {
+      out.push({ id: `mate:${connector}:${key}:unknown`, target: `pin:${connector}`, kind: 'mate_unknown', severity: 'fix', text: `${p.mpn} plugs into ${connector}, but ${connector} has no pins in the pin plan, so its order cannot be checked against the part's: ${theirs}.` })
+      continue
+    }
+    const at = (n: number): PinRow | undefined => rows.find((r) => r.pin === String(n))
+    const label = (r: PinRow): string => r.name ?? r.function ?? r.net ?? r.kind
+    const count = Math.max(order.length, ...rows.map((r) => Number(r.pin)).filter(Number.isFinite))
+    const wrong: { n: number; ours: string; theirs: string; supply: boolean }[] = []
+    for (let n = 1; n <= count; n++) {
+      const c = at(n)
+      const m = order[n - 1]
+      if (!c && !m) continue
+      if (c && m && samePin(c, m)) continue
+      const ours = c ? label(c) : 'no pin'
+      const supply = [ours, ...(c ? [c.net ?? '', c.function ?? ''] : []), m ?? ''].some((x) => SUPPLY.has(pinRole(x)))
+      wrong.push({ n, ours, theirs: m ?? 'no pin', supply })
+    }
+    if (!wrong.length) continue
+    const ours = [...rows].sort((a, b) => Number(a.pin) - Number(b.pin) || a.pin.localeCompare(b.pin)).map((r) => `${r.pin} ${label(r)}`).join(', ')
+    const supply = wrong.some((w) => w.supply)
+    out.push({
+      id: `mate:${connector}:${key}:order`, target: `pin:${connector}.${wrong[0]?.n}`, kind: 'mate_order', severity: supply ? 'blocks' : 'fix',
+      text: `${connector}'s pins are ${ours}; ${p.mpn}, which plugs into it, has ${theirs}. ${wrong.map((w) => `Pin ${w.n}: ${connector}'s ${w.ours} meets the part's ${w.theirs}`).join('; ')}. On a straight cable ${supply ? 'its supply is on the wrong pins' : 'these signals cross'}: change ${connector}'s order, choose a part whose order matches, or waive it naming the cable that crosses them.`,
+    })
+  }
+  return out
 }
 
 const bare = (net: string): string => net.replace(/^.*\//, '')
@@ -400,10 +508,11 @@ const USED = (p: PinRow): boolean => p.status !== 'withdrawn' && p.kind !== 'spa
 
 /**
  * Check the pin plan on its own (and against the netlist when given): every finding with what to do about it, in
- * plain words. `nets` absent: the schematic part of the check (mismatch, not_on_schematic) is not done.
+ * plain words. `nets` absent: the schematic part of the check (mismatch, not_on_schematic) is not done. `mated`: the
+ * architecture's off-board parts, each against the connector it plugs into (mateCheck).
  */
-export function pinCheck(pins: readonly PinRow[], nets?: ReadonlyMap<string, readonly string[]> | null): PinFinding[] {
-  const out: PinFinding[] = []
+export function pinCheck(pins: readonly PinRow[], nets?: ReadonlyMap<string, readonly string[]> | null, mated?: readonly MatedPart[]): PinFinding[] {
+  const out: PinFinding[] = mated ? mateCheck(mated, pins) : []
   const live = pins.filter((p) => p.status !== 'withdrawn')
   const at = (p: PinRow): string => `${p.part} pin ${p.pin}${p.name ? ` (${p.name})` : ''}`
   for (const p of live.filter(USED)) {

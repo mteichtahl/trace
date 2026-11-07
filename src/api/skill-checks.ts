@@ -25,7 +25,7 @@ import { signBlockers } from '../core/journey.js'
 import { type SkillCheckDef, skillDef } from '../core/skills.js'
 import { type DesignDecision, standing } from '../tools/design/decisions.js'
 import { type DesignRows, TOPIC_NAMES, INTENT_TOPICS } from '../tools/design/db.js'
-import { type PinFinding, architectureView, intentView, linksView, missingFields, outscoredBy, outscoredWords, pinCheck } from '../tools/design/record.js'
+import { type PinFinding, architectureView, intentView, linksView, matedParts, missingFields, outscoredBy, outscoredWords, pinCheck } from '../tools/design/record.js'
 import type { Finding, TraceRequirement } from './record-read.js'
 import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
@@ -208,7 +208,8 @@ function pinBar(i: CheckInput, id: string, kinds: readonly PinFinding['kind'][])
   const pins = i.design.rows.pins.filter((p) => p.status !== 'withdrawn')
   if (!pins.length) return notMet(id, NO_PLAN)
   const waived = new Set((i.r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
-  const mine = pinCheck(pins, kinds.some((k) => k === 'mismatch' || k === 'not_on_schematic' || k === 'missing_pin') ? i.nets ?? null : null).filter((f) => kinds.includes(f.kind))
+  const mated = kinds.some((k) => k === 'mate_order' || k === 'mate_unknown') ? matedParts(architectureView(i.design.rows, i.design.decisions)) : undefined
+  const mine = pinCheck(pins, kinds.some((k) => k === 'mismatch' || k === 'not_on_schematic' || k === 'missing_pin') ? i.nets ?? null : null, mated).filter((f) => kinds.includes(f.kind))
   const open = mine.filter((f) => !waived.has(f.id))
   if (open.length) return notMet(id, `${open.slice(0, 3).map((f) => f.text).join(' ')}${open.length > 3 ? ` And ${open.length - 3} more.` : ''}`)
   return mine.length ? { id, status: 'waived', detail: `${plural(mine.length, 'finding')} waived.` } : met(id)
@@ -367,6 +368,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'pin-plan-review/functions': (i) => pinBar(i, 'functions', ['no_net', 'no_function', 'unsupported', 'unknown_alternates']),
   'pin-plan-review/instances': (i) => pinBar(i, 'instances', ['claimed_twice', 'function_twice']),
   'pin-plan-review/boot': (i) => pinBar(i, 'boot', ['reserved']),
+  'pin-plan-review/mates': (i) => pinBar(i, 'mates', ['mate_order', 'mate_unknown']),
   'pin-plan-review/match': (i) => {
     if (!i.nets) return i.design?.rows.pins.some((p) => p.status !== 'withdrawn') ? notMet('match', 'The pin plan has not been checked against the schematic yet: run design.pins check.') : notMet('match', NO_PLAN)
     return pinBar(i, 'match', ['mismatch', 'not_on_schematic', 'missing_pin'])
@@ -662,6 +664,16 @@ export function questionsOn(skill: string, r: JourneyRecord | null, design: Desi
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const about = new RegExp(`\\b(pins?|pin[- ]?(plan|order|out|map)|pinout${parts.length ? `|${parts.map(esc).join('|')}` : ''})\\b`, 'i')
   return r.questions.filter((q) => q.kind !== 'stuck' && q.answeredAt === null && about.test(`${q.text} ${q.blocks ?? ''}`)).sort((a, b) => a.askedAt - b.askedAt)
+}
+
+/**
+ * The parts of the pin plan a question names (J2 in "Which pin order should the OLED header J2 have?"), so the pin map
+ * shows the question on their pins (test-esp32 #106). Pure.
+ */
+export function questionParts(q: Pick<QuestionRow, 'text' | 'blocks'>, design: DesignRows | null): string[] {
+  const parts = [...new Set((design?.pins ?? []).filter((p) => p.status !== 'withdrawn').map((p) => p.part))]
+  const words = `${q.text} ${q.blocks ?? ''}`
+  return parts.filter((part) => new RegExp(`(?<![A-Za-z0-9_])${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`).test(words))
 }
 
 /** Why a review cannot be submitted over its open questions, naming the one to answer first; null when none is open. */

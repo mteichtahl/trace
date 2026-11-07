@@ -295,6 +295,10 @@ export async function bomCheck(rows: BomRow[], boards: number, o: LookupOptions)
     let status: LineStatus
     let note: string
     if (stock === null) { status = 'ok'; note = `${best.offer.seller} does not publish stock`; flags.push('stock-unknown') } else if (stock <= 0) { status = 'out'; note = `out of stock at every provider asked; ${best.buy} needed`; flags.push('out-of-stock') } else if (stock < best.buy) { status = 'short'; note = `${stock} in stock, ${best.buy} needed: ${best.buy - stock} short`; flags.push('short') } else if (stock < best.buy * LOW_STOCK_FACTOR) { status = 'low'; note = `${stock} in stock covers ${best.buy}, with under ${LOW_STOCK_FACTOR}× to spare`; flags.push('low-stock') } else { status = 'ok'; note = `${stock} in stock, ${best.buy} needed` }
+    // JLCPCB's assembly library: an extended part costs a fee per part at assembly (the order estimate counts them)
+    const jlc = best.offer.attributes?.['JLC library']
+    if (jlc === 'extended') flags.push('jlc-extended')
+    else if (jlc === 'basic') flags.push('jlc-basic')
     const unit = best.unit
     const sameCurrency = unit !== null && unit.currency === o.currency
     if (unit && !sameCurrency) { flags.push('other-currency'); note += `; priced in ${unit.currency}, not added to the ${o.currency} total` }

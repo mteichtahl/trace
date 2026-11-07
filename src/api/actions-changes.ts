@@ -5,7 +5,8 @@
  *
  *   changes.list    read    { repo } → { repo, changes }: the open pull requests a trace job of this project opened
  *                           (the branch match of src/api/changes.ts), oldest first, each with its checks and verdict
- *                           (the status of the oldest MAX_STATUS only: each costs two GitHub calls)
+ *                           (the status of the oldest MAX_STATUS only: each costs a few GitHub calls; its checks are read as
+ *                           change.get reads them, so the list and the change's page say one thing)
  *   change.get      read    { repo, number } → ChangeDetail: what trace did, its files, checks, the requirements it
  *                           names, trace's recommendation, and whether this person may accept it now (and if not, why)
  *   change.check    read    { repo, number, id } → CheckDetail (src/api/changes.ts): one check of its head commit in full,
@@ -197,6 +198,23 @@ export const openPulls = async (ctx: Context, repo: string): Promise<PullSummary
 const pullStatus = (ctx: Context, gh: GitHubApi, repo: string, number: number, sha?: string): Promise<PullStatus | null> =>
   (gh.pullStatus ? cached(ctx.deps.githubCache, repo, `status:${number}:${sha ?? ''}`, () => gh.pullStatus!(repo, number)) : Promise.resolve(null))
 
+/**
+ * One open change's status as the lists say it (changes.list, the journey's open changes): its checks counted and read
+ * as its page reads them (change.get), each workflow as its jobs, from the same kept look (`runs:<sha>`, kept
+ * DETAIL_STATUS_TTL_MS). The list counted a workflow as one check and kept GitHub's status TTL_MS, so it said "Checks
+ * running, 0 of 1 done" for minutes while the change's page said every check passed (test-esp32 #16). A check
+ * finishing sends a live event a debounce window later (src/web/hooks.ts DEBOUNCE_MS), past this keep, so the look it
+ * sets off reads the checks as they are. When the checks cannot be read that way, GitHub's status is kept.
+ */
+const listStatus = async (ctx: Context, gh: GitHubApi, repo: string, number: number, sha?: string): Promise<PullStatus | null> => {
+  const [status, runs] = await Promise.all([
+    pullStatus(ctx, gh, repo, number, sha),
+    gh.checkRuns && sha ? cached(ctx.deps.githubCache, repo, `runs:${sha}`, () => gh.checkRuns!(repo, sha, { jobs: true }), DETAIL_STATUS_TTL_MS).catch(() => null) : Promise.resolve(null),
+  ])
+  // the status's head is the one these checks were read for: a push in between keeps GitHub's own count
+  return status && runs?.length && status.sha === sha ? { ...status, checks: checksOf(runs) } : status
+}
+
 /** Count one GitHub-touching change action against this principal's budget (src/api/github-cache.ts). */
 const spend = (ctx: Context): void => { ctx.deps.githubBudget?.take(ctx.principal.sub) }
 
@@ -271,8 +289,8 @@ export async function openChanges(ctx: Context, repo: string, o: { max?: number 
   const stacks = stacksOf(pulls, repo, rule.defaultBranch)
   const max = o.max ?? MAX_STATUS
   const [status, editStatus, { given, answers }, look, contents] = await Promise.all([
-    Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
-    Promise.all(edits.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
+    Promise.all(mine.map(({ pull }, i) => (i < max ? listStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
+    Promise.all(edits.map(({ pull }, i) => (i < max ? listStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     mine.length ? projectReview(ctx, repo, rows) : Promise.resolve({ given: new Set<string>(), answers: new Map<string, PendingAnswer[]>() }),
     // workflow runs no runner picks up (src/api/stuck-checks.ts): one look for the whole list, kept a minute
     mine.length ? stuckLook(ctx, repo).catch(() => null) : Promise.resolve(null),

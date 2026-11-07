@@ -15,7 +15,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { money } from '@/lib/format'
 import type { CostView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
-import { budgetsOf } from './gate-spend'
+import { budgetsOf, estimateLine } from './gate-spend'
 
 const pct = (n: number, of: number): string => `${Math.min(100, Math.max(0, (n / of) * 100))}%`
 
@@ -47,6 +47,7 @@ export function Budgets({ cost, id, compact = false, className }: { cost: CostVi
         ) : (
           <p className="mt-3 text-sm text-muted-foreground">No build budget set. <Link to="/p/$id/settings" params={{ id }} className="text-primary hover:underline">Set it in Settings</Link></p>
         )}
+        {cost.orderEstimate && <OrderEstimate e={cost.orderEstimate} />}
       </section>
       <section className={box} aria-label="Cloud-work allowance">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -71,6 +72,26 @@ export function Budgets({ cost, id, compact = false, className }: { cost: CostVi
           </>
         )}
       </section>
+    </div>
+  )
+}
+
+/** The order estimate against the cost requirements, from the newest parts check (#162). */
+function OrderEstimate({ e }: { e: NonNullable<CostView['orderEstimate']> }) {
+  const m = (a: number, b: number) => (a === b ? money(a, e.currency) : `${money(a, e.currency)} to ${money(b, e.currency)}`)
+  const label = e.verdict === 'over' ? 'Over a cost requirement' : e.verdict === 'at_risk' ? 'At risk' : e.verdict === 'under' ? 'Within the cost requirements' : null
+  return (
+    <div className="mt-4 border-t pt-3" aria-label="Order estimate">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-sm font-medium">Order estimate</h4>
+        {label && <StatusBadge status={e.verdict === 'under' ? 'met' : e.verdict === 'over' ? 'failing' : 'warning'} label={label} />}
+      </div>
+      <dl className="mt-2 space-y-1 text-sm">
+        <Row label={`The order, ${e.quantity} boards`} hint="Boards, assembly, parts, case and shipping" value={m(e.low, e.high)} />
+        <Row label="Per board" hint="Boards, assembly and parts" value={m(e.perBoard.low, e.perBoard.high)} />
+      </dl>
+      <p className="mt-2 text-xs text-muted-foreground">{estimateLine(e)}</p>
+      {e.notIn.length > 0 && <p className="mt-1 text-xs text-muted-foreground">{e.notIn.join(' ')}</p>}
     </div>
   )
 }

@@ -92,6 +92,18 @@ export const returnReasonOk = (reason: string): boolean => reason.trim().length 
 /** "the schematic gate" → "Sign the schematic gate" */
 export const signLabel = (gateName: string): string => `Sign ${gateName.startsWith('the ') ? gateName : `the ${gateName}`}`
 
+/**
+ * Why a signature was refused, in words for the dialog (test-esp32 #179). The record's refusal (an answer with ok
+ * false) is the reason itself: shown, not folded under technical detail. Its own lead ("The gate cannot be signed
+ * yet.") is dropped, since the dialog says the gate was not signed. Any other failure (the network, a server error)
+ * has no reason in words: null, and its message stays technical detail.
+ */
+export function signRefusal(e: unknown): string | null {
+  if (!(e instanceof Error) || (e as { status?: unknown }).status !== 200) return null
+  const words = e.message.replace(/^The gate (?:cannot be signed yet|was not signed)[.:]\s*/i, '').trim()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : null
+}
+
 /** Why Sign is locked, in one sentence for a phone (where there is no tooltip): the open criteria by name. */
 export function lockedLine(gate: Pick<Gate, 'criteria' | 'waivers'>, blockers: Blocker[]): string {
   const b = blockers[0]
