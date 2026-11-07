@@ -42,7 +42,10 @@ export async function askOnce(o: AskOnce): Promise<string> {
         if (!line.startsWith('data:')) continue
         try {
           const e = JSON.parse(line.slice(5).trim()) as { type: string; delta?: string; message?: string }
-          if (e.type === 'TEXT_MESSAGE_CONTENT' && e.delta) {
+          // a new text message after earlier text starts a new paragraph, never runs on from it (test-esp32 #85)
+          if (e.type === 'TEXT_MESSAGE_START' && text.trim()) {
+            text = `${text.trimEnd()}\n\n`
+          } else if (e.type === 'TEXT_MESSAGE_CONTENT' && e.delta) {
             text += e.delta
             o.onText?.(text)
           } else if (e.type === 'RUN_ERROR') throw new Error(e.message ?? 'trace stopped')

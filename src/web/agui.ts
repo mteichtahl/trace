@@ -427,7 +427,9 @@ export async function runAgent(deps: WebDeps, who: Caller, input: RunInput, sink
 
 /** An assistant turn as what is kept: its text, and its tool calls (as parts, so the thread replays with its cards). */
 function keepTurn(kept: Kept[], m: BedrockMessage): void {
-  const text = (m.content ?? []).map((b) => b.text ?? '').join('')
+  // each text block is its own message on screen; kept as one, they are paragraphs apart, never run together
+  // ("…the right one later.- The text is your own wording.All 13 go in…": test-esp32 #85)
+  const text = (m.content ?? []).map((b) => b.text?.trim() ?? '').filter(Boolean).join('\n\n')
   const calls = (m.content ?? []).flatMap((b) => (b.toolUse ? [{ id: b.toolUse.toolUseId ?? '', name: b.toolUse.name ?? '', args: JSON.stringify(b.toolUse.input ?? {}) }] : []))
   if (text || calls.length) kept.push({ role: 'assistant', text, ...(calls.length ? { parts: { toolCalls: calls } } : {}) })
 }
