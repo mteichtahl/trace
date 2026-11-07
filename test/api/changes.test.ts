@@ -21,7 +21,7 @@ import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, openChanges, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
-  readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
+  askedFor, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import { forgetRetries } from '../../src/api/stuck-checks.js'
@@ -628,6 +628,31 @@ describe('changes.list and change.get', () => {
     expect(await run(REVIEWER, 'change.get', { repo: REPO, number: 1 })).toMatchObject({ may_accept: false, blockers: ['Only a contributor on this project can accept a change.'] })
     expect(await run(USER, 'change.get', { repo: REPO, number: 2 })).toMatchObject({ recommendation: { verdict: 'ask' }, may_accept: false })
     await expect(run(USER, 'change.get', { repo: REPO, number: 3 })).rejects.toThrow(/no change #3 from trace/)
+  })
+
+  // test-esp32 #141, #234: an EMC specialist's job, started by another specialist's hand-off, opened a change, and
+  // nothing on it said who started that job or what it was asked to check
+  it('says who asked for a change a hand-off made, and what; nothing for one a person or a stage started', async () => {
+    const now = Date.now() / 1000
+    await jobIndex(ctx(ADMIN), REPO).update((d) => {
+      putJob(d, 'job-emc', { kind: 'task', agent: 'emc', title: 'Asked by the Implementation specialist: Check the USB D+/D- pair and the 3.3 V supply for emissions.', state: 'succeeded', branch: 'claude/handoff-ho0123456789abcd', handoff: 'ho0123456789abcd', endedAt: now - 50 }, now)
+      return { result: null }
+    })
+    github.add(7, 'claude/handoff-ho0123456789abcd', { title: 'trace: the emc specialist\'s record (job-emc)' })
+    const d = await run(USER, 'change.get', { repo: REPO, number: 7 })
+    expect(d).toMatchObject({ from: 'the EMC specialist', handoff: { by: 'the Implementation specialist', question: 'Check the USB D+/D- pair and the 3.3 V supply for emissions.' } })
+    expect((await run(USER, 'change.get', { repo: REPO, number: 1 })).handoff).toBeUndefined()
+  })
+
+  it('askedFor: the agents\' facts first, the job\'s title when they cannot be read, the branch when the job is a later one', () => {
+    const asked = { id: 'ho0123456789abcd', fromAgent: 'impl', question: 'Check the USB pair\n for emissions.', blocks: 'the layout review gate' }
+    const job = { handoff: 'ho0123456789abcd', title: 'Asked by the Implementation specialist: Check the USB pair for emi' }
+    expect(askedFor({ job, branch: 'x', handoffs: [asked], agentWords: AGENT_WORDS })).toEqual({ by: 'the Implementation specialist', question: 'Check the USB pair for emissions.', blocks: 'the layout review gate' })
+    expect(askedFor({ job, branch: 'x', handoffs: null, agentWords: AGENT_WORDS })).toEqual({ by: 'the Implementation specialist', question: 'Check the USB pair for emi' })
+    // a person's "ask for changes" job is the latest on the branch: the hand-off is still found by the branch
+    const later = { handoff: null, title: 'Revise: use a ferrite bead' }
+    expect(askedFor({ job: later, branch: 'claude/handoff-ho0123456789abcd', rows: [later, job], agentWords: AGENT_WORDS })?.by).toBe('the Implementation specialist')
+    expect(askedFor({ job: later, branch: 'claude/task-reqs', rows: [job], agentWords: AGENT_WORDS })).toBeNull()
   })
 
   it('names only the project\'s requirements, says once which it cites that the project has not, and covers the real ones (log #47, #105)', async () => {

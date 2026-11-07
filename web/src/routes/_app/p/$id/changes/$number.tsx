@@ -44,7 +44,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { repoOf } from '@/lib/api'
 import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
-import { KIND_TAG, changeOf, checksHeading, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
+import { KIND_TAG, askedLine, changeOf, checksHeading, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
 import type { ChangeDetail, ChangeFile, ChangeSummary, CheckJob } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -135,6 +135,8 @@ function Review() {
           {!phone && jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} onOpenCheck={setCheck} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="did">
             <h3 id="did" className="section-label">{edit ? 'What it changes' : 'What trace did'}</h3>
+            {/* another specialist asked for it: who, and what (test-esp32 #234) */}
+            {askedLine(d) && <p className="mt-2 text-sm text-muted-foreground">{askedLine(d)}</p>}
             {d.summary.length ? (
               <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
                 {d.summary.map((s, i) => <li key={i}><Rich text={s} /></li>)}
