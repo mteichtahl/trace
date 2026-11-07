@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AGAIN_MS, ANSWERED_STEP, afterWrite, applyWrite, settleLostJob, stepAnswers, writeInvalidations } from './after-write'
+import { keys } from './queries'
 import type { InboxItem, Journey, RunSummary } from './types'
 import { splitRuns } from '@/components/run-line'
 
@@ -50,6 +51,12 @@ describe('what an act changes (test-esp32 log #17, #123, #148, #153)', () => {
     }
     // the changes' own screens too
     expect(writeInvalidations('change.accept', { repo: R, number: 1 })).toEqual(expect.arrayContaining([['changes.list', R], ['change.get', R]]))
+    // and the tools' reads of the default branch: Requirements' coverage after a verify record is accepted (test-esp32 #65)
+    expect(writeInvalidations('change.accept', { repo: R, number: 1 })).toContainEqual(['tool', R])
+    const coverage = new QueryClient()
+    coverage.setQueryData([...keys.action('tool', { repo: R, name: 'verify.coverage' }), 'coverage'], { requirements: [] })
+    void coverage.invalidateQueries({ queryKey: ['tool', R] })
+    expect(coverage.getQueryState([...keys.action('tool', { repo: R, name: 'verify.coverage' }), 'coverage'])?.isInvalidated).toBe(true)
     // a job paused from a screen that names no project
     expect(writeInvalidations('job.control', { id: 'j1', op: 'pause' })).toContainEqual(['jobs.list'])
   })

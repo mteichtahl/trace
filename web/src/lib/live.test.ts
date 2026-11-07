@@ -56,9 +56,10 @@ describe('a run\'s log grew (log.appended)', () => {
 })
 
 describe('a change moved on GitHub (the webhook\'s record.changed, kind change)', () => {
-  it('refetches the change\'s status, the lists that show it, and the journey', () => {
+  it('refetches the change\'s status, the lists that show it, the journey, and what is read from the default branch', () => {
     const e = { type: 'record.changed', repo: 'a/b', kind: 'change', number: 7, at: '' } as unknown as Parameters<typeof invalidationsFor>[0]
-    expect(invalidationsFor(e)).toEqual([['pull.status', 'a/b'], ['changes.list', 'a/b'], ['change.get', 'a/b'], ['inbox'], ['journey.get', 'a/b'], ['change.runs', 'a/b'], ['activity.list']])
+    // the tools' reads (verify.coverage) and the intent links: a merged change moves the default branch (test-esp32 #65)
+    expect(invalidationsFor(e)).toEqual([['pull.status', 'a/b'], ['changes.list', 'a/b'], ['change.get', 'a/b'], ['inbox'], ['journey.get', 'a/b'], ['change.runs', 'a/b'], ['activity.list'], ['tool', 'a/b'], ['requirements.trace', 'a/b']])
   })
 })
 
