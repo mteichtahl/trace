@@ -2,8 +2,8 @@
  * Query keys and the data hooks every screen shares. A key starts with the action name, then the repo when there is
  * one, so a live event can invalidate "everything about this repo's journey" with a prefix (lib/live.ts).
  */
-import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { type ActionName, type ArgsOf, call } from './api'
+import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ActionName, type ArgsOf, call, projectName } from './api'
 
 export const keys = {
   action: <A extends ActionName>(a: A, args?: ArgsOf<A>) => (args && 'repo' in (args as object) ? [a, (args as { repo: string }).repo, args] : [a, args ?? {}]) as readonly unknown[],
@@ -23,6 +23,16 @@ export const useAction = <A extends ActionName>(action: A, args: ArgsOf<A>, o: {
 export const useProjects = () => useAction('projects', {})
 export const useInbox = () => useAction('inbox', {})
 export const useJourney = (repo: string) => useAction('journey.get', { repo })
+/**
+ * The names people gave these projects (their journeys' names), as a lookup by repo. Until a journey is read, and for a
+ * project that has none, the name is made from the repository's.
+ */
+export function useProjectNames(repos: readonly string[], o: { enabled?: boolean } = {}): (repo: string) => string {
+  const journeys = useQueries({ queries: repos.map((repo) => q('journey.get', { repo }, { enabled: o.enabled ?? true })) })
+  const named = new Map(repos.map((repo, i) => [repo, journeys[i]?.data?.name] as const))
+  return (repo) => named.get(repo) || projectName(repo)
+}
+
 export const useWaits = (repo: string, enabled = true) => useAction('tools.waits', { repo }, { enabled })
 
 /**

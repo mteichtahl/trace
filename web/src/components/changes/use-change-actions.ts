@@ -13,25 +13,43 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { ApiError, type ResultOf, call } from '@/lib/api'
 import { isUpdating } from '@/lib/http'
+import { currentStage } from '@/lib/guided'
 import { q } from '@/lib/queries'
 import type { ChangeAccepted, InboxItem } from '@/lib/types'
 import { showAfterAccept } from './after-accept'
 
-/** The toast after accepting: what moved, and what trace starts next. */
+/** The toast after accepting: what moved (`step`: the stage's place after the accept), and what trace starts next. */
 export function acceptedWords(title: string, r: Pick<ChangeAccepted, 'next' | 'stage'>, step?: { index: number; total: number; stage: string } | null): { title: string; description: string } {
-  const moved = step ? `${step.stage} is now on step ${Math.min(step.total, step.index + 1)} of ${step.total}.` : `"${title}" is part of the design now.`
+  const moved = step ? `${step.stage} is now on step ${step.index} of ${step.total}.` : `"${title}" is part of the design now.`
   return { title: 'Accepted into the design', description: `${moved} ${r.next || 'trace carries on with the next step.'}`.trim() }
 }
 
 /** Accept a change from a Needs you card (any project): the same toast, and the item leaves the list. */
-/** After an accept: on a phone the "What happens next" screen; on wider screens the toast, whose action opens it. */
-export function confirmAccepted(a: { repo: string; project?: string; title: string; result: Pick<ChangeAccepted, 'next' | 'stage' | 'warning'> }, step?: { index: number; total: number; stage: string } | null) {
+/**
+ * The stage's place once a change is accepted, from the journey read again: what the Overview's Next step then says.
+ * Never a guess from the place before (test-esp32 #54: the toast said "step 5 of 5" while Next step said "Step 4 of 5").
+ */
+async function placeAfter(qc: QueryClient, repo: string): Promise<{ index: number; total: number; stage: string } | null> {
+  try {
+    const j = await qc.fetchQuery({ ...q('journey.get', { repo }), staleTime: 0 })
+    const c = currentStage(j)
+    return j.next?.step && c ? { index: j.next.step.index, total: j.next.step.total, stage: c.stage.name } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * After an accept: on a phone the "What happens next" screen; on wider screens the toast, whose action opens it. `step`:
+ * the change was the stage's now-step, so the toast says where the stage is after it (read again with `qc`).
+ */
+export async function confirmAccepted(a: { repo: string; project?: string; title: string; result: Pick<ChangeAccepted, 'next' | 'stage' | 'warning'> }, step?: { index: number; total: number; stage: string } | null, qc?: QueryClient) {
   const phone = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 767px)').matches
   showAfterAccept(a, phone)
   // merged, but the decision was not written down: said, never hidden (it is not a failure: nothing is to be redone)
   if (a.result.warning) toast.warning('Accepted, with a note', { description: a.result.warning })
   if (phone) return
-  const w = acceptedWords(a.title, a.result, step)
+  const w = acceptedWords(a.title, a.result, step && qc ? await placeAfter(qc, a.repo) : null)
   toast.success(w.title, { description: `${a.project ? `${a.project}: ` : ''}${w.description}`, action: { label: 'What happens next', onClick: () => showAfterAccept(a, true) } })
 }
 
@@ -129,7 +147,7 @@ export function useAcceptFromInbox() {
     setBusy(item.id)
     acceptLatest(qc, repo, number)
       .then((r) => {
-        confirmAccepted({ repo, project: item.project, title, result: r })
+        void confirmAccepted({ repo, project: item.project, title, result: r })
         qc.setQueryData<InboxItem[]>(['inbox', {}], (xs) => xs?.filter((x) => x.id !== item.id))
       })
       .catch((e: unknown) => toast.error('Could not accept the change', { description: refusalWords(e) }))
@@ -150,7 +168,7 @@ export function useAcceptNow(repo: string) {
   const qc = useQueryClient()
   const accept = useMutation({
     mutationFn: (a: { number: number; title: string; step?: { index: number; total: number; stage: string } | null }) => acceptLatest(qc, repo, a.number),
-    onSuccess: (r, a) => confirmAccepted({ repo, title: a.title, result: r }, a.step),
+    onSuccess: (r, a) => void confirmAccepted({ repo, title: a.title, result: r }, a.step, qc),
     onError: (e) => toast.error('Could not accept the change', { description: refusalWords(e) }),
     onSettled: () => refreshAfterAccept(qc, repo),
   })
@@ -181,7 +199,7 @@ export function useChangeActions(repo: string) {
     /** `head`: the head commit the person was shown (change.get's head.sha) */
     mutationFn: (a: { number: number; head: string; title: string; note?: string; step?: { index: number; total: number; stage: string } | null }) =>
       acceptWhileUpdating({ repo, number: a.number, head: a.head, ...(a.note ? { note: a.note } : {}) }),
-    onSuccess: (r, a) => confirmAccepted({ repo, title: a.title, result: r }, a.step),
+    onSuccess: (r, a) => void confirmAccepted({ repo, title: a.title, result: r }, a.step, qc),
     onError: (e) => toast.error('Could not accept the change', { description: refusalWords(e) }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })

@@ -182,7 +182,7 @@ function releaseReasons(input: CheckInput): CheckResult {
 
 type Checker = (input: CheckInput) => CheckResult
 
-const NO_PLAN = 'No pin plan is recorded yet: the firmware track proposes it with design.pins.'
+const NO_PLAN = 'No pin plan is recorded yet: trace proposes it in Capture.'
 
 /** A check over the intent statements (with the person's pending decisions over them). */
 function withIntent(i: CheckInput, id: string, fn: (v: ReturnType<typeof intentView>) => CheckResult): CheckResult {
@@ -377,7 +377,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'pin-plan-review/boot': (i) => pinBar(i, 'boot', ['reserved', 'strap_pull']),
   'pin-plan-review/mates': (i) => pinBar(i, 'mates', ['mate_order', 'mate_unknown']),
   'pin-plan-review/match': (i) => {
-    if (!i.nets) return i.design?.rows.pins.some((p) => p.status !== 'withdrawn') ? notMet('match', 'The pin plan has not been checked against the schematic yet: run design.pins check.') : notMet('match', NO_PLAN)
+    if (!i.nets) return i.design?.rows.pins.some((p) => p.status !== 'withdrawn') ? notMet('match', 'The pin plan has not been checked against the schematic yet: trace checks it against the schematic\'s netlist.') : notMet('match', NO_PLAN)
     return pinBar(i, 'match', ['mismatch', 'not_on_schematic', 'missing_pin'])
   },
 

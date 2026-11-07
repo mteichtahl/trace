@@ -6,10 +6,10 @@ import { useNavigate } from '@tanstack/react-router'
 import { FolderClosed, Moon, Sparkles, Sun, Monitor, ArrowRight } from 'lucide-react'
 import { useEffect, useId, useState, type ComponentType } from 'react'
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command'
-import { projectId, projectName } from '@/lib/api'
+import { projectId } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useSetPref } from '@/lib/prefs'
-import { useProjects } from '@/lib/queries'
+import { useProjectNames, useProjects } from '@/lib/queries'
 import { createStore, useStore } from '@/lib/store'
 import { openPanel } from '@/components/chat/chat-state'
 import { AREAS } from './nav'
@@ -48,6 +48,8 @@ export function CommandMenu() {
   const [text, setText] = useState('')
   const navigate = useNavigate()
   const projects = useProjects()
+  // the names people gave the projects, read only while the menu is open
+  const nameOf = useProjectNames((projects.data ?? []).map((p) => p.repo), { enabled: open })
   const { user } = useAuth()
   const setPref = useSetPref()
   const go = (f: () => void) => {
@@ -76,8 +78,8 @@ export function CommandMenu() {
         )}
         <CommandGroup heading="Projects">
           {(projects.data ?? []).map((p) => (
-            <CommandItem key={p.repo} value={`project ${projectName(p.repo)} ${p.repo}`} onSelect={() => go(() => void navigate({ to: '/p/$id', params: { id: projectId(p.repo) } }))}>
-              <FolderClosed /> {projectName(p.repo)}
+            <CommandItem key={p.repo} value={`project ${nameOf(p.repo)} ${p.repo}`} onSelect={() => go(() => void navigate({ to: '/p/$id', params: { id: projectId(p.repo) } }))}>
+              <FolderClosed /> {nameOf(p.repo)}
               <span className="ml-auto font-mono text-xs text-muted-foreground">{p.repo}</span>
             </CommandItem>
           ))}

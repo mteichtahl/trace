@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NewProjectDraft } from '@/lib/types-s1'
-import { type RepoCheck, checks, partsFor, recommendTemplate, repoOk, slug, stepOk } from './rules'
+import { type RepoCheck, buildWords, checks, partsFor, recommendTemplate, repoOk, slug, stepOk } from './rules'
 
 const d: NewProjectDraft = {
   name: 'Soil sensor 2', description: '', icon: { glyph: 'sensor', colour: 'green' }, start: 'idea', template: 'board',
@@ -61,5 +61,13 @@ describe('New project', () => {
     })
 
     it('a malformed name is never met', () => expect(repoOk({ ...d, repository: { ...d.repository, name: 'soil sensor' } }, { ...free, repo: 'acme/soil sensor' })).toBe(false))
+  })
+
+  // test-esp32 #81: the Review step listed boards, budget and fab but not the target unit cost (US$8)
+  it('lists every value set on Build and budget on the Review step, the target unit cost too', () => {
+    expect(buildWords({ ...d.build, unitCost: 8, budget: 100 })).toBe('10 boards per build, a target unit cost of US$8, a build budget of US$100 per revision, no cloud-work allowance; JLCPCB.')
+    expect(buildWords({ ...d.build, unitCost: 7.5, cloudBudget: 500, later: { certify: true, produce: false, sustain: false } }))
+      .toBe('10 boards per build, a target unit cost of US$7.50, no build budget, a cloud-work allowance of US$500, with certify; JLCPCB.')
+    expect(buildWords(d.build)).toContain('no target unit cost')
   })
 })

@@ -121,7 +121,7 @@ export const RECORD_ACTIONS = {
         }
       })
       const unnamed = files.sch.filter((f) => !serves.has(f))
-      if (files.sch.length && unnamed.length) notes.push(`${unnamed.length} of ${files.sch.length} sheets do not name the requirements they serve yet (design.sheets).`)
+      if (files.sch.length && unnamed.length) notes.push(`${unnamed.length} of ${files.sch.length} sheets do not name the requirements they serve yet.`)
       const boardRun = latestRun(db, 'kicad.board')
       const result = boardRun ? runResult(db, boardRun.id) : null
       const outline = result?.outline as { width_mm?: number; height_mm?: number } | null | undefined
@@ -137,6 +137,7 @@ export const RECORD_ACTIONS = {
         ...(outline?.width_mm ? { size: `${outline.width_mm} × ${outline.height_mm} mm` } : {}),
         findings: (drc.findings ?? []).map((f) => pictureFinding(f, pic?.drawing)),
       } : undefined
+      // the notes are for a person: what is missing and who does it, never a tool's name (test-esp32 #40)
       // the architecture: the option a person chose, else trace's recommendation, drawn; every option listed
       const arch = architectureView(design.rows, design.decisions)
       const shown = arch.options.find((o) => o.id === arch.current)
@@ -146,9 +147,9 @@ export const RECORD_ACTIONS = {
         options: arch.options.map((o) => ({ id: o.id, name: o.name, summary: o.summary, recommended: o.recommended, why: o.why, gives_up: o.gives_up, risks: o.risks, total: o.total, blocks: o.blocks.map(blockOut), connections: o.connections.map((c) => ({ from: c.from, to: c.to, label: c.label, kind: c.kind })) })),
         criteria: arch.criteria, fixed: arch.fixed, scores: arch.scores, recommended: arch.recommended, chosen: arch.chosen,
       } : undefined
-      if (!shown) notes.push('No architecture is recorded yet: the agents propose options with design.architecture, and a person chooses one in Architecture choice.')
+      if (!shown) notes.push('No architecture is recorded yet: trace proposes options in Architect, and a person chooses one in Architecture choice.')
       else if (!arch.chosen) notes.push(`No architecture is chosen yet: the diagram shows trace's ${arch.recommended ? 'recommendation' : 'first option'}, until a person chooses in Architecture choice.`)
-      if (shown) notes.push('Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate\'s stock criterion records it.')
+      if (shown) notes.push('Stock per key part is not shown here: trace checks it with the parts check when asked, and the architecture gate\'s stock criterion records it.')
       // the pin plan, checked against the newest netlist in the record
       const net = latestNetlist(db)
       const pinFindings = pinCheck(design.rows.pins, net?.nets ?? null, matedParts(arch))
@@ -184,12 +185,12 @@ export const RECORD_ACTIONS = {
         }),
         findings: pinFindings.map((f) => ({ ...f, severity: waived.has(f.id) ? 'waived' as const : f.severity })),
       } : undefined
-      if (!pins.length) notes.push('No pin plan is recorded yet: the firmware track proposes it with design.pins, and a person agrees it in Pin plan review.')
+      if (!pins.length) notes.push('No pin plan is recorded yet: trace proposes it in Capture, and a person agrees it in Pin plan review.')
       // the case: the newest build, its problems by part, and whether it still stands for the default branch
       const cv = caseView(db, r, { installation: process.env.TRACE_PREFIX ?? 'trace', project: repo })
       const { inputs: built, ...caseOut } = cv ?? { inputs: null }
       const stale = cv ? await caseStaleness(ctx, repo, built) : null
-      if (pins.length && !net) notes.push('The pin plan has not been checked against the schematic yet: design.pins check (or kicad.netlist) stores the netlist it is compared with.')
+      if (pins.length && !net) notes.push('The pin plan has not been checked against the schematic yet: trace checks it once the schematic\'s netlist is in the record.')
       return {
         repo, ref: files.ref, sheets, ...(board ? { board } : {}), ...(architecture ? { architecture } : {}),
         ...(pins.length ? { pins, pin_plan: pinPlan } : {}),

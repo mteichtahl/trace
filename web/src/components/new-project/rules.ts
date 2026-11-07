@@ -3,6 +3,7 @@
  * checks each of the six steps must pass before Continue, the part ceiling from an account class (a Guest can only
  * review; admins are on every project), the template trace recommends, and the repository name from the project name.
  */
+import { money } from '@/lib/format'
 import type { PersonClass, Template } from '@/lib/types'
 import type { NewProjectDraft } from '@/lib/types-s1'
 
@@ -15,6 +16,17 @@ export const STEPS = [
   { id: 'review', title: 'Review', sub: 'What will be set up' },
 ] as const
 export type StepId = (typeof STEPS)[number]['id']
+
+/** The Review step's line for Build and budget: every value set on that step, and what was left unset. */
+export function buildWords(b: NewProjectDraft['build']): string {
+  const later = Object.entries(b.later).filter(([, on]) => on).map(([k]) => k)
+  return [
+    `${b.quantity} boards per build`,
+    b.unitCost !== undefined ? `a target unit cost of ${money(b.unitCost)}` : 'no target unit cost',
+    b.budget !== undefined ? `a build budget of ${money(b.budget)} per revision` : 'no build budget',
+    b.cloudBudget !== undefined ? `a cloud-work allowance of ${money(b.cloudBudget)}` : 'no cloud-work allowance',
+  ].join(', ') + (later.length ? `, with ${later.join(' and ')}` : '') + `; ${b.fab}.`
+}
 
 export const slug = (name: string): string => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80)
 

@@ -4932,8 +4932,8 @@
         "No electrical rule check is recorded yet.",
         "No design rule check is recorded yet.",
         "No architecture is chosen yet: the diagram shows trace's recommendation, until a person chooses in Architecture choice.",
-        "Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate's stock criterion records it.",
-        "The pin plan has not been checked against the schematic yet: design.pins check (or kicad.netlist) stores the netlist it is compared with."
+        "Stock per key part is not shown here: trace checks it with the parts check when asked, and the architecture gate's stock criterion records it.",
+        "The pin plan has not been checked against the schematic yet: trace checks it once the schematic's netlist is in the record."
       ]
     }
   },

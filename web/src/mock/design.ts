@@ -93,7 +93,7 @@ function design(): DesignView {
     },
     notes: [
       ...(chosen ? [] : ['No architecture is chosen yet: the diagram shows trace\'s recommendation, until a person chooses in Architecture choice.']),
-      'Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate\'s stock criterion records it.',
+      'Stock per key part is not shown here: trace checks it with the parts check when asked, and the architecture gate\'s stock criterion records it.',
     ],
   }
 }

@@ -44,6 +44,12 @@ export const impl: Specialist = {
       + ' strapping pin that anything else drives (an auto-reset transistor, a button, a peripheral) gets an external'
       + ' pull to its boot level (10 kOhm is usual), never the part\'s internal pull alone; design_pins check flags one'
       + ' without it. Leave one out only for a reason you write in the report, for the person to agree or waive.',
+    'Schematic sheets are drawn to be read: one sheet per architecture block (USB, power, bridge, MCU, display …)'
+      + ' under a root sheet of hierarchical sheet symbols. On each sheet, place the block\'s parts as one circuit'
+      + ' spread over the page (not packed into a corner), wired to each other, with a text title per group; net'
+      + ' labels and hierarchical labels only for what leaves the sheet or crosses it. Pick the paper size the circuit'
+      + ' fills (A4 for most blocks, A3 for a dense MCU) and keep parts on the 1.27 mm grid. A sheet whose parts are'
+      + ' all joined by labels, or bunched in a corner, is redrawn before the job reports done.',
     'Panel and mounting hardware: when a job asks for the hardware list, kicad_bom with hardware: true makes it as a'
       + ' list of its own (the case parts and board screws from the newest case build, else the board\'s mounting holes,'
       + ' and parts marked Hardware = panel or mounting); it is never part of the parts list, its stock check or the'

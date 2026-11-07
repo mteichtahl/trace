@@ -339,6 +339,23 @@ describe('who a change is credited to', () => {
     expect(jobsByBranch([verifyTask(), worker]).get('claude/task-reqs')?.id).toBe('job-v')
   })
 
+  it('the specialist that made it, after a conflict work item brought it up to date (test-esp32 #219)', () => {
+    // #43: the render task's worker made the branch; "Bring it up to date" started a conflict work item, which the
+    // Verification specialist took and whose worker merged main in: the change is still the Rendering specialist's
+    const render = { ...row('job-r', 'claude/task-renders', 'task', 'render', 1), payload: JSON.stringify({ kind: 'task', repository: 'acme/board', request: 'Commit the revision A renders', agent: 'render', requestedBy: 'p' }) }
+    const renderWorker = { ...row('job-rw', 'claude/task-renders', 'task', 'worker', 2), parentJob: 'job-r' }
+    const conflict = { ...row('job-c', 'claude/task-renders', 'work-item', 'verify', 3), title: 'Pull request #43: Revision A renders' }
+    const conflictWorker = { ...row('job-cw', 'claude/task-renders', 'task', 'worker', 4), parentJob: 'job-c' }
+    const [c] = traceChanges([pr(43, 'claude/task-renders')], [render, renderWorker, conflict, conflictWorker], RULE)
+    expect(c?.job.id).toBe('job-r')
+    expect(fromWords(c?.job ?? null, AGENT_WORDS)).toBe('the Rendering specialist')
+    // a later task on its branch (a resumed one, or one asked for changes) still takes it over
+    const resumed = { ...row('job-r2', 'claude/task-renders', 'task', 'render', 5), resumeOf: 'job-r' }
+    expect(jobsByBranch([render, conflict, resumed], RULE).get('claude/task-renders')?.id).toBe('job-r2')
+    // a work item on its own branch is the change's job
+    expect(jobsByBranch([conflict], RULE).get('claude/task-renders')?.id).toBe('job-c')
+  })
+
   it('the pick, when the router moved the job to another specialist, saying where it ran', () => {
     expect(fromWords(verifyTask({ agent: 'impl' }), AGENT_WORDS)).toBe('the Verification specialist (routed to the Implementation specialist)')
     expect(creditedAgent(verifyTask({ agent: 'impl' }))).toBe('verify')

@@ -26,7 +26,7 @@ import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { useTraceContext } from '@/components/chat/context'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { FlatNote } from '@/components/installation/layout'
-import { checks as allChecks, partsFor, recommendTemplate, repoOf, slug, STEPS, type StepId } from '@/components/new-project/rules'
+import { buildWords, checks as allChecks, partsFor, recommendTemplate, repoOf, slug, STEPS, type StepId } from '@/components/new-project/rules'
 import { RepoNote } from '@/components/new-project/repo-note'
 import { IconPicker, ProjectIconView, recommendGlyph } from '@/components/project/project-icon'
 import { RunLine } from '@/components/run-line'
@@ -260,7 +260,7 @@ function NewProject() {
             <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : 'from an existing KiCad design'}.</li>
             <li>{d.repository.mode === 'new' ? 'A new private repository' : 'The existing repository'} <span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> on <span className="font-mono">{d.repository.branch}</span>{d.advanced.onboardingPr ? ', with an onboarding change' : ''}.</li>
             <li>{d.people.length ? `${d.people.length} ${d.people.length === 1 ? 'person' : 'people'} added` : 'Nobody added yet'}{d.people.some((p) => p.class === 'new') ? `, ${d.people.filter((p) => p.class === 'new').length} to invite by email` : ''}; admins reach it without being added.</li>
-            <li>{d.build.quantity} boards per build{d.build.budget !== undefined ? `, a build budget of ${money(d.build.budget)} per revision` : ', no build budget'}{d.build.cloudBudget !== undefined ? `, a cloud-work allowance of ${money(d.build.cloudBudget)}` : ', no cloud-work allowance'}{Object.entries(d.build.later).filter(([, on]) => on).length ? `, with ${Object.entries(d.build.later).filter(([, on]) => on).map(([k]) => k).join(' and ')}` : ''}; {d.build.fab}.</li>
+            <li>{buildWords(d.build)}</li>
           </ul>
           <div className="rounded-xl border p-4 text-sm">
             <p className="font-medium">What happens when you press Create</p>
@@ -297,7 +297,7 @@ function Summary({ d, onEdit }: { d: NewProjectDraft; onEdit: () => void }) {
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{d.name || 'Untitled'}</span><span className="rounded border px-1.5 text-xs">{TEMPLATES.find((t) => t.id === d.template)?.label} template</span><span className="rounded border px-1.5 text-xs">{d.start === 'idea' ? 'Start from an idea' : 'Start from a design'}</span></p>
         {d.description && <p className="mt-1 text-sm">{d.description}</p>}
-        <p className="mt-1 text-xs text-muted-foreground"><span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> · {d.build.quantity} boards per run · {d.build.fab} · {d.build.budget !== undefined ? `build budget ${money(d.build.budget)}` : 'no build budget set'}</p>
+        <p className="mt-1 text-xs text-muted-foreground"><span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> · {d.build.quantity} boards per run · {d.build.fab} · {d.build.budget !== undefined ? `build budget ${money(d.build.budget)}` : 'no build budget set'}{d.build.unitCost !== undefined ? ` · target ${money(d.build.unitCost)} a board` : ''}</p>
       </div>
       <Button variant="link" size="sm" onClick={onEdit}>Edit basics</Button>
     </div>

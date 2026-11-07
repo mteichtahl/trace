@@ -8,6 +8,7 @@ import { useEffect } from 'react'
 import { AfterAccept } from '@/components/changes/after-accept'
 import { ChatProvider } from '@/components/chat/chat-provider'
 import { AppShell } from '@/components/shell/app-shell'
+import { ShellSkeleton } from '@/components/shell/shell-skeleton'
 import { loadConfig } from '@/lib/config'
 import { requireSignedIn } from '@/lib/guard'
 import { liveStatus, startLive } from '@/lib/live'
@@ -67,4 +68,10 @@ function AppLayout() {
 export const Route = createFileRoute('/_app')({
   beforeLoad: ({ location }) => requireSignedIn(location),
   component: AppLayout,
+  // the first load asks who is signed in, which can take seconds on a cold API: the shell's outline meanwhile, never a
+  // blank page (test-esp32 #15). At once, so nothing blank comes between index.html's outline and it; a later
+  // navigation knows who is signed in already, so it never shows
+  pendingComponent: ShellSkeleton,
+  pendingMs: 0,
+  pendingMinMs: 0,
 })

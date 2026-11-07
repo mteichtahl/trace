@@ -3,11 +3,11 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem,
 } from '@/components/ui/sidebar'
-import { projectId, projectName } from '@/lib/api'
+import { projectId } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { firstName, initials } from '@/lib/format'
 import { usePrefs } from '@/lib/prefs'
-import { useInbox, useProjects } from '@/lib/queries'
+import { useInbox, useProjectNames, useProjects } from '@/lib/queries'
 import { AREAS, isActive } from './nav'
 
 export function Wordmark() {
@@ -27,6 +27,8 @@ export function AppSidebar() {
   const prefs = usePrefs()
   const admin = user?.class === 'admin'
   const pinned = prefs.work.pinned.length ? prefs.work.pinned : (projects.data ?? []).slice(0, 5).map((p) => p.repo)
+  // the name the person gave each project, not the repository's
+  const nameOf = useProjectNames(pinned)
   const waiting = (repo: string) => (inbox.data ?? []).filter((i) => i.repo === repo).length
 
   return (
@@ -60,10 +62,10 @@ export function AppSidebar() {
                 const to = `/p/${projectId(repo)}`
                 return (
                   <SidebarMenuItem key={repo}>
-                    <SidebarMenuButton asChild isActive={pathname.startsWith(to)} tooltip={projectName(repo)} className="h-9">
+                    <SidebarMenuButton asChild isActive={pathname.startsWith(to)} tooltip={nameOf(repo)} className="h-9">
                       <Link to="/p/$id" params={{ id: projectId(repo) }}>
-                        <span className="hidden size-4 items-center justify-center text-[10px] font-semibold text-muted-foreground group-data-[collapsible=icon]:flex">{projectName(repo)[0]}</span>
-                        <span>{projectName(repo)}</span>
+                        <span className="hidden size-4 items-center justify-center text-[10px] font-semibold text-muted-foreground group-data-[collapsible=icon]:flex">{nameOf(repo)[0]}</span>
+                        <span>{nameOf(repo)}</span>
                       </Link>
                     </SidebarMenuButton>
                     {n > 0 && (

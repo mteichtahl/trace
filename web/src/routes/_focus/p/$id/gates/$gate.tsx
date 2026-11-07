@@ -64,6 +64,8 @@ function GatePage() {
   const router = useRouter()
   const j = useJourney(repo)
   const close = () => (window.history.length > 1 ? router.history.back() : void router.navigate({ to: '/p/$id', params: { id } }))
+  // signed or returned, the journey moved: the Overview shows where it is now, not the page visited before (test-esp32 #54)
+  const toOverview = () => void router.navigate({ to: '/p/$id', params: { id } })
   const g = j.data?.gates.find((x) => x.id === gateId) as GateMore | undefined
   const from = j.data?.stages.find((s) => s.id === g?.after)
   const to = j.data && from ? j.data.stages[j.data.stages.indexOf(from) + 1] : undefined
@@ -114,7 +116,7 @@ function GatePage() {
       ) : g.pending?.length ? (
         <GatePending journey={j.data} gate={g} />
       ) : (
-        <GateReview journey={j.data} gate={g} onDone={close} />
+        <GateReview journey={j.data} gate={g} onDone={toOverview} />
       )}
     </div>
   )
