@@ -1,5 +1,5 @@
 /**
- * The gate's cost line (admins): what the project has spent so far, the cloud part an estimate with what AWS billed
+ * The gate's cost list (admins), one short item each: what the project has spent so far, the cloud part an estimate with what AWS billed
  * beside it, and the project's two budgets, each by its own name:
  *
  *   the build budget          what the order may cost (boards, parts, case): the orders paid, orders placed and not
@@ -51,32 +51,93 @@ export function budgetsOf(c: Costs): Budgets {
   }
 }
 
-export function gateSpendLine(c: CostView): string | null {
+/**
+ * One item of the gate's cost list: a short head ("Build budget" "US$200 for boards, parts and case: US$28.80 left")
+ * and what explains it, one short line each. The list was one paragraph of about ninety words (spent, the AWS bill,
+ * the build budget with the forecast's source, the order estimate with its limits, the allowance), hard to read at a
+ * gate (test-esp32 run 2, #236).
+ */
+export interface SpendItem { id: 'spent' | 'billed' | 'build' | 'estimate' | 'cloud'; label: string; text: string; more: string[] }
+
+export function gateSpendItems(c: CostView): SpendItem[] | null {
   if (!c.money) return null
   const cloud = c.spent.cloud ?? 0
   const orders = c.spent.orders ?? 0
   const actual = c.spent.detail?.actual
-  const parts = [
-    `Spent so far ${money(cloud + orders, c.currency)}`,
-    c.spent.cloud !== null && (cloud > 0 || actual) ? `${money(cloud, c.currency)} of it cloud work (estimated from model use and job time)` : '',
-    orders ? `${money(orders, c.orderCurrency ?? c.currency)} on orders` : '',
-  ].filter(Boolean)
   const b = budgetsOf(c)
-  return [`${parts.join(', ')}.`, actual ? billedLine(actual, c.currency) : '', b.build ? buildBudgetLine(b.build) : '', c.orderEstimate ? estimateLine(c.orderEstimate) : '', cloudLine(b, c.spent.cloud !== null)].filter(Boolean).join(' ')
+  const cloudPart = c.spent.cloud !== null && (cloud > 0 || actual) ? `${money(cloud, c.currency)} of it cloud work (estimated from model use and job time).` : ''
+  const ordersPart = orders ? `${money(orders, c.orderCurrency ?? c.currency)} on orders.` : ''
+  // one kind of spend is said on the line itself; both, one under the other
+  const only = cloudPart && !ordersPart && cloud > 0 ? ', all of it cloud work (estimated from model use and job time)' : ordersPart && !cloudPart ? ', all of it on orders' : ''
+  const items: SpendItem[] = [{ id: 'spent', label: 'Spent so far', text: `${money(cloud + orders, c.currency)}${only}.`, more: only ? [] : [cloudPart, ordersPart].filter(Boolean) }]
+  if (actual) items.push(billedItem(actual, c.currency))
+  if (b.build) items.push(buildItem(b.build))
+  if (c.orderEstimate) items.push(estimateItem(c.orderEstimate))
+  const cl = cloudItem(b, c.spent.cloud !== null)
+  if (cl) items.push(cl)
+  return items
+}
+
+/** The gate's cost list as plain text, one sentence after another (its tests read it so). */
+export function gateSpendLine(c: CostView): string | null {
+  const items = gateSpendItems(c)
+  return items ? items.map((i) => [`${i.label} ${i.text}`, ...i.more].join(' ')).join(' ') : null
 }
 
 /**
- * What AWS billed, said as what it is: the project's own tagged resources (its agent runtime, memory, runner), a day or
- * so behind. Model use and the shared job machines are not tagged per project, so the bill leaves them out and the
- * estimate counts only them: the two figures are different spend, not one figure checked against the other. The gate
- * said "US$119 of it cloud work (estimated; US$34.75 billed by AWS so far)", which read as the estimate being 3.4
- * times the bill (test-esp32 run 2, #183).
+ * What AWS billed, said as what it is: the project's own tagged resources, a day or so behind, and different spend
+ * from the estimate, not a check on it (test-esp32 run 2, #183: "US$119 of it cloud work (estimated; US$34.75 billed
+ * by AWS so far)" read as the estimate being 3.4 times the bill).
  */
-export function billedLine(a: NonNullable<NonNullable<CostView['spent']['detail']>['actual']>, currency: string): string {
+function billedItem(a: NonNullable<NonNullable<CostView['spent']['detail']>['actual']>, currency: string): SpendItem {
   const services = Object.entries(a.byService).filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).map(([s]) => s)
-  const through = a.through ? ` through ${a.through}` : ''
-  const what = services.length ? ` (${services.slice(0, 3).join(', ')}${services.length > 3 ? ' and more' : ''})` : ''
-  return `Apart from that, AWS billed ${money(a.total, currency)}${through} for the project's own tagged resources${what}: its agent runtime, memory and runner, which the estimate does not count. Model use and the shared job machines are not tagged per project, so that bill leaves them out; the two figures are different spend. Billing runs about a day behind.`
+  return {
+    id: 'billed', label: 'Billed by AWS', text: `${money(a.total, currency)}${a.through ? ` through ${a.through}` : ''}, apart from the estimate.`,
+    more: [
+      `For the project's own tagged resources${services.length ? ` (${services.slice(0, 3).join(', ')}${services.length > 3 ? ' and more' : ''})` : ''}: its agent runtime, memory and runner, which the estimate does not count.`,
+      'Model use and the shared job machines are not tagged per project, so the bill leaves them out: the two figures are different spend.',
+      'Billing runs about a day behind.',
+    ],
+  }
+}
+
+function buildItem(b: NonNullable<Budgets['build']>): SpendItem {
+  const m = (n: number) => money(n, b.currency)
+  const head = `${m(b.budget)} for boards, parts and case`
+  const held = [
+    b.orders ? `After ${m(cents(b.orders))} paid for orders.` : '',
+    b.committed ? `After ${m(b.committed)} committed for orders placed but not paid yet.` : '',
+    b.forecast ? `After ${m(b.forecast)} forecast for the order${b.forecastSource ? `: ${b.forecastSource}` : ''}.` : '',
+  ].filter(Boolean)
+  if (!held.length) return { id: 'build', label: 'Build budget', text: `${head}: nothing ordered or forecast yet.`, more: [] }
+  return { id: 'build', label: 'Build budget', text: `${head}: ${b.left >= 0 ? `${m(b.left)} left` : `${m(-b.left)} over`}.`, more: held }
+}
+
+function estimateItem(e: NonNullable<CostView['orderEstimate']>): SpendItem {
+  const m = (n: number) => money(n, e.currency)
+  const r = (a: number, b: number) => (a === b ? m(a) : `${m(a)} to ${m(b)}`)
+  const said = limitsSaid(e)
+  return {
+    id: 'estimate', label: 'Order estimate', text: `${r(e.low, e.high)} for ${e.quantity} boards, ${r(e.perBoard.low, e.perBoard.high)} per board.`,
+    more: [
+      `From the parts check of ${e.at.slice(0, 10)}; the fab's fees, case and shipping from its published prices, not a quote.`,
+      ...said.map((x) => `${x[0]!.toUpperCase()}${x.slice(1)}.`),
+      ...(said.length && (e.verdict === 'over' || e.verdict === 'at_risk') ? [CHANGE_NOW] : []),
+    ],
+  }
+}
+
+function cloudItem(b: Budgets, known: boolean): SpendItem | null {
+  const m = (n: number) => money(n, b.cloud.currency)
+  const { allowance, spent, left } = b.cloud
+  if (allowance === null || left === null) {
+    // said only beside a build budget, so nobody reads the cloud work into it
+    return b.build && known ? { id: 'cloud', label: 'Cloud work', text: 'not counted against the build budget.', more: ['No cloud-work allowance is set (Settings).'] } : null
+  }
+  return {
+    id: 'cloud', label: 'Cloud-work allowance', text: `${m(allowance)}: ${left >= 0 ? `${m(left)} left` : `${m(-left)} over`} after ${m(cents(spent))} of trace's cloud work (estimated).`,
+    more: left >= 0 ? [] : ['Cost and time shows what each job cost.'],
+  }
 }
 
 /**
@@ -88,45 +149,22 @@ export function estimateLine(e: NonNullable<CostView['orderEstimate']>): string 
   const m = (n: number) => money(n, e.currency)
   const r = (a: number, b: number) => (a === b ? m(a) : `${m(a)} to ${m(b)}`)
   const head = `Order estimate ${r(e.low, e.high)} for ${e.quantity} boards, ${r(e.perBoard.low, e.perBoard.high)} per board (parts check of ${e.at.slice(0, 10)}; the fab's fees, case and shipping from its published prices, not a quote)`
-  const named = e.limits.filter((l) => l.verdict !== 'not_compared')
-  if (!named.length) return `${head}.`
-  const said = named.map((l) => {
+  const said = limitsSaid(e)
+  if (!said.length) return `${head}.`
+  return `${head}: ${said.join('; ')}.${e.verdict === 'over' || e.verdict === 'at_risk' ? ` ${CHANGE_NOW}` : ''}`
+}
+
+const CHANGE_NOW = 'Change the budget, the parts, the case or the quantity now, while it is cheap.'
+
+/** Each cost limit the estimate could be compared with: "over REQ-4ce9e8 (US$100) by US$41 to US$144". */
+function limitsSaid(e: NonNullable<CostView['orderEstimate']>): string[] {
+  const m = (n: number) => money(n, e.currency)
+  const r = (a: number, b: number) => (a === b ? m(a) : `${m(a)} to ${m(b)}`)
+  return e.limits.filter((l) => l.verdict !== 'not_compared').map((l) => {
     const what = l.requirement ?? (l.kind === 'total' ? 'the build budget' : 'the target unit cost')
     const got = l.kind === 'total' ? [e.low, e.high] as const : [e.perBoard.low, e.perBoard.high] as const
     return l.verdict === 'under' ? `under ${what} (${m(l.amount)})`
       : l.verdict === 'over' ? `over ${what} (${m(l.amount)}) by ${r(got[0] - l.amount, got[1] - l.amount)}`
         : `at risk against ${what} (${m(l.amount)}): up to ${m(got[1] - l.amount)} over`
   })
-  return `${head}: ${said.join('; ')}.${e.verdict === 'over' || e.verdict === 'at_risk' ? ' Change the budget, the parts, the case or the quantity now, while it is cheap.' : ''}`
-}
-
-/**
- * "Build budget US$100 (boards, parts and case): US$20 left after US$80 forecast for the order (10 boards at US$8 each,
- * the build plan's target unit cost)." Cloud work is never in it.
- */
-export function buildBudgetLine(b: NonNullable<Budgets['build']>): string {
-  const m = (n: number) => money(n, b.currency)
-  const held = [
-    b.orders ? `${m(cents(b.orders))} paid for orders` : '',
-    b.committed ? `${m(b.committed)} committed for orders placed but not paid yet` : '',
-    b.forecast ? `${m(b.forecast)} forecast for the order${b.forecastSource ? ` (${b.forecastSource})` : ''}` : '',
-  ].filter(Boolean)
-  const head = `Build budget ${m(b.budget)} (boards, parts and case)`
-  if (!held.length) return `${head}: nothing ordered or forecast yet.`
-  const after = `after ${held.join(' and ')}`
-  return b.left >= 0 ? `${head}: ${m(b.left)} left ${after}.` : `${head}: ${m(-b.left)} over ${after}.`
-}
-
-/** "Cloud-work allowance US$60: US$58.41 left after US$1.59 of trace's cloud work (estimated)." */
-export function cloudLine(b: Budgets, known = true): string {
-  const m = (n: number) => money(n, b.cloud.currency)
-  const { allowance, spent, left } = b.cloud
-  if (allowance === null || left === null) {
-    // said only beside a build budget, so nobody reads the cloud work into it
-    return b.build && known ? 'trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).' : ''
-  }
-  const after = `after ${m(cents(spent))} of trace's cloud work (estimated)`
-  return left >= 0
-    ? `Cloud-work allowance ${m(allowance)}: ${m(left)} left ${after}.`
-    : `Cloud-work allowance ${m(allowance)}: ${m(-left)} over ${after}. Cost and time shows what each job cost.`
 }

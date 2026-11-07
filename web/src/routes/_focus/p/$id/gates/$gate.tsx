@@ -44,7 +44,7 @@ import { EmptyState, ErrorState, Loading, NotShared, OfflineBanner, QueryError }
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { ApiError, projectId, projectName, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { gateSpendLine } from '@/components/project/gate-spend'
+import { gateSpendItems } from '@/components/project/gate-spend'
 import { ago, money } from '@/lib/format'
 import { useLiveStatus } from '@/lib/live'
 import { q, useCall, useJourney } from '@/lib/queries'
@@ -212,7 +212,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
   })
   // the project's spend so far, for the cost line (admins only: cost.get carries no money for anyone else)
   const cost = useQuery(q('cost.get', { repo }, { enabled: admin }))
-  const spendLine = admin && cost.data?.money ? gateSpendLine(cost.data) : null
+  const spend = admin && cost.data?.money ? gateSpendItems(cost.data) : null
 
   const state = { opened, acknowledged, admin, online: live.state !== 'offline' }
   const blockers = signBlockers(g, state)
@@ -370,7 +370,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
             )}
           </section>
 
-          {(g.forecast || g.spend || spendLine) && (
+          {(g.forecast || g.spend || spend) && (
             <div className="mt-6 space-y-1 text-sm">
               {g.forecast && <p className="flex items-start gap-2"><Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden /><span><Rich text={g.forecast} /></span></p>}
               {g.spend && (
@@ -379,7 +379,20 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                   <span><strong>This gate commits {money(g.spend.total, g.spend.currency)}.</strong> {g.spend.changed}</span>
                 </p>
               )}
-              {spendLine && <p className="flex items-start gap-2 text-muted-foreground"><Clock className="mt-0.5 size-4 shrink-0" aria-hidden /><span>{spendLine}</span></p>}
+              {spend && (
+                // one short item each, not one paragraph (test-esp32 run 2, #236)
+                <div className="flex items-start gap-2 text-muted-foreground">
+                  <Clock className="mt-0.5 size-4 shrink-0" aria-hidden />
+                  <ul className="min-w-0 flex-1 space-y-1.5" aria-label="Spend and budgets">
+                    {spend.map((i) => (
+                      <li key={i.id}>
+                        <span className="font-medium text-foreground">{i.label}</span> {i.text}
+                        {i.more.length > 0 && <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-xs">{i.more.map((m) => <li key={m}>{m}</li>)}</ul>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
 

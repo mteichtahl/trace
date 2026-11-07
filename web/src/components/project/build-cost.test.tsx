@@ -16,7 +16,7 @@ import { handle } from '@/mock/handlers'
 import { BenchReadings, BoardList, PlacedOrders, limitText } from './build-record'
 import { CloudBreakdown, explorerLine, pricesLine } from './cloud-cost'
 import { ago } from '@/lib/format'
-import { budgetsOf, gateSpendLine } from './gate-spend'
+import { budgetsOf, gateSpendItems, gateSpendLine } from './gate-spend'
 import { Budgets } from './budgets'
 
 vi.mock('@tanstack/react-router', async (orig) => ({ ...(await orig<object>()), Link: ({ children }: { children: ReactNode }) => children }))
@@ -49,7 +49,7 @@ describe('the API\'s build and cost answers, as the app reads them', () => {
     expect(pricesLine(c.prices)).toEqual({ status: 'warning', label: 'Built-in prices' })
     expect(screen.getByText('Built-in prices')).toBeInTheDocument()
     expect(explorerLine(c.explorer)).toMatchObject({ status: 'waiting', label: 'Not read yet' })
-    expect(gateSpendLine(c)).toBe('Spent so far US$40, US$40 on orders.')
+    expect(gateSpendLine(c)).toBe('Spent so far US$40, all of it on orders.')
   })
 
   it('usage.month: each project with its estimate, the actual (none yet) and orders', () => {
@@ -104,9 +104,26 @@ describe('small rules', () => {
 
   it('the gate\'s line says nothing without money, and counts the build budget left after the orders and what is committed', () => {
     expect(gateSpendLine({ money: false, currency: 'USD', spent: { cloud: null, orders: null }, committed: null, forecast: null, stages: [], lines: [] })).toBeNull()
-    const line = gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 12, orders: 100, detail: { estimated: { agents: 12, gpu: 0, cpu: 0, total: 12 }, actual: { total: 3, byService: {}, through: null, estimatedDays: 0 }, basis: 'estimate' } }, committed: 50, forecast: 0, budget: 300, stages: [], lines: [] })
+    const items = gateSpendItems({ money: true, currency: 'USD', spent: { cloud: 12, orders: 100, detail: { estimated: { agents: 12, gpu: 0, cpu: 0, total: 12 }, actual: { total: 3, byService: {}, through: null, estimatedDays: 0 }, basis: 'estimate' } }, committed: 50, forecast: 0, budget: 300, stages: [], lines: [] })!
     // the cloud work is not taken off the build budget: US$300 less US$100 paid and US$50 committed
-    expect(line).toBe('Spent so far US$112, US$12 of it cloud work (estimated from model use and job time), US$100 on orders. Apart from that, AWS billed US$3 for the project\'s own tagged resources: its agent runtime, memory and runner, which the estimate does not count. Model use and the shared job machines are not tagged per project, so that bill leaves them out; the two figures are different spend. Billing runs about a day behind. Build budget US$300 (boards, parts and case): US$150 left after US$100 paid for orders and US$50 committed for orders placed but not paid yet. trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
+    expect(items).toEqual([
+      { id: 'spent', label: 'Spent so far', text: 'US$112.', more: ['US$12 of it cloud work (estimated from model use and job time).', 'US$100 on orders.'] },
+      { id: 'billed', label: 'Billed by AWS', text: 'US$3, apart from the estimate.', more: ['For the project\'s own tagged resources: its agent runtime, memory and runner, which the estimate does not count.', 'Model use and the shared job machines are not tagged per project, so the bill leaves them out: the two figures are different spend.', 'Billing runs about a day behind.'] },
+      { id: 'build', label: 'Build budget', text: 'US$300 for boards, parts and case: US$150 left.', more: ['After US$100 paid for orders.', 'After US$50 committed for orders placed but not paid yet.'] },
+      { id: 'cloud', label: 'Cloud work', text: 'not counted against the build budget.', more: ['No cloud-work allowance is set (Settings).'] },
+    ])
+  })
+
+  // test-esp32 run 2, #236: spent, the bill, the budget with the forecast's source, the order estimate with its limits
+  // and the allowance were one paragraph of about ninety words
+  it('the gate\'s cost list is short items, each head a line of its own', () => {
+    const c = { money: true, currency: 'USD', spent: { cloud: 38.12, orders: 0, detail: { estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: { total: 9.86, byService: { 'Amazon Bedrock AgentCore': 7.2 }, through: '2026-11-06', estimatedDays: 1 }, basis: 'estimate' as const } }, committed: 0, forecast: 171, budget: 200, cloudBudget: 60, quantity: 10, unit_cost: 12, stages: [], lines: [] }
+    const items = gateSpendItems(c)!
+    expect(items.map((i) => i.label)).toEqual(['Spent so far', 'Billed by AWS', 'Build budget', 'Cloud-work allowance'])
+    for (const i of items) {
+      expect(`${i.label} ${i.text}`.split(/\s+/).length).toBeLessThanOrEqual(20)
+      for (const m of i.more) expect(m.split(/\s+/).length).toBeLessThanOrEqual(30)
+    }
   })
 
   it('the gate\'s line says what AWS billed is the project\'s tagged resources, not a check on the estimate (test-esp32 run 2, #183)', () => {
@@ -114,22 +131,22 @@ describe('small rules', () => {
     const actual = { total: 34.75, byService: { 'Amazon Bedrock AgentCore': 30.1, 'AWS CodeBuild': 4.1, 'AWS Secrets Manager': 0.55 }, through: '2026-11-05', estimatedDays: 1 }
     const line = gateSpendLine({ money: true, currency: 'USD', spent: { cloud: 119, orders: 0, detail: { estimated: { agents: 110, gpu: 4, cpu: 5, total: 119 }, actual, basis: 'estimate' } }, committed: 0, forecast: 0, stages: [], lines: [] })!
     expect(line).not.toMatch(/estimated; US\$34.75 billed/)
-    expect(line).toMatch(/US\$119 of it cloud work \(estimated from model use and job time\)/)
-    expect(line).toMatch(/AWS billed US\$34.75 through 2026-11-05 for the project's own tagged resources \(Amazon Bedrock AgentCore, AWS CodeBuild, AWS Secrets Manager\)/)
+    expect(line).toMatch(/US\$119, all of it cloud work \(estimated from model use and job time\)/)
+    expect(line).toMatch(/Billed by AWS US\$34.75 through 2026-11-05, apart from the estimate\. For the project's own tagged resources \(Amazon Bedrock AgentCore, AWS CodeBuild, AWS Secrets Manager\)/)
     expect(line).toMatch(/which the estimate does not count/)
     expect(line).toMatch(/the two figures are different spend/)
   })
 
   it('the gate\'s line keeps the order and trace\'s cloud work apart, the forecast with its source (test-esp32 run 2, #91: US$1.59 spent, "US$18.41 left")', () => {
     const define = { money: true, currency: 'USD', spent: { cloud: 1.59, orders: 0 }, committed: 0, forecast: 80, budget: 100, quantity: 10, unit_cost: 8, stages: [], lines: [] }
-    expect(gateSpendLine(define)).toBe('Spent so far US$1.59, US$1.59 of it cloud work (estimated from model use and job time). Build budget US$100 (boards, parts and case): US$20 left after US$80 forecast for the order (10 boards at US$8 each, the build plan\'s target unit cost). trace\'s cloud work does not count against the build budget, and no cloud-work allowance is set (Settings).')
+    expect(gateSpendLine(define)).toBe('Spent so far US$1.59, all of it cloud work (estimated from model use and job time). Build budget US$100 for boards, parts and case: US$20 left. After US$80 forecast for the order: 10 boards at US$8 each, the build plan\'s target unit cost. Cloud work not counted against the build budget. No cloud-work allowance is set (Settings).')
     // the Architect gate with an allowance: the build still has its US$20, the cloud work is counted against its own
     const architect = { ...define, spent: { cloud: 21.28, orders: 0 }, cloudBudget: 60 }
-    expect(gateSpendLine(architect)).toMatch(/Build budget US\$100 \(boards, parts and case\): US\$20 left after US\$80 forecast for the order .* Cloud-work allowance US\$60: US\$38.72 left after US\$21.28 of trace's cloud work \(estimated\)\.$/)
+    expect(gateSpendLine(architect)).toMatch(/Build budget US\$100 for boards, parts and case: US\$20 left\. After US\$80 forecast for the order: .* Cloud-work allowance US\$60: US\$38.72 left after US\$21.28 of trace's cloud work \(estimated\)\.$/)
     // over the allowance says by how much, never US$0
     expect(gateSpendLine({ ...architect, cloudBudget: 20 })).toMatch(/Cloud-work allowance US\$20: US\$1.28 over after US\$21.28 of trace's cloud work \(estimated\)\. Cost and time shows what each job cost\.$/)
     // over the build budget is the order's alone
-    expect(gateSpendLine({ ...architect, budget: 75 })).toMatch(/Build budget US\$75 \(boards, parts and case\): US\$5 over after US\$80 forecast for the order/)
+    expect(gateSpendLine({ ...architect, budget: 75 })).toMatch(/Build budget US\$75 for boards, parts and case: US\$5 over\. After US\$80 forecast for the order/)
     expect(budgetsOf(architect)).toMatchObject({ build: { budget: 100, forecast: 80, left: 20 }, cloud: { allowance: 60, spent: 21.28, left: 38.72 } })
   })
 
