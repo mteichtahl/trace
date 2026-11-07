@@ -152,8 +152,11 @@ export function FocusLayout({
     </span>
   ) : null
 
+  // The page is exactly the viewport: only the rail, the centre and the right panel scroll, each inside itself.
+  // `relative` and `overflow-clip` keep what is positioned inside them (screen-reader text is absolute) from
+  // growing the document, so the window never scrolls the header away (test-esp32 R16).
   return (
-    <div className="flex h-dvh flex-col bg-background" role="main" aria-label={title}>
+    <div className="relative flex h-dvh flex-col overflow-clip bg-background" role="main" aria-label={title} data-focus-shell>
       <header className="flex h-[52px] shrink-0 items-center gap-3 border-b px-4">
         <Button variant="outline" size="icon" onClick={onClose} aria-label="Close and return">
           <X />
@@ -189,28 +192,28 @@ export function FocusLayout({
       {notice && <div className="shrink-0 border-b px-4 py-3 empty:hidden">{notice}</div>}
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[240px] shrink-0 overflow-y-auto border-r bg-sidebar p-3 md:block lg:w-[240px]">{stepList}</aside>
+        <aside className="relative hidden w-[240px] shrink-0 overflow-y-auto border-r bg-sidebar p-3 md:block lg:w-[240px]">{stepList}</aside>
         {centre === 'fill' ? (
-          <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">{children}</div>
         ) : (
-          <div className="min-w-0 flex-1 overflow-y-auto">
+          <div className="relative min-w-0 flex-1 overflow-y-auto">
             <div className={cn('mx-auto w-full px-4 py-6 md:px-6', variant === 'checklist' ? 'max-w-none' : 'max-w-[960px]')}>{children}</div>
           </div>
         )}
-        {variant === 'checklist' && aside && <aside className="hidden w-[320px] shrink-0 overflow-y-auto border-l p-4 lg:block">{aside}</aside>}
+        {variant === 'checklist' && aside && <aside className="relative hidden w-[320px] shrink-0 overflow-y-auto border-l p-4 lg:block">{aside}</aside>}
         {right && traceOpen && variant !== 'checklist' && (
-          <aside className="hidden w-[380px] shrink-0 flex-col border-l xl:flex" aria-label={variant === 'conversational' ? 'What is being built' : 'trace'}>
+          <aside className="relative hidden w-[380px] shrink-0 flex-col overflow-clip border-l xl:flex" aria-label={variant === 'conversational' ? 'What is being built' : 'trace'}>
             {right}
           </aside>
         )}
         {trace && traceOpen && variant === 'checklist' && (
-          <aside className="hidden w-[380px] shrink-0 flex-col border-l 2xl:flex" aria-label="trace">
+          <aside className="relative hidden w-[380px] shrink-0 flex-col overflow-clip border-l 2xl:flex" aria-label="trace">
             {trace}
           </aside>
         )}
       </div>
 
-      {outcome && <div className="max-h-[45dvh] shrink-0 overflow-y-auto border-t px-4 py-3 md:px-6">{outcome}</div>}
+      {outcome && <div className="relative max-h-[45dvh] shrink-0 overflow-y-auto border-t px-4 py-3 md:px-6">{outcome}</div>}
 
       <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked} saving={draftSaving} />
 
