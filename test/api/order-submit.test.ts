@@ -106,10 +106,18 @@ describe('Order submit: each step from the record', () => {
 
   it('Pay and record: the order gate, not signed yet, and no order', async () => {
     const v = await view()
-    expect(v.order.pay).toEqual({ gate: { id: 'fabricate.order', signed: null }, sheet: 'not_met', order: null })
+    expect(v.order.pay).toEqual({ gate: { id: 'fabricate.order', signed: null }, sheet: 'not_met', order: null, quote: null })
     // not due yet, never "waived" (a risk accepted): nothing is paid before the gate, and it holds Submit back no more
     // than a waiver would (#227)
     expect(check(v, 'recorded')).toMatchObject({ status: 'not_due', detail: expect.stringMatching(/^not due yet: .*after the order gate is signed/) })
+  })
+
+  it('Pay and record: the JLCPCB quote is asked for, never in the way, and shown once it is recorded', async () => {
+    expect(check(await view(), 'quote')).toMatchObject({ status: 'not_due', detail: expect.stringMatching(/^no quote recorded yet: .*Record a quote/) })
+    await run(USER, 'quote.record', { repo: REPO, total: 61.2, on: '2026-11-01', why: 'First quote after uploading the package.' })
+    const v = await view()
+    expect(v.order.pay.quote).toMatchObject({ total: 61.2, currency: 'USD', on: '2026-11-01' })
+    expect(check(v, 'quote')).toMatchObject({ status: 'met', detail: 'US$61.20 for 10 boards, quoted 2026-11-01.' })
   })
 
   it('the options and the matching are ticked one by one, and Submit then meets the order sheet, keeping the draft', async () => {

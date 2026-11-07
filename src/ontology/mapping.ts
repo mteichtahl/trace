@@ -223,6 +223,17 @@ export const TABLES: readonly TableMap[] = [
     },
   },
   {
+    db: 'journey', table: 'quotes', class: 'FabQuote', kind: 'quote', key: 'id',
+    columns: {
+      id: ID(), revision: { prop: 'ofRevision', ...revision }, fab: { prop: 'fabHouse' }, quoted_on: { prop: 'quotedOn', as: 'date' },
+      total: { prop: 'quotedTotal', as: 'decimal' }, currency: { prop: 'currency' }, quantity: { prop: 'quotedQuantity', as: 'int' },
+      lines: { prop: 'quoteLines', as: 'json' }, options: { prop: 'quotedOptions', as: 'json' }, options_from: { prop: 'optionsFromRun', ref: 'run' },
+      parts_run: { prop: 'partsCheckRun', ref: 'run' }, parts_total: { prop: 'partsCheckTotal', as: 'decimal' }, link: { prop: 'quoteLink' },
+      why: { prop: 'reason' }, order_id: { prop: 'placedAs', ref: 'order' },
+      by: { prop: 'recordedBy' }, at: { prop: 'recordedAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' },
+    },
+  },
+  {
     db: 'journey', table: 'stuck_dismissals', class: 'StuckDismissal', kind: 'stuck-dismissal', key: 'stuck_id',
     columns: {
       stuck_id: { prop: 'dismisses' }, job_id: { prop: 'fromJob', ref: 'job' }, reason: { prop: 'reason' },
@@ -318,6 +329,20 @@ export const TABLES: readonly TableMap[] = [
       answer: { prop: 'answer' }, answer_evidence: { prop: 'answerEvidence', objects: evidence }, confidence: { prop: 'confidence', as: 'decimal' },
       acceptance_met: { prop: 'acceptanceMet', as: 'bool' }, answered_at: { prop: 'answeredAt', as: 'time' },
       why: { prop: 'failureReason' }, ended_at: { prop: 'endedAt', as: 'time' },
+    },
+  },
+
+  {
+    db: 'facts', table: 'agent_quotes', class: 'FabQuote', kind: 'agent-quote', key: 'id',
+    columns: {
+      id: ID(), revision: { prop: 'ofRevision', ...revision }, fab: { prop: 'fabHouse' }, quoted_on: { prop: 'quotedOn', as: 'date' },
+      total: { prop: 'quotedTotal', as: 'decimal' }, currency: { prop: 'currency' }, quantity: { prop: 'quotedQuantity', as: 'int' },
+      lines: { prop: 'quoteLines', as: 'json' }, options: { prop: 'quotedOptions', as: 'json' }, options_from: { prop: 'optionsFromRun', ref: 'run' },
+      parts_run: { prop: 'partsCheckRun', ref: 'run' }, parts_total: { prop: 'partsCheckTotal', as: 'decimal' }, link: { prop: 'quoteLink' },
+      why: { prop: 'reason' }, order_id: { prop: 'placedAs', ref: 'order' },
+      said: { prop: 'fromPersonsWords' }, agent: { prop: 'performedBy', ...specialist },
+      by: { ignore: 'the agent\'s name in words: the label of the specialist it links to' }, job_id: { prop: 'fromJob', ref: 'job' },
+      at: { prop: 'recordedAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' },
     },
   },
 

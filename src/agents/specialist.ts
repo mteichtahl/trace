@@ -28,6 +28,8 @@ export const SHARED_TOOLS = [
   'kb.search', 'kb.status',
   // the project's journey: read it, ask people, check the criteria trace owns, say when stuck (src/tools/journey)
   'journey.status', 'journey.ask', 'journey.check', 'journey.stuck',
+  // the JLCPCB quotes people recorded, and one a person told the agent, from their words only (src/core/quotes.ts)
+  'journey.quotes', 'journey.quote_record',
   // a criterion a shape backs, checked over the project's records (src/tools/shape)
   'shape.check',
   // the design record: propose intent, link requirements to it, architectures, the pin plan, sheet → requirements

@@ -40,7 +40,8 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { isAdmin } from '../core/access.js'
-import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, agentFacts, agentFactsStore, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
+import { type QuoteRow, allQuotes, loadAgentQuotes, loadQuotes } from '../core/quotes.js'
 import { type Lasts, askedBy, carryOn, designBefore, ruleFromAnswer, viewerOf, waivedWords } from './actions-journey.js'
 import { docsAfterDesign } from './docs-follow.js'
 import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
@@ -140,6 +141,8 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
   const sheetFiles = skill === 'schematic-finish' ? await kicadFiles(ctx, repo).then((f) => f.sch, () => null) : null
   // what the bench measured and who answered, as taken (the bench's live copy beside the facts: src/core/bench.ts)
   const bench = HARDWARE_SKILLS.has(skill) ? await liveBenchOf(ctx, repo) : { readings: [], ids: [] }
+  // Order submit: the quotes agents recorded from people's words, beside the person's own (src/core/quotes.ts)
+  const agentQuoted = skill === 'order-submit' ? await agentFactsStore(ctx, repo).read((db) => loadAgentQuotes(db)).then((x) => x.result, () => [] as QuoteRow[]) : []
   const input: Awaited<ReturnType<typeof inputFor>> = await withRecordDb(ctx, repo, (db) => {
     const own = loadJourney(db)
     const r = own ? mergeAgentFacts(own, facts) : null
@@ -223,7 +226,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       placement: placement ? { status: placement.status, summary: placement.summary } : null,
       caseBuild: caseRun ? { id: caseRun.id, status: caseRun.status, summary: caseRun.summary, result: runResult(db, caseRun.id) } : null,
       caseOptions: optRow && optJson ? { id: String(optRow.id), options: optJson } : null,
-      instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
+      instruments, tests, orders: r ? loadOrders(db) : [], quotes: skill === 'order-submit' ? allQuotes(loadQuotes(db), agentQuoted) : [], draft, gate: currentGate(r), question,
       design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles, ...(skill === 'architecture-choice' ? { stockLines: stockLines(db) } : {}),
       draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors, reviewBefore,
       // the release report Release review approves: the newest verify.report run that finished
@@ -552,7 +555,7 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       const rec = releaseRecommendation(i.r, v, i.requirements)
       return { release: v, ...(rec ? { recommendation: rec } : {}) }
     }
-    case 'order-submit': return { order: orderView(i.r, i.order ?? null, i.orders, Date.now() / 1000) }
+    case 'order-submit': return { order: orderView(i.r, i.order ?? null, i.orders, Date.now() / 1000, i.quotes ?? []) }
     case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
     case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }
     default: return {}
