@@ -72,7 +72,7 @@ function Cost() {
         <span className="font-semibold">{m(d.spent.cloud)} of cloud work so far{d.spent.detail ? ' (estimated)' : ''}.</span> The order: {m(d.spent.orders)} paid, {m(d.committed)} committed and {m(d.forecast)} forecast. Each counts against its own budget.
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile label="Cloud work to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate · ${money(d.spent.detail.actual.total, d.currency)} billed by AWS` : 'Estimate · AWS has billed nothing tagged yet') : undefined} />
+        <Tile label="Cloud work to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate of model use and jobs · AWS billed ${money(d.spent.detail.actual.total, d.currency)} apart, for the project's tagged resources` : 'Estimate of model use and jobs · AWS has billed nothing tagged yet') : undefined} />
         <Tile label="Orders paid" value={m(d.spent.orders)} />
         <Tile label="Committed" value={m(d.committed)} hint="Orders placed, not paid yet" />
         <Tile label="Forecast for the order" value={m(d.forecast)} hint={forecastSource(d, d.orderCurrency ?? d.currency) ?? 'Boards × the target unit cost'} />

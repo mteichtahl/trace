@@ -51,11 +51,25 @@ export function gateSpendLine(c: CostView): string | null {
   const actual = c.spent.detail?.actual
   const parts = [
     `Spent so far ${money(cloud + orders, c.currency)}`,
-    c.spent.cloud !== null && (cloud > 0 || actual) ? `${money(cloud, c.currency)} of it cloud work (estimated${actual ? `; ${money(actual.total, c.currency)} billed by AWS so far` : ''})` : '',
+    c.spent.cloud !== null && (cloud > 0 || actual) ? `${money(cloud, c.currency)} of it cloud work (estimated from model use and job time)` : '',
     orders ? `${money(orders, c.orderCurrency ?? c.currency)} on orders` : '',
   ].filter(Boolean)
   const b = budgetsOf(c)
-  return [`${parts.join(', ')}.`, b.build ? buildBudgetLine(b.build) : '', cloudLine(b, c.spent.cloud !== null)].filter(Boolean).join(' ')
+  return [`${parts.join(', ')}.`, actual ? billedLine(actual, c.currency) : '', b.build ? buildBudgetLine(b.build) : '', cloudLine(b, c.spent.cloud !== null)].filter(Boolean).join(' ')
+}
+
+/**
+ * What AWS billed, said as what it is: the project's own tagged resources (its agent runtime, memory, runner), a day or
+ * so behind. Model use and the shared job machines are not tagged per project, so the bill leaves them out and the
+ * estimate counts only them: the two figures are different spend, not one figure checked against the other. The gate
+ * said "US$119 of it cloud work (estimated; US$34.75 billed by AWS so far)", which read as the estimate being 3.4
+ * times the bill (test-esp32 run 2, #183).
+ */
+export function billedLine(a: NonNullable<NonNullable<CostView['spent']['detail']>['actual']>, currency: string): string {
+  const services = Object.entries(a.byService).filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).map(([s]) => s)
+  const through = a.through ? ` through ${a.through}` : ''
+  const what = services.length ? ` (${services.slice(0, 3).join(', ')}${services.length > 3 ? ' and more' : ''})` : ''
+  return `Apart from that, AWS billed ${money(a.total, currency)}${through} for the project's own tagged resources${what}: its agent runtime, memory and runner, which the estimate does not count. Model use and the shared job machines are not tagged per project, so that bill leaves them out; the two figures are different spend. Billing runs about a day behind.`
 }
 
 /**
