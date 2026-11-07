@@ -16,7 +16,8 @@ import { LENGTH_DEFINITION, netNames } from '../kicad/pcb.js'
 import { needPcb, resolveProject, type Project } from '../kicad/project.js'
 import { cap, recorded } from '../kicad/record.js'
 import { readLayout } from './board.js'
-import { druRules, floorplan, GROUND, lengthMatch, netClasses, placementCheck, POWER } from './checks.js'
+import { druRules, floorplan, GROUND, lengthMatch, netClasses, PAIR_CLASSES, placementCheck, POWER, usbSpeedFrom, type PairClass, type UsbSpeed } from './checks.js'
+import type { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
 
 const project = z.string().optional().describe('path to a .kicad_pro, .kicad_sch or .kicad_pcb (or a folder with one project); omit for the configured/only project')
@@ -82,10 +83,12 @@ export const placementCheckTool = defineTool({
 
 export const lengthMatchTool = defineTool({
   name: 'pcb.length_match',
-  description: 'Length matching on a routed KiCad board: differential pair skew (pairs found as KiCad pairs them, names ending +/- or P/N, plus pairs given) and length groups (nets or globs, matched to the longest or a target), against tolerances given here or skew/length constraints in the .kicad_dru (conditions on A./B. NetClass, NetName, inDiffPair, Type, Layer, existsOnLayer, isPlated, Pad_Type, Via_Type, Reference, insideArea/intersectsArea/enclosedByArea on rule areas, with && || ! and parentheses; a rule with any other term is listed as skipped). A rule governs a net when one of its tracks, vias or pads meets the condition. Lengths are the same as kicad.net_length and emc.precheck report: pad to pad along the net\'s longest routed run (both layers; each pair and group row says which pads), via barrels from the stackup included unless include_vias is false, with delay when the stackup is known; stubs to a net\'s other pads are not counted. Recorded; returns run_id.',
+  description: 'Length matching on a routed KiCad board: differential pair skew (pairs found as KiCad pairs them, names ending +/- or P/N, plus pairs given) and length groups (nets or globs, matched to the longest or a target), against tolerances given here, skew/length constraints in the .kicad_dru, or else the pair\'s signal class default (USB 2.0 Low/Full Speed 15 mm, High Speed 1.27 mm, each with its basis; a USB pair\'s speed from usb_speed or the project\'s requirements and intent) (conditions on A./B. NetClass, NetName, inDiffPair, Type, Layer, existsOnLayer, isPlated, Pad_Type, Via_Type, Reference, insideArea/intersectsArea/enclosedByArea on rule areas, with && || ! and parentheses; a rule with any other term is listed as skipped). A rule governs a net when one of its tracks, vias or pads meets the condition. Lengths are the same as kicad.net_length and emc.precheck report: pad to pad along the net\'s longest routed run (both layers; each pair and group row says which pads), via barrels from the stackup included unless include_vias is false, with delay when the stackup is known; stubs to a net\'s other pads are not counted. Not met (status fail, with reasons) when a pair or group is over its tolerance or unrouted, has no tolerance at all, or a pair on the board by name is left unchecked and not in ignore; a board with no pairs or groups says there is nothing to match. Recorded; returns run_id.',
   input: z.object({
     project,
-    pairs: z.array(z.object({ p: z.string(), n: z.string(), max_skew_mm: z.number().nonnegative().optional() }).strict()).optional(),
+    pairs: z.array(z.object({ p: z.string(), n: z.string(), max_skew_mm: z.number().nonnegative().optional(), signal_class: z.enum(PAIR_CLASSES).optional().describe('the default tolerance when nothing else gives one') }).strict()).optional(),
+    usb_speed: z.enum(['low', 'full', 'high']).optional().describe('USB 2.0 speed of the USB pairs (else read from the requirements and intent)'),
+    ignore: z.array(z.string()).default([]).describe('nets (globs) whose names pair but that are not differential pairs to match'),
     auto_pairs: z.boolean().default(true).describe('also check every +/- and P/N pair on the board'),
     max_skew_mm: z.number().nonnegative().optional().describe('skew tolerance for pairs without their own (else the .kicad_dru rule)'),
     groups: z.array(z.object({ name: z.string(), nets: z.array(z.string()).min(1).describe('net names or globs, e.g. ["/DDR/DQ*"]'), tolerance_mm: z.number().nonnegative().optional(), target_mm: z.number().positive().optional() }).strict()).optional(),
@@ -101,19 +104,26 @@ export const lengthMatchTool = defineTool({
       const rules = dru && existsSync(dru) ? druRules(readFileSync(dru, 'utf8'), areas) : { rules: [], skipped: [] }
       let r: ReturnType<typeof lengthMatch>
       try {
-        r = lengthMatch(L.board, netNames(L.board), { pairs: a.pairs, auto_pairs: a.auto_pairs, max_skew_mm: a.max_skew_mm, groups: a.groups, include_vias: a.include_vias, rules: rules.rules, netClass: netClasses(p.pro) })
+        const classes = Object.fromEntries((a.pairs ?? []).filter((x) => x.signal_class).map((x) => [x.p, x.signal_class as PairClass]))
+        const speed = a.usb_speed ? { speed: a.usb_speed as UsbSpeed, from: 'usb_speed' } : usbSpeedFrom(statedTexts(run.db))
+        r = lengthMatch(L.board, netNames(L.board), { pairs: a.pairs, auto_pairs: a.auto_pairs, max_skew_mm: a.max_skew_mm, groups: a.groups, include_vias: a.include_vias, rules: rules.rules, netClass: netClasses(p.pro), classes, usb_speed: speed, ignore: a.ignore })
       } catch (e) {
         throw new ToolError(e instanceof Error ? e.message : String(e))
       }
       for (const pr of r.pairs as { p: string; skew_mm: number }[]) run.measure(`skew.${pr.p}`, pr.skew_mm, 'mm')
       for (const g of r.groups as { name: string; spread_mm: number }[]) run.measure(`spread.${g.name}`, g.spread_mm, 'mm')
       const pc = cap(r.pairs, a.limit)
-      const passed = r.failures === 0
+      // nothing checked is not "within tolerance" (test-esp32 #187): a pair without a tolerance, or one left out, is not met
+      const passed = r.reasons.length === 0
+      const counts = `${r.pairs.length} pair(s), ${r.groups.length} group(s): ${r.failures} failing, ${r.unknown} without a tolerance${r.unchecked.length ? `, ${r.unchecked.length} unchecked` : ''}`
       return {
         status: passed ? 'pass' as const : 'fail' as const,
-        summary: `${r.pairs.length} pair(s), ${r.groups.length} group(s): ${r.failures} failing, ${r.unknown} without a tolerance`,
+        summary: r.nothing_to_match ? 'nothing to match: no differential pair or length group on the board'
+          : passed ? counts : `not met: ${r.reasons.join('; ')} (${counts})`,
         result: {
-          passed, pairs: pc.items, pairs_omitted: pc.omitted, groups: r.groups, failures: r.failures, without_tolerance: r.unknown,
+          passed, ...(r.nothing_to_match ? { nothing_to_match: true } : {}), ...(passed ? {} : { reasons: r.reasons }),
+          pairs: pc.items, pairs_omitted: pc.omitted, groups: r.groups, failures: r.failures, without_tolerance: r.unknown,
+          ...(r.unchecked.length ? { unchecked: r.unchecked } : {}), ...(r.ignored.length ? { ignored: r.ignored } : {}),
           dru_rules: rules.rules.map((x) => ({ name: x.name, condition: x.condition, skew_max_mm: x.skew_max_mm ?? null, length: x.length ?? null })),
           ...(rules.skipped.length ? { dru_skipped: rules.skipped } : {}),
           length_definition: LENGTH_DEFINITION + (a.include_vias ? '' : '; via barrels left out here (include_vias false)'),
@@ -123,6 +133,16 @@ export const lengthMatchTool = defineTool({
     })
   },
 })
+
+/** The project's requirements and intent statements in force, as { id, text }, for the signal class of a pair. */
+function statedTexts(db: DatabaseSync): { id: string; text: string }[] {
+  const has = (t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
+  const rows = (sql: string): { id: string; text: string }[] => (db.prepare(sql).all() as { id: unknown; text: unknown }[]).map((x) => ({ id: String(x.id), text: String(x.text) }))
+  return [
+    ...(has('requirements') ? rows("SELECT id, text || ' ' || coalesce(acceptance, '') AS text FROM requirements WHERE status NOT IN ('rejected', 'obsolete') ORDER BY id") : []),
+    ...(has('intent_statements') ? rows("SELECT id, text FROM intent_statements WHERE status != 'withdrawn' ORDER BY id") : []),
+  ]
+}
 
 export const floorplanTool = defineTool({
   name: 'pcb.floorplan',

@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { capacitanceUf, diffPairs, druRules, type DruArea, type DruItem, type DruRule } from '../../src/tools/layout/checks.js'
+import { capacitanceUf, diffPairs, druRules, usbPair, usbSpeedFrom, type DruArea, type DruItem, type DruRule } from '../../src/tools/layout/checks.js'
+import { Work } from '../../src/core/store.js'
 import { arcPoints, area, clip, hull, inside, loops, overlapArea, overlaps, rectPoly } from '../../src/tools/layout/geom.js'
 import { pointInPolygon, polygonOverlapArea, polygonsOverlap, segmentsCross, triangulate } from '../../src/tools/pcb/geometry.js'
 import { readLayout } from '../../src/tools/layout/board.js'
@@ -369,6 +370,102 @@ describe('one length for a net (test-esp32 #159)', () => {
     const [sp, sn] = emc.edge_spectrum as Dict[]
     expect(sp).toMatchObject({ net: 'USB_DP', length_mm: 27.07, path: 'U1.1 to J1.B6', trace_mm: 24, via_barrel_mm: 3.07, vias: 2 })
     expect(sn).toMatchObject({ net: 'USB_DN', length_mm: 24, path: 'U1.2 to J1.B7' })
+  })
+})
+
+/**
+ * test-esp32 #163, #187: the test board's USB pair as measured on the one length (PR #316): D+ U2.5 to J1.B6 15.10 mm,
+ * D- U2.6 to J1.B7 17.73 mm, 2.63 mm apart. "Matched-length groups are within tolerance" was met on a run that had
+ * no tolerance for the pair; Full Speed USB allows that skew, High Speed does not.
+ */
+function fsFixture(name = 'fs'): string {
+  const nets = ['/USB_DP', '/USB_DN', '/CC1', '/CC2']
+  const fps: Fp[] = [
+    { ref: 'U2', value: 'CH340C', x: 9, y: 10.5, cy: 1.5, sheet: '/', pads: [{ num: '5', x: 1, y: -0.5, net: '/USB_DP' }, { num: '6', x: 1, y: 0.5, net: '/USB_DN' }] },
+    { ref: 'J1', value: 'USB-C', x: 25, y: 12, cy: 3, sheet: '/', pads: [{ num: 'B6', x: 0.1, y: -2, net: '/USB_DP' }, { num: 'B7', x: 0, y: 1.73, net: '/USB_DN' }, { num: 'A5', x: 1, y: 0, net: '/CC1' }, { num: 'B5', x: 1, y: 1, net: '/CC2' }] },
+  ]
+  const extra = [seg(10, 10, 25.1, 10, '/USB_DP'), seg(10, 11, 25, 11, '/USB_DN'), seg(25, 11, 25, 13.73, '/USB_DN')].join('\n')
+  const pcb = join(dir, `${name}.kicad_pcb`)
+  writeFileSync(pcb, boardText(fps, extra, nets))
+  return pcb
+}
+
+describe('matched lengths by signal class (test-esp32 #163, #187)', () => {
+  type Pair = { p: string; n: string; p_mm: number; n_mm: number; skew_mm: number; status: string; tolerance_mm: number | null; tolerance_from: string | null; signal_class?: string; basis?: string; why?: string }
+
+  it('a USB pair with no rule and no stated speed is not met, never passed vacuously', async () => {
+    const r = await call('pcb.length_match', { project: fsFixture() })
+    const pair = (r.pairs as Pair[])[0] as Pair
+    expect(pair).toMatchObject({ p: '/USB_DP', n: '/USB_DN', p_mm: 15.1, n_mm: 17.73, status: 'no_tolerance', tolerance_mm: null })
+    expect(pair.skew_mm).toBeCloseTo(2.63, 3)
+    expect(pair.why).toMatch(/no requirement states its speed/)
+    expect(r.passed).toBe(false)
+    expect(r.reasons).toEqual([expect.stringMatching(/^\/USB_DP\/\/USB_DN has no matched-length rule/)])
+    const run = new Work()
+    try {
+      expect(run.run(r.run_id as string)?.status).toBe('fail')
+      expect(run.run(r.run_id as string)?.summary).toMatch(/^not met: \/USB_DP\/\/USB_DN has no matched-length rule/)
+    } finally {
+      run.close()
+    }
+  })
+
+  it('a pair on the board left out of the check is not met unless ignored', async () => {
+    const pcb = fsFixture('fs-skip')
+    const r = await call('pcb.length_match', { project: pcb, auto_pairs: false })
+    expect(r.passed).toBe(false)
+    expect(r.unchecked).toEqual([{ p: '/USB_DP', n: '/USB_DN' }])
+    expect((r.reasons as string[])[0]).toMatch(/is a differential pair by name and was not checked/)
+    const ig = await call('pcb.length_match', { project: pcb, auto_pairs: false, ignore: ['USB_D*'] })
+    expect(ig).toMatchObject({ passed: true, ignored: [{ p: '/USB_DP', n: '/USB_DN' }] })
+  })
+
+  it('Full Speed allows the 2.63 mm, with its basis; High Speed fails it', async () => {
+    const pcb = fsFixture('fs-speed')
+    const fs = await call('pcb.length_match', { project: pcb, usb_speed: 'full' })
+    const fp = (fs.pairs as Pair[])[0] as Pair
+    expect(fp).toMatchObject({ status: 'pass', signal_class: 'usb2_fs', tolerance_mm: 15, tolerance_from: 'USB 2.0 Full Speed default (speed from usb_speed)' })
+    expect(fp.basis).toMatch(/12 Mbit\/s.*4 to 20 ns/)
+    expect(fs.passed).toBe(true)
+    const hs = await call('pcb.length_match', { project: pcb, usb_speed: 'high' })
+    expect((hs.pairs as Pair[])[0]).toMatchObject({ status: 'fail', signal_class: 'usb2_hs', tolerance_mm: 1.27 })
+    expect(hs.passed).toBe(false)
+    expect((hs.reasons as string[])[0]).toBe('/USB_DP//USB_DN is 2.63 mm apart, over its 1.27 mm (USB 2.0 High Speed default (speed from usb_speed))')
+    // a tolerance given still wins over the class default, which the row shows beside it
+    const tight = await call('pcb.length_match', { project: pcb, usb_speed: 'full', max_skew_mm: 1 })
+    expect((tight.pairs as Pair[])[0]).toMatchObject({ status: 'fail', tolerance_mm: 1, class_tolerance_mm: 15 })
+  })
+
+  it('reads the USB speed from the project\'s requirements', async () => {
+    const w = new Work()
+    try {
+      const t = Date.now() / 1000
+      w.db.prepare("INSERT INTO requirements (id, text, kind, acceptance, status, created, updated) VALUES (?, ?, 'functional', ?, 'proposed', ?, ?)")
+        .run('REQ-7e10d0', 'The USB port shall work as a USB 2.0 Full Speed (12 Mbit/s) device in both directions through the CH340C.', 'Enumerates at 12 Mbit/s Full Speed.', t, t)
+    } finally {
+      w.close()
+    }
+    const r = await call('pcb.length_match', { project: fsFixture('fs-req') })
+    expect((r.pairs as Pair[])[0]).toMatchObject({ status: 'pass', signal_class: 'usb2_fs', tolerance_from: 'USB 2.0 Full Speed default (speed from REQ-7e10d0)' })
+    expect(r.passed).toBe(true)
+  })
+
+  it('a board with no pairs says there is nothing to match', async () => {
+    const r = await call('pcb.length_match', { project: fixture(), auto_pairs: false })
+    // the fixture's USB_D+/USB_D- pair is on the board: left out, it is not met
+    expect(r.passed).toBe(false)
+    const none = await call('pcb.length_match', { project: fixture(), ignore: ['USB_*'] })
+    expect(none).toMatchObject({ passed: true, nothing_to_match: true })
+  })
+
+  it('names pairs and speeds', () => {
+    expect(diffPairs(['/USB_DP', '/USB_DM', 'TX_P', 'TX_N', 'CC1', 'CC2', 'INP', 'INM'])).toEqual([{ p: '/USB_DP', n: '/USB_DM' }, { p: 'TX_P', n: 'TX_N' }])
+    expect(usbPair('/USB_DP', '/USB_DN')).toBe(true)
+    expect(usbPair('/D+', '/D-')).toBe(true)
+    expect(usbPair('LVDS_CLK_P', 'LVDS_CLK_N')).toBe(false)
+    expect(usbSpeedFrom([{ id: 'R1', text: 'High speed ADC' }, { id: 'R2', text: 'USB 2.0 device at 12 Mbit/s' }])).toEqual({ speed: 'full', from: 'R2' })
+    expect(usbSpeedFrom([{ id: 'R1', text: 'USB 2.0 Full Speed' }, { id: 'R2', text: 'USB High-Speed 480 Mbit/s host' }])).toEqual({ speed: 'high', from: 'R2' })
+    expect(usbSpeedFrom([{ id: 'R1', text: 'USB-C receptacle' }])).toBeNull()
   })
 })
 
