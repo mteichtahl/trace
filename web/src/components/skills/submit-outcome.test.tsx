@@ -13,7 +13,7 @@ import { toast } from 'sonner'
 import { ApiError, call } from '@/lib/api'
 import type { Journey } from '@/lib/types'
 import { SKILL_BY_ID } from './definitions'
-import { applyCriteria, doneWords, partlyOutcome, refusedOutcome } from './submit-outcome'
+import { SUBMITTED_STEP, applyCriteria, doneWords, partlyOutcome, refusedOutcome } from './submit-outcome'
 import { useSkill } from './use-skill'
 
 const navigate = vi.fn()
@@ -130,5 +130,24 @@ describe('the outcome, worked out', () => {
     applyCriteria(qc, REPO, DONE)
     const after = qc.getQueryData<Journey>(['journey.get', REPO, {}])!
     expect(after.gates[0]!.criteria.map((c) => c.status)).toEqual(['met', 'not_met'])
+  })
+  // test-esp32-run2 R32: the gate box said 1 of 3 met while the next step card still said 0 of 3 and Continue
+  it('counts the stage and the next step with them, so the cards on screen agree', () => {
+    const qc = new QueryClient()
+    const gate = { id: 'define', after: 'define', criteria: [{ id: 'define.accepted', text: 'x', status: 'not_met' }, { id: 'define.other', text: 'y', status: 'not_met' }, { id: 'define.third', text: 'z', status: 'waived' }] }
+    const stages = [{ id: 'define', name: 'Define', state: 'current', criteria: { met: 1, total: 3 } }]
+    const about = (id: string) => ({ kind: 'task', owner: 'you', summary: 'Define: x', why: `The requirements baseline needs it (1 of 3 criteria met).`, ref: { kind: 'criterion', id } })
+    qc.setQueryData(['journey.get', REPO, {}], { repo: REPO, gates: [gate], stages, next: about('define.accepted') } as unknown as Journey)
+    applyCriteria(qc, REPO, DONE)
+    let after = qc.getQueryData<Journey>(['journey.get', REPO, {}])!
+    expect(after.stages[0]!.criteria).toEqual({ met: 2, total: 3 })
+    // the step was the criterion just met: it gives way until the journey is read again
+    expect(after.next).toEqual(SUBMITTED_STEP)
+    // a step about another criterion of the gate keeps its words, counted again
+    qc.setQueryData(['journey.get', REPO, {}], { repo: REPO, gates: [gate], stages, next: about('define.other') } as unknown as Journey)
+    applyCriteria(qc, REPO, DONE)
+    after = qc.getQueryData<Journey>(['journey.get', REPO, {}])!
+    expect(after.next.why).toBe('The requirements baseline needs it (2 of 3 criteria met).')
+    expect(after.next.ref).toEqual({ kind: 'criterion', id: 'define.other' })
   })
 })

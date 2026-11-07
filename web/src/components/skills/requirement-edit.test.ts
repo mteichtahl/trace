@@ -3,7 +3,7 @@
  * fields, accepted rows can be edited, and the chat's decisions are the rows' own.
  */
 import { describe, expect, it } from 'vitest'
-import { type RequirementDecision, type ShownRequirement, changedRequirementFields, decideRequirements, recordRequirement, requirementBadge, reviewDraftContext, shownRequirement, withRequirementEdit } from './requirement-edit'
+import { type RequirementDecision, type ShownRequirement, changedRequirementFields, criterionCheck, decideRequirements, recordRequirement, requirementBadge, reviewDraftContext, shownRequirement, withRequirementEdit } from './requirement-edit'
 
 const r7: ShownRequirement = { id: 'REQ-7ec888', text: 'Reads soil moisture accurately', criterion: 'Readings are accurate', method: null, kind: 'electrical', accepted: true }
 const r2: ShownRequirement = { id: 'R-2', text: 'Has a two-line display', criterion: null, method: null, kind: 'functional', accepted: false }
@@ -67,5 +67,22 @@ describe('decide_requirement', () => {
       { id: 'R-2', words: r2.text, criterion: null, kind: 'functional', state: 'undecided' },
     ])
     expect(c.note).toMatch(/decide_requirement, never with a task/)
+  })
+})
+
+// test-esp32-run2 R27: the bar's criterion check follows the edit on screen
+describe('criterionCheck', () => {
+  const vague = { id: 'requirement:REQ-7ec888', title: 'REQ-7ec888: Reads soil moisture accurately', status: 'open', criterion: 'Readings are accurate', accepted: true } as const
+  const open = { id: 'requirement:R-2', title: 'R-2: Has a two-line display', status: 'open', criterion: '16 by 2 at 1 m' } as const
+  it('is not met while a kept row has no number, met once the edit gives one', () => {
+    expect(criterionCheck([vague], [])).toBe('not_met')
+    expect(criterionCheck([vague], [{ requirement: 'REQ-7ec888', choice: 'edit', criterion: 'Within ±3 % VWC at 25 °C' }])).toBe('met')
+    expect(criterionCheck([vague], [{ requirement: 'REQ-7ec888', choice: 'strike', reason: 'Not needed' }])).toBe('met')
+  })
+  it('leaves it to the record while a row is undecided, unless a kept one already has no number', () => {
+    expect(criterionCheck([open], [])).toBeUndefined()
+    expect(criterionCheck([open, vague], [])).toBe('not_met')
+    expect(criterionCheck([open], [{ requirement: 'R-2', choice: 'accept' }])).toBe('met')
+    expect(criterionCheck([], [])).toBeUndefined()
   })
 })
