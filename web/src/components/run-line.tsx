@@ -11,6 +11,9 @@
  * that trace has not heard from it and when it will be declared lost, and past that time it shows as lost
  * (runState), the same as the Agents page and the job index say once they look again. A job waiting on a person's
  * answer (`waiting`, askingOf) says so and whose, with Answer it, rather than "still running" (#197).
+ *
+ * A finished job its specialist declined as another's work (`declined`, test log R26) is not shown done: it says so,
+ * and offers Send it to <specialist> (DeclinedJobActions) until someone has.
  */
 import { Circle, CircleAlert, CircleHelp, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck, SquareTerminal } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
@@ -23,6 +26,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { about, duration, time } from '@/lib/format'
 import type { Question, RunSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { DeclinedJobActions } from './declined-job'
 import { timeAgainstUsual } from './log-view'
 import { useNow } from './use-now'
 
@@ -80,7 +84,8 @@ export function lostNow(r: RunSummary, st: ReturnType<typeof runState>): RunSumm
 /**
  * A project's jobs as its Overview lists them, by the clock (runState): `doing` is what trace is doing (running, with a
  * silent one saying so, and paused); `ended` the jobs lost in the last day, which are over and need attention (Start
- * again or Dismiss), never shown as running, until a person settles them. Pure.
+ * again or Dismiss), never shown as running, until a person settles them, and the ones of the last day its specialist
+ * declined as another's work, until someone sends them on (Send it to <specialist>). Pure.
  */
 export function splitRuns(jobs: readonly RunSummary[], now: number): { doing: RunSummary[]; ended: RunSummary[] } {
   const doing: RunSummary[] = []
@@ -91,6 +96,8 @@ export function splitRuns(jobs: readonly RunSummary[], now: number): { doing: Ru
     const st = runState(r, now)
     if (st === 'running' || st === 'silent' || st === 'paused') doing.push(r)
     else if (st === 'lost' && now - Date.parse(r.heard?.at ?? r.startedAt ?? '') < 24 * 3600_000) ended.push(lostNow(r, st))
+    // declined by its specialist as another's work and not sent on yet: it ended without its work done (test log R26)
+    else if (r.declined && !r.declined.sent && now - Date.parse(r.endedAt ?? r.startedAt ?? '') < 24 * 3600_000) ended.push(r)
   }
   return { doing, ended }
 }
@@ -107,6 +114,8 @@ export function runDetail(run: RunSummary, now: number): string {
   }
   if (run.state === 'paused') return `Paused${run.pausedBy ? ` by ${run.pausedBy}` : ''}: its work so far is kept${run.branch ? ` on ${run.branch}` : ''}. Resume carries on from there.`
   if (run.state === 'lost') return run.step ?? 'trace lost contact with it.'
+  // finished: what it came to, not how long it has run
+  if (run.declined) return run.step ?? `Declined: it says this is the ${run.declined.toName} specialist's work.`
   const parts: string[] = []
   if (run.where) parts.push(run.where)
   if (run.stepIndex && run.stepCount) parts.push(`Step ${run.stepIndex} of ${run.stepCount}${run.step ? `: ${run.step}` : ''}`)
@@ -121,7 +130,7 @@ export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, o
   const [confirm, setConfirm] = useState(false)
   const st = runState(run, now)
   const active = st === 'running'
-  const Icon = waiting && st !== 'lost' ? CircleHelp : st === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : st === 'lost' || st === 'silent' ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
+  const Icon = waiting && st !== 'lost' ? CircleHelp : st === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : st === 'lost' || st === 'silent' || run.declined ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
   // only what the job system can do for this job, when its view says (job.control answers ok: false for the rest)
   const can = (op: 'pause' | 'resume' | 'cancel' | 'move_up') => !run.controls || run.controls.includes(op)
   const pause = can('pause') ? onPause : undefined
@@ -171,6 +180,8 @@ export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, o
         ) : (
           <p className="mt-0.5 text-xs text-muted-foreground">{runDetail(run, now)}</p>
         )}
+        {/* under its words, so a phone keeps the line readable */}
+        {run.declined && <DeclinedJobActions run={run} className="mt-2" />}
         {run.progress !== undefined && active && !waiting && (
           <div className="mt-2 h-1 max-w-[360px] overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(run.progress * 100)} aria-label={`${run.title} progress`}>
             <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.round(run.progress * 100)}%` }} />

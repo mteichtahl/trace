@@ -239,6 +239,23 @@ describe('the API server', () => {
     started.length = 0
   })
 
+  it('a change to a requirement\'s criterion goes to the Verification specialist whatever was picked, and the answer says so (test log R26)', async () => {
+    started.length = 0
+    const request = 'Change REQ-7ec888\'s acceptance criterion to: blinks at 1 Hz ± 10 %'
+    const r = await call(user, { action: 'task', repo: 'acme/board', request, agent: 'impl' })
+    expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1', agent: 'verify', routed: expect.stringMatching(/^It went to the Verification specialist, not Implementation: the request changes a requirement's acceptance criterion/) } })
+    expect(started).toEqual([expect.objectContaining({ request, agent: 'verify' })])
+    // Verification picked, or nothing picked: as asked, with nothing to say
+    started.length = 0
+    expect((await call(user, { action: 'task', repo: 'acme/board', request, agent: 'verify' })).body.result).not.toHaveProperty('routed')
+    expect((await call(user, { action: 'task', repo: 'acme/board', request })).body.result).not.toHaveProperty('routed')
+    expect(started[1]).not.toHaveProperty('agent')
+    // carrying on a branch stays with the specialist whose work is on it
+    await call(user, { action: 'task', repo: 'acme/board', request, agent: 'impl', branch: 'claude/task-draw-the-schematic-09f6d5' })
+    expect(started[2]).toMatchObject({ agent: 'impl' })
+    started.length = 0
+  })
+
   it('a task may carry on one of trace\'s own branches (its pull request updates), never main or a person\'s', async () => {
     started.length = 0
     const r = await call(user, { action: 'task', repo: 'acme/board', request: 'swap J1 for an SMD socket', agent: 'impl', branch: 'claude/task-draw-the-schematic-09f6d5' })

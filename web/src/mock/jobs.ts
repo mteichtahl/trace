@@ -35,6 +35,10 @@ const JOBS: Record<string, RunSummary[]> = {
     // a job that ended without finishing (test-esp32 log #45, #46): Start again or Dismiss, and the next step says so
     { id: 'job_l1', title: 'Write the timing constraints for the LED driver', state: 'lost', agent: 'impl', agentName: 'Implementation', startedAt: ago(40 * MIN), branch: 'claude/task-led-timing-constraints', controls: ['restart', 'dismiss'], startedBy: 'marc@example.com', yours: true,
       step: 'trace lost contact with it: its runtime stopped without a word for more than 15 minutes. Its last lines: "running the impl specialist on acme/panel-controller (max 120 turns, 73 tools)".' },
+    // declined by its specialist as another's work, nothing changed (test log R26): Send it to Verification
+    { id: 'job_dc1', title: 'Change REQ-7ec888\'s acceptance criterion to 1 Hz ± 10 %', state: 'done', agent: 'impl', agentName: 'Implementation', startedAt: ago(9 * MIN), endedAt: ago(7 * MIN), controls: ['send'], startedBy: 'marc@example.com', yours: true,
+      step: 'Declined: the Implementation specialist changed nothing; it says this is the Verification specialist\'s work.',
+      declined: { from: 'impl', to: 'verify', toName: 'Verification', why: 'I didn\'t change REQ-7ec888. Editing a requirement\'s acceptance criterion belongs to the Verification specialist.' } },
   ],
   'acme/motor-driver': [
     { id: 'job_a1', title: 'Size the current-sense amplifier', state: 'paused', agent: 'ams', agentName: 'Analog and mixed-signal', stepIndex: 4, stepCount: 6, pausedBy: 'trace (waiting on your answer)', controls: ['resume', 'cancel'], startedBy: 'trace' },
@@ -138,6 +142,7 @@ export function jobsAction(name: string, a: Record<string, unknown>): Answer | u
   }
   if (name !== 'job.control') return undefined
   if (a.op === 'restart' || a.op === 'dismiss') return lostControl(String(a.id), a.op, typeof a.reason === 'string' ? a.reason : null)
+  if (a.op === 'send') return sendControl(String(a.id))
   const all = Object.values(JOBS).flat()
   const j = all.find((x) => x.id === a.id)
   const list = Object.values(JOBS).find((l) => l.some((x) => x.id === a.id))
@@ -185,6 +190,19 @@ function lostControl(id: string, op: 'restart' | 'dismiss', reason: string | nul
   const again: RunSummary = { id: `${j.id}_2`, title: j.title, state: 'queued', agent: j.agent, agentName: j.agentName, position: 1, startsWhen: 'starts when it is its turn', controls: ['pause', 'cancel'], startedBy: j.startedBy, yours: j.yours, branch: j.branch }
   list.push(again)
   return { ok: true, result: { ok: true, state: 'queued', jobId: again.id, kept: `It starts again on ${j.branch ?? 'its branch'}, from what the lost attempt left there.` } }
+}
+
+/** Send a declined job to the specialist it named (a new queued task), as job.control send does. */
+function sendControl(id: string): Answer {
+  const list = Object.values(JOBS).find((l) => l.some((x) => x.id === id))
+  const j = list?.find((x) => x.id === id)
+  if (!j || !list || !j.declined) return { ok: true, result: { ok: false, reason: 'Only a person\'s task its specialist declined as another\'s work can be sent on.' } }
+  if (j.declined.sent) return { ok: true, result: { ok: false, reason: `It was sent to the ${j.declined.toName} specialist already: follow the new job.` } }
+  j.declined = { ...j.declined, sent: { by: 'you', at: new Date().toISOString() } }
+  j.controls = []
+  const sent: RunSummary = { id: `${j.id}_sent`, title: j.title, state: 'queued', agent: j.declined.to, agentName: j.declined.toName, position: 1, startsWhen: 'starts when it is its turn', controls: ['pause', 'cancel'], startedBy: j.startedBy, yours: j.yours }
+  list.push(sent)
+  return { ok: true, result: { ok: true, state: 'queued', jobId: sent.id, kept: `The ${j.declined.toName} specialist takes it on a new branch.` } }
 }
 
 /**

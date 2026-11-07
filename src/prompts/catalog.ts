@@ -117,7 +117,8 @@ add({ id: 'specialist.route', mode: 'editable', prompt: 'specialist', then: ['sp
   default: [
     'You were given this job because: {{reason}} (routing: {{source}}, confidence {{confidence}}).',
     'If, once you have looked, the job is plainly outside your area, do not do another specialist\'s work: report which',
-    'specialist fits (verify, impl, ams, emc, render, thermal or docs) and why, and stop. A person can relabel it agent:<kind>.',
+    'specialist fits (verify, impl, ams, emc, render, thermal or docs) and why, and stop (the NOT MINE line below). A person',
+    'can relabel it agent:<kind>, or send it on from the job\'s card.',
   ].join('\n') })
 
 const RULES_HEAD = [
@@ -418,6 +419,9 @@ add({ id: 'specialist.escalate', mode: 'locked', prompt: 'specialist', vars: { p
     'blocks you, and when the worker failed the same acceptance criterion twice.',
     'To ESCALATE: stop, and begin your final report with a line "ESCALATE: <the exact question or diagnosis>"; the harness',
     'posts it{{posted_to}} on the item and the item is left for a person.',
+    'When the job is plainly another specialist\'s work and you changed nothing (no commit, no record written), begin your',
+    'final report with a line "NOT MINE: <kind>: <why, in one sentence>" (kind: verify, impl, ams, emc, render, thermal or',
+    'docs). The job then ends as declined, not done, and the person is offered to send it to that specialist.',
   ].join('\n') })
 add({ id: 'specialist.report', mode: 'editable', prompt: 'specialist', then: ['specialist.guardrails'], vars: {},
   description: "The specialist's final report: what it contains and its tone.",

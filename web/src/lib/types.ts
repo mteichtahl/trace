@@ -520,7 +520,7 @@ export interface RunSummary {
   /** queued: what it waits for ("starts when the schematic gate is signed") */
   startsWhen?: string
   /** what job.control can do for it now (the job view's `controls`); absent: not known, the screen's own choice */
-  controls?: ('pause' | 'resume' | 'cancel' | 'move_up' | 'restart' | 'dismiss')[]
+  controls?: ('pause' | 'resume' | 'cancel' | 'move_up' | 'restart' | 'dismiss' | 'send')[]
   /** the agent doing it (verify, impl, …, worker) and its name in words (jobs.list) */
   agent?: string
   agentName?: string
@@ -545,6 +545,11 @@ export interface RunSummary {
   /** lost: dismissed by a person (with their reason) or started again; it then leaves "Ended without finishing". Or
    * merged: its change (`number`) was merged after its runtime went quiet, so it is finished (shown as succeeded) */
   settled?: { how: 'dismissed' | 'restarted' | 'merged'; by: string; at: string; reason?: string; number?: number }
+  /**
+   * finished, but its specialist declined it: it changed nothing and said the work is another specialist's (`to`,
+   * `toName`). Not a plain success: Send it to <toName> (job.control send) until someone has (`sent`)
+   */
+  declined?: { from: string; to: string; toName: string; why: string; sent?: { by: string; at: string } }
   /** the job index's own id (`id` is the API's): the one its questions name (Question.jobId) */
   workerJobId?: string
 }

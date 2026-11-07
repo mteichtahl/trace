@@ -5,9 +5,12 @@
  * Precedence:
  *   1. explicit   a kind the caller named (API task `agent`, `tracectl remote task --agent`, a pick that already routed).
  *                 A person's pick (checkPick: a task they asked for, not a hand-off or a delegation) is checked first:
- *                 when the request's own words or evidence point plainly to another specialist and say nothing for the
- *                 one picked, that other one takes it (source 'keyword' or 'evidence', the pick named in the reason)
+ *                 a change to a record one specialist owns (recordOwner: a requirement, its criterion, the test plan,
+ *                 an intent statement) goes to that owner; and when the request's own words or evidence point plainly
+ *                 to another specialist and say nothing for the one picked, that other one takes it (source 'keyword'
+ *                 or 'evidence', the pick named in the reason)
  *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render / agent:thermal / agent:docs on the issue or PR (labels.agent_*)
+ *   2b. owner     with no kind named and no label, a record change goes to its owner (source 'keyword', confidence 0.9)
  *   3. evidence   failing check or job names and their logs, and the changed files (EVIDENCE below)
  *   4. keyword    words in the issue, PR or task text (each specialist's `keywords`)
  *   5. model      one turn, no tools, schema-constrained output (Classifier), unless agents.route_with_model is off
@@ -24,6 +27,7 @@ import { z } from 'zod'
 import type { TraceConfig } from '../core/config.js'
 import { type Route, SPECIALIST_KINDS, type SpecialistKind, SpecialistKindSchema } from './kinds.js'
 import { SPECIALISTS } from './index.js'
+import { recordOwner } from './owners.js'
 import { type Composed, Composer, type Layers, NO_LAYERS } from '../prompts/resolve.js'
 
 export interface CheckEvidence {
@@ -93,6 +97,17 @@ const FILE_RULES: readonly Rule[] = [
   { kind: 'docs', re: /^docs\/design\//i, weight: 3, what: 'the project\'s documents' },
   { kind: 'thermal', re: /(^|\/)[^/]*(ldo|regulator|buck|boost|mosfet|heatsink|power[-_]?stage)[^/]*\.(kicad_sch|kicad_pcb|kicad_sym|kicad_mod)$/i, weight: 2, what: 'power-stage parts' },
 ]
+
+// ------------------------------------------------------------------ the records' owner (owners.ts)
+
+/** The route for a record change, when its owner is enabled. */
+function ownerRoute(text: string | undefined, kinds: readonly SpecialistKind[], picked?: SpecialistKind): Route | null {
+  const o = recordOwner(text)
+  if (!o || !kinds.includes(o.kind)) return null
+  const owner = SPECIALISTS[o.kind].title
+  const why = `the request changes ${o.what}, and the ${owner} specialist keeps the requirements, the test plan and the intent statements`
+  return { kind: o.kind, reason: (picked && picked !== o.kind ? `${picked} was picked, but ${why}` : why).slice(0, 500), confidence: 0.9, source: 'keyword' }
+}
 
 // ------------------------------------------------------------------ route
 
@@ -177,6 +192,12 @@ export function route(input: RouteInput, cfg: RouteConfig): Route {
     return { kind: first[1], reason: `label ${first[0]}${others.length ? ` (also labelled ${others.join(', ')}; the first wins)` : ''}`, confidence: others.length ? 0.9 : 1, source: 'label' }
   }
   const text = input.text ?? ''
+  // a change to a record only one specialist writes goes to it, whatever else the words point to (only when nothing
+  // was asked for: a pick is checked in misPicked)
+  if (!input.kind || !kinds.includes(input.kind)) {
+    const owned = ownerRoute(text, kinds)
+    if (owned) return owned
+  }
   const ev = evidenceScores(input)
   const kw = keywordScores(text, kinds)
   const evLead = leader(ev, kinds)
@@ -218,6 +239,10 @@ export function route(input: RouteInput, cfg: RouteConfig): Route {
  * whose specialist would only report it is not its work and stop). The model is not asked: it decides nothing here.
  */
 function misPicked(input: RouteInput, picked: SpecialistKind, cfg: RouteConfig): Route | null {
+  // a change to a record goes to its owner, even when other words in it give the pick support (a criterion that
+  // names a timing limit is still a requirement's words); the owner's own pick stands
+  const owned = ownerRoute(input.text, kindsOf(cfg), picked)
+  if (owned) return owned.kind === picked ? null : owned
   const r = route({ ...input, kind: undefined, checkPick: undefined }, cfg)
   if (r.kind === picked || !(r.source === 'label' || r.source === 'evidence' || r.source === 'keyword')) return null
   const support = (evidenceScores(input).scores.get(picked) ?? 0) + (keywordScores(input.text ?? '', [picked]).scores.get(picked) ?? 0)

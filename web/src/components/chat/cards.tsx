@@ -133,7 +133,7 @@ export interface TaskRequest {
 }
 
 /** What a confirm card answers trace with (the start_task tool's result). */
-export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string; queued?: boolean } | { confirmed: false; reason: string }
+export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string; queued?: boolean; agent?: string; routed?: string } | { confirmed: false; reason: string }
 
 /** A job's state as `job` gives it, in the run card's words. Pure. */
 export function runStateOf(state: string): RunSummary['state'] {
@@ -182,7 +182,9 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
 }) {
   const agent = task.agent ? AGENT_NAMES[task.agent] ?? task.agent : 'chosen by trace'
   if (answer?.confirmed && answer.accepted && answer.jobId) {
-    return <StartedRun jobId={answer.jobId} repo={task.repo} title={task.request ?? 'Task'} />
+    const run = <StartedRun jobId={answer.jobId} repo={task.repo} title={task.request ?? 'Task'} />
+    // the request changes a record another specialist owns: it went to them, and the card says so (test log R26)
+    return answer.routed ? <div><p className="mt-2 text-xs text-muted-foreground" role="status">{answer.routed}</p>{run}</div> : run
   }
   return (
     <Frame>

@@ -29,7 +29,7 @@ export class ApiError extends Error {
 type Repo = { repo: string }
 
 /** What job.control can do; a job's view lists the ones the API can do for it now (`controls`). */
-export type JobOp = 'pause' | 'resume' | 'cancel' | 'move_up' | 'restart' | 'dismiss'
+export type JobOp = 'pause' | 'resume' | 'cancel' | 'move_up' | 'restart' | 'dismiss' | 'send'
 
 /** Every action the app calls: its arguments and its answer. */
 export interface Actions {
@@ -45,7 +45,7 @@ export interface Actions {
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
   'tools.list': { args: Repo; result: { name: string; description: string; needs: 'read' | 'write'; input: unknown }[] }
   tool: { args: Repo & { name: string; args?: Record<string, unknown> }; result: unknown }
-  task: { args: Repo & { request: string; agent?: string; branch?: string }; result: { accepted: boolean; jobId: string; reason?: string; queued?: boolean } }
+  task: { args: Repo & { request: string; agent?: string; branch?: string }; result: { accepted: boolean; jobId: string; reason?: string; queued?: boolean; agent?: string; routed?: string } }
   'memory.list': { args: Repo & { agent?: string; limit?: number; includeInactive?: boolean }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.recall': { args: Repo & { query: string; top_k?: number }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.remember': { args: Repo & { text: string; scope: 'personal' | 'project'; thread?: string }; result: { repo: string; recorded: boolean; scope: 'personal' | 'project'; actor: string; session: string; note: string } }

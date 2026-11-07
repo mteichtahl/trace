@@ -14,6 +14,7 @@ import {
 } from '../../src/agents/runtime/job.js'
 import { type JobRunner, type Jobs, createJobs } from '../../src/agents/runtime/jobs.js'
 import { taskBranch, taskPrompt } from '../../src/agents/worker/prompt.js'
+import { declinedOf } from '../../src/agents/declines.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, allowedToolsOf, specialistPrompt, toolsOf } from '../../src/agents/index.js'
 import { InvocationSchema, type JobPayload, TaskPayload, WrongProject, checkProject } from '../../src/agents/runtime/schemas.js'
 import { createAgentServer } from '../../src/agents/runtime/server.js'
@@ -479,7 +480,8 @@ describe('job runner', () => {
       const flat = h.cmds.map((c) => c.args.join(' '))
       expect(flat).toContain(`ls-remote --heads origin refs/heads/${branch}`)
       expect(flat.at(-1)).toBe('status --porcelain -- .trace/project.db')
-      expect(flat.at(-2)).toBe(`checkout -B ${branch} origin/main`)
+      // where the branch stood before the specialist ran (a decline is told by nothing having changed: declines.ts)
+      expect(flat.slice(-4, -1)).toEqual([`checkout -B ${branch} origin/main`, 'rev-parse HEAD', `ls-remote origin refs/heads/${branch}`])
       const p = h.claudeCalls.at(-1)!.prompt
       expect(p).toMatch(/> Add a 3V3 rail check/)
       expect(p).toMatch(/"marc@example.com"/)
@@ -490,6 +492,32 @@ describe('job runner', () => {
       expect(taskPrompt(task, cfgOf(), branch)).toMatch(/There is no issue to comment on/)
       expect(taskPrompt({ ...task, issue: 12 }, cfgOf(), branch)).toMatch(/Finish with a comment on #12/)
     } finally { h.cleanup() }
+  })
+
+  // test log R26: Implementation was asked to change a requirement's criterion, said it was Verification's, changed
+  // nothing, and the job read "succeeded: impl: done in 2 turns"
+  it('ends a task its specialist declined as another\'s work, with nothing changed, as declined for that specialist', async () => {
+    const said = 'NOT MINE: verify: changing a requirement\'s acceptance criterion is the Verification specialist\'s work.\nI changed nothing.'
+    const task = { kind: 'task' as const, repository: 'o/r', request: 'Tidy the notes', requestedBy: 'marc@example.com', agent: 'impl' as const }
+    const h = harness({}, [{ type: 'result', subtype: 'success', is_error: false, result: said, num_turns: 2 }])
+    try {
+      const s = await createRunner(h.d)(task, h.ctx)
+      expect(s).toBe('impl: declined, for verify: I changed nothing.')
+      expect(declinedOf(s)).toMatchObject({ from: 'impl', to: 'verify' })
+      expect(h.lines.some((l) => /^declined: the impl specialist changed nothing/.test(l))).toBe(true)
+    } finally { h.cleanup() }
+    // the same words, but the branch moved while it ran (it, or its worker, committed): it ends as it says
+    let heads = 0
+    const moved = harness({ exec: async (_c, args) => ({ stdout: args[0] === 'rev-parse' && args[1] === 'HEAD' ? `sha${heads++}` : '', stderr: '' }) },
+      [{ type: 'result', subtype: 'success', is_error: false, result: said, num_turns: 2 }])
+    try {
+      expect(await createRunner(moved.d)(task, moved.ctx)).toMatch(/^impl: done in 2 turns: NOT MINE/)
+    } finally { moved.cleanup() }
+    // a plain report: done, as before
+    const plain = harness()
+    try {
+      expect(await createRunner(plain.d)(task, plain.ctx)).toMatch(/^impl: done in 7 turns/)
+    } finally { plain.cleanup() }
   })
 
   // test-esp32 log #75: a job pushed to the branch of change #12 after it was discarded, and #12 came back as #13

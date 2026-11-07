@@ -1258,6 +1258,7 @@
           },
           "handoff": null,
           "settled": null,
+          "declined": null,
           "controls": [
             "pause",
             "cancel"
@@ -1302,6 +1303,7 @@
             "fromName": "Thermal"
           },
           "settled": null,
+          "declined": null,
           "controls": [
             "pause",
             "cancel"
@@ -1342,6 +1344,7 @@
           "heard": null,
           "handoff": null,
           "settled": null,
+          "declined": null,
           "controls": [
             "pause",
             "cancel"
@@ -1382,6 +1385,7 @@
             "fromName": "Thermal"
           },
           "settled": null,
+          "declined": null,
           "controls": []
         },
         {
@@ -1415,6 +1419,7 @@
           "heard": null,
           "handoff": null,
           "settled": null,
+          "declined": null,
           "controls": []
         }
       ],
@@ -4013,6 +4018,7 @@
           },
           "handoff": null,
           "settled": null,
+          "declined": null,
           "controls": [
             "pause",
             "cancel"
@@ -4057,6 +4063,7 @@
             "fromName": "Thermal"
           },
           "settled": null,
+          "declined": null,
           "controls": [
             "pause",
             "cancel"
@@ -4097,6 +4104,7 @@
           "heard": null,
           "handoff": null,
           "settled": null,
+          "declined": null,
           "controls": [
             "pause",
             "cancel"
@@ -4137,6 +4145,7 @@
             "fromName": "Thermal"
           },
           "settled": null,
+          "declined": null,
           "controls": []
         },
         {
@@ -4170,6 +4179,7 @@
           "heard": null,
           "handoff": null,
           "settled": null,
+          "declined": null,
           "controls": []
         }
       ],
