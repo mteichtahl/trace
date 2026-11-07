@@ -11,7 +11,8 @@ const shown = new Map([[r7.id, r7], [r2.id, r2]])
 
 describe('an edit in the draft', () => {
   it('lays its fields over an earlier edit\'s, and accepts the requirement', () => {
-    const one = withRequirementEdit({}, 'R-2', { text: 'Has a two-line display readable at 1 m' })
+    const none: { decisions?: RequirementDecision[] } = {}
+    const one = withRequirementEdit(none, 'R-2', { text: 'Has a two-line display readable at 1 m' })
     const two = withRequirementEdit(one, 'R-2', { criterion: '16 characters by 2 lines, read at 1 m in 500 lx' })
     expect(two.decisions).toEqual([{ requirement: 'R-2', choice: 'edit', text: 'Has a two-line display readable at 1 m', criterion: '16 characters by 2 lines, read at 1 m in 500 lx' }])
     // over an accept or a strike, it replaces it
