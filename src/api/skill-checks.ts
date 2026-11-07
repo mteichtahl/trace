@@ -54,6 +54,8 @@ export interface CheckResult {
 export interface CheckInput {
   r: JourneyRecord | null
   viewer: Viewer
+  /** Architecture choice: every run in the record, by id, as its words (src/core/record-refs.ts runKindsOf) */
+  runWords?: ReadonlyMap<string, string> | null
   /** every requirement, struck ones included, with its evidence (record-read.ts) */
   requirements: (TraceRequirement & { status: string })[]
   /** the struck ones (rejected or obsolete, or struck by a person), which requirementEvidence leaves out, each with the

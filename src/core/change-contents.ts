@@ -33,6 +33,7 @@
  * Pure (recordChanges reads two open databases).
  */
 import type { DatabaseSync } from 'node:sqlite'
+import { plainRecordRefs, runKindsOf } from './record-refs.js'
 
 /** keepRecord's commit subject, as openPr makes a title of it (with "(+N more)" when there were more commits). */
 const RECORD = /^trace: the [\w-]+ specialist's record \([^)]*\)(?: \(\+\d+ more\))?$/
@@ -241,9 +242,11 @@ const partsOf = (v: unknown): string => {
 function optionsChange(design: DatabaseSync, head: DatabaseSync): OptionsChange | null {
   const d = rowsDiff(design, head, 'arch_options')
   if (!d.added.length && !d.changed.length) return null
+  // the runs and answers its words cite, said as people say them (test-esp32-run2 R30: "(84ac569329e8472d: USD …)")
+  const runs = runKindsOf(head)
   const options = (head.prepare('SELECT * FROM arch_options ORDER BY id').all() as Record<string, unknown>[])
     .filter((r) => !['rejected', 'withdrawn'].includes(str(r.status)))
-    .map((r) => ({ id: str(r.id), name: str(r.name), recommended: Number(r.recommended ?? 0) === 1, why: str(r.why) || null }))
+    .map((r) => ({ id: str(r.id), name: str(r.name), recommended: Number(r.recommended ?? 0) === 1, why: plainRecordRefs(str(r.why), { run: (id) => runs.get(id) }) || null }))
   const differ: OptionsChange['differ'] = []
   if (options.length > 1 && has(head, 'arch_blocks')) {
     const blocks = head.prepare('SELECT * FROM arch_blocks ORDER BY option, id').all() as Record<string, unknown>[]
@@ -254,7 +257,7 @@ function optionsChange(design: DatabaseSync, head: DatabaseSync): OptionsChange 
         return { option: o.id, parts: b ? partsOf(b.parts) || str(b.name) : '', name: b ? str(b.name) : '' }
       })
       if (new Set(by.map((x) => x.parts)).size < 2) continue
-      differ.push({ block: by.find((x) => x.name)?.name ?? id, by: by.map(({ option, parts }) => ({ option, parts })) })
+      differ.push({ block: kindName(by.map((x) => x.name).filter(Boolean)) || id, by: by.map(({ option, parts }) => ({ option, parts })) })
     }
   }
   return { added: d.added.length, options, differ }
@@ -326,6 +329,29 @@ const STATUS_WORDS: Readonly<Record<string, string>> = { pass: 'passed', fail: '
 const statusWords = (s: Record<string, number>): string => {
   const parts = Object.entries(s).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${STATUS_WORDS[k] ?? k}`)
   return parts.length ? ` (${parts.join(', ')})` : ''
+}
+
+/**
+ * What a block is in every option it is in, from its names there: the words they end with in common ("ESP32-C3 Wi-Fi
+ * module", "ESP32-S3 Wi-Fi module", "ESP32 Wi-Fi module" → "Wi-Fi module"), else the words they start with, else ''.
+ * One option's name would say that option's part over a row that lists them all (test-esp32-run2 R30). Pure.
+ */
+export function kindName(names: readonly string[]): string {
+  const all = [...new Set(names.map((n) => n.trim()).filter(Boolean))]
+  if (all.length <= 1) return all[0] ?? ''
+  const words = all.map((n) => n.split(/\s+/))
+  const same = (pick: (w: string[], i: number) => string | undefined): string[] => {
+    const out: string[] = []
+    for (let i = 0; ; i++) {
+      const w = pick(words[0]!, i)
+      if (w === undefined || !words.every((x) => pick(x, i)?.toLowerCase() === w.toLowerCase())) return out
+      out.push(w)
+    }
+  }
+  const tail = same((w, i) => w[w.length - 1 - i]).reverse()
+  const head = same((w, i) => w[i])
+  const kind = (tail.length ? tail : head).join(' ')
+  return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : ''
 }
 
 /** "Adds 3 architecture options: …", how they differ, and which one is recommended (log #37). */

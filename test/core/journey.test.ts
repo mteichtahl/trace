@@ -130,6 +130,25 @@ describe('the journey record', () => {
     expect(nextStep(rec(), ADMIN).button).toBe('Answer it for them')
   })
 
+  // test-esp32-run2 R29: "so architect.stock is not met" / "It blocks the architect.stock criterion"
+  it('says a gate criterion an agent names by id in its words, wherever the question is shown', () => {
+    const define = rec().criteria.find((c) => c.id === 'define.accepted')!
+    const words = `"${define.text.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}"`
+    const q = askQuestion(db, { askedBy: 'the Verification specialist', text: 'Two requirements are still proposed, so define.accepted is not met. Accept them?', blocks: 'the define.accepted criterion', options: [
+      { id: 'a', label: 'Accept both', recommended: true, why: 'meets define.accepted' }, { id: 'b', label: 'Strike one' },
+    ] })
+    const v = journeyView(rec(), USER).questions.find((x) => x.id === q)!
+    expect(v.text).toBe(`Two requirements are still proposed, so ${words} is not met. Accept them?`)
+    expect(v.blocks).toBe(`the criterion ${words}`)
+    expect(v.options[0]?.why).toBe(`meets ${words}`)
+    const n = nextStep(rec(), USER)
+    expect(n.summary).not.toMatch(/define\.accepted/)
+    expect(n.why).toBe(`It blocks the criterion ${words}.`)
+    expect(inboxItems('acme/x', rec(), USER).find((i) => i.id === `question:${q}`)?.summary).not.toMatch(/define\.accepted/)
+    // the record keeps the id: it says what the question is about
+    expect(rec().questions.find((x) => x.id === q)?.blocks).toBe('the define.accepted criterion')
+  })
+
   it('answers need a reason when they differ from the recommendation, and refuse vague words', () => {
     const q = askQuestion(db, { askedBy: 'agent', text: 'Which?', blocks: 'work', options: [{ id: 'a', label: 'A', recommended: true }, { id: 'b', label: 'B' }] })
     expect(() => answerQuestion(db, q, signer, { option: 'b' })).toThrow(/Say in a line why you chose otherwise/)

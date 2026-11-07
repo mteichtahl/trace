@@ -5,7 +5,7 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { betterTitle, changeTitle, contentBullets, contentPhrase, designAreas, mergeTitle, oneRowTitle, plumbingTitle, recordChanges, recordKind, recordRequirementIds, recordTitle, type RecordChanges } from '../../src/core/change-contents.js'
+import { betterTitle, changeTitle, contentBullets, contentPhrase, designAreas, kindName, mergeTitle, oneRowTitle, plumbingTitle, recordChanges, recordKind, recordRequirementIds, recordTitle, type RecordChanges } from '../../src/core/change-contents.js'
 
 const DOCS = 'trace: the docs specialist\'s record (job-mw3ashi6-e8b5d222)'
 const IMPL = 'trace: the impl specialist\'s record (job-mw3awisf-29f0f73e)\n\nWhat its tools wrote to the project\'s record.'
@@ -136,7 +136,7 @@ describe('a change that holds only a record, or was brought up to date by a merg
       CREATE TABLE test_results (run_id TEXT PRIMARY KEY, test_id TEXT, status TEXT, reason TEXT, at REAL);
       CREATE TABLE arch_options (id TEXT PRIMARY KEY, name TEXT, summary TEXT, recommended INTEGER, why TEXT, status TEXT, updated REAL);
       CREATE TABLE arch_blocks (option TEXT, id TEXT, name TEXT, parts TEXT, status TEXT, updated REAL, PRIMARY KEY (option, id));
-      CREATE TABLE runs (id TEXT PRIMARY KEY, tool TEXT)`)
+      CREATE TABLE runs (id TEXT PRIMARY KEY, kind TEXT)`)
     return d
   }
 
@@ -177,6 +177,28 @@ describe('a change that holds only a record, or was brought up to date by a merg
     // what they share (the microcontroller) is not a difference
     expect(bullets.join('\n')).not.toMatch(/Microcontroller \(/)
     expect(contentPhrase({ paths: [], record })).toBe('3 architecture options')
+  })
+
+  // test-esp32-run2 R30: the row was labelled "ESP32-C3 Wi-Fi module" (option A's name) over C3, S3 and WROOM, and the
+  // recommendation quoted the parts check by its id
+  it('labels a block by what it is in every option, and says the runs its words cite', () => {
+    const design = db()
+    const head = db()
+    const opt = head.prepare('INSERT INTO arch_options VALUES (?, ?, \'\', ?, ?, \'proposed\', 1)')
+    opt.run('A', 'ESP32-C3-MINI-1-H4X with native USB', 1, 'Lowest order estimate of the three (84ac569329e8472d: USD 60.54-89.77 vs 75.05-104.28 for B)')
+    opt.run('B', 'ESP32-S3-MINI-1-N8 with native USB', 0, null)
+    opt.run('C', 'ESP32-WROOM-32E-N4 with CH340C', 0, null)
+    head.prepare('INSERT INTO runs VALUES (\'84ac569329e8472d\', \'parts.bom_check\')').run()
+    const block = head.prepare('INSERT INTO arch_blocks VALUES (?, ?, ?, ?, \'proposed\', 1)')
+    for (const [o, name, mpn] of [['A', 'ESP32-C3 Wi-Fi module', 'ESP32-C3-MINI-1-H4X'], ['B', 'ESP32-S3 Wi-Fi module', 'ESP32-S3-MINI-1-N8'], ['C', 'ESP32 Wi-Fi module', 'ESP32-WROOM-32E-N4']] as const) {
+      block.run(o, 'mcu', name, JSON.stringify([{ mpn }]))
+    }
+    const bullets = contentBullets({ paths: ['.trace/project.db'], record: recordChanges(design, head) })
+    expect(bullets[1]).toBe('They differ in Wi-Fi module (A: ESP32-C3-MINI-1-H4X, B: ESP32-S3-MINI-1-N8, C: ESP32-WROOM-32E-N4)')
+    expect(bullets[2]).toBe('Recommends A: Lowest order estimate of the three (the parts check: USD 60.54-89.77 vs 75.05-104.28 for B)')
+    expect(kindName(['USB-C input', 'USB-C power'])).toBe('USB-C')
+    expect(kindName(['3.3 V supply', '3.3 V supply'])).toBe('3.3 V supply')
+    expect(kindName(['Bridge', 'Radio'])).toBe('')
   })
 
   it('the requirements a record adds are ones the change names', () => {

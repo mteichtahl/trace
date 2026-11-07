@@ -60,6 +60,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import { type JobLook, jobRefs, plainJobRefs, plainJobRefsOf, refKey } from './job-refs.js'
+import { plainCriterionRefs, plainCriterionRefsOf } from './record-refs.js'
 import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
@@ -1374,16 +1375,30 @@ export function markOutOfDate(view: JourneyView, r: JourneyRecord, open: readonl
   }
 }
 
-function questionView(q: QuestionRow, v: Viewer, r?: JourneyRecord): QuestionView {
-  const stale = r ? outOfDate(q, r) : null
+function questionView(q0: QuestionRow, v: Viewer, r?: JourneyRecord): QuestionView {
+  const stale = r ? outOfDate(q0, r) : null
+  // the gate criteria an agent names by id ("so architect.stock is not met"), in their words (test-esp32-run2 R29);
+  // the row keeps the ids, which say what the question is about (criteriaOf)
+  const q = r ? plainQuestion(q0, r) : q0
+  const options = q.options
   return {
     id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: questionForWhom(q, v),
-    stage: q.stage, text: q.text, blocks: q.blocks, options: q.options, recommended: q.options.find((o) => o.recommended) ?? null,
+    stage: q.stage, text: q.text, blocks: q.blocks, options, recommended: options.find((o) => o.recommended) ?? null,
     sources: q.sources, job_id: q.jobId, asked_at: isoN(q.askedAt),
     answered: q.answeredAt !== null ? { answer: q.answer ?? '', option_id: q.optionId, reason: q.answerReason, by: q.answeredBy, at: isoN(q.answeredAt) } : null,
     ...(q.recommendation ? { recommendation: q.recommendation } : {}),
     ...(stale ? { out_of_date: stale } : {}),
     ...(q.kind === 'stuck' ? plainOf(q) : {}),
+  }
+}
+
+/** A question as people read it: the gate criteria it names by id said in their words (plainCriterionRefs). */
+export function plainQuestion<Q extends Pick<QuestionRow, 'text' | 'blocks' | 'options' | 'recommendation'>>(q: Q, r: Pick<JourneyRecord, 'criteria'>): Q {
+  const w = (t: string): string => plainCriterionRefs(t, r.criteria)
+  return {
+    ...q, text: w(q.text), blocks: plainCriterionRefsOf(q.blocks, r.criteria),
+    options: q.options.map((o) => ({ ...o, label: w(o.label), why: w(o.why) })),
+    ...(q.recommendation ? { recommendation: w(q.recommendation) } : {}),
   }
 }
 
@@ -1549,8 +1564,10 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
     }
   }
   // A question blocks work (one out of date is passed over: what it asked about has moved on, test-esp32 #108)
-  const q = blocking.find((x) => !outOfDate(x, r))
-  if (q) {
+  const q0 = blocking.find((x) => !outOfDate(x, r))
+  if (q0) {
+    // in people's words: a gate criterion by its words, not its id (test-esp32-run2 R29)
+    const q = plainQuestion(q0, r)
     const rec = q.options.find((o) => o.recommended)
     const forYou = questionFor(q, viewer)
     const verb = q.kind === 'stuck' ? `${q.askedBy} is stuck` : `${q.askedBy} asks`
@@ -2470,9 +2487,10 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
       out.push({ id: `gate:${g.id}`, kind: 'gate', repo, project, stage, summary: `${lead}${v.title} is ready. All ${v.total} criteria met or waived; trace recommends signing.`, since: isoN(since), waited: ago(since, at), blocking: true, action: 'Review and sign', ref: { kind: 'gate', id: g.id } })
     }
   }
-  for (const q of r.questions) {
-    if (q.answeredAt !== null || !questionFor(q, viewer)) continue
-    if (q.kind === 'question' && !q.blocks?.trim()) continue
+  for (const q0 of r.questions) {
+    if (q0.answeredAt !== null || !questionFor(q0, viewer)) continue
+    if (q0.kind === 'question' && !q0.blocks?.trim()) continue
+    const q = plainQuestion(q0, r)
     const rec = q.options.find((o) => o.recommended)
     out.push({
       id: `question:${q.id}`, kind: q.kind === 'stuck' ? 'stuck' : 'question', repo, project, stage: q.stage ?? stage,
