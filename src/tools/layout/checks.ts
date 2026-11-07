@@ -52,6 +52,8 @@ export interface Finding {
   check: 'courtyard_overlap' | 'outside_edge' | 'edge_clearance' | 'keepout' | 'decoupling_distance' | 'power_pin_without_decoupling' | 'connector_not_at_edge' | 'no_courtyard' | 'courtyard_open'
   severity: 'error' | 'warning' | 'info'
   refs: string[]
+  /** the pin it is about (power_pin_without_decoupling: "U2.4") */
+  pin?: string
   message: string
   value_mm?: number
   limit_mm?: number
@@ -152,6 +154,8 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
   const padsOf = (ref: string): Pad[] => Object.values(b.pads).flat().filter((p) => p.ref === ref)
   const decoupling: { cap: string; value: string; net: string; nearest_pin: string | null; distance_mm: number | null; ok: boolean | null }[] = []
   const covered = new Set<string>()
+  // each decoupling capacitor's pad on its rail, so a pin with none near can say which is nearest
+  const capPads: { cap: string; net: string; pad: Pad; side: PlacedFootprint['side'] }[] = []
   for (const f of fps) {
     if (!o.decap_refs.test(f.ref) || f.dnp) continue
     const uf = capacitanceUf(f.value)
@@ -162,6 +166,7 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
     const pwr = nets.find((n) => n !== gnd && !o.ground.test(n))
     if (!gnd || !pwr || nets.length !== 2 || !o.power.test(pwr)) continue // a filter capacitor on a signal is not decoupling
     const capPad = pads.find((p) => p.net === pwr) as Pad
+    capPads.push({ cap: f.ref, net: pwr, pad: capPad, side: f.side })
     const pins = (b.pads[pwr] ?? []).filter((p) => o.ic_refs.test(p.ref) && byRef.has(p.ref) && byRef.get(p.ref)?.side === f.side)
     let best: { pin: string; d: number } | null = null
     for (const p of pins) {
@@ -174,12 +179,27 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
     decoupling.push({ cap: f.ref, value: f.value, net: pwr, nearest_pin: best?.pin ?? null, distance_mm: best ? r3(best.d) : null, ok })
     if (best && ok === false) findings.push({ check: 'decoupling_distance', severity: 'warning', refs: [f.ref, best.pin.split('.')[0] as string], message: `${f.ref} (${f.value} on ${pwr}) is ${r3(best.d)} mm from the nearest ${pwr} pin, ${best.pin} (want ≤ ${o.decap_max_mm} mm)`, value_mm: r3(best.d), limit_mm: o.decap_max_mm })
   }
-  // IC power pins on a net that has decoupling somewhere, but none near this pin
+  // IC power pins on a net that has decoupling somewhere, but none near this pin: each pin once (a part's two pads of
+  // one number, such as a regulator's tab and its pin 2, are one pin), with the nearest capacitor on its rail, so a
+  // reviewer can judge it (test-esp32 #130: "power_pin_without_decoupling 4" named no pin)
   const decapNets = new Set(decoupling.map((d) => d.net))
   for (const net of decapNets) {
+    const byPin = new Map<string, Pad[]>()
     for (const p of b.pads[net] ?? []) {
-      if (!o.ic_refs.test(p.ref) || !byRef.has(p.ref) || covered.has(`${p.ref}.${p.num}`)) continue
-      findings.push({ check: 'power_pin_without_decoupling', severity: 'info', refs: [p.ref], message: `${p.ref}.${p.num} (${net}) has no decoupling capacitor within ${o.decap_max_mm} mm`, at: [r3(p.x), r3(p.y)] })
+      const pin = `${p.ref}.${p.num}`
+      if (o.ic_refs.test(p.ref) && byRef.has(p.ref) && !covered.has(pin)) byPin.set(pin, [...(byPin.get(pin) ?? []), p])
+    }
+    for (const [pin, pads] of byPin) {
+      const p = pads[0] as Pad
+      let near: { cap: string; d: number; side: boolean } | null = null
+      for (const c of capPads.filter((x) => x.net === net)) {
+        for (const q of pads) {
+          const d = dist(c.pad, q)
+          if (!near || d < near.d) near = { cap: c.cap, d, side: c.side === byRef.get(p.ref)?.side }
+        }
+      }
+      const nearest = near ? `; the nearest is ${near.cap}, ${r3(near.d)} mm away${near.side ? '' : ' on the other side'}` : ''
+      findings.push({ check: 'power_pin_without_decoupling', severity: 'info', refs: [p.ref], pin, message: `${pin} (${net}) has no decoupling capacitor within ${o.decap_max_mm} mm${nearest}`, at: [r3(p.x), r3(p.y)], ...(near ? { value_mm: r3(near.d), limit_mm: o.decap_max_mm } : {}) })
     }
   }
 
@@ -199,6 +219,35 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
   const counts: Record<string, number> = {}
   for (const x of findings) counts[x.check] = (counts[x.check] ?? 0) + 1
   return { findings, counts, decoupling, connectors }
+}
+
+/**
+ * A placement check's result in one line: errors and warnings apart from notes (severity info), each check with its
+ * count and what it is about, the pin for a power pin, else the first part named. "power_pin_without_decoupling 4"
+ * alone left a reviewer unable to judge it (test-esp32 #130). At most six names a check; the rest are counted.
+ */
+export function placementSummary(findings: readonly Finding[]): string {
+  const part = (sev: Finding['severity'][]): string => {
+    const by = new Map<string, string[]>()
+    for (const f of findings) {
+      if (!sev.includes(f.severity)) continue
+      const names = by.get(f.check) ?? []
+      const name = f.pin ?? f.refs.join('/')
+      if (name && !names.includes(name)) names.push(name)
+      by.set(f.check, names)
+    }
+    return [...by].map(([check, names]) => {
+      const n = findings.filter((f) => f.check === check && sev.includes(f.severity)).length
+      const shown = names.slice(0, 6).join(', ')
+      return `${check} ${n}${names.length ? ` (${shown}${names.length > 6 ? ` and ${names.length - 6} more` : ''})` : ''}`
+    }).join(', ')
+  }
+  const errors = findings.filter((f) => f.severity === 'error').length
+  const warnings = findings.filter((f) => f.severity === 'warning').length
+  const notes = findings.filter((f) => f.severity === 'info').length
+  const issues = part(['error', 'warning'])
+  const info = part(['info'])
+  return `${errors} error(s), ${warnings} warning(s)${issues ? `: ${issues}` : ''}${notes ? `; ${notes} note(s): ${info}` : ''}${!issues && !notes ? ': clean' : ''}`
 }
 
 // ------------------------------------------------------------------ lengths
