@@ -82,3 +82,22 @@ describe('plain words', () => {
     })
   })
 })
+
+// test-esp32 #170: the Overview read "the Implementation specialist is stuck: Also: the module datasheet…": every
+// sentence before the aside cited a check's id, so the aside was the only plain one and the main point was dropped
+describe('a stuck report leads with its point', () => {
+  const why = 'architect.stock is not met (shape_check 52b9eb5d36ae4a0d) on one key part only: the off-board OLED module SSD1306-0.96-OLED-128x64-I2C-module. The newer architect.mapped shape needs it in the oled block as an off-board key part with its size (now met, shape_check 91b38f54a251488d), and every key part is then stock-checked. No configured supplier lists a 0.96 in SSD1306 module (parts_search on LCSC: only C9900302173, 0 in stock, no pinout; bom_check d908622df9f947c7: not found). Every board part is in stock for 10 boards (bom_check 1b4a0c446d474f70, 45.16 USD). Also: the module datasheet the case is sized from (sha256 ea9a571f, p2) lists pin 1 VCC and pin 2 GND, the reverse of J2\'s GND-first order (project rule), so the module bought must be GND first, or its 4-wire cable must swap pins 1 and 2.'
+
+  it('drops the brackets that cite internals and keeps the sentence', () => {
+    const { summary } = plainSummary(why)
+    expect(summary).toMatch(/^No configured supplier lists a 0\.96 in SSD1306 module\. Every board part is in stock for 10 boards\./)
+    expect(summary).not.toMatch(/^Also/)
+    expect(summary).not.toMatch(/bom_check|parts_search|shape_check|architect\./)
+  })
+
+  it('an aside never leads, and plain brackets stay', () => {
+    expect(plainSummary('Also: the cable is short. The module is not stocked anywhere.').summary).toBe('The module is not stocked anywhere. Also: the cable is short.')
+    expect(plainSummary('Use the header (GND first). It fits.').summary).toBe('Use the header (GND first). It fits.')
+    expect(plainSummary('Also: the cable is short.').summary).toBe('Also: the cable is short.')
+  })
+})
