@@ -112,7 +112,9 @@ export function readOnly(sql: string): boolean {
 // comparing two versions
 
 export type RowChange = 'added' | 'removed' | 'changed'
-export interface RowDiff { key: string; change: RowChange; before?: SqlValue[]; after?: SqlValue[]; fields: { column: string; before: string; after: string }[] }
+/** A changed field: its text before and after, and the stored values (for `readable`). */
+export interface FieldChange { column: string; before: string; after: string; was?: SqlValue; now?: SqlValue }
+export interface RowDiff { key: string; change: RowChange; before?: SqlValue[]; after?: SqlValue[]; fields: FieldChange[] }
 export interface TableDiff {
   name: string
   status: 'added' | 'removed' | 'changed' | 'same'
@@ -120,6 +122,8 @@ export interface TableDiff {
   beforeSql?: string
   afterSql?: string
   columns: string[]
+  /** the primary key's columns, when rows are matched by key */
+  keyColumns: string[]
   counts: { added: number; removed: number; changed: number; same: number }
   rows: RowDiff[]
   /** how rows were matched: by primary key, rowid, or whole row (no key) */
@@ -159,9 +163,11 @@ export function diffTable(a: Database | null, b: Database | null, ta: DbTable | 
   const name = (tb ?? ta)!.name
   const pkA = (ta?.columns ?? []).filter((c) => c.pk > 0).sort((x, y) => x.pk - y.pk).map((c) => c.name)
   const pkB = (tb?.columns ?? []).filter((c) => c.pk > 0).sort((x, y) => x.pk - y.pk).map((c) => c.name)
-  const samePk = pkA.join('|') === pkB.join('|')
+  // a table only one version has is keyed by its own key
+  const samePk = !ta || !tb || pkA.join('|') === pkB.join('|')
   const view = (ta ?? tb)!.kind === 'view'
-  const by: TableDiff['matchedBy'] = pkB.length && samePk && !view ? 'key' : !view && !(ta?.withoutRowid || tb?.withoutRowid) && pkA.length === 0 && pkB.length === 0 ? 'rowid' : 'row'
+  const pk = tb ? pkB : pkA
+  const by: TableDiff['matchedBy'] = pk.length && samePk && !view ? 'key' : !view && !(ta?.withoutRowid || tb?.withoutRowid) && pkA.length === 0 && pkB.length === 0 ? 'rowid' : 'row'
   const A = a && ta ? keyedRows(a, ta, by, pkA) : { cols: [] as string[], map: new Map<string, SqlValue[]>() }
   const B = b && tb ? keyedRows(b, tb, by, pkB) : { cols: [] as string[], map: new Map<string, SqlValue[]>() }
   const columns = B.cols.length ? B.cols : A.cols
@@ -184,7 +190,7 @@ export function diffTable(a: Database | null, b: Database | null, ta: DbTable | 
       const vb = ib >= 0 ? cellText(after[ib]!) : ''
       const rawA = ia >= 0 ? before[ia] : undefined
       const rawB = ib >= 0 ? after[ib] : undefined
-      if (va !== vb || (rawA === null) !== (rawB === null)) fields.push({ column: c, before: rawA === null ? 'NULL' : va, after: rawB === null ? 'NULL' : vb })
+      if (va !== vb || (rawA === null) !== (rawB === null)) fields.push({ column: c, before: rawA === null ? 'NULL' : va, after: rawB === null ? 'NULL' : vb, was: rawA ?? null, now: rawB ?? null })
     }
     if (fields.length) {
       counts.changed++
@@ -199,7 +205,7 @@ export function diffTable(a: Database | null, b: Database | null, ta: DbTable | 
   const norm = (s?: string) => (s ?? '').replace(/\s+/g, ' ').trim()
   const schemaChanged = !!ta && !!tb && norm(ta.sql) !== norm(tb.sql)
   const status = !ta ? 'added' : !tb ? 'removed' : schemaChanged || counts.added || counts.removed || counts.changed ? 'changed' : 'same'
-  return { name, status, schemaChanged, beforeSql: ta?.sql, afterSql: tb?.sql, columns, counts, rows, matchedBy: by, truncated: counts.added + counts.removed + counts.changed > rows.length }
+  return { name, status, schemaChanged, beforeSql: ta?.sql, afterSql: tb?.sql, columns, keyColumns: by === 'key' ? pk : [], counts, rows, matchedBy: by, truncated: counts.added + counts.removed + counts.changed > rows.length }
 }
 
 /** Every table and view of both versions, compared. Changed ones first, then by name. */
@@ -231,6 +237,82 @@ export function describeDbDiff(d: TableDiff[]): string {
   }
   const out = [words(t, 'Table'), words(r, 'Row')].filter(Boolean)
   return out.length ? out.join(' · ') : 'No differences in the tables or their rows.'
+}
+
+// a row's values as a person reads them (test-esp32 log #59, #19, R10)
+
+/** Columns that hold a time: created, updated, opened_at, decided_on, ts and the like. */
+const TIME_COLUMN = /^(created|updated|modified|deleted|decided|accepted|started|finished|ended|opened|closed|merged|signed|ts|time|timestamp|when)$|_(at|on|ts|time)$/i
+/** Columns that hold a yes or no: is_x, has_x, testable, enabled, removed and the like. */
+const FLAG_COLUMN = /^(is|has|can|should|was|allow|use|needs)_|able$|^(enabled|disabled|done|active|required|removed|deleted|ok|passed|checked|locked|hidden|optional|accepted|archived|pinned|resolved|stale|dnp|flag)$|_(flag|ok)$/i
+
+/** A number as Unix time in milliseconds, when it is one (seconds or milliseconds, years 2000 to 2100). */
+function asTime(column: string, v: SqlValue): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d{9,13}(\.\d+)?$/.test(v.trim()) ? Number(v) : NaN
+  if (!Number.isFinite(n)) return null
+  const named = TIME_COLUMN.test(column)
+  const seconds = n >= 946_684_800 && n < 4_102_444_800
+  const millis = n >= 946_684_800_000 && n < 4_102_444_800_000
+  // a column not named for a time: only a number that clearly is one (fractional seconds, or milliseconds since 2014)
+  if (named) return seconds ? n * 1000 : millis ? n : null
+  if (typeof v !== 'number') return null
+  if (seconds && !Number.isInteger(n)) return n * 1000
+  if (Number.isInteger(n) && n >= 1_388_534_400_000 && n < 2_524_608_000_000) return n
+  return null
+}
+
+/** A time as the person's local date and time, to the second. */
+export const localTime = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
+
+const IDENTITY = ['kind', 'type', 'name', 'ref', 'id']
+
+/** Parsed JSON as compact words: an object's kind and ref first, then key: value; empty parts left out. */
+export function jsonText(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'string') return v.trim()
+  if (typeof v === 'boolean') return v ? 'yes' : 'no'
+  if (typeof v === 'number') return String(v)
+  if (Array.isArray(v)) return v.map((x) => (x && typeof x === 'object' && !Array.isArray(x) ? `(${jsonText(x)})` : jsonText(x))).filter(Boolean).join(', ')
+  if (typeof v === 'object') {
+    const entries = Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, jsonText(x)] as const).filter(([, t]) => t)
+    const head = IDENTITY.flatMap((k) => entries.filter(([e]) => e === k).map(([, t]) => t))
+    const rest = entries.filter(([k]) => !IDENTITY.includes(k)).map(([k, t]) => {
+      const inner = (v as Record<string, unknown>)[k]
+      const shown = inner && typeof inner === 'object' && !Array.isArray(inner) ? `(${t})` : typeof inner === 'string' && /\s/.test(t) ? `"${t}"` : t
+      return `${k}: ${shown}`
+    })
+    return [head.join(' '), ...rest].filter(Boolean).join(', ')
+  }
+  return String(v)
+}
+
+/**
+ * A stored value as a person reads it: times as local date and time, JSON as compact words, a 0 or 1 in a yes-or-no
+ * column as yes or no. Empty (NULL, "", {} or []) is "".
+ */
+export function readable(column: string, v: SqlValue | undefined): string {
+  if (v === null || v === undefined) return ''
+  if (v instanceof Uint8Array) return cellText(v)
+  const t = asTime(column, v)
+  if (t !== null) return localTime(t)
+  if (typeof v === 'number' && (v === 0 || v === 1) && FLAG_COLUMN.test(column)) return v ? 'yes' : 'no'
+  const s = String(v).trim()
+  if (/^[[{]/.test(s)) {
+    try {
+      return jsonText(JSON.parse(s))
+    } catch {
+      return s
+    }
+  }
+  if (s === 'null') return ''
+  return s
+}
+
+/** An added or removed row as its filled-in fields, read as words; empty ones and the key already shown left out. */
+export function rowFields(columns: string[], values: SqlValue[], skip: string[] = []): { column: string; text: string }[] {
+  return values
+    .map((v, i) => ({ column: columns[i] ?? `Column ${i + 1}`, text: readable(columns[i] ?? '', v) }))
+    .filter((f) => f.text && !skip.includes(f.column))
 }
 
 // a trace project record's tool runs: said by kind and file, not row by row
