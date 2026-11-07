@@ -29,7 +29,7 @@ import { type PinFinding, architectureView, intentView, linksView, missingFields
 import type { Finding, TraceRequirement } from './record-read.js'
 import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
-import { type OrderRecord, enteredOf, matchedOf, orderLines, orderOptions, orderSigned } from './order-submit.js'
+import { type OrderRecord, enteredOf, matchedOf, optionsRun, orderLines, orderOptions, orderSigned } from './order-submit.js'
 import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine, releaseRecommendation, releaseView } from './release-review.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
@@ -500,8 +500,8 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'order-submit/stock': (i) => criterion(i, 'stock', 'fabricate.order.stock'),
   // each option ticked as entered on its step (the draft's entered), against the options from the record
   'order-submit/options': (i) => {
-    const opts = i.order?.board ? orderOptions(i.r, i.order) : []
-    if (!opts.length) return yours('options', 'the board\'s options from a board check (kicad.board), to compare what was entered with')
+    const opts = i.order && optionsRun(i.order) ? orderOptions(i.r, i.order) : []
+    if (!opts.length) return yours('options', 'the board\'s options, recorded with the package (kicad.fab) or by a board check (kicad.board), to compare what was entered with')
     const done = new Set(enteredOf(i.draft))
     const left = opts.filter((o) => !done.has(o.id))
     return left.length ? notMet('options', `Tick ${andList(left.slice(0, 5).map((o) => o.label.toLowerCase()))}${left.length > 5 ? ` and ${left.length - 5} more` : ''} once entered.`) : met('options', `${plural(opts.length, 'option')} entered.`)

@@ -5,8 +5,8 @@
  *   stock     the newest parts.bom_check: each line's stock and price, and what changed since the release approval
  *             was signed (the newest check before that signature)
  *   package   the newest kicad.fab run: its files in the release folder (links into the repository), which to upload
- *   options   each board and assembly option to enter on JLCPCB, from the board (kicad.board), the build plan and the
- *             package; an option no record decides is JLCPCB's default, and says so
+ *   options   each board and assembly option to enter on JLCPCB: those kicad.fab recorded with the package, else from
+ *             the board (kicad.board) and the package, with the build plan's quantities; an option no record decides is JLCPCB's default, and says so
  *   matching  each line of the package's parts list (kicad.fab's bom.csv) with its LCSC part
  *   pay       the order gate and the order recorded for this revision
  *
@@ -15,6 +15,7 @@
  */
 import type { JourneyRecord, OrderRow } from '../core/journey.js'
 import { parseCsv } from '../tools/kicad/bom.js'
+import { orderOptionsOf } from '../tools/kicad/order-options.js'
 
 export interface RunRow { id: string; status: string; summary: string | null; started: number; result: Record<string, unknown> | null }
 
@@ -54,7 +55,7 @@ export interface OrderView {
     problems: string[]; placements: number | null; hand_placed: string[] | null
   } | null
   options: OrderOption[]
-  /** where the board options come from: the kicad.board run, or null (none yet) */
+  /** the run the board options come from: kicad.fab's recorded options, else kicad.board; null when neither */
   board_run: string | null
   lines: OrderLine[]
   /** where the lines come from: the package's parts list, or the parts check when there is no package */
@@ -143,6 +144,21 @@ function packageOf(rec: OrderRecord): OrderView['package'] {
  * The colours, finish and impedance control no record decides: JLCPCB's default, marked not decided.
  */
 export function orderOptions(r: JourneyRecord | null, rec: OrderRecord): OrderOption[] {
+  // the options kicad.fab recorded with the package, as the Build page's order sheet shows them, with the build
+  // plan's quantities; a package made before they were recorded falls back to the board check below
+  const recorded = orderOptionsOf(rec.fab?.result ?? null)
+  if (recorded?.length) {
+    const qty = r?.journey.build.quantity ?? null
+    const slug = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    const of = (g: 'pcb' | 'pcba') => recorded.filter((x) => x.group === g).map((x): OrderOption => ({ id: slug(x.option), group: g === 'pcb' ? 'board' : 'assembly', label: x.option, value: x.value, source: x.source, decided: x.decided }))
+    const pcba = of('pcba')
+    return [
+      ...of('pcb'),
+      ...(qty !== null ? [{ id: 'quantity', group: 'board' as const, label: 'PCB quantity', value: String(qty), source: 'the build plan', decided: true }] : []),
+      ...pcba,
+      ...(pcba.length && qty !== null ? [{ id: 'assembled', group: 'assembly' as const, label: 'Assembly quantity', value: String(qty), source: 'the build plan', decided: true }] : []),
+    ]
+  }
   const b = rec.board?.result ?? null
   const src = rec.board ? `kicad.board ${rec.board.id.slice(0, 8)}` : ''
   const out: OrderOption[] = []
@@ -185,6 +201,12 @@ export function orderOptions(r: JourneyRecord | null, rec: OrderRecord): OrderOp
   return out
 }
 
+/** The run the order options come from, or null when no run gives the board's own options. */
+export function optionsRun(rec: OrderRecord): string | null {
+  if (orderOptionsOf(rec.fab?.result ?? null)?.length) return rec.fab!.id
+  return rec.board?.id ?? null
+}
+
 /** The package's parts list (kicad.fab's bom.csv) as lines; else the newest parts check's. */
 export function orderLines(rec: OrderRecord): { lines: OrderLine[]; from: OrderView['lines_from'] } {
   const csv = rec.fab?.bomCsv ? parseCsv(rec.fab.bomCsv).filter((row) => row.some((c) => c.trim())) : []
@@ -220,7 +242,7 @@ export function orderView(r: JourneyRecord | null, rec: OrderRecord | null, orde
   const sheetWaived = sheet && r?.waivers.some((w) => w.targetKind === 'criterion' && w.target === sheet.id && w.closedAt === null)
   const o = orders.find((x) => x.revision === r?.journey.revision && x.state !== 'cancelled')
   return {
-    stock: stockOf(r, R, now), package: packageOf(R), options: orderOptions(r, R), board_run: R.board?.id ?? null, lines, lines_from: from,
+    stock: stockOf(r, R, now), package: packageOf(R), options: orderOptions(r, R), board_run: optionsRun(R), lines, lines_from: from,
     pay: {
       gate: gate ? { id: gate.id, signed: signed ? { by: signed.by, at: iso(signed.at) } : null } : null,
       sheet: sheet ? (sheet.status === 'met' ? 'met' : sheetWaived ? 'waived' : 'not_met') : null,

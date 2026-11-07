@@ -134,4 +134,16 @@ describe('Order submit: pure pieces', () => {
     expect(orderLines(rec)).toEqual({ lines: [{ key: 'R1', refs: 'R1', value: null, mpn: 'X', lcsc: 'C1', qty: 2 }], from: 'parts' })
     expect(orderOptions(null, rec).map((o) => o.id)).toEqual(['impedance', 'mask', 'silk', 'finish'])
   })
+
+  it('a package that recorded its order options gives them, with the build plan\'s quantities', () => {
+    const fab = { id: 'f', status: 'pass', summary: null, started: 0, outDir: null, bomCsv: null, result: { order_options: [
+      { group: 'pcb', option: 'Layers', value: '4', source: 'the board file', decided: true },
+      { group: 'pcb', option: 'Surface finish', value: 'HASL', source: 'JLCPCB\'s default', decided: false },
+      { group: 'pcba', option: 'Assembly side', value: 'Top side (3 placed parts)', source: 'the placements', decided: true },
+    ] } }
+    const r = { journey: { build: { quantity: 5 } } } as unknown as Parameters<typeof orderOptions>[0]
+    expect(orderOptions(r, { parts: null, signedParts: null, fab, board: { id: 'b', result: { copper_layers: 2 } } }).map((o) => [o.id, o.value])).toEqual([
+      ['layers', '4'], ['surface-finish', 'HASL'], ['quantity', '5'], ['assembly-side', 'Top side (3 placed parts)'], ['assembled', '5'],
+    ])
+  })
 })

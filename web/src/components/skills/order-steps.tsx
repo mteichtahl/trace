@@ -113,7 +113,7 @@ function Package({ repo, v }: { repo: string; v: OrderSheetView['package'] }) {
 }
 
 function Options({ v, entered, toggle: tick }: { v: OrderSheetView; entered: string[]; toggle: (id: string) => void }) {
-  if (!v.board_run) return <EmptyState className="mt-2">No board check (kicad.board) is recorded yet, so the board's own options are not known: trace reads the board when it builds the package.</EmptyState>
+  if (!v.board_run) return <EmptyState className="mt-2">The board's own options are not recorded yet: trace records them with the release package (kicad.fab).</EmptyState>
   const groups = [['board', 'PCB'], ['assembly', 'PCB assembly']] as const
   return (
     <div className="mt-2 space-y-3">
