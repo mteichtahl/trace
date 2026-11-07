@@ -26,6 +26,7 @@
  */
 import { loadJourney, mergeAgentFacts } from '../core/journey.js'
 import { type Context, Repo, agentFacts, def, withRecordDb } from './action-kit.js'
+import { plainArchitecture, runKindsOf } from '../core/record-refs.js'
 import { questionParts, questionsOn } from './skill-checks.js'
 import { caseStaleness, caseView } from './case-read.js'
 import { standing } from '../tools/design/decisions.js'
@@ -139,7 +140,9 @@ export const RECORD_ACTIONS = {
       } : undefined
       // the notes are for a person: what is missing and who does it, never a tool's name (test-esp32 #40)
       // the architecture: the option a person chose, else trace's recommendation, drawn; every option listed
-      const arch = architectureView(design.rows, design.decisions)
+      // the runs and answers the agents cite said as people say them, not by id (test-esp32-run2 R31)
+      const runs = runKindsOf(db)
+      const arch = plainArchitecture(architectureView(design.rows, design.decisions), { run: (id) => runs.get(id) })
       const shown = arch.options.find((o) => o.id === arch.current)
       const architecture = shown ? {
         option: `Option ${shown.id}: ${shown.name}`, id: shown.id, state: arch.chosen?.option === shown.id ? 'chosen' as const : 'proposed' as const,
