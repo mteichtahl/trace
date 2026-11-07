@@ -20,7 +20,8 @@
  *                   Without the topic, or when subscribing fails, it reads the record on a timer (30 s, doubling to
  *                   5 minutes). Either way it says when it will look next
  *   journey.check   record a criterion trace owns as met or not met, with its evidence (a run id, an artifact, a file);
- *                   a person-owned criterion is refused. The newest check of a criterion supersedes the ones before
+ *                   a person-owned criterion is refused, and met on a run that did not pass (unless a person waived
+ *                   what failed). The newest check of a criterion supersedes the ones before
  *   journey.stuck   say the agent cannot go on: why, what it recommends, its options; or (resolved) that it moved on
  *   journey.handoff a specialist asks another for something in that one's area, as a recorded request
  *                   (src/core/handoffs.ts: the quality bar and the guards are checked before anything is written): the
@@ -63,6 +64,7 @@ import { JobIndexStore, indexedHandle, loadJobs } from '../../core/job-index.js'
 import { asksAgain } from '../../core/process-time.js'
 import { recordProcessMetric } from '../../core/telemetry.js'
 import { video } from './video.js'
+import { waiverCriterion } from '../../core/waiver-words.js'
 import { type DesignRows, withDesign } from '../design/db.js'
 import { loadDesignDecisions } from '../design/decisions.js'
 import { type PinFinding, architectureView, mateCheck, matedParts } from '../design/record.js'
@@ -104,11 +106,18 @@ const Evidence = EvidenceSchema.extend({
   kind: z.enum(['run', 'artifact', 'file', 'record', 'report', 'datasheet', 'kb']).describe('run (a run_id), artifact (run_id/name), file (a path in the repository), record, report, datasheet (part, sha256, page), kb (a knowledge-base path)'),
 }).describe('{ kind, ref, label? }')
 
-/** Runs and files are checked against the checkout: a run id that is not in its record, or a file that is not there, is refused. */
-function checkEvidence(evidence: readonly z.output<typeof Evidence>[]): void {
+/** A run an agent cited, as its record holds it. */
+interface CitedRun { id: string; kind: string; status: string; summary: string | null }
+
+/**
+ * Runs and files are checked against the checkout: a run id that is not in its record, or a file that is not there, is
+ * refused. Returns the runs cited (by run or artifact), with how each ended.
+ */
+function checkEvidence(evidence: readonly z.output<typeof Evidence>[]): CitedRun[] {
   const root = findRoot()
   const db = projectPath()
   const runs = existsSync(db) ? new Work(db) : null
+  const cited: CitedRun[] = []
   try {
     for (const e of evidence) {
       if ((e.kind === 'run' || e.kind === 'artifact') && runs) {
@@ -116,6 +125,7 @@ function checkEvidence(evidence: readonly z.output<typeof Evidence>[]): void {
         const rec = runs.run(id)
         if (!rec) throw new ToolError(`journey: no run ${JSON.stringify(id)} in this checkout's record (trace.runs lists them)`)
         if (name && !rec.artifacts.some((a) => a.name === name)) throw new ToolError(`journey: run ${id} has no artifact ${JSON.stringify(name)}`)
+        if (!cited.some((c) => c.id === rec.id)) cited.push({ id: rec.id, kind: rec.kind, status: rec.status, summary: rec.summary })
       }
       if (e.kind === 'file' && root) {
         const full = resolve(root, e.ref)
@@ -127,6 +137,22 @@ function checkEvidence(evidence: readonly z.output<typeof Evidence>[]): void {
   } finally {
     runs?.db.close()
   }
+  return cited
+}
+
+/**
+ * Why a criterion cannot be met on these runs, or null: a run that failed, errored or has not finished does not show
+ * it met (test-esp32 #233: the length tool fails a pair with no tolerance, and nothing stopped an agent citing that run
+ * for met). A failure is evidence only where a person waived it: an open waiver of the criterion or of one of its
+ * findings (an ERC run fails on errors each waived).
+ */
+export function failedEvidence(criterion: string, runs: readonly CitedRun[], r: JourneyRecord | null): string | null {
+  const failed = runs.filter((x) => x.status !== 'pass')
+  if (!failed.length) return null
+  const waived = (r?.waivers ?? []).some((w) => w.closedAt === null && waiverCriterion({ kind: w.targetKind, id: w.target }) === criterion)
+  if (waived) return null
+  const words = failed.map((x) => `run ${x.id} (${x.kind}) ${x.status === 'running' ? 'has not finished' : x.status === 'error' ? 'ended in an error' : 'failed'}${x.summary ? `: ${x.summary.slice(0, 200)}` : ''}`)
+  return `journey: ${criterion} is not met on a run that did not pass: ${words.join('; ')}. Record it not_met with that run, fix what failed and cite the run that passes, or ask a person (journey.ask) for a waiver.`
 }
 
 // ------------------------------------------------------------------ journey.status
@@ -397,7 +423,7 @@ async function mateConflicts(s: Scope, r: JourneyRecord | null): Promise<PinFind
 
 export const check = defineTool({
   name: 'journey.check',
-  description: 'Record a gate criterion that trace owns as met or not met, with the evidence that shows it (a run id from this job, an artifact, a file). Only criteria with owner "trace" (journey.status lists them); a person\'s criteria are met only by their own acts. Check again whenever the evidence changes: the newest check of a criterion stands.',
+  description: 'Record a gate criterion that trace owns as met or not met, with the evidence that shows it (a run id from this job, an artifact, a file). Only criteria with owner "trace" (journey.status lists them); a person\'s criteria are met only by their own acts. A run cited for met must have passed, unless a person waived what failed. Check again whenever the evidence changes: the newest check of a criterion stands.',
   input: z.object({
     criterion: z.string().regex(/^[a-z][a-z.]*\.[a-z]+$/, 'a criterion id such as capture.erc').describe('the criterion id, e.g. capture.erc'),
     status: z.enum(['met', 'not_met']),
@@ -407,8 +433,12 @@ export const check = defineTool({
   available: configured,
   run: async (a) => plainly(async () => {
     const s = journeyScope()
-    checkEvidence(a.evidence)
+    const runs = checkEvidence(a.evidence)
     const r = await record(s)
+    if (a.status === 'met') {
+      const failed = failedEvidence(a.criterion, runs, r)
+      if (failed) throw new ToolError(failed)
+    }
     if (a.criterion === 'capture.datasheets' && a.status === 'met') {
       const open = await mateConflicts(s, r)
       if (open.length) throw new ToolError(`journey: capture.datasheets is not met while an off-board part's pins differ from its connector's (the datasheet says otherwise): ${open.map((f) => f.text).join(' ')} Record it not_met, and ask a person (journey.ask) which way to fix it, or for a waiver of ${open.map((f) => f.id).join(', ')}.`)
