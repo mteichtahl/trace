@@ -29,6 +29,7 @@ import { type PinFinding, architectureView, intentView, linksView, missingFields
 import type { Finding, TraceRequirement } from './record-read.js'
 import type { StockLine } from '../tools/design/key-parts.js'
 import { staleSentence } from '../tools/mech/stale.js'
+import { type OrderRecord, enteredOf, matchedOf, optionsRun, orderLines, orderOptions, orderSigned } from './order-submit.js'
 import { AREAS, AREA_TITLES, type ReleaseRecord, acknowledged, decisionOf, noteOf, partLine, releaseRecommendation, releaseView } from './release-review.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
@@ -92,6 +93,8 @@ export interface CheckInput {
   readings?: Reading[]
   /** Release review: what its steps show, from the record (release-review.ts) */
   release?: ReleaseRecord | null
+  /** Order submit: what its steps show, from the record (order-submit.ts) */
+  order?: OrderRecord | null
   /** the person's draft of this skill (its own shape per skill), or null */
   draft: Record<string, unknown> | null
   /** the gate Gate signing is about; the question Question answer is about */
@@ -495,11 +498,30 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
 
   // ---- Order submit
   'order-submit/stock': (i) => criterion(i, 'stock', 'fabricate.order.stock'),
-  'order-submit/options': () => yours('options', 'the order sheet\'s options (from the release package), to compare what was entered with'),
-  'order-submit/matching': () => yours('matching', 'the fab\'s matched parts list for the order; trace does not read it from the fab'),
+  // each option ticked as entered on its step (the draft's entered), against the options from the record
+  'order-submit/options': (i) => {
+    const opts = i.order && optionsRun(i.order) ? orderOptions(i.r, i.order) : []
+    if (!opts.length) return yours('options', 'the board\'s options, recorded with the package (kicad.fab) or by a board check (kicad.board), to compare what was entered with')
+    const done = new Set(enteredOf(i.draft))
+    const left = opts.filter((o) => !done.has(o.id))
+    return left.length ? notMet('options', `Tick ${andList(left.slice(0, 5).map((o) => o.label.toLowerCase()))}${left.length > 5 ? ` and ${left.length - 5} more` : ''} once entered.`) : met('options', `${plural(opts.length, 'option')} entered.`)
+  },
+  // each line of the package's parts list confirmed against JLCPCB's matching, or marked not placed by JLCPCB
+  'order-submit/matching': (i) => {
+    const { lines } = i.order ? orderLines(i.order) : { lines: [] }
+    if (!lines.length) return yours('matching', 'the package\'s parts list (kicad.fab), to compare JLCPCB\'s matching with')
+    const { matched, unplaced } = matchedOf(i.draft)
+    const left = lines.filter((l) => !matched.includes(l.key) && !unplaced.includes(l.key))
+    if (left.length) return notMet('matching', `Confirm ${andList(left.slice(0, 5).map((l) => l.refs))}${left.length > 5 ? ` and ${left.length - 5} more` : ''} against JLCPCB's matching.`)
+    const off = lines.filter((l) => unplaced.includes(l.key))
+    return met('matching', off.length ? `JLCPCB will not place ${andList(off.map((l) => l.refs))}.` : `${plural(lines.length, 'line')} matched.`)
+  },
   'order-submit/recorded': (i) => {
     const rev = i.r?.journey.revision
     const o = i.orders.find((x) => x.revision === rev && x.state !== 'cancelled')
+    // before the order gate is signed nothing is paid yet: Submit then says the order sheet matches the release, and
+    // the order is recorded after the gate, on the same skill
+    if (!o && i.r?.gates.some((g) => g.id === 'fabricate.order') && !orderSigned(i.r)) return { id: 'recorded', status: 'waived', detail: 'Paid and recorded after the order gate is signed; Submit now says the order sheet matches the release' }
     if (!o) return notMet('recorded', 'Record the order number, what was paid and the ship date.')
     const missing = [o.paid === null ? 'what was paid' : '', o.shipDate ? '' : 'the ship date'].filter(Boolean)
     return missing.length ? notMet('recorded', `Order ${o.number} has no ${missing.join(' or ')}.`) : met('recorded', `Order ${o.number}.`)

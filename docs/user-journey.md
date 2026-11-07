@@ -668,6 +668,8 @@ Quality bar:
 - Every BOM line matched the intended LCSC part, or the substitute is acknowledged.
 - Order number, paid cost and ship date are recorded.
 
+Each step shows what the record holds for it (src/api/order-submit.ts, web/src/components/skills/order-steps.tsx): today's parts check line by line with what changed since the parts check the release was approved on; the package's files (the newest `kicad.fab` run) with the three to upload first, each opening in the app; every option to enter, from the board check (`kicad.board`), the build plan and the package, with the options no record decides marked as JLCPCB's defaults, each ticked as entered; the package's parts list with each line's LCSC part, marked matched or not placed by JLCPCB; and the order gate and the order. Submitted before the order gate is signed, once the options are entered and the parts matched, it meets "The order sheet matches the release" and keeps the draft; after paying, the order is recorded and the skill submitted again.
+
 Produces: the order record, linked to the release; trace tracks it from the order number.
 
 ### Bench setup
