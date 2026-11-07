@@ -388,6 +388,9 @@ export function jobsByBranch(jobs: readonly JobRow[], rule?: Pick<TraceRule, 'de
     const made = (j.parentJob ? jobs.find((x) => x.id === j.parentJob) : undefined) ?? j
     const held = byBranch.get(j.branch)
     if (held && held.kind === 'task' && made.kind === 'work-item') continue
+    // the asker carrying on on a hand-off's branch checks the answer there: the change is still the answering
+    // specialist's (test-esp32-run2 R29: the analog specialist's record read "Made by the Implementation specialist")
+    if (held && held.kind === 'task' && carriesOn(made)) continue
     byBranch.set(j.branch, made)
   }
   return byBranch
@@ -825,6 +828,23 @@ export function stageNamed(criteria: readonly string[]): StageId | null {
   return (STAGE_IDS as readonly string[]).includes(s ?? '') ? s as StageId : null
 }
 
+/** A job the asker started to carry on after its hand-off was answered (src/agents/runtime/handoff.ts carryOn). */
+export const carriesOn = (j: Pick<JobRow, 'requestedBy'>): boolean => /^hand-off ho[0-9a-f]+$/.test(j.requestedBy ?? '')
+
+/**
+ * The job that asked for a hand-off job's work (its request's `handoff.fromJob`), or null: its criteria place the
+ * answer's change in a stage when the question itself names none (test-esp32-run2 R29: Stage "—").
+ */
+export function askingJob(job: Pick<JobRow, 'payload'> | null, rows: readonly JobRow[]): JobRow | null {
+  if (!job?.payload) return null
+  try {
+    const from = (JSON.parse(job.payload) as { handoff?: { fromJob?: unknown } }).handoff?.fromJob
+    return typeof from === 'string' ? rows.find((r) => r.id === from) ?? null : null
+  } catch {
+    return null
+  }
+}
+
 /** A job row's request (its recorded payload), or ''. */
 export function jobRequest(job: Pick<JobRow, 'payload'> | null): string {
   if (!job?.payload) return ''
@@ -955,6 +975,8 @@ export function changeSummary(o: {
   stuck?: StuckChecks | null | undefined
   /** a later work item is working on its branch (updatingJob): bringing it up to date, or fixing its checks */
   updating?: boolean | undefined
+  /** the job that asked for this one's work, when it answered a hand-off (askingJob): its stage when this names none */
+  asker?: JobRow | null | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
@@ -967,9 +989,10 @@ export function changeSummary(o: {
   if (unfinished) facts.unfinished = unfinished
   settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
   const crit = criteriaNamed(jobRequest(o.job), o.job?.title ?? '')
+  const stage = stageNamed(crit) ?? (o.asker ? stageNamed(criteriaNamed(jobRequest(o.asker), o.asker.title)) : null)
   return {
     number: o.pull.number, title: o.pull.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold), kind: 'work',
-    from: fromWords(o.job, o.agentWords), job_id: o.job ? indexedHandle(o.repo, o.job.session, o.job.id) : null, stage: stageNamed(crit),
+    from: fromWords(o.job, o.agentWords), job_id: o.job ? indexedHandle(o.repo, o.job.session, o.job.id) : null, stage,
     opened_at: o.pull.created_at ?? o.pull.updated_at, updated_at: s?.updated_at ?? o.pull.updated_at,
     state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}), verdict: verdictOf(facts),
     ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
