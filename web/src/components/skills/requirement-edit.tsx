@@ -95,6 +95,26 @@ export function requirementBadge(d: Pick<RequirementDecision, 'choice'> | undefi
   return accepted ? { status: 'met', label: 'Accepted' } : { status: 'yours', label: 'Undecided' }
 }
 
+/**
+ * "One testable criterion each" from the rows on screen, the draft laid over them, as the record checks it
+ * (src/api/skill-checks.ts requirements-review/criterion): met when every row is decided and every one kept has a
+ * number in its criterion, not met when a kept one has none. With a row still undecided it is the record's to say (an
+ * open question on it counts there). An edit counts at once, not once the draft is saved and checked again (test-esp32-run2
+ * R27: the bar took about 5 s). Pure.
+ */
+export function criterionCheck(items: readonly SkillItem[], decisions: readonly RequirementDecision[]): 'met' | 'not_met' | undefined {
+  const rows = items.flatMap((it) => { const r = recordRequirement(it); return r ? [r] : [] })
+  if (!rows.length) return undefined
+  let undecided = false
+  for (const r of rows) {
+    const d = decisions.find((x) => x.requirement === r.id)
+    if (d?.choice === 'strike') continue
+    if (!d && !r.accepted) { undecided = true; continue }
+    if (!/\d/.test(shownRequirement(r, d).criterion ?? '')) return 'not_met'
+  }
+  return undecided ? undefined : 'met'
+}
+
 /** The words, criterion, method and kind of a requirement row, as shown. */
 export function RequirementWording({ r }: { r: ShownRequirement }) {
   return (

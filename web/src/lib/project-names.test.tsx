@@ -24,9 +24,10 @@ describe('useProjectNames', () => {
     const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     const repos = ['mteichtahl/test-esp32-e2e', 'acme/motor-driver']
     const { result } = renderHook(() => useProjectNames(repos), { wrapper })
-    expect(result.current('mteichtahl/test-esp32-e2e')).toBe('Test esp32 e2e')
+    // until the journey is read: the repository's name as it is, not a prettified guess (test-esp32-run2 R8)
+    expect(result.current('mteichtahl/test-esp32-e2e')).toBe('test-esp32-e2e')
     await waitFor(() => expect(result.current('mteichtahl/test-esp32-e2e')).toBe('test-esp32'))
-    expect(result.current('acme/motor-driver')).toBe('Motor driver')
+    expect(result.current('acme/motor-driver')).toBe('motor-driver')
   })
 
   it('reads nothing while it is not enabled', async () => {
@@ -35,7 +36,7 @@ describe('useProjectNames', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     const { result } = renderHook(() => useProjectNames(['mteichtahl/test-esp32-e2e'], { enabled: false }), { wrapper })
-    expect(result.current('mteichtahl/test-esp32-e2e')).toBe('Test esp32 e2e')
+    expect(result.current('mteichtahl/test-esp32-e2e')).toBe('test-esp32-e2e')
     expect(call).not.toHaveBeenCalled()
   })
 })

@@ -18,7 +18,8 @@ const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.i
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 const arr = (v: unknown): Obj[] => (Array.isArray(v) ? v.filter(isObj) : [])
 const pid = (repo: string): string => repo.replace('/', '~')
-const projectName = (repo: string): string => { const n = (repo.split('/').pop() ?? repo).replace(/[-_]+/g, ' ').trim(); return n.charAt(0).toUpperCase() + n.slice(1) }
+// a journey with no name of its own: the repository's name as it is, not a prettified guess (test-esp32-run2 R8)
+const projectName = (repo: string): string => repo.split('/').pop() || repo
 
 // ------------------------------------------------------------------ journey.get
 

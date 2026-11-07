@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, RequirementLine, decidedByReview } from './design-steps'
-import { RequirementsChat, withRequirementEdit } from './requirement-edit'
+import { RequirementsChat, criterionCheck, withRequirementEdit } from './requirement-edit'
 import { ReleaseStep, type ReleaseDraft, releaseChecks } from './release-steps'
 import { OrderStep, type OrderDraft, orderChecks } from './order-steps'
 import { StepPicture } from './step-picture'
@@ -52,7 +52,9 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const release = def.id === 'release-review'
   const order = def.id === 'order-submit'
   // Release review's choice is made on its Decide step, its note the reason (release-steps.tsx)
-  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(order ? orderChecks(v?.order, s.draft.data) : {}), ...(release ? releaseChecks(v?.release, s.draft.data, v?.recommendation?.recommended) : needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
+  // Requirements review's criterion check follows an edit on screen at once (test-esp32-run2 R27)
+  const criterion = def.id === 'requirements-review' ? criterionCheck(all, s.draft.data.decisions ?? []) : undefined
+  const checks = qualityChecks(def, v, { ...draftChecks(v, s.draft.data), ...(criterion ? { criterion } : {}), ...(order ? orderChecks(v?.order, s.draft.data) : {}), ...(release ? releaseChecks(v?.release, s.draft.data, v?.recommendation?.recommended) : needsReason(s.draft.data.choice, v?.recommendation) ? { reasons: 'not_met' as const } : {}) }, s.goTo)
   const gate = def.id === 'gate-signing'
 
   return (
