@@ -16,9 +16,10 @@ import { CanvasFrame, type CanvasFrameProps } from './canvas-frame'
  * How a drawing fits the frame: its boxes (with padding), or fixed bounds so a layout holds still between versions.
  * `readable`: the zoom below which the boxes cannot be read; a drawing that would open smaller than that (a long
  * column of rows) opens fitted to the frame's width instead, at its top, and the person drags it up and down. The
- * Fit button still shows the whole drawing.
+ * Fit button still shows the whole drawing. Fixed bounds take it too: the block diagram's (test-esp32-run2 R31: it
+ * opened at 65 %, unreadable) is read at that zoom from its top left corner.
  */
-export type FlowFit = { padding: number; readable?: number } | { bounds: { x: number; y: number; width: number; height: number } }
+export type FlowFit = { padding: number; readable?: number } | { bounds: { x: number; y: number; width: number; height: number }; readable?: number }
 
 type Rect = { x: number; y: number; width: number; height: number }
 type Viewport = { x: number; y: number; zoom: number }
@@ -42,7 +43,9 @@ const fitTo = (flow: Flow, fit: FlowFit, duration?: number) =>
   'bounds' in fit ? flow.fitBounds(fit.bounds, { duration }) : flow.fitView({ padding: fit.padding, duration })
 /** The first view of a drawing: readable (readableViewport) where it says so, else fitted. */
 const openAt = (flow: Flow, fit: FlowFit, frame: { width: number; height: number }, duration?: number) => {
-  const v = 'readable' in fit && fit.readable ? readableViewport(flow.getNodesBounds(flow.getNodes()), frame, fit.padding, fit.readable) : null
+  const v = fit.readable
+    ? 'bounds' in fit ? readableViewport(fit.bounds, frame, 0, fit.readable) : readableViewport(flow.getNodesBounds(flow.getNodes()), frame, fit.padding, fit.readable)
+    : null
   return v ? flow.setViewport(v, { duration }) : fitTo(flow, fit, duration)
 }
 
