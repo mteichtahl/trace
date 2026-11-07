@@ -380,9 +380,9 @@ export const BUILD: BuildView = {
         { ref: 'U1', name: 'STM32L072CZT6', lcsc: 'C2652091', stock: 3140, need: 10, status: 'ok', then: 3.86, now: 3.98 },
         { ref: 'U2', name: 'RFM95W-868S2', lcsc: 'C2939786', stock: 1208, need: 10, status: 'ok', then: 1.92, now: 2.11 },
         { ref: 'U3', name: 'TLV75533PDBVR', lcsc: 'C82942', stock: 48920, need: 10, status: 'ok', then: 0.21, now: 0.21 },
-        { ref: 'J1', name: 'S2B-PH-K-S', lcsc: 'C131337', stock: 22605, need: 10, status: 'ok', then: 0.06, now: 0.06 },
+        { ref: 'J1', name: 'S2B-PH-K-S', lcsc: 'C131337', stock: 22605, need: 10, status: 'ok', then: 0.06, now: 0.05 },
         { ref: 'J2', name: 'U.FL-R-SMT-1', lcsc: 'C88374', stock: 9771, need: 10, status: 'ok', then: 0.18, now: 0.18 },
-        { ref: 'C1–C14', name: 'CL05B104KO5NNNC', lcsc: 'C1525', stock: 9830112, need: 140, status: 'ok', then: 0.002, now: 0.002 },
+        { ref: 'C1–C14', name: 'CL05B104KO5NNNC', lcsc: 'C1525', stock: 9830112, need: 140, status: 'ok', then: 0.00200, now: 0.00202 },
       ],
       files: ['gerbers.zip', 'bom-jlcpcb.csv', 'cpl-jlcpcb.csv', 'hardware.csv'],
       hardware: {
