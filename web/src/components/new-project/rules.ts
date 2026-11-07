@@ -57,7 +57,9 @@ export function checks(d: NewProjectDraft, o: CheckContext): Check[] {
   const desc = d.description.trim()
   return [
     { id: 'name', step: 'about', text: 'Name not used by another project', ok: name.length >= 2 && !o.taken.map((t) => t.toLowerCase()).includes(name.toLowerCase()) },
-    { id: 'desc', step: 'about', text: 'Description is a full sentence', ok: desc.length === 0 || (/[.!?]$/.test(desc) && desc.length <= 280) },
+    // the description is optional: with none there is nothing to check, so the bar does not show it as met (test-esp32
+    // log #1, #79: "Description is a full sentence" was ticked with the box empty)
+    ...(desc.length ? [{ id: 'desc', step: 'about' as const, text: 'Description is a full sentence', ok: /[.!?]$/.test(desc) && desc.length <= 280 }] : []),
     { id: 'template', step: 'start', text: 'Template chosen', ok: !!d.template && !!d.start },
     { id: 'repo', step: 'repository', text: d.repository.mode === 'new' ? 'Repository name free on GitHub' : 'Repository reachable', ok: repoOk(d, o.repo) },
     { id: 'parts', step: 'people', text: 'Everyone has a part', ok: d.people.every((p) => p.part === 'reviewer' || p.class !== 'guest') },
