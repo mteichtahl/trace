@@ -6,7 +6,7 @@ import { readoutState } from './checklist-skill'
 import { answerChecks, arrivingChoice, changedFields, decidedNote, intentDraftContext, intentSubmitLabel, statementBadge, undecidedStatements, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
-import { changeChecks, waiverChecks, type WaiverDraft } from './form-skills'
+import { changeChecks, waivableShown, waiverChecks, whereExample, type WaiverDraft } from './form-skills'
 import { changesExplained } from './kicad-skill'
 import { qualityChecks } from './use-skill'
 
@@ -68,6 +68,25 @@ describe('Waiver', () => {
   it('names its scope', () => {
     expect(waiverChecks({ ...d, scope: 'condition', condition: '' }).scope).toBe('not_met')
     expect(waiverChecks({ ...d, scope: 'revision' }).scope).toBe('met')
+  })
+  // test-esp32 #148: opened from a DRC finding's "Waive this one…", the finding was 28th of 28, below the fold
+  it('shows what it was opened with first, and alone until the person asks for the rest', () => {
+    const list = [...Array.from({ length: 27 }, (_, i) => ({ id: `requirement:R-${i + 1}` })), { id: 'finding:drc@3' }]
+    expect(waivableShown(list, 'finding:drc@3', false).map((w) => w.id)).toEqual(['finding:drc@3'])
+    const all = waivableShown(list, 'finding:drc@3', true)
+    expect(all[0]?.id).toBe('finding:drc@3')
+    expect(all).toHaveLength(28)
+    // nothing chosen, or something not in the list: every one, in order
+    expect(waivableShown(list, undefined, false)).toEqual(list)
+    expect(waivableShown(list, 'other', false)).toEqual(list)
+  })
+  it('gives a "Where exactly" example that fits what is waived', () => {
+    expect(whereExample('later', 'finding', 'DRC: J2 courtyard overlaps U1')).toBe('Sign-off: the rule checks on the release files')
+    expect(whereExample('later', 'finding', 'U3 (TLV75533) has 6 in stock: 10 boards need 10.')).toBe('Fabricate: the stock check when the order is placed')
+    expect(whereExample('later', 'finding')).not.toMatch(/SPICE/)
+    expect(whereExample('bench', 'finding')).toMatch(/^Bring-up step/)
+    expect(whereExample('later', 'requirement')).toBe('Prove: SPICE stability run on the LDO')
+    expect(whereExample('bench', 'requirement')).toBe('Bring-up step 3 (unpowered rail check)')
   })
 })
 
