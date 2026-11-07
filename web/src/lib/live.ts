@@ -37,8 +37,11 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       const r = e.repo
       // a change moved on GitHub (src/web/hooks.ts: `kind: 'change'`, `number` when GitHub named one): its status, the
       // lists that show it, and the journey (its open changes are steps)
+      // and what is read from the default branch, which a change merged there moves: the tools' reads (verify.coverage
+      // behind Requirements, test-esp32 #65) and the intent links. A change accepted here may merge only once its
+      // checks pass, after the accept's own refetch
       if ((e as { kind?: unknown }).kind === 'change') {
-        return [['pull.status', r], ['changes.list', r], ['change.get', r], ['inbox'], ['journey.get', r], ['change.runs', r], ['activity.list']]
+        return [['pull.status', r], ['changes.list', r], ['change.get', r], ['inbox'], ['journey.get', r], ['change.runs', r], ['activity.list'], ['tool', r], ['requirements.trace', r]]
       }
       const byWhat: Record<typeof e.what, QueryKey[]> = {
         // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
