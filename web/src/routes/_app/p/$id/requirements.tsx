@@ -212,7 +212,8 @@ export function NoRequirements({ id, repo, drafting, jobs, write }: { id: string
 function IntentLine({ trace, id }: { trace: TraceView; id: string }) {
   const s = trace.summary
   const proposed = trace.intent.filter((i) => i.state === 'proposed').length
-  const uncovered = trace.intent.filter((i) => !i.covered && i.uncovered === undefined)
+  // a line marked "don't care" needs no requirement: it is not counted as one left uncovered
+  const uncovered = trace.intent.filter((i) => !i.covered && i.uncovered === undefined && i.kind !== 'dont_care')
   return (
     <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
       <span>{trace.intent.length} intent lines{proposed ? `, ${proposed} still proposed by trace` : ', all accepted'}.</span>

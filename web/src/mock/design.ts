@@ -103,6 +103,8 @@ function trace(): TraceView {
   const intent = [
     ...TRACE.intent.map((i) => ({ ...i, text: decided[i.id]?.text ?? i.text, state: state(i.id), kind: 'statement' as const, source: { kind: 'person' as const, ref: 'Marc' }, covered: TRACE.links.some((l) => l.intent === i.id) })),
     { id: 'I-6', topic: 'Physical', text: 'Fits a 50 × 30 mm board in the IP67 probe housing.', state: state('I-6'), kind: 'statement' as const, flags: [], source: { kind: 'brief' as const, quote: 'the probe housing from the last project' }, covered: false },
+    // marked "don't care": no requirement comes from it, and none is needed
+    { id: 'I-7', topic: 'Compliance', text: 'No radio certification for the field trial units.', state: 'accepted' as const, kind: 'dont_care' as const, flags: [], source: { kind: 'person' as const, ref: 'Marc' }, covered: false },
   ]
   return { ...TRACE, intent, summary: { requirements: 14, verified: 8, failing: 1, untested: 4, waived: 1, intent: intent.length, accepted: intent.filter((i) => i.state !== 'proposed').length, uncovered: 1, unlinked: 6 } }
 }
