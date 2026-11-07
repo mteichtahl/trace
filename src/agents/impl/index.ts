@@ -40,7 +40,10 @@ export const impl: Specialist = {
       + ' parts_search and parts_lookup, pull their datasheets (parts_fetch_datasheet) and check stock for the build'
       + ' quantity (parts_bom_check). A circuit outside these (a filter, a converter loop, noise) is a hand-off to ams.',
     'Capture: once the schematic is written, kicad_erc on it and kicad_netlist to check every connection the'
-      + ' architecture names; kicad_bom to check each part carries its MPN, manufacturer and LCSC fields.',
+      + ' architecture names; kicad_bom to check each part carries its MPN, manufacturer and LCSC fields. A boot'
+      + ' strapping pin that anything else drives (an auto-reset transistor, a button, a peripheral) gets an external'
+      + ' pull to its boot level (10 kOhm is usual), never the part\'s internal pull alone; design_pins check flags one'
+      + ' without it. Leave one out only for a reason you write in the report, for the person to agree or waive.',
     'Panel and mounting hardware: when a job asks for the hardware list, kicad_bom with hardware: true makes it as a'
       + ' list of its own (the case parts and board screws from the newest case build, else the board\'s mounting holes,'
       + ' and parts marked Hardware = panel or mounting); it is never part of the parts list, its stock check or the'

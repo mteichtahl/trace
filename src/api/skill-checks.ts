@@ -209,7 +209,7 @@ function pinBar(i: CheckInput, id: string, kinds: readonly PinFinding['kind'][])
   if (!pins.length) return notMet(id, NO_PLAN)
   const waived = new Set((i.r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
   const mated = kinds.some((k) => k === 'mate_order' || k === 'mate_unknown') ? matedParts(architectureView(i.design.rows, i.design.decisions)) : undefined
-  const mine = pinCheck(pins, kinds.some((k) => k === 'mismatch' || k === 'not_on_schematic' || k === 'missing_pin') ? i.nets ?? null : null, mated).filter((f) => kinds.includes(f.kind))
+  const mine = pinCheck(pins, kinds.some((k) => k === 'mismatch' || k === 'not_on_schematic' || k === 'missing_pin' || k === 'strap_pull') ? i.nets ?? null : null, mated).filter((f) => kinds.includes(f.kind))
   const open = mine.filter((f) => !waived.has(f.id))
   if (open.length) return notMet(id, `${open.slice(0, 3).map((f) => f.text).join(' ')}${open.length > 3 ? ` And ${open.length - 3} more.` : ''}`)
   return mine.length ? { id, status: 'waived', detail: `${plural(mine.length, 'finding')} waived.` } : met(id)
@@ -367,7 +367,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   // ---- Pin plan review
   'pin-plan-review/functions': (i) => pinBar(i, 'functions', ['no_net', 'no_function', 'unsupported', 'unknown_alternates']),
   'pin-plan-review/instances': (i) => pinBar(i, 'instances', ['claimed_twice', 'function_twice']),
-  'pin-plan-review/boot': (i) => pinBar(i, 'boot', ['reserved']),
+  'pin-plan-review/boot': (i) => pinBar(i, 'boot', ['reserved', 'strap_pull']),
   'pin-plan-review/mates': (i) => pinBar(i, 'mates', ['mate_order', 'mate_unknown']),
   'pin-plan-review/match': (i) => {
     if (!i.nets) return i.design?.rows.pins.some((p) => p.status !== 'withdrawn') ? notMet('match', 'The pin plan has not been checked against the schematic yet: run design.pins check.') : notMet('match', NO_PLAN)

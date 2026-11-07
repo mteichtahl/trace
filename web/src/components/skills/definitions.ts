@@ -164,7 +164,7 @@ export const SKILLS: SkillDef[] = [
     checks: [
       { id: 'functions', text: 'Every used pin has a net and a supported function', step: 'map' },
       { id: 'instances', text: 'No peripheral claimed twice', step: 'conflicts' },
-      { id: 'boot', text: 'Boot, reset and debug pins keep their roles', step: 'conflicts' },
+      { id: 'boot', text: 'Boot, reset and debug pins keep their roles; boot straps have a pull', step: 'conflicts' },
       { id: 'mates', text: 'Every off-board part\'s pins match its connector', step: 'conflicts' },
       { id: 'match', text: 'The schematic matches the pin plan', step: 'agree' },
     ],
