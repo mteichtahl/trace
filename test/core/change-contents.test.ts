@@ -33,6 +33,21 @@ describe('a change\'s title', () => {
     expect(betterTitle(DOCS, [DOCS, IMPL])).toBe('The docs specialist\'s record')
     expect(betterTitle('Case design, reviewed', [DOCS, CASE])).toBe('Case design, reviewed')
   })
+
+  // test-esp32-run2 R30: after "Bring it up to date" the change was titled "Merge origin/main (06ec36f) into
+  // claude/task-… (+3 more)", the agent's own merge commit
+  it('never takes its title from a merge commit, the agent\'s own with the commit it merged too', () => {
+    const IMPL1 = 'trace: the impl specialist\'s record (job-mw6z2ehq-131995a3)'
+    const IMPL2 = 'trace: the impl specialist\'s record (job-mw6zlmqi-f2f7f324)'
+    const OURS = 'Merge main into claude/task-the-requirements-baseline-gate-was-signe-5a1229 (trace: the project database merged)'
+    const AGENT = 'Merge origin/main (06ec36f) into claude/task-the-requirements-baseline-gate-was-signe-5a1229'
+    expect(mergeTitle(AGENT)).toBe(true)
+    expect(mergeTitle('Merge commit 06ec36f into claude/x')).toBe(true)
+    expect(mergeTitle(`${AGENT} (+3 more)`)).toBe(true)
+    expect(mergeTitle('Merged the two regulators into one block')).toBe(false)
+    expect(changeTitle([IMPL1, IMPL2, OURS, AGENT])).toBe('The implementation specialist\'s record')
+    expect(betterTitle(`${AGENT} (+3 more)`, [IMPL1, IMPL2, OURS, AGENT], { kind: 'impl' })).toBe('The implementation specialist\'s record')
+  })
 })
 
 describe('what a change holds', () => {

@@ -42,9 +42,10 @@ const PLAIN_RECORD = /^The (?:[\w -]+ )?specialist's record(?:: .*)?$/
 /**
  * A merge commit's subject: git's own ("Merge branch 'main' into …", "Merge pull request #3 from …", "Merge
  * remote-tracking branch …") and trace's when it brings a branch up to date ("Merge claude/a into claude/b (trace: the
- * project database merged)"), with openPr's "(+N more)" after it or not (test-esp32 log #154).
+ * project database merged)"), with openPr's "(+N more)" after it or not (test-esp32 log #154), and an agent's own with
+ * the commit it merged ("Merge origin/main (06ec36f) into claude/task-…": test-esp32-run2 R30, a change was titled by it).
  */
-const MERGE = /^Merge (?:branch |pull request |remote-tracking branch |commit |[\w./'-]+ into )/
+const MERGE = /^Merge (?:branch |pull request |remote-tracking branch |commit |[\w./'-]+(?: \(?[0-9a-f]{7,40}\)?)? into )/
 
 /** Whether a title or commit subject is only a specialist's record (keepRecord), or the name trace gives one. */
 export const recordTitle = (s: string): boolean => RECORD.test(s.trim()) || PLAIN_RECORD.test(s.trim())

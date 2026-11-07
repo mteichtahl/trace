@@ -21,7 +21,7 @@ import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, openChanges, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, agentReport, reportOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
-  askedFor, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking, updatingJob,
+  askedFor, askingJob, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking, updatingJob,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import { forgetRetries } from '../../src/api/stuck-checks.js'
@@ -382,6 +382,23 @@ describe('who a change is credited to', () => {
     expect(idle.working).toBeUndefined()
     expect(idle.updating).toBeUndefined()
     expect(acceptance({ state: 'open', draft: false, mergeable: 'dirty', checks: null, working: true, updating: true }, true).blockers[0]).toBe('trace is updating this change. Wait for its job to finish.')
+  })
+
+  // test-esp32-run2 R29: the analog specialist answered the Implementation specialist's hand-off on its branch; the
+  // asker carried on there after, and the change read "Made by the Implementation specialist", in Stage "—"
+  it('the specialist that answered a hand-off, though the asker carried on on its branch; in the asker\'s stage', () => {
+    const branch = 'claude/handoff-hoda5b1502f4f144'
+    const asker = { ...row('job-im', 'claude/task-the-project-is-in-architect', 'task', 'impl', 1), payload: JSON.stringify({ kind: 'task', repository: 'acme/board', request: 'The project is in Architect. Its criterion "Every key part is in stock" (architect.stock) is not met.', agent: 'impl', requestedBy: 'trace' }) }
+    const answer = { ...row('job-ams', branch, 'task', 'ams', 2), handoff: 'hoda5b1502f4f144', payload: JSON.stringify({ kind: 'task', repository: 'acme/board', request: 'Size the LDO for the radio bursts.', agent: 'ams', requestedBy: 'the Implementation specialist (job job-im)', handoff: { id: 'hoda5b1502f4f144', from: 'impl', fromJob: 'job-im' } }) }
+    const carry = { ...row('job-im2', branch, 'task', 'impl', 3), requestedBy: 'hand-off hoda5b1502f4f144', payload: JSON.stringify({ kind: 'task', repository: 'acme/board', request: 'Your hand-off was answered.', agent: 'impl', requestedBy: 'hand-off hoda5b1502f4f144' }) }
+    const job = jobsByBranch([asker, answer, carry], RULE).get(branch) ?? null
+    expect(job?.id).toBe('job-ams')
+    expect(fromWords(job, AGENT_WORDS)).toBe('the Analog and mixed-signal specialist')
+    expect(askingJob(job, [asker, answer, carry])?.id).toBe('job-im')
+    const pull = { number: 5, title: 'The analog and mixed-signal specialist\'s record', url: 'https://github.com/acme/board/pull/5', draft: false, labels: [], updated_at: '2026-11-05T00:00:00Z' }
+    expect(changeSummary({ repo: 'acme/board', pull, job, status: null, hold: 'no-automerge', agentWords: AGENT_WORDS }).stage).toBeNull()
+    expect(changeSummary({ repo: 'acme/board', pull, job, status: null, hold: 'no-automerge', agentWords: AGENT_WORDS, asker: askingJob(job, [asker, answer, carry]) }).stage).toBe('architect')
+    expect(askingJob(asker, [asker])).toBeNull()
   })
 
   it('the pick, when the router moved the job to another specialist, saying where it ran', () => {

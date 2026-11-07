@@ -396,10 +396,12 @@ async function startReleaseDocs(ctx: Context, repo: string, revision: string, ti
  * trace's still not met once that work ended, with nothing else working on it, is started on its own (startOwnedWork,
  * src/api/owned-work.ts): by this entry's specialist, or by trace's router for a stage with no entry here.
  */
-export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
+export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string; headline: string }>> = {
   architect: {
     agent: 'impl',
     started: 'The Implementation agent proposes the architecture options for Architecture choice.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Proposing architecture options',
     request: [
       'The requirements baseline gate was signed: the project is in Architect. Propose the architecture for Architecture choice.',
       'Read the accepted requirements (verify.requirements list) and the intent (design.intent list).',
@@ -413,6 +415,8 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
   capture: {
     agent: 'impl',
     started: 'The Implementation agent draws the schematic for the chosen architecture and runs the schematic review checks.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Drawing the schematic',
     request: [
       'The architecture review gate was signed: the project is in Capture. Draw the schematic for the chosen architecture.',
       'Read the chosen option (design.architecture list) and the accepted requirements (verify.requirements list). Draw it in KiCad: a root sheet and one sheet per block, every part with its MPN, Manufacturer and LCSC fields and a footprint, and on each sheet a note naming the requirements it serves (design.sheets). Schematic only: no .kicad_pcb, that is Layout\'s.',
@@ -427,6 +431,8 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
   prove: {
     agent: 'verify',
     started: 'The Verification agent plans a test for every requirement it can check before layout, and runs them.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Proving the schematic before layout',
     request: [
       'The schematic review gate was signed: the project is in Prove. Prove the schematic against the accepted requirements before layout.',
       'Read the accepted requirements with their acceptance criteria (verify.requirements list) and the schematic.',
@@ -439,6 +445,8 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
   layout: {
     agent: 'impl',
     started: 'The Implementation agent lays out the board and runs the layout review checks.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Laying out the board',
     request: [
       'The design proven gate was signed: the project is in Layout. Lay out the board for the proven schematic.',
       'Read the accepted requirements (verify.requirements list) for the outline, layers and anything that constrains placement, and the schematic.',
@@ -452,6 +460,8 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
   signoff: {
     agent: 'verify',
     started: 'The Verification agent closes coverage and writes the release report for Sign-off.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Writing the release report',
     request: [
       'The layout review gate was signed: the project is in Sign-off. Prepare the release report.',
       'Run what the layout made possible (the items planned for after layout), then close coverage (verify.coverage): every requirement verified or waived, the gaps named. Record signoff.coverage with journey.check.',
@@ -465,6 +475,8 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
   fabricate: {
     agent: 'impl',
     started: 'The Implementation agent builds the release package and checks stock and prices again today.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Building the release package',
     request: [
       'The release approval gate was signed: the project is in Fabricate. Prepare the order for JLCPCB.',
       'Build the release package with kicad.fab (house jlcpcb, zipped) from the released board on the default branch, into hardware/<board>/release/rev<revision>/: Gerbers and drill, the parts list and the placement file in JLCPCB\'s columns. Fix nothing in the design here: a problem the package shows is a question for a person (journey.ask). Read the board with kicad.board, so its layers, size, thickness and copper are in the record for the order options. Record fabricate.order.package with journey.check, citing the kicad.fab run.',
@@ -480,11 +492,13 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
  * accepted board, so it starts when the layout lands, not after the documents (test-esp32 #132: the fit criterion
  * waited behind a docs change, though the documents are written from the case, not the other way round).
  */
-export const FOLLOW_ON: Readonly<Record<string, { after: readonly string[]; agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
+export const FOLLOW_ON: Readonly<Record<string, { after: readonly string[]; agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string; headline: string }>> = {
   'layout.fit': {
     after: ['layout.routed', 'layout.drc'],
     agent: 'impl',
     started: 'The Implementation agent designs the case for the accepted board and checks that the board fits it.',
+    // what its job is called: what it does, not the signature that started it (test-esp32-run2 R28)
+    headline: 'Designing the case',
     request: [
       'The board layout is accepted: the project is in Layout. Design its enclosure and check that the board fits it.',
       'Read the accepted requirements (verify.requirements list) for the size, mounting, openings and environment the case must meet, and the board as it now is on the default branch.',
@@ -527,7 +541,7 @@ export async function startFollowOn(ctx: Context, repo: string, r: JourneyRecord
     const f = FOLLOW_ON[id]!
     if (busy.some((j) => j.repository === repo && j.agent === f.agent && (j.state === 'queued' || j.state === 'running'))) continue
     try {
-      const s = await jobs.startJob({ kind: 'task', repository: repo, request: f.request, agent: f.agent, requestedBy: 'trace', requestedBySub: ctx.principal.sub })
+      const s = await jobs.startJob({ kind: 'task', repository: repo, request: f.request, headline: f.headline, agent: f.agent, requestedBy: 'trace', requestedBySub: ctx.principal.sub })
       if (!s.accepted) { out.errors.push(s.reason ?? 'trace did not accept the job.'); continue }
       await writeJourney(ctx, repo, (db) => {
         decide(db, { kind: 'work.started', stage: r.journey.currentStage, ref: id, by: 'trace', summary: f.started, detail: { job: s.jobId, agent: f.agent } })
@@ -546,12 +560,12 @@ export async function startFollowOn(ctx: Context, repo: string, r: JourneyRecord
  * that criterion only, with the stage's request for what the stage is about. A stage with no STAGE_WORK leaves the
  * agent to trace's router. Pure.
  */
-export function ownedWork(stage: StageId, id: string, text: string): { agent?: (typeof SPECIALIST_KINDS)[number]; request: string; started: string; scribe?: true } {
+export function ownedWork(stage: StageId, id: string, text: string): { agent?: (typeof SPECIALIST_KINDS)[number]; request: string; started: string; headline?: string; scribe?: true } {
   const name = STAGE_NAMES[stage]
   const what = text.replace(/\.$/, '')
   if (id.endsWith('.docs')) return { scribe: true, request: docsRequest(`${name}'s documents criterion is not met, and nothing was working on it.`, { stage, also: ['journey'] }), started: 'The Documentation agent brings the project\'s documents up to date.' }
   const follow = FOLLOW_ON[id]
-  if (follow) return { agent: follow.agent, request: follow.request, started: follow.started }
+  if (follow) return { agent: follow.agent, request: follow.request, started: follow.started, headline: follow.headline }
   const work = STAGE_WORK[stage]
   const request = [
     `The project is in ${name}. Its criterion "${what}" (${id}) is not met, and no job is working on it: the stage's earlier work ended without meeting it.`,
@@ -560,7 +574,8 @@ export function ownedWork(stage: StageId, id: string, text: string): { agent?: (
     ...(work ? ['', 'What the stage asks, for context:', work.request] : []),
   ].join('\n')
   const who = work ? `The ${SPECIALIST_WORDS[work.agent]} agent` : 'trace'
-  return { ...(work ? { agent: work.agent } : {}), request, started: `${who} works on "${what}".` }
+  // named by the criterion it works on, not by "The project is in …" (test-esp32-run2 R28)
+  return { ...(work ? { agent: work.agent } : {}), request, started: `${who} works on "${what}".`, headline: `${name}: ${what.charAt(0).toLowerCase()}${what.slice(1)}` }
 }
 
 /**
@@ -592,7 +607,7 @@ export async function startOwnedWork(ctx: Context, repo: string, r: Pick<Journey
       const d = await startScribe(ctx, repo, work.request)
       out = d.started ? { started: d.started, ...(d.jobId ? { jobId: d.jobId } : {}) } : { jobError: d.jobError ?? d.skipped ?? 'trace did not accept the job.' }
     } else {
-      const s = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request: work.request, ...(work.agent ? { agent: work.agent } : {}), requestedBy: by, requestedBySub: ctx.principal.sub })
+      const s = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request: work.request, ...(work.headline ? { headline: work.headline } : {}), ...(work.agent ? { agent: work.agent } : {}), requestedBy: by, requestedBySub: ctx.principal.sub })
       out = s.accepted ? { started: work.started, jobId: s.jobId } : { jobError: s.reason ?? 'trace did not accept the job.' }
     }
   } catch (e) { out = { jobError: e instanceof Error ? e.message : String(e) } }
@@ -891,9 +906,10 @@ export const JOURNEY_ACTIONS = {
     let kickoff: { jobId?: string; started?: string[]; jobError?: string } = {}
     if (work && request) {
       try {
-        // named by what it does (its request leads with why the stage is open again: test-esp32 #196)
-        const headline = reopened ? reopenHeadline(reopened.stage, reopened.scope.kept) : undefined
-        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, ...(headline ? { headline } : {}), agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        // named by what it does, never by the signature that opened the stage (its request leads with why the stage
+        // is open: test-esp32 #196, test-esp32-run2 R28 "The requirements baseline gate was signed: …")
+        const headline = reopened ? reopenHeadline(reopened.stage, reopened.scope.kept) : work.headline
+        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, headline, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
         kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
       } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
     }
