@@ -19,6 +19,7 @@ import type { AddressInfo } from 'node:net'
 import { type SnsApi, type SqsApi, sweepInFlight } from '../../src/gpu/batch.js'
 import { projectHash } from '../../src/core/project.js'
 import { activeWaits } from '../../src/core/wait.js'
+import { withDesign } from '../../src/tools/design/db.js'
 
 const home = mkdtempSync(join(tmpdir(), 'trace-journey-tools-'))
 // where the API finds it too (src/api/action-kit.ts bucketStore): <TRACE_HOME>/projects locally
@@ -130,6 +131,21 @@ describe('the journey tools', () => {
     const r = await call('journey.check', { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: runId }], note: 'every requirement maps to a block' }) as { check_id: string; gate: { id: string; met: number } }
     expect(r).toMatchObject({ criterion: 'architect.mapped', gate: { id: 'architect', met: 1 } })
     expect((await facts.read((db) => loadAgentFacts(db))).result.checks).toEqual([expect.objectContaining({ criterion: 'architect.mapped', status: 'met', by: 'verify', jobId: 'job-7' })])
+  })
+
+  it('journey.check refuses capture.datasheets met while an off-board module\'s pins differ from its connector\'s (test-esp32 #169)', async () => {
+    const OLED = 'SSD1306-0.96-OLED-128x64-I2C-module'
+    const module = (pins: string[]) => withDesign((d) => {
+      d.setOption({ id: 'A', name: 'ESP32-C3', summary: 's', recommended: true })
+      d.setBlocks('A', [{ id: 'oled', name: 'OLED', parts: [{ mpn: '2.54-1*4PFemale', key: true }, { mpn: OLED, key: true, off_board: true, mates: { connector: 'J2', pins, source: 'ea9a571f p2' } }] }])
+      d.setPins([{ part: 'J2', pin: '1', name: 'GND', net: 'GND', kind: 'power' }, { part: 'J2', pin: '2', name: 'VCC', net: '+3V3', kind: 'power' }, { part: 'J2', pin: '3', name: 'SCL', net: '/I2C_SCL', kind: 'signal' }, { part: 'J2', pin: '4', name: 'SDA', net: '/I2C_SDA', kind: 'signal' }])
+    })
+    const check = () => call('journey.check', { criterion: 'capture.datasheets', status: 'met', evidence: [{ kind: 'datasheet', ref: OLED, label: 'OLED module p.2: pin order' }] })
+    module(['VCC', 'GND', 'SCL', 'SDA'])
+    await expect(check()).rejects.toThrow(/J2's pins are 1 GND, 2 VCC, 3 SCL, 4 SDA; .* has 1 VCC, 2 GND, 3 SCL, 4 SDA/)
+    module(['GND', 'VCC', 'SCL', 'SDA'])
+    await expect(check()).resolves.toMatchObject({ criterion: 'capture.datasheets' })
+    withDesign((d) => d.setOption({ id: 'A', name: 'ESP32-C3', summary: 's', status: 'withdrawn' }))
   })
 
   it('journey.stuck needs why and a recommendation; resolved clears this job\'s', async () => {

@@ -157,7 +157,7 @@ export const SKILLS: SkillDef[] = [
     guides: 'Agreeing each microcontroller pin between schematic and firmware', produces: 'The pin plan, checked again after any pin swap in Layout.',
     steps: [
       { id: 'map', title: 'See the map', detail: 'Every pin with its net, the function the firmware expects, and the alternate functions the part allows.' },
-      { id: 'conflicts', title: 'Resolve conflicts', detail: 'Two functions on one peripheral, a function a pin cannot carry, a boot or debug pin reused.' },
+      { id: 'conflicts', title: 'Resolve conflicts', detail: 'Two functions on one peripheral, a function a pin cannot carry, a boot or debug pin reused, a module whose pins are in another order than its connector.' },
       { id: 'room', title: 'Keep room', detail: 'Spare pins brought to test points or a header where you want them.' },
       { id: 'agree', title: 'Agree', detail: 'Schematic and firmware pin configuration checked against the same plan.' },
     ],
@@ -165,6 +165,7 @@ export const SKILLS: SkillDef[] = [
       { id: 'functions', text: 'Every used pin has a net and a supported function', step: 'map' },
       { id: 'instances', text: 'No peripheral claimed twice', step: 'conflicts' },
       { id: 'boot', text: 'Boot, reset and debug pins keep their roles', step: 'conflicts' },
+      { id: 'mates', text: 'Every off-board part\'s pins match its connector', step: 'conflicts' },
       { id: 'match', text: 'Firmware matches the schematic', step: 'agree' },
     ],
   },

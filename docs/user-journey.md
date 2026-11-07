@@ -763,7 +763,7 @@ The skill sits between the schematic and the firmware, so a pin that works on th
 Steps:
 
 1. **See the map:** every MCU pin with its net, the function the firmware expects, and the alternate functions the part allows.
-2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else; trace proposes a fix for each and says why.
+2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else, an off-board module whose pin order differs from its connector's; trace proposes a fix for each and says why.
 3. **Keep room:** spare pins brought to test points or a header where the person wants them.
 4. **Agree:** the schematic and the firmware pin configuration are generated from or checked against the same plan.
 
@@ -772,6 +772,8 @@ Quality bar:
 - Every used pin has a net and a function the part supports on that pin.
 - No peripheral instance is claimed twice.
 - Boot, reset and debug pins keep their roles, or the change is waived.
+- Every off-board part (a display module, a sensor board, a battery) has the pin order its datasheet gives, pin for pin
+  the same as the connector it plugs into, or the difference is waived (a straight cable would reverse its supply).
 - The firmware pin configuration matches the schematic.
 
 Produces: the pin plan, checked again after any pin swap in Layout.
