@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ApiError, onAnswer } from '@/lib/api'
+import { onAnswer, readRetry, readRetryDelay } from '@/lib/api'
 import { afterWrite } from '@/lib/after-write'
 import { listenForNewVersion } from '@/lib/new-version'
 import { RouteError } from '@/components/route-error'
@@ -15,8 +15,9 @@ export const queryClient = new QueryClient({
       // events, not polling: the live connection invalidates what changed (lib/live.ts)
       staleTime: 30_000,
       refetchOnWindowFocus: false,
-      // never retry a 429: trace's firewall counts every request, so a retry only keeps it shut longer
-      retry: (n, e) => !(e instanceof ApiError && (e.noAccess || e.status === 401 || e.status === 429)) && n < 2,
+      // never a 429 or no access; while trace is updating, for about a minute (lib/api.ts readRetry)
+      retry: readRetry,
+      retryDelay: readRetryDelay,
     },
   },
 })

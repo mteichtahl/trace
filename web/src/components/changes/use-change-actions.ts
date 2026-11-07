@@ -11,7 +11,8 @@
 import { type QueryClient, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { call } from '@/lib/api'
+import { ApiError, type ResultOf, call } from '@/lib/api'
+import { isUpdating } from '@/lib/http'
 import { q } from '@/lib/queries'
 import type { ChangeAccepted, InboxItem } from '@/lib/types'
 import { showAfterAccept } from './after-accept'
@@ -38,7 +39,62 @@ export function confirmAccepted(a: { repo: string; project?: string; title: stri
 export function refusalWords(e: unknown): string {
   const said = (e instanceof Error ? e.message : String(e ?? '')).trim()
   const why = said || 'trace did not say why.'
+  // trace updating: its words say what is known of the change (acceptWhileUpdating), and "Nothing changed" may not be
+  if (isUpdating(e)) return `${why}${/[.!?]$/.test(why) ? '' : '.'}`
   return `${why}${/[.!?]$/.test(why) ? '' : '.'} Nothing changed.`
+}
+
+/** The waits before looking again at a change whose accept met trace updating: about a minute in all. */
+export const ACCEPT_AGAIN_MS = [3_000, 6_000, 12_000, 20_000, 20_000] as const
+
+/** Said when trace is still updating after ACCEPT_AGAIN_MS: whether the change is known to be still open or not. */
+export const ACCEPT_UPDATING = {
+  open: 'trace is updating, so the change was not accepted yet. It is still waiting for you: try again in a minute.',
+  unknown: 'trace is updating, so it could not tell yet whether the change was accepted. Look at it again in a minute before you accept it again.',
+}
+
+const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/**
+ * Accept the head the person was shown, through a redeploy of the API (test-esp32 #223: "424" while three builds were
+ * in flight). An answer that says trace is updating does not say whether the merge happened, so the accept is never
+ * sent again blindly: trace waits, reads the change, and sends it again only while it is still open at that same
+ * head (the API refuses any other head, and GitHub merges only that commit). Merged in the meantime: it is accepted.
+ * Any other refusal is thrown at once, as it was.
+ */
+export async function acceptWhileUpdating(
+  a: { repo: string; number: number; head: string; note?: string },
+  o: { again?: readonly number[]; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<ChangeAccepted> {
+  const again = o.again ?? ACCEPT_AGAIN_MS
+  const sleep = o.sleep ?? pause
+  const send = () => call('change.accept', { repo: a.repo, number: a.number, head_sha: a.head, ...(a.note ? { note: a.note } : {}) })
+  let wait = 0
+  for (;;) {
+    try {
+      return await send()
+    } catch (e) {
+      if (!isUpdating(e)) throw e
+    }
+    // look at the change until trace answers, then send it again only if it is still open at the same head
+    for (;;) {
+      if (wait >= again.length) throw new ApiError(ACCEPT_UPDATING.unknown, 503, 'updating')
+      await sleep(again[wait++]!)
+      let d: ResultOf<'change.get'>
+      try {
+        d = await call('change.get', { repo: a.repo, number: a.number })
+      } catch (e) {
+        if (isUpdating(e)) continue
+        throw e
+      }
+      if (d.state === 'merged') return { merged: true, sha: a.head, stage: '', next: '' }
+      if (d.state === 'closed') throw new Error('It was discarded, so there is nothing to accept.')
+      if (d.head?.sha !== a.head) throw new Error('It changed since you looked at it. Look again before accepting.')
+      // still open, as it was: sent again while there is time left; otherwise said as it is
+      if (wait >= again.length) throw new ApiError(ACCEPT_UPDATING.open, 503, 'updating')
+      break
+    }
+  }
 }
 
 /**
@@ -53,7 +109,7 @@ export async function acceptLatest(qc: QueryClient, repo: string, number: number
   if (d.state === 'closed') throw new Error('It was discarded, so there is nothing to accept.')
   if (!d.head?.sha) throw new Error('trace could not read which version of it to accept. Open the change and accept it there.')
   if (!d.may_accept) throw new Error(`It cannot be accepted now. ${(d.blockers ?? []).join(' ')}`.trim())
-  return call('change.accept', { repo, number, head_sha: d.head.sha })
+  return acceptWhileUpdating({ repo, number, head: d.head.sha })
 }
 
 const refreshAfterAccept = (qc: QueryClient, repo: string) => {
@@ -124,9 +180,9 @@ export function useChangeActions(repo: string) {
   const accept = useMutation({
     /** `head`: the head commit the person was shown (change.get's head.sha) */
     mutationFn: (a: { number: number; head: string; title: string; note?: string; step?: { index: number; total: number; stage: string } | null }) =>
-      call('change.accept', { repo, number: a.number, head_sha: a.head, ...(a.note ? { note: a.note } : {}) }),
+      acceptWhileUpdating({ repo, number: a.number, head: a.head, ...(a.note ? { note: a.note } : {}) }),
     onSuccess: (r, a) => confirmAccepted({ repo, title: a.title, result: r }, a.step),
-    onError: (e) => toast.error('Could not accept the change', { description: `${e instanceof Error ? e.message : String(e)} Nothing changed.` }),
+    onError: (e) => toast.error('Could not accept the change', { description: refusalWords(e) }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })
   const ask = useMutation({
