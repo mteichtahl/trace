@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { SignatureV4 } from '@smithy/signature-v4'
-import { API_FIRST_BYTE_MS, API_UNAVAILABLE, callApi, runtimeSession } from '../../src/web/call.js'
+import { API_FIRST_BYTE_MS, API_UNAVAILABLE, API_UPDATING, callApi, runtimeSession } from '../../src/web/call.js'
 import { API_READ_TIMEOUT_SECONDS } from '../../src/infra/web.js'
 import { appsyncPublisher, changeOf } from '../../src/web/events.js'
 import { EMPTY_SHA256, contentSha256 } from '../../src/web/content-hash.js'
@@ -229,6 +229,21 @@ describe('/api/call when the API runtime does not answer', () => {
     const slow: typeof fetch = async () => { await new Promise((r) => setTimeout(r, 10)); return new Response('{"ok":true,"result":[]}', { status: 200 }) }
     const a = await callApi({ ...w.deps, fetch: slow }, who, 'projects', {}, { firstByteMs: 1_000 })
     expect(a).toMatchObject({ status: 200, json: { ok: true, result: [] } })
+  })
+
+  it('the runtime\'s 424 while a deploy replaces it is 503 api_updating in plain words, never a bare status (test-esp32 #223)', async () => {
+    const w = world()
+    w.runtime.answers.set('change.accept', () => ({ status: 424, body: { message: 'Received error from runtime' } }))
+    const r = await w.serve(call({ action: 'change.accept', repo: 'acme/board', number: 44, head_sha: 'a'.repeat(40) }))
+    expect(r.status).toBe(503)
+    expect(r.json()).toEqual({ ok: false, error: API_UPDATING, code: 'api_updating' })
+    expect(w.logs.find((l) => l.warning === 'api runtime: updating or not ready')).toMatchObject({ action: 'change.accept', status: 424, body: expect.stringContaining('Received error') })
+    expect(w.publisher.sent).toEqual([])
+    // trace's own refusal with one of those statuses passes through as it is
+    w.runtime.answers.set('projects', () => ({ status: 503, body: { ok: false, error: 'sign-in cannot be checked just now: try again in a moment' } }))
+    const own = await w.serve(call({ action: 'projects' }))
+    expect(own.status).toBe(503)
+    expect(own.json()).toEqual({ ok: false, error: 'sign-in cannot be checked just now: try again in a moment' })
   })
 
   it('a call the caller abandons is not blamed on the runtime', async () => {

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import { time } from '@/lib/format'
+import { isUpdating } from '@/lib/http'
 import { useLiveStatus } from '@/lib/live'
 import { cn } from '@/lib/utils'
 
@@ -129,7 +130,11 @@ export function QueryError({ error, what, onRetry }: { error: unknown; what: str
   // the app was updated a few minutes before the API it calls (a deploy rebuilds the API's image after publishing the
   // pages): say so, rather than calling it a failure
   if (UPDATING.test(msg)) return <ErrorState title={`trace is finishing an update, so ${what} will be here in a few minutes.`} onRetry={onRetry} detail={msg} />
-  return <ErrorState title={`Could not load ${what}.`} onRetry={onRetry} detail={msg} />
+  // the API runtime replaced by a deploy (test-esp32 #223): the screen has already tried again for about a minute
+  const status = typeof (error as { status?: unknown } | null)?.status === 'number' ? (error as { status: number }).status : null
+  const detail = status && status !== 200 && !msg.includes(String(status)) ? `${msg} (HTTP ${status})` : msg
+  if (isUpdating(error)) return <ErrorState title={`trace is updating, so ${what} could not be loaded just now. Try again in a minute.`} onRetry={onRetry} detail={detail} />
+  return <ErrorState title={`Could not load ${what}.`} onRetry={onRetry} detail={detail} />
 }
 
 export function Partial({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {

@@ -55,6 +55,17 @@ export const API_UNAVAILABLE = 'trace\'s service is not answering just now. It m
 export const runtimeSession = (sub: string, build: string = process.env.TRACE_API_BUILD ?? ''): string =>
   `trace-web-${createHash('sha256').update(build ? `${sub}\n${build}` : sub).digest('hex').slice(0, 40)}`
 
+/**
+ * What the app shows when the API runtime answers with a status that means it is being replaced (AgentCore's 424 while a
+ * deploy updates the runtime, test-esp32 #223) and none of trace's own words.
+ */
+export const API_UPDATING = 'trace is updating, so it could not answer just now. Try again in a minute.'
+
+/** The runtime's statuses that mean it is updating or starting, not that the request was wrong. */
+export const RUNTIME_UPDATING: ReadonlySet<number> = new Set([424, 502, 503, 504])
+
+const Refusal = z.object({ ok: z.literal(false), error: z.string().min(1) }).loose()
+
 export interface CallAnswer { status: number; text: string; json: unknown }
 
 export interface Caller { config: WebConfig; token: string; sub: string }
@@ -154,7 +165,22 @@ export function callRoutes(deps: WebDeps, publisher?: () => Publisher) {
         stream: async (sink) => {
           let opened = false
           const open = (status: number): void => { if (!opened) { opened = true; sink.open(status, { ...JSON_HEADERS }) } }
-          const answer = await callApi(deps, who, action, args, { onStart: open, onChunk: (c) => sink.write(c) })
+          // a status that may be the runtime being replaced is held back until its body says whose it is: trace's
+          // own refusal passes through as it is; AgentCore's (424 while a deploy updates the runtime) becomes 503
+          // api_updating in plain words, never a bare status (test-esp32 #223)
+          let held = false
+          const answer = await callApi(deps, who, action, args, {
+            onStart: (status) => { held = RUNTIME_UPDATING.has(status); if (!held) open(status) },
+            onChunk: (c) => { if (!held) sink.write(c) },
+          })
+          if (held && !Refusal.safeParse(answer.json).success) {
+            deps.log({ warning: 'api runtime: updating or not ready', action, status: answer.status, runtime: who.config.apiRuntimeArn, body: answer.text.slice(0, 300) })
+            open(503)
+            sink.write(JSON.stringify({ ok: false, error: API_UPDATING, code: 'api_updating' }))
+          } else if (held) {
+            open(answer.status)
+            sink.write(answer.text)
+          }
           open(answer.status)
           sink.end()
           // a change to the prompts: the chat agent's instructions are asked for again (src/web/chat-prompts.ts)

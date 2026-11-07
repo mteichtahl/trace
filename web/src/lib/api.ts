@@ -5,7 +5,7 @@
  * or throws an ApiError carrying the words to show.
  */
 import { refresh, token } from './auth'
-import { HttpError, request } from './http'
+import { HttpError, isUpdating, request } from './http'
 import { READERS } from './readers'
 import type {
   ChatMessage, ChatThread, InboxItem, Journey, JobView, Member, MeDoc, Part, PersonClass, ProjectRef, Wait,
@@ -341,6 +341,25 @@ export async function api<T>(path: string, o: { method?: 'GET' | 'POST' | 'PUT' 
     if (e instanceof HttpError) throw new ApiError(e.message, e.status, e.code)
     throw e
   }
+}
+
+/**
+ * How a screen's read is tried again (every query's default, main.tsx). Never on a 401, no access or a 429 (trace's
+ * firewall counts every request, so a retry only keeps it shut longer). While trace is updating (the API runtime
+ * replaced by a deploy, test-esp32 #223) for about a minute, waiting longer each time; anything else twice.
+ */
+export function readRetry(n: number, e: unknown): boolean {
+  if (e instanceof ApiError && (e.noAccess || e.status === 401 || e.status === 429)) return false
+  return n < (isUpdating(e) ? UPDATING_DELAYS_MS.length : 2)
+}
+
+/** The waits between tries of a read while trace is updating: about a minute in all. */
+export const UPDATING_DELAYS_MS = [2_000, 4_000, 8_000, 15_000, 15_000, 15_000] as const
+
+/** How long before the next try of a read: TanStack Query's own (1 s, 2 s, …) unless trace is updating. */
+export function readRetryDelay(n: number, e: unknown): number {
+  if (isUpdating(e)) return UPDATING_DELAYS_MS[Math.min(n, UPDATING_DELAYS_MS.length - 1)]!
+  return Math.min(1000 * 2 ** n, 30_000)
 }
 
 /** A project's display name from its repo slug (owner/soil-sensor → Soil sensor). */
