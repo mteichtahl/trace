@@ -259,6 +259,12 @@ export interface RunJob {
 /** GitHub's own bookkeeping steps ("Set up job", "Post Run actions/checkout@v4", "Complete job"): not shown. */
 const BOOKKEEPING = /^(Set up job|Complete job|Post .+)$/
 
+/**
+ * A step left unnamed in the workflow: GitHub names it "Run " and the first line of its script ("Run for r in
+ * $RESULTS; do"), shell that means nothing to a person (test-esp32 log R4). Shown by its job's name instead.
+ */
+const UNNAMED = /^Run (?!actions\/|[\w.-]+\/[\w.-]+@)/
+
 /** A step's or job's state from GitHub's status and conclusion. Pure. */
 const stepState = (status: string, conclusion: string | null): UpdateStep['state'] =>
   status !== 'completed' ? (status === 'in_progress' ? 'running' : 'waiting')
@@ -273,7 +279,12 @@ export function updateSteps(jobs: readonly RunJob[]): UpdateStep[] {
   return jobs.flatMap((j) => {
     const steps = (j.steps ?? []).filter((s) => !BOOKKEEPING.test(s.name)).sort((a, b) => a.number - b.number)
     if (!steps.length) return [{ name: j.name, state: stepState(j.status, j.conclusion) }]
-    return steps.map((s) => ({ name: many ? `${j.name} › ${s.name}` : s.name, state: stepState(s.status, s.conclusion) }))
+    // an unnamed step is its job when it is the job's only step, else "step n" of the job
+    const own = (s: { name: string }, i: number): string | null => !UNNAMED.test(s.name) ? s.name : steps.length === 1 ? null : `step ${i + 1}`
+    return steps.map((s, i) => {
+      const n = own(s, i)
+      return { name: n === null ? j.name : many ? `${j.name} › ${n}` : n, state: stepState(s.status, s.conclusion) }
+    })
   })
 }
 
