@@ -1,5 +1,5 @@
 /**
- * Cost and time (/p/:id/cost, admins): spent, committed and forecast cost against the project's two budgets (the build
+ * Cost and time (/p/:id/cost, admins): spent so far in all (cloud work estimated, what AWS billed, orders paid), committed and forecast cost against the project's two budgets (the build
  * budget for the order, the cloud-work allowance for trace's own work: budgets.tsx), the stage timeline
  * (days and cloud use per stage, forecasts for what is queued), spend by job grouped by stage with work done again
  * marked (and the warning when the current stage nears its share of the cloud-work allowance), and the spend lines as a Data table. The chart is
@@ -25,7 +25,7 @@ import { useAction } from '@/lib/queries'
 import type { CostView } from '@/lib/types-s1'
 import { CloudBreakdown } from '@/components/project/cloud-cost'
 import { SpendByJob, SpendWarningCard } from '@/components/project/spend-by-job'
-import { Budgets } from '@/components/project/budgets'
+import { Budgets, SpentSoFar } from '@/components/project/budgets'
 import { forecastSource } from '@/components/project/gate-spend'
 import { cn } from '@/lib/utils'
 
@@ -68,12 +68,10 @@ function Cost() {
   ]
   return (
     <div className="pb-12">
-      <p className="mt-6 text-[15px]">
-        <span className="font-semibold">{m(d.spent.cloud)} of cloud work so far{d.spent.detail ? ' (estimated)' : ''}.</span> The order: {m(d.spent.orders)} paid, {m(d.committed)} committed and {m(d.forecast)} forecast. Each counts against its own budget.
-      </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile label="Cloud work to date" value={m(d.spent.cloud)} hint={d.spent.detail ? (d.spent.detail.actual ? `Estimate of model use and jobs · AWS billed ${money(d.spent.detail.actual.total, d.currency)} apart, for the project's tagged resources` : 'Estimate of model use and jobs · AWS has billed nothing tagged yet') : undefined} />
-        <Tile label="Orders paid" value={m(d.spent.orders)} />
+      {/* spent so far is all of it, the total first and its parts under it (Marc: "all costs in total") */}
+      <SpentSoFar cost={d} className="mt-6" />
+      <p className="mt-4 text-[15px]">The order: {m(d.spent.orders)} paid, {m(d.committed)} committed and {m(d.forecast)} forecast. The order counts against the build budget, trace's cloud work against its allowance.</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Tile label="Committed" value={m(d.committed)} hint="Orders placed, not paid yet" />
         <Tile label="Forecast for the order" value={m(d.forecast)} hint={((s) => (s ? `${s[0]!.toUpperCase()}${s.slice(1)}` : 'Boards × the target unit cost'))(forecastSource(d, d.orderCurrency ?? d.currency))} />
       </div>

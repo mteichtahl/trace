@@ -52,7 +52,8 @@ import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
 import { BuildHealth } from '@/components/project/build-health'
 import { SpendWarningCard } from '@/components/project/spend-by-job'
-import { Budgets } from '@/components/project/budgets'
+import { Budgets, SpentSoFar } from '@/components/project/budgets'
+import { spentTotal } from '@/components/project/gate-spend'
 import { ResignGates } from '@/components/project/resign-gates'
 
 export const Route = createFileRoute('/_app/p/$id/')({
@@ -283,7 +284,7 @@ function Overview() {
             <Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="mt-3 inline-block text-sm text-primary hover:underline">Full history</Link>
           </FoldRow>
           {(r || c || budgets) && (
-            <FoldRow label="Requirements and cost" count={[r && `${r.accepted}`, budgets ? money(budgets.spent.cloud ?? 0, budgets.currency) : c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
+            <FoldRow label="Requirements and cost" count={[r && `${r.accepted}`, budgets ? `${money(spentTotal(budgets).total, budgets.currency)} spent` : c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
               <div className="space-y-4"><SideSummary j={d} id={id} budgets={budgets} /></div>
             </FoldRow>
           )}
@@ -379,9 +380,10 @@ function SideSummary({ j, id, budgets }: { j: Journey; id: string; budgets?: Cos
       {budgets ? (
         <div>
           <div className="mb-2 flex items-baseline justify-between">
-            <h2 className="font-semibold">Budgets</h2>
+            <h2 className="font-semibold">Spend and budgets</h2>
             <Link to="/p/$id/cost" params={{ id }} className="text-sm text-primary hover:underline">Cost and time</Link>
           </div>
+          <SpentSoFar cost={budgets} compact className="mb-4" />
           <Budgets cost={budgets} id={id} compact />
         </div>
       ) : c && (
