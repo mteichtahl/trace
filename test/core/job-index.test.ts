@@ -4,7 +4,7 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { agentViews, cannot, controlsOf, jobViews } from '../../src/api/actions-jobs.js'
+import { agentViews, cannot, controlsOf, jobViews, stepWords } from '../../src/api/actions-jobs.js'
 import {
   type JobControl, type JobRow, OVERDUE_AFTER_S, STALE_AFTER_S, applyJobIndexSchema, changedSince, indexedHandle, isLive, loadControls, loadJobs, mayStart, moveUpOrder, pruneJobs, putControl,
   putJob, queueOrder, typicalSeconds, lastWords, markLost, tailOf, TAIL_LINES, endInTail, recordTailEnds, jobKindOf,
@@ -182,6 +182,23 @@ describe('the views', () => {
     expect(agentViews(jobs, stuckAt(AT - 1000), new Set(), new Set(), AT).find((x) => x.id === 'render')).toMatchObject({ status: 'stuck', says: 'Stuck: AccessDenied on batch:TagResource.' })
     // a person answered it (the answer is kept under the stuck item's id): settled, as Home and the inbox show it
     expect(agentViews(jobs, stuckAt(AT - 1000), new Set(['s']), new Set(), AT).find((x) => x.id === 'render')?.status).toBe('idle')
+  })
+})
+
+// test-esp32 #40: "trace is doing" showed the runtime's line, with the repository, the branch and "max 120 turns, 40 tools"
+describe('a running job\'s step, in words', () => {
+  it('says who is working, not the runtime\'s line', () => {
+    expect(stepWords('running the impl specialist on mteichtahl/test-esp32-e2e claude/task-x (max 120 turns, 40 tools)')).toBe('The Implementation specialist is working')
+    expect(stepWords('running the worker for the verify specialist (job job-mw2-abc123) on claude/task-x (max 200 turns, US$5)')).toBe("The worker is doing the Verification specialist's work on the repository")
+    expect(stepWords('running ERC (max 3 turns)')).toBe('running ERC')
+    expect(stepWords('running ERC')).toBe('running ERC')
+    expect(stepWords(null)).toBeNull()
+  })
+  it('is what the job views show', () => {
+    const d = db()
+    add(d, 'run', { state: 'running', agent: 'impl', startedAt: AT - 60, beatAt: AT - 5, step: 'running the impl specialist on acme/board claude/task-x (max 120 turns, 40 tools)' })
+    const v = jobViews(REPO, loadJobs(d), new Map(), { at: AT, sub: 'sub-m', write: true, pause: true, cancel: true })
+    expect(v[0]?.step).toBe('The Implementation specialist is working')
   })
 })
 
