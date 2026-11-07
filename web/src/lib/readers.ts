@@ -200,6 +200,7 @@ export function readChange(raw: unknown): ChangeDetail {
   return {
     ...readChangeSummary(c),
     summary: (Array.isArray(c.summary) ? c.summary : []).map(String).filter(Boolean),
+    ...(str(c.report) ? { report: str(c.report) as string } : {}),
     files: arr(c.files).map((f) => ({
       path: String(f.path ?? ''), status: (['added', 'modified', 'removed', 'renamed'].includes(String(f.status)) ? f.status : 'modified') as ChangeFile['status'],
       additions: Number(f.additions ?? 0), deletions: Number(f.deletions ?? 0), kind: FILE_KINDS.has(f.kind as ChangeFileKind) ? (f.kind as ChangeFileKind) : 'binary',

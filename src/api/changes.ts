@@ -37,6 +37,7 @@
 import { SPECIALIST_KINDS } from '../agents/kinds.js'
 import { type AppEdit, EDIT_WORDS, type EditKind } from '../core/app-edits.js'
 import { plumbingTitle } from '../core/change-contents.js'
+import { plainLine } from '../core/plain-words.js'
 import type { JobRow } from '../core/job-index.js'
 import { indexedHandle, isLive } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
@@ -130,6 +131,8 @@ export const annotationLevel = (l: string): CheckDetail['annotations'][number]['
 export interface Recommendation { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
 export interface ChangeDetail extends ChangeSummary {
   summary: string[]
+  /** the agents' own reports, as they wrote them (agentReport), behind More; absent: none */
+  report?: string
   files: { path: string; status: PullFile['status']; additions: number; deletions: number; kind: FileKind }[]
   checks_list: CheckLine[]
   /** the project's requirements it names (requirementsNamed) */
@@ -841,22 +844,34 @@ export function reportOf(summary: string | null | undefined): string {
 export function summaryBullets(o: { jobSummary: string | null; body: string; commits: readonly string[]; earlier?: readonly (string | null)[] }): string[] {
   // a record's or a merge commit's subject says nothing of the work: never a bullet (test-esp32 log #59, #154)
   const clean = (xs: readonly string[]): string[] => [...new Set(xs.map((x) => x.replace(/^[0-9a-f]{7,40}\s+/, '').replace(/<!--[\s\S]*?-->/g, '').trim()).filter((x) => x && !plumbingTitle(x)))].slice(0, 12)
+  // a report's line as a person reads it: the agent's internals left out, its report kept behind More (test-esp32 #24)
+  const plain = (xs: readonly string[]): string[] => clean(xs).map(plainLine).filter((x): x is string => x !== null)
   // every job's on the branch, oldest first: a change two jobs made is not said by the second one's alone (log #18)
   const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => reportOf(s)).filter(Boolean)
   if (jobs.length) {
     const lines = jobs.map((job) => {
       const l = firstList(job)
-      return clean(l.length ? l : job.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, '')).filter((x) => x.trim()))
+      return plain(l.length ? l : job.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, '')).filter((x) => x.trim()))
     })
     // several jobs' reports read as one would contradict each other ("Changes 2 requirements", then an earlier job's "I
     // did not touch any requirement's words", log #166): each is labelled with the job it is from
     const said = lines.filter((l) => l.length)
-    if (said.length < 2) return said.flat().slice(0, 12)
-    return [...new Set(said.flatMap((l, i) => l.map((x) => `**${jobLabel(i, said.length)}:** ${x}`)))].slice(0, 12)
+    if (said.length === 1) return said.flat().slice(0, 12)
+    if (said.length > 1) return [...new Set(said.flatMap((l, i) => l.map((x) => `**${jobLabel(i, said.length)}:** ${x}`)))].slice(0, 12)
   }
-  const fromBody = clean(firstList(o.body))
+  const fromBody = plain(firstList(o.body))
   if (fromBody.length) return fromBody
   return clean(o.commits.map((m) => m.split('\n')[0] ?? ''))
+}
+
+/**
+ * The agents' own reports on a change, for More under "What trace did" (test-esp32 #24): each job's, oldest first,
+ * without the runtime's header, labelled when there are several. Null: no job wrote one.
+ */
+export function agentReport(o: { jobSummary: string | null; earlier?: readonly (string | null)[] }): string | null {
+  const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => reportOf(s)).filter(Boolean)
+  if (!jobs.length) return null
+  return jobs.length === 1 ? jobs[0]! : jobs.map((j, i) => `**${jobLabel(i, jobs.length)}**\n\n${j}`).join('\n\n')
 }
 
 /** Which of a change's jobs a report is from, oldest first: "Earlier job", "Latest job", or "Job 2 of 3". */

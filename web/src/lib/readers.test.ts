@@ -258,3 +258,12 @@ describe('a job waiting on a question (#197)', () => {
     expect(readJob({ id: 'h.w1', workerJobId: 'w1', title: 'Check the ERC', state: 'running', controls: [] }).workerJobId).toBe('w1')
   })
 })
+
+// test-esp32 #24: the agent's own report reaches the change page, behind More
+describe('a change\'s agent report', () => {
+  it('is read when there is one, and left out when there is none', () => {
+    const base = { number: 2, title: 't', summary: ['Updated INT-8dd269'], files: [], checks_list: [], requirements: [], recommendation: { verdict: 'none', why: '' } }
+    expect((READERS['change.get']!({ ...base, report: '- changed_since: false' }, { repo: 'acme/x', number: 2 }) as { report?: string }).report).toBe('- changed_since: false')
+    expect('report' in (READERS['change.get']!(base, { repo: 'acme/x', number: 2 }) as object)).toBe(false)
+  })
+})
