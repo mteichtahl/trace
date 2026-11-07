@@ -52,6 +52,8 @@ export interface Finding {
   check: 'courtyard_overlap' | 'outside_edge' | 'edge_clearance' | 'keepout' | 'decoupling_distance' | 'power_pin_without_decoupling' | 'connector_not_at_edge' | 'no_courtyard' | 'courtyard_open'
   severity: 'error' | 'warning' | 'info'
   refs: string[]
+  /** the pin it is about (power_pin_without_decoupling: "U2.4") */
+  pin?: string
   message: string
   value_mm?: number
   limit_mm?: number
@@ -152,6 +154,8 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
   const padsOf = (ref: string): Pad[] => Object.values(b.pads).flat().filter((p) => p.ref === ref)
   const decoupling: { cap: string; value: string; net: string; nearest_pin: string | null; distance_mm: number | null; ok: boolean | null }[] = []
   const covered = new Set<string>()
+  // each decoupling capacitor's pad on its rail, so a pin with none near can say which is nearest
+  const capPads: { cap: string; net: string; pad: Pad; side: PlacedFootprint['side'] }[] = []
   for (const f of fps) {
     if (!o.decap_refs.test(f.ref) || f.dnp) continue
     const uf = capacitanceUf(f.value)
@@ -162,6 +166,7 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
     const pwr = nets.find((n) => n !== gnd && !o.ground.test(n))
     if (!gnd || !pwr || nets.length !== 2 || !o.power.test(pwr)) continue // a filter capacitor on a signal is not decoupling
     const capPad = pads.find((p) => p.net === pwr) as Pad
+    capPads.push({ cap: f.ref, net: pwr, pad: capPad, side: f.side })
     const pins = (b.pads[pwr] ?? []).filter((p) => o.ic_refs.test(p.ref) && byRef.has(p.ref) && byRef.get(p.ref)?.side === f.side)
     let best: { pin: string; d: number } | null = null
     for (const p of pins) {
@@ -174,12 +179,27 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
     decoupling.push({ cap: f.ref, value: f.value, net: pwr, nearest_pin: best?.pin ?? null, distance_mm: best ? r3(best.d) : null, ok })
     if (best && ok === false) findings.push({ check: 'decoupling_distance', severity: 'warning', refs: [f.ref, best.pin.split('.')[0] as string], message: `${f.ref} (${f.value} on ${pwr}) is ${r3(best.d)} mm from the nearest ${pwr} pin, ${best.pin} (want ≤ ${o.decap_max_mm} mm)`, value_mm: r3(best.d), limit_mm: o.decap_max_mm })
   }
-  // IC power pins on a net that has decoupling somewhere, but none near this pin
+  // IC power pins on a net that has decoupling somewhere, but none near this pin: each pin once (a part's two pads of
+  // one number, such as a regulator's tab and its pin 2, are one pin), with the nearest capacitor on its rail, so a
+  // reviewer can judge it (test-esp32 #130: "power_pin_without_decoupling 4" named no pin)
   const decapNets = new Set(decoupling.map((d) => d.net))
   for (const net of decapNets) {
+    const byPin = new Map<string, Pad[]>()
     for (const p of b.pads[net] ?? []) {
-      if (!o.ic_refs.test(p.ref) || !byRef.has(p.ref) || covered.has(`${p.ref}.${p.num}`)) continue
-      findings.push({ check: 'power_pin_without_decoupling', severity: 'info', refs: [p.ref], message: `${p.ref}.${p.num} (${net}) has no decoupling capacitor within ${o.decap_max_mm} mm`, at: [r3(p.x), r3(p.y)] })
+      const pin = `${p.ref}.${p.num}`
+      if (o.ic_refs.test(p.ref) && byRef.has(p.ref) && !covered.has(pin)) byPin.set(pin, [...(byPin.get(pin) ?? []), p])
+    }
+    for (const [pin, pads] of byPin) {
+      const p = pads[0] as Pad
+      let near: { cap: string; d: number; side: boolean } | null = null
+      for (const c of capPads.filter((x) => x.net === net)) {
+        for (const q of pads) {
+          const d = dist(c.pad, q)
+          if (!near || d < near.d) near = { cap: c.cap, d, side: c.side === byRef.get(p.ref)?.side }
+        }
+      }
+      const nearest = near ? `; the nearest is ${near.cap}, ${r3(near.d)} mm away${near.side ? '' : ' on the other side'}` : ''
+      findings.push({ check: 'power_pin_without_decoupling', severity: 'info', refs: [p.ref], pin, message: `${pin} (${net}) has no decoupling capacitor within ${o.decap_max_mm} mm${nearest}`, at: [r3(p.x), r3(p.y)], ...(near ? { value_mm: r3(near.d), limit_mm: o.decap_max_mm } : {}) })
     }
   }
 
@@ -199,6 +219,35 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
   const counts: Record<string, number> = {}
   for (const x of findings) counts[x.check] = (counts[x.check] ?? 0) + 1
   return { findings, counts, decoupling, connectors }
+}
+
+/**
+ * A placement check's result in one line: errors and warnings apart from notes (severity info), each check with its
+ * count and what it is about, the pin for a power pin, else the first part named. "power_pin_without_decoupling 4"
+ * alone left a reviewer unable to judge it (test-esp32 #130). At most six names a check; the rest are counted.
+ */
+export function placementSummary(findings: readonly Finding[]): string {
+  const part = (sev: Finding['severity'][]): string => {
+    const by = new Map<string, string[]>()
+    for (const f of findings) {
+      if (!sev.includes(f.severity)) continue
+      const names = by.get(f.check) ?? []
+      const name = f.pin ?? f.refs.join('/')
+      if (name && !names.includes(name)) names.push(name)
+      by.set(f.check, names)
+    }
+    return [...by].map(([check, names]) => {
+      const n = findings.filter((f) => f.check === check && sev.includes(f.severity)).length
+      const shown = names.slice(0, 6).join(', ')
+      return `${check} ${n}${names.length ? ` (${shown}${names.length > 6 ? ` and ${names.length - 6} more` : ''})` : ''}`
+    }).join(', ')
+  }
+  const errors = findings.filter((f) => f.severity === 'error').length
+  const warnings = findings.filter((f) => f.severity === 'warning').length
+  const notes = findings.filter((f) => f.severity === 'info').length
+  const issues = part(['error', 'warning'])
+  const info = part(['info'])
+  return `${errors} error(s), ${warnings} warning(s)${issues ? `: ${issues}` : ''}${notes ? `; ${notes} note(s): ${info}` : ''}${!issues && !notes ? ': clean' : ''}`
 }
 
 // ------------------------------------------------------------------ lengths
@@ -248,17 +297,70 @@ export function netClasses(proPath: string | null): (net: string) => string | nu
   }
 }
 
-/** KiCad's own pairing: the same name ending in + and -, or in P and N. */
+/** KiCad's own pairing: the same name ending in + and -, or in P and N; and USB's DP and DM (D minus). */
 export function diffPairs(nets: readonly string[]): { p: string; n: string }[] {
   const set = new Set(nets)
   const out: { p: string; n: string }[] = []
   for (const net of nets) {
     const m = /^(.*)(\+|P)$/.exec(net)
     if (!m || !m[1]) continue
-    const other = `${m[1]}${m[2] === '+' ? '-' : 'N'}`
-    if (set.has(other)) out.push({ p: net, n: other })
+    const others = m[2] === '+' ? [`${m[1]}-`] : [`${m[1]}N`, ...(/D_?$/.test(m[1]) ? [`${m[1]}M`] : [])]
+    const other = others.find((o) => set.has(o))
+    if (other) out.push({ p: net, n: other })
   }
   return out.sort((a, b) => a.p.localeCompare(b.p))
+}
+
+// ------------------------------------------------------------------ signal classes
+
+/** The signal classes a pair gets a skew tolerance from when nothing else gives one. */
+export const PAIR_CLASSES = ['usb2_ls', 'usb2_fs', 'usb2_hs'] as const
+export type PairClass = (typeof PAIR_CLASSES)[number]
+export type UsbSpeed = 'low' | 'full' | 'high'
+
+/**
+ * The default skew tolerance of each class, with its basis. FR-4 carries a signal about 6.7 ps per mm. Full and Low
+ * Speed edges are nanoseconds long, so a few mm of skew is harmless there; High Speed is the tight one.
+ */
+export const CLASS_TOLERANCE: Readonly<Record<PairClass, { name: string; tolerance_mm: number; skew_ps: number; basis: string }>> = {
+  usb2_ls: {
+    name: 'USB 2.0 Low Speed', tolerance_mm: 15, skew_ps: 100,
+    basis: 'USB 2.0 Low Speed, 1.5 Mbit/s (667 ns bit): the USB 2.0 specification has low-speed edges rise and fall in 75 to 300 ns, so 100 ps of D+/D- skew (about 15 mm of FR-4 at 6.7 ps/mm) is negligible.',
+  },
+  usb2_fs: {
+    name: 'USB 2.0 Full Speed', tolerance_mm: 15, skew_ps: 100,
+    basis: 'USB 2.0 Full Speed, 12 Mbit/s (83 ns bit): the USB 2.0 specification has full-speed edges rise and fall in 4 to 20 ns, so 100 ps of D+/D- skew (about 15 mm of FR-4 at 6.7 ps/mm) is under 3 % of the fastest edge and does not move the crossover.',
+  },
+  usb2_hs: {
+    name: 'USB 2.0 High Speed', tolerance_mm: 1.27, skew_ps: 8.5,
+    basis: 'USB 2.0 High Speed, 480 Mbit/s (2.08 ns bit, edges from 500 ps): the USB 2.0 specification allows a cable pair 100 ps of skew, and common layout guidance matches D+ and D- on the board within 50 mil (1.27 mm, about 8.5 ps).',
+  },
+}
+
+const USB_CLASS: Readonly<Record<UsbSpeed, PairClass>> = { low: 'usb2_ls', full: 'usb2_fs', high: 'usb2_hs' }
+
+/** Whether a pair's names say USB: USB in either name, or D+/D-, DP/DN, DP/DM on their own. */
+export function usbPair(p: string, n: string): boolean {
+  const base = (x: string): string => x.replace(/^.*\//, '')
+  return [p, n].some((x) => /USB/i.test(base(x))) || (/^D_?[+P]$/i.test(base(p)) && /^D_?[-NM]$/i.test(base(n)))
+}
+
+/**
+ * The USB speed the project states, from its requirements and intent (each { id, text }): High Speed or 480 Mbit/s,
+ * Full Speed or 12 Mbit/s, Low Speed or 1.5 Mbit/s, in a text that names USB. The fastest one stated wins.
+ */
+export function usbSpeedFrom(texts: readonly { id: string; text: string }[]): { speed: UsbSpeed; from: string } | null {
+  const order: [UsbSpeed, RegExp][] = [
+    ['high', /\bhigh[- ]?speed\b|\b480\s*Mb(it)?(\/s|ps)\b/i],
+    ['full', /\bfull[- ]?speed\b|\b12\s*Mb(it)?(\/s|ps)\b/i],
+    ['low', /\blow[- ]?speed\b|\b1\.5\s*Mb(it)?(\/s|ps)\b/i],
+  ]
+  const usb = texts.filter((t) => /\bUSB\b/i.test(t.text))
+  for (const [speed, re] of order) {
+    const hit = usb.find((t) => re.test(t.text))
+    if (hit) return { speed, from: hit.id }
+  }
+  return null
 }
 
 export interface NetLength { net: string; length_mm: number; delay_ps: number | null; from: string | null; to: string | null; trace_mm: number; via_barrel_mm: number | null; vias: number; unreached: string[]; routed: boolean }
@@ -288,12 +390,42 @@ export interface LengthOptions {
   include_vias: boolean
   rules: DruRule[]
   netClass: (net: string) => string | null
+  /** each pair's class, given; else USB pairs are USB 2.0 at usb_speed */
+  classes?: Readonly<Record<string, PairClass>> | undefined
+  usb_speed?: { speed: UsbSpeed; from: string } | null | undefined
+  /** nets (or globs) that are not pairs to match, though their names pair */
+  ignore?: readonly string[] | undefined
 }
 
-export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions): { pairs: unknown[]; groups: unknown[]; lengths: unknown[]; failures: number; unknown: number } {
+/** A pair's signal class and why: given for it, or a USB pair at the stated speed; null when not known. */
+function pairClass(pr: { p: string; n: string }, o: LengthOptions): { cls: PairClass; from: string } | { cls: null; why: string } | null {
+  const given = o.classes?.[pr.p]
+  if (given) return { cls: given, from: 'given for the pair' }
+  if (!usbPair(pr.p, pr.n)) return null
+  if (o.usb_speed) return { cls: USB_CLASS[o.usb_speed.speed], from: o.usb_speed.from }
+  return { cls: null, why: `a USB pair, but no requirement states its speed: Full Speed allows ${CLASS_TOLERANCE.usb2_fs.tolerance_mm} mm, High Speed ${CLASS_TOLERANCE.usb2_hs.tolerance_mm} mm (give usb_speed or a tolerance)` }
+}
+
+export interface LengthVerdict {
+  pairs: unknown[]; groups: unknown[]; lengths: unknown[]; failures: number; unknown: number
+  /** pairs on the board by name that nothing checked and ignore does not name */
+  unchecked: { p: string; n: string }[]
+  ignored: { p: string; n: string }[]
+  /** why the check is not met, in plain words; empty when it is */
+  reasons: string[]
+  /** no pair or group on the board, so there is nothing to match */
+  nothing_to_match: boolean
+}
+
+export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions): LengthVerdict {
   const lens = new Map<string, NetLength>()
   const len = (n: string): NetLength => lens.get(n) ?? lens.set(n, netLength(b, n, o.include_vias)).get(n) as NetLength
-  const pairList: { p: string; n: string; max_skew_mm?: number | undefined }[] = [...(o.pairs ?? []), ...(o.auto_pairs ? diffPairs(nets).filter((d) => !(o.pairs ?? []).some((q) => q.p === d.p)) : [])]
+  const ignoreRes = (o.ignore ?? []).map(glob)
+  const ignoredNet = (n: string): boolean => ignoreRes.some((re) => re.test(n) || re.test(n.replace(/^\//, '')))
+  const onBoard = diffPairs(nets)
+  const ignored = onBoard.filter((d) => ignoredNet(d.p) || ignoredNet(d.n))
+  const candidates = onBoard.filter((d) => !ignored.includes(d))
+  const pairList: { p: string; n: string; max_skew_mm?: number | undefined }[] = [...(o.pairs ?? []), ...(o.auto_pairs ? candidates.filter((d) => !(o.pairs ?? []).some((q) => q.p === d.p)) : [])]
   let failures = 0
   let unknown = 0
   const pairs = pairList.map((pr) => {
@@ -306,8 +438,12 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
     const iN = netItems(b, pr.n, o.netClass(pr.n), true)
     const rule = o.rules.find((r) => r.skew_max_mm !== undefined && ruleGoverns(r, ip, iN) && ruleGoverns(r, iN, ip))
     const given = pr.max_skew_mm
+    // the signal class gives a default with its basis (test-esp32 #163, #187): a USB Full Speed pair is not held to
+    // a High Speed figure, and a pair nothing gives a tolerance to is not met, not passed
+    const sc = pairClass(pr, o)
+    const byClass = sc?.cls ? { v: CLASS_TOLERANCE[sc.cls].tolerance_mm, from: `${CLASS_TOLERANCE[sc.cls].name} default (speed from ${sc.from})` } : null
     const tol: { v: number; from: string } | null = given !== undefined ? { v: given, from: 'given for the pair' }
-      : o.max_skew_mm !== undefined ? { v: o.max_skew_mm, from: 'max_skew_mm' } : rule ? { v: rule.skew_max_mm as number, from: `rule ${rule.name}` } : null
+      : o.max_skew_mm !== undefined ? { v: o.max_skew_mm, from: 'max_skew_mm' } : rule ? { v: rule.skew_max_mm as number, from: `rule ${rule.name}` } : byClass
     const routed = a.routed && c.routed && !a.unreached.length && !c.unreached.length
     const status = !routed ? 'unrouted' : tol === null ? 'no_tolerance' : skew <= tol.v + 1e-9 ? 'pass' : 'fail'
     if (status === 'fail' || status === 'unrouted') failures++
@@ -316,6 +452,8 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
       p: pr.p, n: pr.n, net_class: cls, p_mm: a.length_mm, n_mm: c.length_mm, skew_mm: skew, p_path: ends(a), n_path: ends(c),
       ...(a.delay_ps !== null && c.delay_ps !== null ? { skew_ps: r3(Math.abs(a.delay_ps - c.delay_ps)) } : {}),
       tolerance_mm: tol?.v ?? null, tolerance_from: tol?.from ?? null, status,
+      ...(sc?.cls ? { signal_class: sc.cls, class_tolerance_mm: CLASS_TOLERANCE[sc.cls].tolerance_mm, basis: CLASS_TOLERANCE[sc.cls].basis } : {}),
+      ...(sc && !sc.cls ? { why: sc.why } : {}),
     }
   })
   const groups = (o.groups ?? []).map((g) => {
@@ -340,7 +478,22 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
       ...(rule ? { rule: rule.name, rule_length_mm: rule.length } : {}), status, out_of_tolerance: bad.map((r) => r.net),
     }
   })
-  return { pairs, groups, lengths: [...lens.values()], failures, unknown }
+  const checked = new Set(pairList.flatMap((x) => [x.p, x.n]).concat(groups.flatMap((g) => g.nets.map((x) => x.net))))
+  const unchecked = candidates.filter((d) => !checked.has(d.p) || !checked.has(d.n))
+  const both = (x: { p: string; n: string }): string => `${x.p}/${x.n}`
+  const reasons: string[] = []
+  for (const pr of pairs) {
+    if (pr.status === 'fail') reasons.push(`${both(pr)} is ${pr.skew_mm} mm apart, over its ${pr.tolerance_mm} mm (${pr.tolerance_from})`)
+    if (pr.status === 'unrouted') reasons.push(`${both(pr)} is not fully routed`)
+    if (pr.status === 'no_tolerance') reasons.push(`${both(pr)} has no matched-length rule${pr.why ? `: ${pr.why}` : ''}`)
+  }
+  for (const g of groups) {
+    if (g.status === 'fail') reasons.push(`group ${g.name}: ${g.out_of_tolerance.join(', ')} out of tolerance`)
+    if (g.status === 'unrouted') reasons.push(`group ${g.name} is not fully routed`)
+    if (g.status === 'no_tolerance') reasons.push(`group ${g.name} has no tolerance`)
+  }
+  for (const d of unchecked) reasons.push(`${both(d)} is a differential pair by name and was not checked (check it, or name it in ignore)`)
+  return { pairs, groups, lengths: [...lens.values()], failures, unknown, unchecked, ignored, reasons, nothing_to_match: !pairs.length && !groups.length && !unchecked.length }
 }
 
 // ------------------------------------------------------------------ floorplan
