@@ -83,16 +83,22 @@ function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): stri
 }
 
 /**
- * A question's address with the option its "Use <option>" button names (`&option=<id>`): the skill opens with it
+ * A question's address with the option its "Use <option>" (or "Use the recommendation") button names
+ * (`&option=<id>`): the skill opens with it
  * chosen. The button names the recommended option (src/core/journey.ts nextStep); any other button, or a question
  * with no such option, leaves the address as it is. Pure.
  */
+/** The next step's button for a question's recommended option whose label is a sentence (src/core/journey.ts). */
+export const USE_RECOMMENDED = 'Use the recommendation'
+
 export function withChosen(to: string, questions: unknown, id: string, button: string | null | undefined): string {
   if (!button?.startsWith('Use ')) return to
   const q = (Array.isArray(questions) ? questions : []).find((x): x is Obj => isObj(x) && String(x.id) === id)
   const label = button.slice('Use '.length)
-  const rec = q && isObj(q.recommended) && String(q.recommended.label) === label ? q.recommended
-    : arr(q?.options).find((o) => String(o.label) === label)
+  const same = (x: unknown): boolean => String(x).trim().replace(/\.$/, '') === label
+  // "Use the recommendation" (src/core/journey.ts USE_RECOMMENDED): the recommended option, whose label is a sentence
+  const rec = q && isObj(q.recommended) && (button === USE_RECOMMENDED || same(q.recommended.label)) ? q.recommended
+    : arr(q?.options).find((o) => same(o.label))
   if (!rec || !str(rec.id)) return to
   return `${to}${to.includes('?') ? '&' : '?'}option=${encodeURIComponent(String(rec.id))}`
 }

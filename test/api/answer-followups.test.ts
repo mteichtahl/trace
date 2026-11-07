@@ -130,7 +130,7 @@ describe('an answer to a job that ran on another specialist\'s branch (test-esp3
     const job = started.at(-1) as Started
     expect(job).toMatchObject({ kind: 'task', agent: 'impl', stackOn: HANDOFF, request: expect.stringMatching(/holds the Documentation specialist's work, so this work is a change of its own[\s\S]*Never push to claude\/handoff-/) })
     expect(job.branch).toBeUndefined()
-    expect(String(r.summary)).toMatch(/carries on with it on a change of its own, on top of claude\/handoff-hoac40d08bf1664e/)
+    expect(String(r.summary)).toMatch(/carries on with it, in a change of its own on top of the one it checked\./)
     const n = workerId(String(r.jobId))
     expect((await followups()).find((x) => x.question === asked)).toMatchObject({ branch: HANDOFF, stackOn: HANDOFF, job: n, agent: 'impl' })
 

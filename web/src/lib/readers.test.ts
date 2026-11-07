@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import answers from './api-answers.json'
-import { READERS, readFileUrl, readJob, readJourney, withChosen } from './readers'
+import { READERS, USE_RECOMMENDED, readFileUrl, readJob, readJourney, withChosen } from './readers'
 import type { InboxItem, Journey, Member, MeDoc, ProjectJobs } from './types'
 import type { JourneyMore } from './types-s1'
 
@@ -235,6 +235,11 @@ describe('"Use <option>" arrives with the option chosen (#198)', () => {
     // the button may name another of its options
     expect(withChosen(to, qs, 'aq1', 'Use VCC-GND')).toBe(`${to}&option=a`)
     expect(withChosen('/p/x/do/question-answer', qs, 'aq1', 'Use GND-VCC')).toBe('/p/x/do/question-answer?option=b')
+  })
+
+  it('"Use the recommendation" (a recommended option whose label is a sentence) chooses it too (test-esp32-run2 log R18)', () => {
+    const long = [{ id: 'aq2', recommended: { id: 'r', label: 'Re-run the I20 note and Q4 closure after the earlier job lands.' }, options: [{ id: 'r', label: 'Re-run the I20 note and Q4 closure after the earlier job lands.' }] }]
+    expect(withChosen(to, long, 'aq2', USE_RECOMMENDED)).toBe(`${to}&option=r`)
   })
 
   it('leaves the address alone for Answer, an option it does not have, or another question', () => {

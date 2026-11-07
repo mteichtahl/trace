@@ -153,7 +153,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         {rec.detail && <span className="text-foreground/80"> {rec.detail}</span>}
       </p>
       {rec.waiver && <WaiverNote text={rec.waiver} />}
-      {(decision.why || decision.evidence?.length) && (
+      {(decision.why || (decision.evidence?.length ?? 0) > 0) && (
         <div className="mt-3">
           <p className="text-xs text-muted-foreground">Why</p>
           {decision.why && (

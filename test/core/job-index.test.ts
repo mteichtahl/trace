@@ -193,6 +193,13 @@ describe('a running job\'s step, in words', () => {
     expect(stepWords('running ERC (max 3 turns)')).toBe('running ERC')
     expect(stepWords('running ERC')).toBe('running ERC')
     expect(stepWords(null)).toBeNull()
+    // a tool call's line: what kind of step it is, never the tool's name and what it was given (test-esp32-run2 log R18)
+    expect(stepWords('tool: memory.remember (2026-11-07: Drafted 23 proposed requirements (REQ-55af0c … REQ-8e52cd))')).toBe('Saving notes')
+    expect(stepWords('tool: Bash (kicad-cli pcb drc board.kicad_pcb)')).toBe('Running a command')
+    expect(stepWords('tool: kicad.erc')).toBe('Checking the design')
+    expect(stepWords('still running: Bash (12 min so far)')).toBe('Running a command (a long step)')
+    expect(stepWords('tool Read returned an error')).toBe("Reading the project's files: a step failed, and the agent carries on")
+    expect(stepWords('tool: some_new_tool (x)')).toBe('Using its tools')
   })
   it('is what the job views show', () => {
     const d = db()
