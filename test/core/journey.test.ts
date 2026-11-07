@@ -104,6 +104,17 @@ describe('the journey record', () => {
     expect(nextStep(rec(), USER)).toMatchObject({ kind: 'task', belongs_to: 'you', ref: { kind: 'criterion', id: 'layout.renders' } })
   })
 
+  it('the order sheet waits for the package and today\'s stock: Fabricate says trace is working until both are met (#220)', () => {
+    for (const g of ['define', 'architect', 'capture', 'prove', 'layout', 'signoff']) { meetAll(g); openAll(g); signGate(db, g, signer) }
+    expect(rec().journey.currentStage).toBe('fabricate')
+    expect(nextStep(rec(), USER)).toMatchObject({ kind: 'working', belongs_to: 'trace', ref: { kind: 'criterion', id: 'fabricate.order.package' } })
+    expect(reviewWaitsOn(rec(), 'fabricate.order.sheet').map((c) => c.id)).toEqual(['fabricate.order.package', 'fabricate.order.stock'])
+    setCriterion(db, 'fabricate.order.package', 'met', [], 'trace')
+    expect(nextStep(rec(), USER)).toMatchObject({ kind: 'working', ref: { kind: 'criterion', id: 'fabricate.order.stock' } })
+    setCriterion(db, 'fabricate.order.stock', 'met', [], 'trace')
+    expect(nextStep(rec(), USER)).toMatchObject({ kind: 'task', belongs_to: 'you', ref: { kind: 'criterion', id: 'fabricate.order.sheet' } })
+  })
+
   it('a blocking question comes first, with the recommended answer as its button', () => {
     const q = askQuestion(db, { askedBy: 'the Analog specialist', text: 'What is the sensor\'s supply range?', blocks: 'sizing the regulator', options: [
       { id: 'b', label: '1.8 to 3.6 V', why: 'the widest' }, { id: 'a', label: '2.7 to 3.6 V', recommended: true, why: 'from the datasheet' },

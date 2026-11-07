@@ -88,7 +88,7 @@ export const GATES: readonly GateDef[] = [
   { id: 'fabricate.order', stage: 'fabricate', name: 'order approval', criteria: [
     { key: 'package', text: 'The release package is built and stored.', owner: 'trace', evidence: 'the release package' },
     { key: 'stock', text: 'Stock and prices are checked again today, and every line is available.', owner: 'trace', evidence: 'today\'s stock check' },
-    { key: 'sheet', text: 'The order sheet matches the release.', owner: 'person', evidence: 'the order sheet' },
+    { key: 'sheet', text: 'The order sheet matches the release.', owner: 'person', evidence: 'the order sheet', after: ['package', 'stock'] },
   ] },
   { id: 'fabricate.received', stage: 'fabricate', name: 'boards received', criteria: [
     { key: 'inspected', text: 'The boards are received and inspected.', owner: 'person', evidence: 'the inspection record' },

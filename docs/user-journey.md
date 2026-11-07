@@ -89,6 +89,7 @@ Each stage lists what the person does, what trace does, what the person sees, an
 - **Person:** signs the order gate, then uploads the package and pays on JLCPCB's site, and records the order number in trace.
 - **trace:** prepares everything JLCPCB needs (Gerbers, BOM and CPL in its columns, board options), re-checks LCSC stock and price on the day, and tracks the order once its number is recorded.
 - **Sees:** an order sheet with the files, options, expected cost and any stock change since sign-off; then the order's status.
+- **Starts:** signing the release approval starts the Implementation agent on the package (`kicad.fab`) and today's stock check (`parts.bom_check`, then `fabricate.order.stock`). The person's "The order sheet matches the release" waits for both: until they are met, the next step is trace's, and trace starts that work itself when nothing is working on it.
 - **Gate, order approval:** an admin signs before the files are handed over. trace never pays. The stage closes at a second gate, boards received and inspected with firmware and bench ready (see Using the fab wait).
 
 ### 9. Bring up
