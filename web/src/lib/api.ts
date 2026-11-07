@@ -177,6 +177,12 @@ export interface Actions {
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null; quote?: string }; result: { ok: true; wait?: Wait; quote?: { id: string; on: string; total: number; currency: string; difference: number | null } | null } }
   /** record a JLCPCB quote the person read off JLCPCB (any time at Fabricate); every one is kept */
   'quote.record': { args: Repo & import('./types-s1').QuoteInput; result: { ok: true; quote: import('./types-s1').QuoteView } }
+  /** correct a quote entered wrong: a new one takes its place, the old one kept to see (an agent's is confirmed first) */
+  'quote.correct': { args: Repo & import('./types-s1').QuoteInput & { quote: string; reason?: string }; result: { ok: true; quote: import('./types-s1').QuoteView } }
+  /** withdraw a quote recorded by mistake, with the reason: kept to see, out of the totals */
+  'quote.withdraw': { args: Repo & { quote: string; reason: string }; result: { ok: true; quote: import('./types-s1').QuoteView } }
+  /** confirm an agent's quote (from the person's words) into the journey record, so an order links to it */
+  'quote.confirm': { args: Repo & { quote: string }; result: { ok: true; quote: import('./types-s1').QuoteView } }
   /** the stage timeline; money for admins (cloud estimates and actuals from the cost ledger, orders); notes */
   'cost.get': { args: Repo; result: import('./types-s1').CostView }
   // the build after payment and cloud cost (src/api/actions-build.ts, actions-cost.ts)

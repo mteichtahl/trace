@@ -9,6 +9,9 @@
  *   quotes          each JLCPCB quote as the person read it off JLCPCB (src/core/quotes.ts): the date, the total and
  *                   its currency, the breakdown lines given, the quantity and options it was for, the release and the
  *                   parts check it was made against, a link or reference, why, and the order placed against it
+ *   quote_notes     what happened to a quote after it was recorded (src/core/quotes.ts), each kept: corrected (by a new
+ *                   quote, with what was wrong), withdrawn as a mistake (with the reason; kept out of the totals), or an
+ *                   agent's quote confirmed by the person into this record (with the words it was from)
  *   board_checks    the incoming inspection's result per board and check: pass, fail, or marked (a hand-placed part
  *                   left off on purpose), with the reference a fault is at and a photo
  *
@@ -79,4 +82,16 @@ CREATE TABLE IF NOT EXISTS quotes (
   by TEXT NOT NULL, at REAL NOT NULL, updated REAL NOT NULL
 );`, merge: newer('quotes', 'id', QUOTE_COLS) })
 
-export const BUILD_TABLES = ['order_tracking', 'boards', 'board_checks', 'quotes'] as const
+// written once and never changed: merged as a union
+ensureProjectSchema({ table: 'quote_notes', sql: `
+CREATE TABLE IF NOT EXISTS quote_notes (
+  id TEXT PRIMARY KEY,
+  quote_id TEXT NOT NULL,         -- the quote it is about: quotes.id, or agent_quotes.id when confirmed
+  kind TEXT NOT NULL CHECK (kind IN ('corrected', 'withdrawn', 'confirmed')),
+  by_quote TEXT,                  -- quotes.id that takes its place: the correction, or the person's copy of an agent's
+  reason TEXT,                    -- corrected: what was wrong; withdrawn: why; confirmed: the words the agent had
+  by TEXT NOT NULL, at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS quote_notes_quote ON quote_notes(quote_id);` })
+
+export const BUILD_TABLES = ['order_tracking', 'boards', 'board_checks', 'quotes', 'quote_notes'] as const
