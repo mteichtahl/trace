@@ -2,8 +2,8 @@
  * A stepped skill drawn from the table alone (Requirements review, Architecture choice, Pin plan review, Board setup,
  * Gate signing, Release review, Order submit, Design import, Certification run, Production release): the step's
  * picture, what the step asks, the items trace prepared for it (from skill.get), trace beside it with the step's
- * summary and its recommendation, and the quality bar from the checker. Continue moves on; any done step can be
- * revisited; leaving keeps the draft. The design skills (Requirements review, Architecture choice) add their decisions
+ * summary and its recommendation, and the quality bar from the checker. Continue moves on; any step opens from the
+ * rail, later ones too (test-esp32 #30); leaving keeps the draft. The design skills (Requirements review, Architecture choice) add their decisions
  * (design-steps.tsx).
  */
 import { Link } from '@tanstack/react-router'
@@ -60,6 +60,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       context={s.context}
       steps={s.steps}
       onStep={s.onStep}
+      anyStep
       checks={checks}
       submitLabel={def.submit}
       onSubmit={() => s.submit()}
