@@ -457,12 +457,6 @@ export function QuestionAnswer({ repo, def, question, option }: { repo: string; 
   const wide = useMediaQuery('(min-width: 1280px)')
   const fields = q ? (
           <>
-            <div>
-              <p className="text-xs text-muted-foreground">Chosen</p>
-              <p className="mt-0.5">{chosen ? chosenWords(options.find((o) => o.id === d.option), d.detail?.trim() || undefined) : d.answer.trim() || <span className="text-muted-foreground">Nothing yet</span>}</p>
-              {d.reason && <p className="mt-1 text-muted-foreground">Reason: {d.reason}</p>}
-              {chosenWaiver && <WaiverNote text={chosenWaiver} />}
-            </div>
             {needs && (
               <div className="space-y-1.5">
                 <Label htmlFor="qa-detail">{needs.charAt(0).toUpperCase() + needs.slice(1)}</Label>
@@ -483,6 +477,14 @@ export function QuestionAnswer({ repo, def, question, option }: { repo: string; 
                 <Label className="flex items-center gap-2 font-normal"><RadioGroupItem value="requirement" /> It changes a requirement (goes through review)</Label>
               </RadioGroup>
             </fieldset>
+            {/* what is chosen or written so far, last: it grows as the answer is typed, and above the fields and the
+                choices it moved them down under the pointer (test-esp32 #36) */}
+            <div>
+              <p className="text-xs text-muted-foreground">Chosen</p>
+              <p className="mt-0.5">{chosen ? chosenWords(options.find((o) => o.id === d.option), d.detail?.trim() || undefined) : d.answer.trim() || <span className="text-muted-foreground">Nothing yet</span>}</p>
+              {d.reason && <p className="mt-1 text-muted-foreground">Reason: {d.reason}</p>}
+              {chosenWaiver && <WaiverNote text={chosenWaiver} />}
+            </div>
           </>
   ) : null
 
@@ -543,8 +545,10 @@ export function QuestionAnswer({ repo, def, question, option }: { repo: string; 
             />
           )}
           {d.option && !stale && <Button variant="ghost" size="sm" onClick={() => set({ option: undefined, reason: undefined })}>Choose again</Button>}
+          {/* a fixed height: grown as it is typed, it moved everything below it (the answer's fields on a narrow screen,
+              Continue) under the pointer (test-esp32 #36); it scrolls, and can be pulled taller */}
           {(d.option === 'other' || !q.recommended) && (
-            <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={3} value={d.answer} onChange={(e) => set({ question: q.id, answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
+            <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={4} className="field-sizing-fixed resize-y" value={d.answer} onChange={(e) => set({ question: q.id, answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
           )}
           {!wide && <section className="space-y-5 rounded-xl border p-5 text-sm" aria-label="Your answer"><h2 className="font-semibold">Your answer</h2>{fields}</section>}
           <div className="h-[360px] overflow-hidden rounded-xl border"><EmbeddedChat repo={repo} title="Ask trace about this question" placeholder="Why does it recommend that? Where did it look?" /></div>
