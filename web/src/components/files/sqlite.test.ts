@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { cellText, describeDbDiff, diffDb, isSqlite, openDb, readOnly, readRows, summarise, toCsv } from './sqlite'
+import { cellText, describeDbDiff, describeRuns, diffDb, isSqlite, openDb, readOnly, readRows, runsDigest, summarise, toCsv } from './sqlite'
 
 const require = createRequire(import.meta.url)
 let SQL: SqlJsStatic
@@ -76,5 +76,32 @@ describe('sqlite files', () => {
     const d = diffDb(a, b)[0]!
     expect(d.matchedBy).toBe('rowid')
     expect(d.counts.changed).toBe(1)
+  })
+
+  it('says a trace record\'s tool runs by kind and their files by name, with the repeats (test-esp32 log #49)', () => {
+    const schema = `CREATE TABLE runs(id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, started REAL NOT NULL, finished REAL, status TEXT NOT NULL, summary TEXT);
+      CREATE TABLE artifacts(run_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT, bytes BLOB NOT NULL, PRIMARY KEY (run_id, name));`
+    const a = make(`${schema} INSERT INTO runs VALUES ('old','kicad.erc',NULL,1,2,'fail','ERC: 3 errors'); INSERT INTO artifacts VALUES ('old','erc-report.json',NULL,'v0');`)
+    // three ERC runs, the first two with the same report; two netlists with the same nets.tsv
+    const b = make(`${schema} INSERT INTO runs VALUES ('old','kicad.erc',NULL,1,2,'fail','ERC: 3 errors'),
+        ('e1','kicad.erc',NULL,10,11,'fail','ERC: 1 error'),('e2','kicad.erc',NULL,20,21,'fail','ERC: 1 error'),('e3','kicad.erc',NULL,30,31,'pass','ERC: clean'),
+        ('n1','kicad.netlist',NULL,12,13,'pass','54 nets'),('n2','kicad.netlist',NULL,22,23,'pass','54 nets');
+      INSERT INTO artifacts VALUES ('old','erc-report.json',NULL,'v0'),('e1','erc-report.json',NULL,'v1'),('e2','erc-report.json',NULL,'v1'),('e3','erc-report.json',NULL,'v2'),
+        ('n1','nets.tsv',NULL,'GND U1.1'),('n2','nets.tsv',NULL,'GND U1.1');`)
+    const r = runsDigest(a, b)!
+    expect(r.runs).toBe(5)
+    expect(r.kinds).toEqual([
+      { kind: 'kicad.erc', runs: 3, statuses: { fail: 2, pass: 1 }, last: { status: 'pass', summary: 'ERC: clean' } },
+      { kind: 'kicad.netlist', runs: 2, statuses: { pass: 2 }, last: { status: 'pass', summary: '54 nets' } },
+    ])
+    expect(r.files).toBe(5)
+    expect(r.names).toEqual([
+      { name: 'erc-report.json', copies: 3, different: 2, kind: 'kicad.erc', status: 'pass' },
+      { name: 'nets.tsv', copies: 2, different: 1, kind: 'kicad.netlist', status: 'pass' },
+    ])
+    expect(describeRuns(r)).toBe('Adds 5 tool runs (3 kicad.erc, 2 kicad.netlist) and 5 files they made, 2 of them the same file again.')
+    // not a trace record, or one that adds no run: nothing to say
+    expect(runsDigest(a, a)).toBeNull()
+    expect(runsDigest(null, make('CREATE TABLE parts(id INTEGER PRIMARY KEY)'))).toBeNull()
   })
 })

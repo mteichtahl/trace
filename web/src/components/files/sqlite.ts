@@ -232,3 +232,83 @@ export function describeDbDiff(d: TableDiff[]): string {
   const out = [words(t, 'Table'), words(r, 'Row')].filter(Boolean)
   return out.length ? out.join(' · ') : 'No differences in the tables or their rows.'
 }
+
+// a trace project record's tool runs: said by kind and file, not row by row
+
+/** One kind of tool run a version adds: how many, their results, and the newest one's. */
+export interface RunKind { kind: string; runs: number; statuses: Record<string, number>; last: { status: string; summary: string } }
+/** One file name the added runs made: how many copies, how many different contents, and the newest copy's run. */
+export interface RunFile { name: string; copies: number; different: number; kind: string; status: string }
+export interface RunsDigest { runs: number; kinds: RunKind[]; files: number; names: RunFile[] }
+
+const hasCols = (db: Database, table: string, cols: readonly string[]): boolean => {
+  const t = summarise(db).tables.find((x) => x.name === table && x.kind === 'table')
+  return !!t && cols.every((c) => t.columns.some((x) => x.name === c))
+}
+
+/** FNV-1a over the bytes, with their length: copies with the same contents get the same word. */
+const contentKey = (v: SqlValue): string => {
+  const b = v instanceof Uint8Array ? v : new TextEncoder().encode(v === null ? '' : String(v))
+  let h = 0x811c9dc5
+  for (let i = 0; i < b.length; i++) h = Math.imul(h ^ b[i]!, 0x01000193) >>> 0
+  return `${b.length}:${h}`
+}
+
+/**
+ * The tool runs (runs) and the files they made (artifacts) that `b` adds against `a`, when both are a trace project
+ * record: by kind, each with its newest run's result, and by file name, with how many copies are the same file again
+ * (test-esp32 log #49: a change's record added 46 artifact rows from about 20 runs, erc-report.json 11 times). Null
+ * when `b` is not a trace record or adds no run.
+ */
+export function runsDigest(a: Database | null, b: Database | null): RunsDigest | null {
+  if (!b || !hasCols(b, 'runs', ['id', 'kind', 'status', 'started'])) return null
+  const before = new Set(a && hasCols(a, 'runs', ['id']) ? all(a, 'SELECT id FROM runs').values.map((v) => String(v[0])) : [])
+  const summary = hasCols(b, 'runs', ['summary']) ? 'summary' : "''"
+  const runs = all(b, `SELECT id, kind, status, started, ${summary} FROM runs ORDER BY started`).values
+    .filter((v) => !before.has(String(v[0])))
+    .map((v) => ({ id: String(v[0]), kind: String(v[1]), status: String(v[2]), started: Number(v[3]), summary: v[4] === null ? '' : String(v[4]) }))
+  const byKind = new Map<string, RunKind>()
+  for (const r of runs) {
+    const k = byKind.get(r.kind) ?? { kind: r.kind, runs: 0, statuses: {}, last: { status: r.status, summary: r.summary } }
+    k.runs++
+    k.statuses[r.status] = (k.statuses[r.status] ?? 0) + 1
+    k.last = { status: r.status, summary: r.summary }
+    byKind.set(r.kind, k)
+  }
+  const names: RunFile[] = []
+  let files = 0
+  if (hasCols(b, 'artifacts', ['run_id', 'name', 'bytes'])) {
+    const had = new Set(a && hasCols(a, 'artifacts', ['run_id', 'name']) ? all(a, 'SELECT run_id, name FROM artifacts').values.map((v) => `${String(v[0])}\u0001${String(v[1])}`) : [])
+    const when = new Map(all(b, 'SELECT id, kind, status, started FROM runs').values.map((v) => [String(v[0]), { kind: String(v[1]), status: String(v[2]), started: Number(v[3]) }]))
+    const byName = new Map<string, { copies: number; contents: Set<string>; newest: { kind: string; status: string; started: number } | null }>()
+    for (const v of all(b, 'SELECT run_id, name, bytes FROM artifacts').values) {
+      if (had.has(`${String(v[0])}\u0001${String(v[1])}`)) continue
+      files++
+      const name = String(v[1])
+      const g = byName.get(name) ?? { copies: 0, contents: new Set<string>(), newest: null }
+      g.copies++
+      g.contents.add(contentKey(v[2] ?? null))
+      const r = when.get(String(v[0]))
+      if (r && (!g.newest || r.started >= g.newest.started)) g.newest = r
+      byName.set(name, g)
+    }
+    for (const [name, g] of byName) names.push({ name, copies: g.copies, different: g.contents.size, kind: g.newest?.kind ?? '', status: g.newest?.status ?? '' })
+    names.sort((x, y) => y.copies - x.copies || x.name.localeCompare(y.name))
+  }
+  if (!runs.length && !files) return null
+  return { runs: runs.length, kinds: [...byKind.values()].sort((x, y) => y.runs - x.runs || x.kind.localeCompare(y.kind)), files, names }
+}
+
+const RESULT_WORD: Record<string, string> = { pass: 'passed', fail: 'failed', error: 'could not run', running: 'still running' }
+/** "passed", "failed": a run's status in words. */
+export const resultWord = (s: string): string => RESULT_WORD[s] ?? s
+
+/** "Adds 19 tool runs (8 kicad.erc, 5 kicad.bom and 2 more kinds) and 30 files they made, 14 of them the same file again." */
+export function describeRuns(d: RunsDigest): string {
+  const kinds = d.kinds.slice(0, 2).map((k) => `${k.runs} ${k.kind}`)
+  const more = d.kinds.length - kinds.length
+  const repeats = d.names.reduce((n, f) => n + f.copies - f.different, 0)
+  const runs = d.runs ? `${d.runs.toLocaleString()} tool ${d.runs === 1 ? 'run' : 'runs'} (${kinds.join(', ')}${more ? ` and ${more} more ${more === 1 ? 'kind' : 'kinds'}` : ''})` : ''
+  const files = d.files ? `${d.files.toLocaleString()} ${d.files === 1 ? 'file' : 'files'} ${d.runs ? 'they made' : 'from earlier runs'}${repeats ? `, ${repeats} of them the same file again` : ''}` : ''
+  return `Adds ${[runs, files].filter(Boolean).join(' and ')}.`
+}
