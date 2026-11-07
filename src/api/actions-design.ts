@@ -10,7 +10,9 @@
  *                                    interface? { type, connector, protocol, rate, direction } (an interface statement's
  *                                    fields the person set; on edit, the others are read from the new words) }
  *                    uncovered       { statement, reason }: no requirement will cover it (Requirements review, step 6)
- *                    requirement     { requirement, choice: accept | strike, reason (strike) }
+ *                    requirement     { requirement, choice: accept | edit | strike, reason (strike), text?,
+ *                                    criterion?, method?, class? (edit: the person's own words, acceptance criterion,
+ *                                    method and kind, each left out keeping the one that stands; an edit accepts it) }
  *                    criteria        { criteria: [{ id, name, weight }] }: fixed before any score is read
  *                    architecture    { option, reason, deciding: [criterion ids], scores?: [{ option, criterion,
  *                                    score, reason }], only_one?: why only one option is possible }
@@ -24,9 +26,9 @@
  */
 import { z } from 'zod'
 import { CHANGE_STAGE, type StageId, applyChange, changeReason, changeWords, decide, loadJourney } from '../core/journey.js'
-import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
+import { type DesignDecision, loadDesignDecisions, recordDesignDecision, standing } from '../tools/design/decisions.js'
 import { INTENT_KINDS, INTENT_TOPICS, InterfaceSchema, STAGES, readDesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, decidedFields, intentView, outscoredBy, outscoredWords, pinPlanPrint } from '../tools/design/record.js'
+import { REQUIREMENT_KINDS, type RequirementWording, type RequirementWords, architectureView, decidedFields, decisionStands, editedOf, intentView, outscoredBy, outscoredWords, pinPlanPrint } from '../tools/design/record.js'
 import { ActionError, type Context, Repo, def, hashOf, label, openProjectDb, plainly, withProjectDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(64)
@@ -35,7 +37,13 @@ const Reason = z.string().trim().min(3).max(2000)
 export const Decision = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('intent'), statement: Id, choice: z.enum(['accept', 'edit', 'reject']), text: z.string().trim().min(3).max(2000).optional(), reason: Reason.optional(), interface: InterfaceSchema.optional() }).strict(),
   z.object({ kind: z.literal('uncovered'), statement: Id, reason: Reason }).strict(),
-  z.object({ kind: z.literal('requirement'), requirement: Id, choice: z.enum(['accept', 'strike']), reason: Reason.optional() }).strict(),
+  z.object({
+    kind: z.literal('requirement'), requirement: Id, choice: z.enum(['accept', 'edit', 'strike']), reason: Reason.optional(),
+    // edit: the person's own wording, each field left out keeping the one that stands; `class` is the requirement's
+    // kind (Classify), named apart from the decision's own kind
+    text: z.string().trim().min(3).max(2000).optional(), criterion: z.string().trim().min(3).max(2000).optional(),
+    method: z.string().trim().min(2).max(500).optional(), class: z.enum(REQUIREMENT_KINDS).optional(),
+  }).strict(),
   z.object({ kind: z.literal('criteria'), criteria: z.array(z.object({ id: Id, name: z.string().trim().min(1).max(80), weight: z.number().min(0).max(10), description: z.string().max(500).optional() }).strict()).min(1).max(20) }).strict(),
   z.object({
     kind: z.literal('architecture'), option: Id, reason: Reason, deciding: z.array(Id).max(20).default([]),
@@ -110,12 +118,29 @@ export function prepare(d: PendingDecision, rows: Awaited<ReturnType<typeof repo
       return { kind: 'intent.uncovered', target: d.statement, choice: 'left_out', detail: { reason: d.reason }, summary: `Intent ${d.statement} is left without a requirement: ${d.reason}` }
     }
     case 'requirement': {
-      if (!requirements.has(d.requirement)) throw new ActionError(`There is no requirement ${d.requirement} in this project.`)
+      const now = requirements.get(d.requirement)
+      if (!now) throw new ActionError(`There is no requirement ${d.requirement} in this project.`)
       if (d.choice === 'strike' && !d.reason) throw new ActionError('Say in a line why the requirement is struck, so a later review can see why.')
+      const given: RequirementWording = { ...(d.text ? { text: d.text } : {}), ...(d.criterion ? { acceptance: d.criterion } : {}), ...(d.method ? { method: d.method } : {}), ...(d.class ? { kind: d.class } : {}) }
+      if (d.choice === 'edit' && !Object.keys(given).length) throw new ActionError(`Give ${d.requirement}'s new words, criterion, method or kind.`)
+      if (d.choice !== 'edit' && Object.keys(given).length) throw new ActionError(`Only an edit of ${d.requirement} changes its wording.`)
+      // the person's earlier edit, while it stands: accepting again keeps it (the row is accepted as shown), and a new
+      // edit lays its fields over it, so editing the criterion keeps the words they set before
+      const was = standing(prior, 'requirement').get(d.requirement)
+      const earlier = was && was.choice === 'accepted' && decisionStands(was, { ...now, status: 'accepted', updated: null }) ? editedOf(was) : null
+      const edited: RequirementWording = d.choice === 'strike' ? {} : { ...(earlier ?? {}), ...given }
+      // a field the person set back to the agent's own words is no edit
+      if (edited.text === now.text) delete edited.text
+      if (edited.acceptance === now.acceptance) delete edited.acceptance
+      const words = Object.keys(edited).length ? edited : null
+      const shown = (k: 'text' | 'acceptance' | 'method' | 'kind', label: string): string => (given[k] ? `${label} ${given[k]}` : '')
       return {
-        // the words and acceptance decided on are kept: an agent's later change of either reopens it (record.ts decisionStands)
-        kind: 'requirement', target: d.requirement, choice: d.choice === 'accept' ? 'accepted' : 'struck', detail: { ...requirements.get(d.requirement), ...(d.reason ? { reason: d.reason } : {}) },
-        summary: d.choice === 'accept' ? `Requirement ${d.requirement} was accepted.` : `Requirement ${d.requirement} was struck: ${d.reason}`,
+        // the words and acceptance decided on are kept: an agent's later change of either reopens it (record.ts
+        // decisionStands); the person's own wording beside them, laid over the row wherever it is read
+        kind: 'requirement', target: d.requirement, choice: d.choice === 'strike' ? 'struck' : 'accepted', detail: { ...now, ...(words ? { edited: words } : {}), ...(d.reason ? { reason: d.reason } : {}) },
+        summary: d.choice === 'strike' ? `Requirement ${d.requirement} was struck: ${d.reason}`
+          : d.choice === 'edit' ? `Requirement ${d.requirement} was accepted in the person's wording: ${[shown('text', 'words'), shown('acceptance', 'criterion'), shown('method', 'method'), shown('kind', 'kind')].filter(Boolean).join('; ')}.`
+          : `Requirement ${d.requirement} was accepted.`,
       }
     }
     case 'criteria': {

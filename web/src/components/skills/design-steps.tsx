@@ -2,10 +2,11 @@
  * What the design skills add to a stepped skill's screen, so the draft carries the decisions Submit records
  * (src/api/actions-skills.ts pendingDecisions; design.decide's shapes):
  *
- *   Requirements review  per requirement: accept, or strike with a reason (draft.decisions), or accept every one
- *                        still undecided at once; a decided row shows Undo; a requirement changed since a person
- *                        decided it shows what changed. Per intent line no requirement covers: leave it out with a
- *                        reason (draft.uncovered), on every step it shows
+ *   Requirements review  per requirement: accept, edit (its words, criterion, method and kind: requirement-edit.tsx;
+ *                        an edit accepts it in those words), or strike with a reason (draft.decisions), or accept
+ *                        every one still undecided at once; a decided row shows Undo; an accepted row can still be
+ *                        edited; a requirement changed since a person decided it shows what changed. Per intent line
+ *                        no requirement covers: leave it out with a reason (draft.uncovered), on every step it shows
  *   Architecture choice  the criteria step fixes the criteria and their weights now, before any score is read
  *                        (design.decide criteria: "criteria fixed before scoring" checks it was first); the choose
  *                        step names the criteria that decided it (draft.deciding); the option and its reason come
@@ -15,7 +16,7 @@
  *
  * The quality bar is the server's, computed with this draft laid over the record, so it moves as the person decides.
  */
-import { CheckCheck, Undo2 } from 'lucide-react'
+import { ArrowRight, CheckCheck, Undo2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -29,9 +30,10 @@ import { BlockDiagramCanvas } from '@/components/project/block-diagram'
 import { useCall } from '@/lib/queries'
 import type { ArchitectureRecord, KeyPartView } from '@/lib/types-s1'
 import type { SkillItem, SkillView } from '@/lib/types-s1'
+import { EditButton, type RequirementDecision, RequirementEditor, type RequirementFields, RequirementWording, recordRequirement, requirementBadge, shownRequirement, withRequirementEdit } from './requirement-edit'
 
 export interface DesignDraft {
-  decisions?: { requirement: string; choice: 'accept' | 'strike'; reason?: string }[]
+  decisions?: RequirementDecision[]
   uncovered?: { statement: string; reason: string }[]
   deciding?: string[]
   /** Resolve conflicts: the person confirms no two requirements contradict each other (no tool compares their numbers) */
@@ -111,12 +113,38 @@ export function ChangedSince({ was }: { was: NonNullable<SkillItem['was']> }) {
   )
 }
 
+/**
+ * A requirement on Requirements review's other steps (Make it testable, Classify…): its decision, its wording as the
+ * draft has it, Edit (accepted rows too: test log R23, where an accepted row showed only its chip) and, while
+ * undecided, a way to Decide.
+ */
+export function RequirementLine({ it, decision, onEdit, onDecide }: { it: SkillItem; decision?: RequirementDecision; onEdit: (requirement: string, fields: RequirementFields) => void; onDecide: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const req = recordRequirement(it)
+  if (!req) return null
+  const shown = shownRequirement(req, decision)
+  const badge = requirementBadge(decision, it.accepted === true)
+  return (
+    <li className="space-y-2 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <StatusBadge status={badge.status} label={badge.label} />
+        <span className="min-w-0 flex-1 text-sm"><RequirementWording r={shown} />{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
+        {!editing && decision?.choice !== 'strike' && <EditButton id={req.id} onClick={() => setEditing(true)} />}
+        {!decision && !it.accepted && <Button size="sm" variant="outline" onClick={onDecide}>Decide <ArrowRight /></Button>}
+      </div>
+      {editing && <RequirementEditor r={shown} onEdit={(f) => onEdit(req.id, f)} onClose={() => setEditing(false)} />}
+    </li>
+  )
+}
+
 function ReviewItems({ view, draft, setDraft, only }: { view?: SkillView; draft: DesignDraft; setDraft: Set; only: 'requirement' | 'intent' }) {
   const items = (view?.items ?? []).filter((i) => i.id.startsWith(`${only}:`))
   const [reasons, setReasons] = useState<Record<string, string>>({})
+  const [editing, setEditing] = useState<string | null>(null)
   if (!items.length) return null
   const idOf = (it: SkillItem) => it.id.slice(only.length + 1)
-  const undecided = only === 'requirement' ? items.map(idOf).filter((id) => !draft.decisions?.some((x) => x.requirement === id)) : []
+  // a row accepted in the record already is decided: Accept all leaves it, and it can still be edited
+  const undecided = only === 'requirement' ? items.filter((it) => !it.accepted).map(idOf).filter((id) => !draft.decisions?.some((x) => x.requirement === id)) : []
   return (
     <section className="mt-6" aria-labelledby={`design-${only}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -128,7 +156,7 @@ function ReviewItems({ view, draft, setDraft, only }: { view?: SkillView; draft:
         )}
       </div>
       {only === 'requirement' ? (
-        <p className="mt-1 text-sm text-muted-foreground">Strike the ones you do not want first, with a reason: accepting the rest leaves every row you decided as it is. Undo puts a row back to undecided.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Strike the ones you do not want first, with a reason: accepting the rest leaves every row you decided as it is. Edit rewords a row, accepted ones too, and accepts it in your words. Undo puts a row back as it was.</p>
       ) : (
         <p className="mt-1 text-sm text-muted-foreground">Add a requirement that covers it, or leave it out with a reason.</p>
       )}
@@ -137,29 +165,37 @@ function ReviewItems({ view, draft, setDraft, only }: { view?: SkillView; draft:
           const id = idOf(it)
           const d = only === 'requirement' ? draft.decisions?.find((x) => x.requirement === id) : undefined
           const left = only === 'intent' ? draft.uncovered?.find((x) => x.statement === id) : undefined
-          const decided = Boolean(d || left)
+          const decided = Boolean(d || left || it.accepted)
           const reason = reasons[id] ?? ''
+          const req = recordRequirement(it)
+          const shown = req ? shownRequirement(req, d) : null
+          const badge = only === 'requirement' ? (d || it.accepted ? requirementBadge(d, it.accepted === true) : null) : null
           return (
             <li key={it.id} className="space-y-2 px-4 py-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="min-w-0 flex-1">
-                  {it.title}
-                  {it.criterion !== undefined && <span className="block text-xs">Criterion: {it.criterion ?? <span className="text-warning">none given</span>}</span>}
+                  {shown ? <RequirementWording r={shown} /> : it.title}
                   <span className="block text-xs text-muted-foreground">{it.detail}</span>
                 </span>
-                {d && <StatusBadge status={d.choice === 'accept' ? 'met' : 'waived'} label={d.choice === 'accept' ? 'Accepted' : 'Struck'} />}
+                {badge && <StatusBadge status={badge.status} label={badge.label} />}
                 {left && <StatusBadge status="waived" label="Left out" />}
               </div>
               {it.was && <ChangedSince was={it.was} />}
+              {shown && editing === id && <RequirementEditor r={shown} onEdit={(f) => setDraft((x) => withRequirementEdit(x, id, f))} onClose={() => setEditing(null)} />}
               {decided ? (
                 <div className="flex flex-wrap items-center gap-2">
                   {(d?.reason ?? left?.reason) && <span className="min-w-0 flex-1 text-xs text-muted-foreground">Reason: {d?.reason ?? left?.reason}</span>}
-                  <Button size="sm" variant="outline" className="ml-auto" aria-label={`Undo ${id}`} onClick={() => {
-                    setReasons((r) => ({ ...r, [id]: d?.reason ?? left?.reason ?? '' }))
-                    setDraft((x) => (only === 'requirement' ? withDecision(x, id, null) : withLeftOut(x, id, null)))
-                  }}>
-                    <Undo2 /> Undo
-                  </Button>
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    {shown && d?.choice !== 'strike' && editing !== id && <EditButton id={id} onClick={() => setEditing(id)} />}
+                    {(d || left) && (
+                      <Button size="sm" variant="outline" aria-label={`Undo ${id}`} onClick={() => {
+                        setReasons((r) => ({ ...r, [id]: d?.reason ?? left?.reason ?? '' }))
+                        setDraft((x) => (only === 'requirement' ? withDecision(x, id, null) : withLeftOut(x, id, null)))
+                      }}>
+                        <Undo2 /> Undo
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
@@ -168,6 +204,7 @@ function ReviewItems({ view, draft, setDraft, only }: { view?: SkillView; draft:
                   {only === 'requirement' ? (
                     <>
                       <Button size="sm" variant="outline" aria-label={`Accept ${id}`} onClick={() => setDraft((x) => withDecision(x, id, 'accept'))}>Accept</Button>
+                      {shown && editing !== id && <EditButton id={id} onClick={() => setEditing(id)} />}
                       <Button size="sm" variant="outline" aria-label={`Strike ${id}`} disabled={reason.trim().length < 3} onClick={() => setDraft((x) => withDecision(x, id, 'strike', reason.trim()))}>Strike</Button>
                     </>
                   ) : (

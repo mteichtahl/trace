@@ -34,6 +34,8 @@ export type Evidence = 'verified' | 'failing' | 'untested' | 'waived'
 
 export interface TraceRequirement {
   id: string; text: string; kind: string; acceptance: string | null; source: string | null; status: string
+  /** how its criterion is checked, when the person gave it with an edit (Requirements review) */
+  method?: string
   evidence: Evidence
   /** why, in words: "TST-001 failed on its last run", "waived: W-… (degraded)" */
   why: string
@@ -68,7 +70,9 @@ export function requirementEvidence(db: DatabaseSync, r: RequirementWaivers): Tr
     const d = decided.get(String(q.id))
     // a person's decision stands over the agents' row; without one, the row's own status
     if (d ? d.choice === 'struck' : q.status === 'rejected' || q.status === 'obsolete') return []
-    return [{ ...q, status: d?.choice === 'accepted' ? 'accepted' : q.status } as Record<string, unknown>]
+    // the person's own wording (an edit in Requirements review) is laid over the agents' row
+    const e = d?.edited
+    return [{ ...q, ...(e?.text ? { text: e.text } : {}), ...(e?.acceptance ? { acceptance: e.acceptance } : {}), ...(e?.kind ? { kind: e.kind } : {}), ...(e?.method ? { method: e.method } : {}), status: d?.choice === 'accepted' ? 'accepted' : q.status } as Record<string, unknown>]
   }).map((q) => {
     const id = String(q.id)
     const mine = tests.filter((t) => list(t.requirements).includes(id)).map((t) => ({
@@ -86,7 +90,7 @@ export function requirementEvidence(db: DatabaseSync, r: RequirementWaivers): Tr
     else { evidence = 'untested'; why = mine.length ? `${v.active.filter((t) => t.status !== 'pass').map((t) => t.id).join(', ')} not run yet.` : 'No test is planned for it yet.' }
     return {
       id, text: String(q.text), kind: String(q.kind), acceptance: q.acceptance === null ? null : String(q.acceptance), source: q.source === null ? null : String(q.source),
-      status: String(q.status), evidence, why, tests: mine, waiver: w?.id ?? null,
+      status: String(q.status), ...(typeof q.method === 'string' ? { method: q.method } : {}), evidence, why, tests: mine, waiver: w?.id ?? null,
       ...(v.set_aside.length ? { set_aside: v.set_aside } : {}), ...(note ? { note } : {}),
     }
   })

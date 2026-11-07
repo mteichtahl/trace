@@ -50,7 +50,7 @@ import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 export const QUEUED_DRAFTING = 'This project\'s agent is still being set up, so the drafting is queued: the Verification agent drafts the candidate requirements for Requirements review by itself once the agent is ready. You need not submit again.'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision, standing } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, decidedFields, intentDraft, intentView, linksView, outscoredBy, outscoredWords, matedParts, pinCheck } from '../tools/design/record.js'
+import { type RequirementWords, architectureView, decidedFields, editedOf, intentDraft, intentView, linksView, outscoredBy, outscoredWords, matedParts, pinCheck } from '../tools/design/record.js'
 import { type PendingDecision, type StatedInput, Decision, Stated, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
 import { jobTitles } from './actions-jobs.js'
@@ -357,7 +357,8 @@ export { REQUIREMENTS_FROM_INTENT }
  *                        draft.decisions [{ statement, choice: accept | edit | reject, text?, reason? }]; every
  *                        proposed statement not named there is accepted as worded (Submit intent accepts the draft;
  *                        the bar's preview, acceptRest false, leaves them proposed)
- *   requirements-review  draft.decisions [{ requirement, choice: accept | strike, reason? }], draft.uncovered
+ *   requirements-review  draft.decisions [{ requirement, choice: accept | edit | strike, reason?, text?, criterion?,
+ *                        method?, class? }] (an edit accepts it in the person's wording), draft.uncovered
  *                        [{ statement, reason }]
  *   architecture-choice  draft.choice { option, reason } with draft.deciding [criterion ids], draft.scores?,
  *                        draft.only_one?. The criteria are not part of Submit: they are fixed (design.decide) at the
@@ -463,10 +464,13 @@ function reasonNeeded(a: ReturnType<typeof architectureView>): { reasonNeeded?: 
  */
 export function changedSince(d: DesignDecision | undefined, now: RequirementWords): { choice: 'accepted' | 'struck'; by: string; at: string; changes: { field: 'words' | 'criterion'; before: string | null; after: string | null }[] } | null {
   if (!d || typeof d.detail.text !== 'string') return null
+  // what the person decided: their own wording where they edited it
+  const e = d.choice === 'struck' ? null : editedOf(d)
   const changes: { field: 'words' | 'criterion'; before: string | null; after: string | null }[] = []
-  if (d.detail.text !== now.text) changes.push({ field: 'words', before: d.detail.text, after: now.text })
-  if ('acceptance' in d.detail) {
-    const was = typeof d.detail.acceptance === 'string' ? d.detail.acceptance : null
+  const words = e?.text ?? d.detail.text
+  if (words !== now.text) changes.push({ field: 'words', before: words, after: now.text })
+  if ('acceptance' in d.detail || e?.acceptance) {
+    const was = e?.acceptance ?? (typeof d.detail.acceptance === 'string' ? d.detail.acceptance : null)
     if (was !== now.acceptance) changes.push({ field: 'criterion', before: was, after: now.acceptance })
   }
   return changes.length ? { choice: d.choice === 'struck' ? 'struck' : 'accepted', by: d.by, at: new Date(d.at * 1000).toISOString(), changes } : null
@@ -517,10 +521,16 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       return {
         items: [
           // the rows the record has not accepted, the draft's decisions on them shown beside each on screen; with each
-          // its acceptance criterion and, for one an agent changed after a person decided it, what changed
-          ...(i.reviewBefore?.requirements ?? i.requirements).filter((q) => q.status !== 'accepted').map((q) => {
+          // its acceptance criterion and, for one an agent changed after a person decided it, what changed. An
+          // accepted one whose criterion has no number is listed too (`accepted`), so the person can edit the
+          // criterion the bar asks for (test log R23: the bar named it and nothing on screen could change it).
+          // `words`, `kind` and `method` are what an Edit starts from: the person's own wording when they edited it
+          ...(i.reviewBefore?.requirements ?? i.requirements).filter((q) => q.status !== 'accepted' || !/\d/.test(q.acceptance ?? '')).map((q) => {
             const was = changedSince(i.reviewBefore ? standing(i.reviewBefore.decisions, 'requirement').get(q.id) : undefined, q)
-            return { id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => noStop(v.find((x) => x.id === l.intent)?.words ?? l.intent)).join('; ') || noStop(q.source ?? '') || 'no source given'}.`, status: 'open' as const, criterion: q.acceptance, ...(was ? { was } : {}) }
+            return {
+              id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => noStop(v.find((x) => x.id === l.intent)?.words ?? l.intent)).join('; ') || noStop(q.source ?? '') || 'no source given'}.`,
+              status: 'open' as const, criterion: q.acceptance, words: q.text, kind: q.kind, ...(q.method ? { method: q.method } : {}), ...(q.status === 'accepted' ? { accepted: true } : {}), ...(was ? { was } : {}),
+            }
           }),
           // as the record has it, so a line the draft leaves out stays listed with its reason (and Undo)
           ...(i.reviewBefore ? intentView(i.design.rows, i.reviewBefore.decisions) : v).filter((x) => x.state !== 'rejected' && x.kind === 'statement' && x.uncovered === null && !links.some((l) => l.intent === x.id)).map((x) => ({ id: `intent:${x.id}`, title: `Not covered: ${x.words}`, detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' as const })),

@@ -440,6 +440,57 @@ describe('the guided skills read the design record', () => {
   })
 })
 
+describe('a person edits a requirement in Requirements review (test log R23)', () => {
+  type Req = { id: string; status: string; text: string; kind: string; acceptance: string | null; method?: string }
+  const req1 = async (): Promise<Req> => ((await run(USER, 'requirements.trace', { repo: REPO })) as { requirements: Req[] }).requirements.find((q) => q.id === 'REQ-1')!
+  type Item = { id: string; criterion?: string | null; words?: string; kind?: string; method?: string; accepted?: boolean; was?: unknown }
+  const item1 = async (): Promise<Item | undefined> => ((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' })) as { items?: Item[] }).items?.find((x) => x.id === 'requirement:REQ-1')
+  const decide = (decision: Record<string, unknown>) => run(USER, 'design.decide', { repo: REPO, decision: { kind: 'requirement', requirement: 'REQ-1', ...decision } })
+
+  it('an edit in the draft is read by the quality bar: a criterion without a number is named, one with a number meets it', async () => {
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 2, data: { decisions: [{ requirement: 'REQ-1', choice: 'edit', criterion: 'Packets get through' }] } })
+    let c = await checks('requirements-review')
+    expect(c.criterion).toMatchObject({ status: 'not_met', detail: expect.stringMatching(/without a criterion with a number: REQ-1/) })
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 2, data: { decisions: [{ requirement: 'REQ-1', choice: 'edit', criterion: 'at least 1.5 km at 1 % packet loss, open field, 868 MHz' }] } })
+    c = await checks('requirements-review')
+    expect(c.criterion).toMatchObject({ status: 'met' })
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 2, data: {} })
+  })
+
+  it('records the person\'s wording over the agents\' row, keeps an earlier edit\'s fields, and lists an accepted row the bar flags', async () => {
+    await decide({ choice: 'edit', text: 'Range of 1.5 km line of sight, outdoors', criterion: 'at least 1.5 km at 1 % packet loss' })
+    expect(await req1()).toMatchObject({ status: 'accepted', text: 'Range of 1.5 km line of sight, outdoors', acceptance: 'at least 1.5 km at 1 % packet loss', kind: 'functional' })
+    // a second edit of only the method and kind keeps the words and criterion the first one set
+    await decide({ choice: 'edit', method: 'HIL range rig in an open field', class: 'electrical' })
+    expect(await req1()).toMatchObject({ status: 'accepted', text: 'Range of 1.5 km line of sight, outdoors', acceptance: 'at least 1.5 km at 1 % packet loss', method: 'HIL range rig in an open field', kind: 'electrical' })
+    // accepting it again accepts it as it reads now, the edit kept
+    await decide({ choice: 'accept' })
+    expect(await req1()).toMatchObject({ text: 'Range of 1.5 km line of sight, outdoors', method: 'HIL range rig in an open field' })
+    // accepted with a number, it is not listed; accepted without one, it is, with its wording to edit from
+    expect(await item1()).toBeUndefined()
+    await decide({ choice: 'edit', criterion: 'Works in the field' })
+    expect(await item1()).toMatchObject({ accepted: true, criterion: 'Works in the field', words: 'Range of 1.5 km line of sight, outdoors', kind: 'electrical', method: 'HIL range rig in an open field' })
+    expect((await item1())?.was).toBeUndefined()
+    // an edit names something to change
+    await expect(decide({ choice: 'edit' })).rejects.toThrow(/new words, criterion, method or kind/)
+    await expect(decide({ choice: 'accept', text: 'Other words' })).rejects.toThrow(/Only an edit/)
+  })
+
+  it('an agent that writes the person\'s edit into the row leaves the decision standing', async () => {
+    await decide({ choice: 'edit', criterion: 'at least 1.5 km at 1 % packet loss' })
+    const key = `${REPO}:main:.trace/project.db`
+    const dir = mkdtempSync(join(scratch, 'edit-'))
+    const path = join(dir, 'project.db')
+    writeFileSync(path, github.files.get(key)!)
+    const db = new DatabaseSync(path)
+    db.prepare("UPDATE requirements SET text='Range of 1.5 km line of sight, outdoors', acceptance='at least 1.5 km at 1 % packet loss', updated=? WHERE id='REQ-1'").run(Date.now() / 1000 + 3)
+    db.close()
+    github.files.set(key, readFileSync(path))
+    rmSync(dir, { recursive: true, force: true })
+    expect(await req1()).toMatchObject({ status: 'accepted', text: 'Range of 1.5 km line of sight, outdoors', method: 'HIL range rig in an open field' })
+  })
+})
+
 describe('a requirement decision stands on the words it was made on', () => {
   const dec = (detail: Record<string, unknown>, at = 100): DesignDecision => ({ id: 'd', kind: 'requirement', target: 'R5', choice: 'accepted', detail, by: 'Marc', byHash: 'h', at, supersededAt: null })
   it('compares the words and acceptance kept with the decision', () => {
@@ -449,6 +500,12 @@ describe('a requirement decision stands on the words it was made on', () => {
     expect(decisionStands(dec({ text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz' }), { ...now, acceptance: '0.375-0.625 Hz' })).toBe(false)
     // kept with the words only (before the acceptance was kept): checked on the words
     expect(decisionStands(dec({ text: '0.5 Hz ± 10 %' }), { ...now, acceptance: '0.375-0.625 Hz' })).toBe(true)
+  })
+  it('stands when an agent wrote the person\'s own edit into the row', () => {
+    const now = { text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz', status: 'proposed', updated: 200 }
+    expect(decisionStands(dec({ text: '0.5 Hz', acceptance: null, edited: { text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz' } }), now)).toBe(true)
+    expect(decisionStands(dec({ text: '0.5 Hz', acceptance: '0.45-0.55 Hz', edited: { text: '0.5 Hz ± 10 %' } }), now)).toBe(true)
+    expect(decisionStands(dec({ text: '0.5 Hz', acceptance: null, edited: { method: 'scope' } }), now)).toBe(false)
   })
   it('without words kept (an older decision), an agent proposing the row again after it reopens it', () => {
     expect(decisionStands(dec({}), { text: 'x', acceptance: null, status: 'proposed', updated: 200 })).toBe(false)

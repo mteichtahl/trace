@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EventType } from '@ag-ui/core'
 import type { ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime'
-import { BACKEND_TOOLS, MAX_ROUNDS, TOOL_RUN_EVENT, toBedrock } from '../../src/web/agui.js'
+import { BACKEND_TOOLS, CONFIRM_TOOLS, MAX_ROUNDS, TOOL_RUN_EVENT, toBedrock } from '../../src/web/agui.js'
 import { TOOL_RUN_ID } from '../../src/core/run-logs.js'
 import { API_UNAVAILABLE } from '../../src/web/call.js'
 import { accessToken } from '../api/fixtures.js'
@@ -308,6 +308,13 @@ describe('the trace agent over AG-UI', () => {
     const w = world()
     expect((await w.serve({ method: 'POST', path: '/api/agui', body: JSON.stringify(input()) })).status).toBe(401)
     expect((await w.serve(run({ messages: [] }))).status).toBe(400)
+  })
+})
+
+describe('the tools steer a requirement edit to the person\'s draft (test log R23)', () => {
+  it('names decide_requirement for Requirements review, and start_task says not to reword a requirement with a job', () => {
+    expect(BACKEND_TOOLS.tool!.description).toMatch(/In Requirements review, reword a requirement, rewrite its acceptance criterion.*decide_requirement/)
+    expect(CONFIRM_TOOLS.start_task!.description).toMatch(/Never to reword a requirement, its acceptance criterion.*decide_requirement/)
   })
 })
 

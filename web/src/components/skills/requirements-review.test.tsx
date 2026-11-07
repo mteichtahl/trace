@@ -6,6 +6,8 @@
  *   - a requirement changed since a person decided it shows what changed, before and after
  *   - the "no two requirements contradict" tick counts in the bar at once, and a Submit pressed while the draft is
  *     saved waits for the save, then submits
+ *   - every row, accepted ones too, can be edited (words, criterion, method, kind) into the draft, and trace's chat
+ *     does the same with decide_requirement (test log R23)
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
@@ -16,7 +18,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { call } from '@/lib/api'
 import type { SkillView } from '@/lib/types-s1'
 import { SKILL_BY_ID } from './definitions'
-import { DesignSteps, acceptRest, decidedByReview, withDecision, withLeftOut, type DesignDraft } from './design-steps'
+import { DesignSteps, RequirementLine, acceptRest, decidedByReview, withDecision, withLeftOut, type DesignDraft } from './design-steps'
+import { withRequirementEdit } from './requirement-edit'
 import { SteppedSkill } from './stepped-skill'
 import { draftChecks, qualityChecks } from './use-skill'
 
@@ -27,6 +30,9 @@ vi.mock('@tanstack/react-router', async (orig) => ({
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }))
 vi.mock('@/components/chat/embedded-chat', () => ({ EmbeddedChat: () => null }))
+// the chat's decide_requirement, as the app registers it: kept so a test can call it as the model would
+const tools = vi.hoisted(() => new Map<string, { handler: (args: unknown) => Promise<unknown> }>())
+vi.mock('@copilotkit/react-core/v2', () => ({ useFrontendTool: (t: { name: string; handler: (args: unknown) => Promise<unknown> }) => { tools.set(t.name, t) } }))
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<typeof import('@/lib/api')>()), call: vi.fn() }))
 const mockCall = vi.mocked(call)
 
@@ -41,6 +47,8 @@ const items: SkillView['items'] = [
   },
   { id: 'intent:I-6', title: 'Not covered: Fits a 50 × 30 mm board.', detail: 'No requirement is derived from this intent line.', status: 'open' },
 ]
+// accepted in the record, its criterion without a number: the bar names it (test log R23)
+const accepted: NonNullable<SkillView['items']>[number] = { id: 'requirement:REQ-7ec888', title: 'REQ-7ec888: Reads soil moisture accurately', words: 'Reads soil moisture accurately', kind: 'electrical', detail: 'From the brief.', status: 'open', criterion: 'Readings are accurate', accepted: true }
 const conflictsCheck = (d?: DesignDraft) => ({ id: 'conflicts', status: d?.no_conflicts ? 'met' : 'not_met', detail: d?.no_conflicts ? 'You confirmed it.' : 'Confirm in Resolve conflicts that no two requirements contradict each other.', by_draft: 'no_conflicts' }) as NonNullable<SkillView['checks']>[number]
 
 describe('Accept or strike', () => {
@@ -73,6 +81,67 @@ describe('Accept or strike', () => {
     expect(changed).toHaveTextContent('Changed since marc@example.com accepted it')
     expect(within(changed).getByLabelText('Before: 3.3 V ± 3 %')).toBeInTheDocument()
     expect(within(changed).getByLabelText('Now: 3.1-3.6 V at the loads')).toBeInTheDocument()
+  })
+})
+
+describe('Editing a requirement (test log R23)', () => {
+  it('an accepted row on Make it testable has Edit; saving the criterion keeps it accepted, in the draft', async () => {
+    let draft: DesignDraft = {}
+    const set = (fn: (d: DesignDraft) => DesignDraft) => { draft = fn(draft) }
+    const ui = () => <ul><RequirementLine it={accepted} decision={draft.decisions?.find((d) => d.requirement === 'REQ-7ec888')} onDecide={() => undefined} onEdit={(id, f) => set((d) => withRequirementEdit(d, id, f))} /></ul>
+    const { rerender } = render(ui())
+    expect(screen.getByText('Accepted')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Decide/ })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Edit REQ-7ec888' }))
+    const box = screen.getByLabelText('Acceptance criterion')
+    // a long criterion on several lines; not a login field
+    expect(box.tagName).toBe('TEXTAREA')
+    expect(box).toHaveAttribute('autocomplete', 'off')
+    expect(box).toHaveAttribute('data-1p-ignore')
+    await userEvent.clear(box)
+    await userEvent.type(box, 'Within ±3 % VWC from 0 to 50 % VWC at 25 °C')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(draft.decisions).toEqual([{ requirement: 'REQ-7ec888', choice: 'edit', criterion: 'Within ±3 % VWC from 0 to 50 % VWC at 25 °C' }])
+    rerender(ui())
+    expect(screen.getByText('Accepted, edited')).toBeInTheDocument()
+    expect(screen.getByText('Criterion: Within ±3 % VWC from 0 to 50 % VWC at 25 °C')).toBeInTheDocument()
+    // a second edit, of the method and kind only, keeps the criterion set before
+    await userEvent.click(screen.getByRole('button', { name: 'Edit REQ-7ec888' }))
+    await userEvent.type(screen.getByLabelText('Method'), 'Bench test against dried samples')
+    await userEvent.selectOptions(screen.getByLabelText('Kind'), 'functional')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(draft.decisions).toEqual([{ requirement: 'REQ-7ec888', choice: 'edit', criterion: 'Within ±3 % VWC from 0 to 50 % VWC at 25 °C', method: 'Bench test against dried samples', class: 'functional' }])
+  })
+
+  it('on Decide, an undecided row and an accepted one can be edited; Accept all leaves the accepted one', async () => {
+    let draft: DesignDraft = {}
+    const set = (fn: (d: DesignDraft) => DesignDraft) => { draft = fn(draft) }
+    render(<DesignSteps repo={REPO} skill="requirements-review" step="decide" view={{ skill: def.id, items: [...items, accepted] }} draft={draft} setDraft={set} />)
+    expect(screen.getByRole('button', { name: /Accept the 3 still undecided/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Edit R-2' }))
+    const words = screen.getByLabelText('Requirement')
+    await userEvent.clear(words)
+    await userEvent.type(words, 'Has a two-line display readable at 1 m')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(draft.decisions).toEqual([{ requirement: 'R-2', choice: 'edit', text: 'Has a two-line display readable at 1 m' }])
+    expect(screen.getByRole('button', { name: 'Edit REQ-7ec888' })).toBeInTheDocument()
+  })
+
+  it('trace\'s chat edits the criterion in the draft with decide_requirement, and the row shows it', async () => {
+    mockCall.mockReset()
+    let saved: DesignDraft | undefined
+    mockCall.mockImplementation((async (action: string, args: Record<string, unknown>) => {
+      if (action === 'skill.draft') { saved = args.data as DesignDraft; return { kept: true } }
+      if (action === 'skill.get') return { skill: def.id, items: [...items, accepted], checks: [{ id: 'criterion', status: 'not_met', detail: '1 accepted requirement without a criterion with a number: REQ-7ec888.' }], draft: { done: ['source', 'decide'] }, step: 2, saved: '2026-11-06T00:00:00Z' }
+      if (action === 'journey.get') return { repo: REPO, name: 'Soil sensor', stages: [], gates: [] }
+      return {}
+    }) as unknown as typeof call)
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider><SteppedSkill repo={REPO} def={def} /></TooltipProvider></QueryClientProvider>)
+    expect((await screen.findAllByRole('button', { name: 'Edit REQ-7ec888' })).length).toBeGreaterThan(0)
+    const tool = tools.get('decide_requirement')!
+    await waitFor(async () => expect(await tool.handler({ decisions: [{ requirement: 'REQ-7ec888', choice: 'edit', criterion: 'Within ±3 % VWC from 0 to 50 % VWC at 25 °C' }] })).toMatchObject({ decided: [{ requirement: 'REQ-7ec888', choice: 'edit' }] }))
+    expect(await screen.findByText('Criterion: Within ±3 % VWC from 0 to 50 % VWC at 25 °C')).toBeInTheDocument()
+    await waitFor(() => expect(saved?.decisions).toEqual([{ requirement: 'REQ-7ec888', choice: 'edit', criterion: 'Within ±3 % VWC from 0 to 50 % VWC at 25 °C' }]), { timeout: 3000 })
   })
 })
 

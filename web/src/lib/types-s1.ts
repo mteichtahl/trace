@@ -97,6 +97,12 @@ export interface SkillItem {
   evidence?: EvidenceRef
   /** Requirements review: the requirement's acceptance criterion */
   criterion?: string | null
+  /** Requirements review: the requirement's words, kind and method as the record has them (an Edit starts from them) */
+  words?: string
+  kind?: string
+  method?: string
+  /** Requirements review: accepted in the record already, listed so its criterion can be edited (test log R23) */
+  accepted?: boolean
   /** Requirements review: a person decided it before an agent changed it, and what changed since (before and after) */
   was?: { choice: 'accepted' | 'struck'; by: string; at: string; changes: { field: 'words' | 'criterion'; before: string | null; after: string | null }[] }
 }
