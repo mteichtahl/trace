@@ -203,6 +203,21 @@ export function settledOf(j: Pick<JobRow, 'resumedBy'>, c: JobControl | undefine
   return null
 }
 
+/**
+ * A job's latest log line as its card says it. The runtime's own lines name the repository, the branch and the job's
+ * limits ("running the impl specialist on acme/x claude/y (max 120 turns, 40 tools)": test-esp32 #40): the card says
+ * who is working; Watch still shows the line. Other lines lose only a turn limit in brackets. Pure.
+ */
+export function stepWords(step: string | null): string | null {
+  if (!step) return step
+  const who = (k: string): string => AGENT_WORDS[k] ?? k
+  const worker = /^running the worker for the ([\w-]+) specialist\b/.exec(step)
+  if (worker) return `The worker is doing the ${who(worker[1]!)} specialist's work on the repository`
+  const running = /^running the ([\w-]+) specialist on \S/.exec(step)
+  if (running) return `The ${who(running[1]!)} specialist is working`
+  return step.replace(/\s*\(max \d+ turns[^)]*\)/, '').trim() || null
+}
+
 /** A lost job's summary once its change was merged: its own, or what is known. */
 const mergedSummary = (j: Pick<JobRow, 'summary'>, number: number | undefined): string =>
   j.summary ?? `Its change${number ? ` (#${number})` : ''} was accepted into the design. trace stopped hearing from its runtime after it opened it, so it is counted as finished.`
@@ -239,7 +254,7 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
     out.push({
       id: indexedHandle(repo, j.session, j.id), workerJobId: j.id, kind: j.kind, repository: repo, agent: j.agent, agentName: j.agent ? AGENT_WORDS[j.agent] ?? j.agent : null,
       title: j.title, number: j.number, startedBy: j.requestedBy, yours: j.requestedBySub !== null && j.requestedBySub === o.sub, state,
-      step: done ? null : said ?? (discarded ? `discarded by ${c?.by ?? 'a person'}` : j.step), held: Boolean(c?.held),
+      step: done ? null : said ?? (discarded ? `discarded by ${c?.by ?? 'a person'}` : stepWords(j.step)), held: Boolean(c?.held),
       queuedAt: iso(j.queuedAt), startedAt: iso(j.state === 'queued' ? null : j.startedAt), endedAt: done ? iso(heardOf(j).heardAt) : iso(j.endedAt),
       typicalS: typicalSeconds(rows, j), where: j.where, branch: j.branch, queue,
       parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: done ? mergedSummary(j, settled.number) : j.summary, error: done ? null : said ?? j.error,

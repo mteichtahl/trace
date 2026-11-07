@@ -159,6 +159,7 @@ describe('design.get', () => {
     expect(d.board.path).toBe('runs/run-exp/board/design-board.svg')
     expect(d.drawings.run).toBe('run-exp')
     expect(d.notes.join(' ')).toMatch(/1 of 2 sheets do not name the requirements/)
+    expect(d.notes.join(' ')).not.toMatch(/\b(?:design|parts|kicad)\.[a-z_]+/)
     // the drawing opens through files.url like any evidence
     const f = await run(USER, 'files.url', { repo: REPO, path: 'runs/run-exp/sheets/hw/power.kicad_sch.svg' }) as { mime?: string; base64?: string }
     expect(f).toMatchObject({ mime: 'image/svg+xml' })
