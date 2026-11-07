@@ -34,9 +34,18 @@ export const REQUIREMENTS_FROM_INTENT = [
   'The intent was submitted in the Intent builder. Draft the candidate requirements from it for Requirements review.',
   'Read the intent statements with the people\'s decisions (design.intent list): use the accepted ones as accepted and the edited ones in their edited words; leave rejected ones out.',
   'For each requirement: one testable acceptance criterion with a number and a unit, a kind, and its source (stated by a person, or inferred). Add them with verify.requirements and link each to the intent statements it comes from (design.intent link).',
+  'Mark every number you chose yourself in the acceptance criterion itself, right after it: "(inferred: where it comes from)", e.g. "within 5 s (inferred: a typical NTP exchange)" or "in 10 of 10 attempts (inferred: a repeatable reset)". That holds for test conditions too (a resolution, a distance, a count of tries, a sampling time). A number a person gave in the intent is not marked. verify.requirements lists the numbers left unmarked (unmarked_numbers): mark each one and update the requirement.',
   'Keep the requirements already in the record that still match the intent, under their ids, rather than adding duplicates. Leave every requirement proposed: people accept or strike them in Requirements review.',
   'Do not change the design files.',
 ].join('\n')
+
+/**
+ * The request as earlier versions of trace sent it, so a drafting job started before it changed is still known as one
+ * (draftingJobs).
+ */
+export const EARLIER_REQUESTS: readonly string[] = [
+  REQUIREMENTS_FROM_INTENT.split('\n').filter((l) => !l.startsWith('Mark every number you chose yourself')).join('\n'),
+]
 
 /** How long after Submit (or a retry) a drafting job not yet in the job index is taken as starting, not as missing. */
 export const STARTING_S = 120
@@ -59,8 +68,9 @@ export interface Drafting {
 /** The jobs the index lists that draft the requirements from the intent, newest first. */
 export function draftingJobs(rows: readonly JobRow[]): JobRow[] {
   // its title as the index gives it now (a headline), or as it gave it before (the request's first 200 characters)
-  const titles = [titleOf(REQUIREMENTS_FROM_INTENT), REQUIREMENTS_FROM_INTENT.replace(/\s+/g, ' ').trim().slice(0, 200)]
-  return rows.filter((j) => j.kind === 'task' && !j.parentJob && (jobRequest(j) === REQUIREMENTS_FROM_INTENT || (!j.payload && titles.includes(j.title))))
+  const requests = [REQUIREMENTS_FROM_INTENT, ...EARLIER_REQUESTS]
+  const titles = [titleOf(REQUIREMENTS_FROM_INTENT), ...requests.map((r) => r.replace(/\s+/g, ' ').trim().slice(0, 200))]
+  return rows.filter((j) => j.kind === 'task' && !j.parentJob && (requests.includes(jobRequest(j)) || (!j.payload && titles.includes(j.title))))
     .sort((a, b) => (b.queuedAt ?? b.startedAt ?? b.updatedAt) - (a.queuedAt ?? a.startedAt ?? a.updatedAt))
 }
 
