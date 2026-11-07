@@ -373,7 +373,7 @@ function checkDetail(c: ChangeDetail, id: string, admin: boolean) {
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
 const open = (repo: string) => (CHANGES[repo] ?? []).filter((c) => c.state === 'open')
-const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by', 'answers', 'working', 'stuck'] as const
+const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies', 'builds_on', 'built_on_by', 'answers', 'working', 'updating', 'stuck'] as const
 
 /** A change whose stuck checks were cancelled and run again: checking until they pass (as the API, the runner fixed). */
 function runAgain(c: ChangeDetail): void {
@@ -486,9 +486,13 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
     case 'change.resolve':
       if (reviewer) return fail('Only contributors can bring a change up to date.')
       if (c.verdict !== 'conflict') return later(ok({ text: 'It does not conflict with the newest design any more: nothing to bring up to date.', remade: false, worker: false, conflict: false }))
+      // as the API: the conflict work item is working on it until it has merged the newest design in (test-esp32 #243)
       c.verdict = 'checking'
       c.mergeable = 'clean'
-      c.blockers = ['trace is merging the newest design into it; its checks run again after.']
+      c.working = true
+      c.updating = true
+      c.blockers = ['trace is updating this change. Wait for its job to finish.']
+      c.recommendation = { verdict: 'wait', why: 'Its job has not finished, so what you see may still change. Wait for it to finish before you accept it.' }
       c.checks = c.checks ? { ...c.checks, passed: 0, running: c.checks.total } : null
       return later(ok({ text: 'trace is bringing it up to date with the newest design now. Its checks run again once it has, and it comes back to you.', remade: false, worker: true, conflict: true }))
     case 'change.rerun': {
@@ -517,6 +521,7 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
       // as the API: the job still working on it is stopped, and the page says so (test-esp32 log #75)
       c.discarded = { by: 'you@example.com', at: new Date().toISOString(), reason: String(a.reason ?? ''), jobs: c.working ? [`The ${c.from.replace(/^the /, '').replace(/ specialist.*$/, '')} job that was working on it was stopped.`] : [] }
       c.working = false
+      delete c.updating
       done(repo, c.number)
       return later(ok({ closed: true, jobs: c.discarded.jobs }))
     default:

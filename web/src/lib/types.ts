@@ -316,6 +316,8 @@ export interface ChangeSummary {
   built_on_by?: ChangeLink[]
   /** the job behind it is still working: it is not ready to review yet, whatever its checks say */
   working?: boolean
+  /** the job working on it is a later one bringing it up to date (or fixing its checks), not the one that made it */
+  updating?: boolean
   /** its checks cannot start: no runner picks them up (src/api/stuck-checks.ts, test-esp32 log #146). Absent: an older API, or not stuck */
   stuck?: StuckChecks
 }

@@ -21,7 +21,7 @@ import { answeredRequest } from '../../src/api/actions-journey.js'
 import { CHECK_LOG_MAX, MERGE_WAITS_MS, mergeMethod, neutralise, openChanges, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, agentReport, reportOf, requirementsNamed, summaryBullets, traceChanges, verdictOf,
-  askedFor, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking,
+  askedFor, readySince, CHECK_TEXT_MAX, checkLines, checkText, infraReason, stacksOf, changeSummary, jobWorking, updatingJob,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import { forgetRetries } from '../../src/api/stuck-checks.js'
@@ -354,6 +354,34 @@ describe('who a change is credited to', () => {
     expect(jobsByBranch([render, conflict, resumed], RULE).get('claude/task-renders')?.id).toBe('job-r2')
     // a work item on its own branch is the change's job
     expect(jobsByBranch([conflict], RULE).get('claude/task-renders')?.id).toBe('job-c')
+  })
+
+  it('is being updated while the conflict work item on it runs, though it stays the task\'s (test-esp32 #243)', () => {
+    const NOW = 1_800_000_000
+    const render = row('job-r', 'claude/task-renders', 'task', 'render', NOW - 600)
+    const conflict = { ...row('job-c', 'claude/task-renders', 'work-item', 'verify', NOW - 60), state: 'running' as const, endedAt: null, startedAt: NOW - 60, beatAt: NOW - 5, updatedAt: NOW - 5 }
+    const conflictWorker = { ...conflict, id: 'job-cw', kind: 'task', agent: 'worker', parentJob: 'job-c' }
+    const [c] = traceChanges([pr(43, 'claude/task-renders')], [render, conflict, conflictWorker], RULE)
+    expect(c?.job.id).toBe('job-r')
+    expect(updatingJob([render, conflict, conflictWorker], 'claude/task-renders', c?.job ?? null, NOW)?.id).toBe('job-c')
+    // only its worker still running: the work item is working through it
+    expect(updatingJob([render, { ...conflict, state: 'queued' as const }, conflictWorker], 'claude/task-renders', render, NOW)?.id).toBe('job-c')
+    // once it ended, nothing is updating it
+    const ended = { ...conflict, state: 'succeeded' as const, endedAt: NOW - 1 }
+    expect(updatingJob([render, ended, { ...conflictWorker, state: 'succeeded' as const, endedAt: NOW - 1 }], 'claude/task-renders', render, NOW)).toBeNull()
+    // a work item that is the change's own job is its job working, not an update
+    expect(updatingJob([conflict], 'claude/task-renders', conflict, NOW)).toBeNull()
+    // another branch's job says nothing about this one
+    expect(updatingJob([render, { ...conflict, branch: 'claude/task-other' }], 'claude/task-renders', render, NOW)).toBeNull()
+    const pull = { number: 43, title: 'Revision A renders', url: 'https://github.com/acme/board/pull/43', draft: false, labels: [], updated_at: '2026-11-05T00:00:00Z' }
+    const status = { state: 'open' as const, mergeable: 'dirty', checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] }, draft: false, updated_at: '2026-11-05T00:00:00Z' }
+    const sum = changeSummary({ repo: 'acme/board', pull, job: render, status, hold: 'no-automerge', agentWords: AGENT_WORDS, at: NOW, updating: true })
+    expect(sum).toMatchObject({ verdict: 'checking', working: true, updating: true, from: 'the Rendering specialist' })
+    const idle = changeSummary({ repo: 'acme/board', pull, job: render, status, hold: 'no-automerge', agentWords: AGENT_WORDS, at: NOW })
+    expect(idle.verdict).toBe('conflict')
+    expect(idle.working).toBeUndefined()
+    expect(idle.updating).toBeUndefined()
+    expect(acceptance({ state: 'open', draft: false, mergeable: 'dirty', checks: null, working: true, updating: true }, true).blockers[0]).toBe('trace is updating this change. Wait for its job to finish.')
   })
 
   it('the pick, when the router moved the job to another specialist, saying where it ran', () => {

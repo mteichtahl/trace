@@ -162,7 +162,7 @@ export function changeLine(c: ChangeSummary): string {
   if (c.stuck && c.state === 'open' && !c.working) return stuckLine(c.stuck)
   // a stacked change whose own checks are fine: it waits for the one below it
   // its job is still at it: passed checks say nothing yet about what it pushes next
-  if (c.working && c.state === 'open') return 'trace is still working on this change. Ready to review when its job finishes.'
+  if (c.working && c.state === 'open') return `trace is ${c.updating ? 'updating' : 'still working on'} this change. Ready to review when its job finishes.`
   if (c.verdict === 'blocked' && c.state === 'open' && c.builds_on) return `Builds on "${c.builds_on.title}". Accept that one first; this one follows it.`
   switch (c.verdict) {
     case 'ready': return `Ready to review. ${checksWords(c.checks)}.`
@@ -203,8 +203,8 @@ export function blockedLine(c: Pick<ChangeSummary, 'state' | 'draft' | 'mergeabl
 }
 
 /** trace's recommendation as the box says it: "trace recommends accepting." */
-export function recommendationWords(r: ChangeDetail['recommendation'], working?: boolean): string {
-  if (working && r.verdict === 'wait') return 'trace is still working on this change.'
+export function recommendationWords(r: ChangeDetail['recommendation'], working?: boolean, updating?: boolean): string {
+  if (working && r.verdict === 'wait') return updating ? 'trace is updating this change.' : 'trace is still working on this change.'
   switch (r.verdict) {
     case 'accept': return 'trace recommends accepting.'
     case 'ask': return 'trace recommends asking for changes.'
