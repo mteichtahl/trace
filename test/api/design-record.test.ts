@@ -361,6 +361,10 @@ describe('the guided skills read the design record', () => {
     const listed = async (): Promise<string[]> => ((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' })) as { items?: { id: string }[] }).items?.map((x) => x.id) ?? []
     const open = await listed()
     expect(open).toContain('requirement:REQ-2')
+    // the source line ends with one full stop, though the intent words end with their own (test-esp32 R22)
+    const items = ((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' })) as { items: { id: string; detail: string }[] }).items
+    const from = items.find((x) => x.id === 'requirement:REQ-2')?.detail
+    expect(from).toMatch(/^From Runs 2 years on one 2,000 mAh .*[^.]\.$/)
     await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 4, data: draft })
     // what the draft decides stays listed, with its decision on screen and Undo, rather than dropping out once saved
     // (test-esp32 #28)

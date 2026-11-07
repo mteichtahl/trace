@@ -236,6 +236,32 @@ describe('an interface statement\'s fields follow the person\'s edit (test-esp32
     expect(intentView(rows, [{ ...edit, choice: 'rejected' }])[0]?.interface).toEqual({ type: 'I2C', connector: '4-pin header' })
     d.close()
   })
+
+  it('the drafter reads which words and interface fields a person stated, so it does not mark them inferred (test-esp32 R22)', () => {
+    const dir = freshDb()
+    const d = new DesignDb(dir)
+    d.addIntent([
+      { id: 'I-oled', topic: 'interfaces', text: 'OLED module on I2C, ESP32 as controller.', interface: { type: 'I2C', connector: '4-pin header', protocol: 'I2C', direction: 'out' } },
+      { id: 'I-qty', topic: 'build', text: '10 units, made at JLCPCB.' },
+    ])
+    const rows = d.rows()
+    // the agent's own, undecided: nothing is a person's
+    expect(intentView(rows, []).map((s) => s.person)).toEqual([null, null])
+    // the person typed the pitch and the rate in the panel's Edit, words unchanged: the decision keeps all five fields
+    const fields: DesignDecision = { id: '1', kind: 'intent', target: 'I-oled', choice: 'accepted', detail: { text: 'OLED module on I2C, ESP32 as controller.', interface: { type: 'I2C', connector: '4-pin 2.54 mm header', protocol: 'I2C', rate: '400 kHz', direction: 'out' } }, by: 'marc@example.com', byHash: 'h', at: 1, supersededAt: null }
+    const accepted: DesignDecision = { id: '2', kind: 'intent', target: 'I-qty', choice: 'accepted', detail: { text: '10 units, made at JLCPCB.' }, by: 'marc@example.com', byHash: 'h', at: 1, supersededAt: null }
+    let v = intentView(rows, [fields, accepted])
+    expect(v[0]?.person).toEqual({ by: 'marc@example.com', words: false, fields: ['connector', 'rate'] })
+    // accepted as worded: the words are still the agent's
+    expect(v[1]?.person).toBeNull()
+    // reworded: the words are the person's
+    v = intentView(rows, [{ ...accepted, choice: 'edited', detail: { text: '10 units, made at JLCPCB.', edited: '10 units, assembled by JLCPCB.' } }])
+    expect(v[1]?.person).toEqual({ by: 'marc@example.com', words: true, fields: [] })
+    // a statement the person stated: theirs in full
+    const stated: DesignDecision = { id: '3', kind: 'intent', target: 'I-dbg', choice: 'stated', detail: { text: 'Debug UART on a 3-pin header at 115200 baud, both directions.', topic: 'interfaces', kind: 'statement' }, by: 'marc@example.com', byHash: 'h', at: 2, supersededAt: null }
+    expect(intentView(rows, [stated]).find((s) => s.id === 'I-dbg')?.person).toEqual({ by: 'marc@example.com', words: true, fields: ['type', 'connector', 'protocol', 'rate', 'direction'] })
+    d.close()
+  })
 })
 
 describe('design.architecture', () => {
