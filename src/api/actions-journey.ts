@@ -457,6 +457,18 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
       'Write the release report with verify.report: it holds coverage, interference estimates, the parts list with its cost and stock, and every open waiver, for a person to review. Release review approves the report it records. Do not sign or waive anything yourself.',
     ].join('\n'),
   },
+  // the order sheet a person checks waits for the package and today's stock (test-esp32 #220): started here, not
+  // only once a person asks
+  fabricate: {
+    agent: 'impl',
+    started: 'The Implementation agent builds the release package and checks stock and prices again today.',
+    request: [
+      'The release approval gate was signed: the project is in Fabricate. Prepare the order for JLCPCB.',
+      'Build the release package with kicad.fab (house jlcpcb, zipped) from the released board on the default branch, into hardware/<board>/release/rev<revision>/: Gerbers and drill, the parts list and the placement file in JLCPCB\'s columns. Fix nothing in the design here: a problem the package shows is a question for a person (journey.ask). Read the board with kicad.board, so its layers, size, thickness and copper are in the record for the order options. Record fabricate.order.package with journey.check, citing the kicad.fab run.',
+      'Check stock and prices again today: parts.bom_check on the package\'s parts list at the build quantity, fresh, then shape.check fabricate.order.stock records the criterion. A line now short or out of stock is a question for a person (journey.ask), with an in-stock alternative where there is one.',
+      'Do not order, pay or sign anything: a person checks the order sheet in Order submit and signs the order gate.',
+    ].join('\n'),
+  },
 }
 
 /**

@@ -110,7 +110,7 @@ describe('trace\'s criterion with nothing working on it (#161)', () => {
     expect(ownedWork('signoff', 'signoff.docs', 'The documents are current.')).toMatchObject({ scribe: true })
     expect(ownedWork('layout', 'layout.fit', 'The board fits.')).toMatchObject({ agent: 'impl', request: expect.stringMatching(/mech_build/) })
     // a stage with no work of its own leaves the agent to trace's router
-    expect(ownedWork('fabricate', 'fabricate.order.package', 'The release package is built and stored.').agent).toBeUndefined()
+    expect(ownedWork('bringup', 'bringup.verified', 'Every requirement is verified on hardware.').agent).toBeUndefined()
   })
 })
 
