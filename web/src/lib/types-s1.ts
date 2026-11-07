@@ -615,6 +615,23 @@ export interface CloudSpend {
   basis: 'estimate'
 }
 
+/** The order (boards, assembly, parts, case, shipping) estimated from the record at the fab's published prices, not a quote. */
+export interface OrderEstimateView {
+  currency: string
+  quantity: number
+  low: number
+  high: number
+  perBoard: { low: number; high: number }
+  /** when its parts check ran */
+  at: string
+  partsRun: string
+  lines: { key: string; what: string; low: number; high: number; source: string }[]
+  notIn: string[]
+  verdict: 'under' | 'at_risk' | 'over' | null
+  limits: { requirement: string | null; kind: 'total' | 'per_board'; amount: number; currency: string; verdict: 'under' | 'at_risk' | 'over' | 'not_compared'; text: string }[]
+  text: string
+}
+
 /** cost.get. Money is for admins only (`money: false`: every amount is null); what is not recorded is null, with notes. */
 export interface CostView {
   money?: boolean
@@ -634,6 +651,8 @@ export interface CostView {
   cloudBudget?: number
   quantity?: number
   unit_cost?: number | null
+  /** the order estimate against the cost requirements, from the newest parts check; absent before one */
+  orderEstimate?: OrderEstimateView
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
   lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'tools' | 'order'; amount: number; estimate?: boolean }[]
   /** spend by job, grouped by stage, work done again marked (admins; null when nothing is recorded) */

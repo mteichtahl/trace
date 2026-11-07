@@ -123,6 +123,22 @@ const SOIL_COST: CostView = {
   warning: { level: 'over', stage: 'Capture', spent: 21.12, share: 14.33, left: 43, stagesLeft: 3, top: [SOIL_JOBS[5]!, SOIL_JOBS[2]!, SOIL_JOBS[0]!] },
   spent: { cloud: 38.12, orders: 0, detail: { estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: { total: 9.86, byService: { 'Amazon Bedrock AgentCore': 7.2, 'AWS CodeBuild': 1.9, 'AWS Secrets Manager': 0.76 }, through: ago(DAY).slice(0, 10), estimatedDays: 1 }, basis: 'estimate' } },
   lines: COST.lines.map((l) => ({ ...l, estimate: true })),
+  // the order estimate from Capture's parts check: the per-board requirement at risk, seen before Sign-off (#162)
+  orderEstimate: {
+    currency: 'USD', quantity: 10, low: 96.4, high: 171.2, perBoard: { low: 10.14, high: 13.62 }, at: ago(DAY), partsRun: 'b0c4a1e9d2f37a60', verdict: 'at_risk',
+    lines: [
+      { key: 'parts', what: 'Parts for 10 boards (18 lines checked)', low: 71.4, high: 71.4, source: 'parts check b0c4a1e9d2f37a60' },
+      { key: 'boards', what: '10 bare boards (no board yet: priced as two layers, up to 100 x 100 mm)', low: 2, high: 30, source: 'JLCPCB\'s published prices of 2026-10-01, not a quote' },
+      { key: 'assembly', what: 'Assembly: setup and stencil, 3 to 6 extended parts, about 260 parts placed', low: 28, high: 35.2, source: 'JLCPCB\'s published prices of 2026-10-01, not a quote' },
+      { key: 'shipping', what: 'Shipping, a small parcel', low: 15, high: 40, source: 'JLCPCB\'s published prices of 2026-10-01, not a quote; depends on the destination' },
+    ],
+    notIn: ['No case yet: a case is added once one is built (mech.build gives its volume).'],
+    limits: [
+      { requirement: 'REQ-COST-001', kind: 'total', amount: 200, currency: 'USD', verdict: 'under', text: 'REQ-COST-001: the order US$96.40 to US$171.20, under US$200.' },
+      { requirement: 'REQ-COST-002', kind: 'per_board', amount: 12, currency: 'USD', verdict: 'at_risk', text: 'REQ-COST-002: per board US$10.14 to US$13.62, at risk against US$12 (up to US$1.62 over).' },
+    ],
+    text: '',
+  },
   explorer: { checkedAt: ago(3 * HOUR), nextAt: ahead(21 * HOUR), ok: true, tag: 'active', text: `Read from Cost Explorer by the trace:project cost allocation tag. A day's figures settle about 24 hours later, so the latest days may still change. Read ${ago(3 * HOUR).slice(0, 16).replace('T', ' ')} UTC; next read ${ahead(21 * HOUR).slice(0, 16).replace('T', ' ')} UTC.` },
   prices: {
     asOf: ago(6 * HOUR).slice(0, 10), stale: false, sources: ['https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/price-changes.html'],
