@@ -7,6 +7,7 @@
  */
 import { useState } from 'react'
 import { askTrace } from '@/components/chat/chat-state'
+import { Cited } from '@/components/cited'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { StatusBadge } from '@/components/status-badge'
@@ -63,7 +64,7 @@ export function OptionsTable({ a, current }: { a: ArchitectureRecord; current?: 
                 const s = a.scores?.find((x) => x.option === o.id && x.criterion === c.id)
                 return (
                   <td key={o.id} className="px-3 py-2 align-top">
-                    {s ? <><span className="font-medium tabular-nums">{s.score} of 5</span><span className="block text-xs text-muted-foreground">{s.reason}{s.by === 'person' ? ' (yours)' : ''}</span></> : <span className="text-xs text-muted-foreground">Not scored</span>}
+                    {s ? <><span className="font-medium tabular-nums">{s.score} of 5</span><span className="block text-xs text-muted-foreground"><Cited text={s.reason} />{s.by === 'person' ? ' (yours)' : ''}</span></> : <span className="text-xs text-muted-foreground">Not scored</span>}
                   </td>
                 )
               })}
@@ -97,10 +98,10 @@ export function ArchitectureSummary({ a, current, requirements }: { a: Architect
         <p><StatusBadge status="yours" label="Not chosen yet" /> The diagram shows trace's {rec ? 'recommendation' : 'first option'}; a person chooses in Architecture choice.</p>
       )}
       {rec && (
-        <p><span className="font-medium">trace recommends option {rec.id}</span>{rec.why ? `: ${rec.why}` : '.'}{rec.gives_up ? <span className="text-muted-foreground"> It gives up {rec.gives_up.replace(/^./, (c) => c.toLowerCase())}</span> : null}</p>
+        <p><span className="font-medium">trace recommends option {rec.id}</span>{rec.why ? <>: <Cited text={rec.why} /></> : '.'}{rec.gives_up ? <span className="text-muted-foreground"> It gives up <Cited text={rec.gives_up.replace(/^./, (c) => c.toLowerCase())} /></span> : null}</p>
       )}
       <CriteriaFollow a={a} />
-      {o && o.risks.length > 0 && <p className="text-muted-foreground">Risks of option {o.id}: {o.risks.join('; ')}.</p>}
+      {o && o.risks.length > 0 && <p className="text-muted-foreground">Risks of option {o.id}: <Cited text={o.risks.join('; ')} />.</p>}
       {missing.length > 0 && <p><StatusBadge status="warning" label={`${missing.length} not served`} /> No block of option {o?.id} serves {missing.join(', ')}: map each to a block, or take it back to Requirements review.</p>}
     </div>
   )

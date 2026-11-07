@@ -33,7 +33,8 @@ const OPTIONS: ArchOption[] = [
   },
   {
     id: 'B', name: 'STM32WL with integrated radio', summary: 'One chip with the LoRa radio inside: fewer parts and a lower sleep current.', recommended: true,
-    why: 'One chip instead of two saves US$1.40 a board and 4 µA asleep, which is two months of battery; the reference design covers the RF matching.', gives_up: 'A second source for the radio, and the SX1262\'s longer track record.',
+    // cited as the agents cite them: a datasheet by its hash and page, a run by its tool and id (test-esp32 #39)
+    why: 'One chip instead of two saves US$1.40 a board (bom_check 3c19aa01d4e5f607) and 4 µA asleep (STM32WLE5JC sha256 0ac83c83 p27, calc_battery_life), which is two months of battery; the reference design covers the RF matching.', gives_up: 'A second source for the radio, and the SX1262\'s longer track record.',
     risks: ['The STM32WLE5JC is low in stock at LCSC'], total: 23,
     blocks: DESIGN.architecture!.blocks.map((b) => ({ ...b })), connections: DESIGN.architecture!.connections.map((c) => ({ ...c })),
   },
@@ -56,7 +57,7 @@ function architecture(): ArchitectureRecord {
       { option: 'A', criterion: 'cost', score: 3, reason: 'Two chips cost US$1.40 more.', by: 'trace' }, { option: 'B', criterion: 'cost', score: 5, reason: 'One chip.', by: 'trace' },
       { option: 'A', criterion: 'power', score: 3, reason: '6 µA asleep with both chips.', by: 'trace' }, { option: 'B', criterion: 'power', score: 4, reason: '2 µA asleep.', by: 'trace' },
       { option: 'A', criterion: 'risk', score: 4, reason: 'Well known parts and layout.', by: 'trace' }, { option: 'B', criterion: 'risk', score: 3, reason: 'Newer part; RF from the reference design.', by: 'trace' },
-      { option: 'A', criterion: 'availability', score: 3, reason: 'Both in stock, one source each.', by: 'trace' }, { option: 'B', criterion: 'availability', score: 2, reason: 'Low stock at LCSC.', by: 'trace' },
+      { option: 'A', criterion: 'availability', score: 3, reason: 'Both in stock, one source each.', by: 'trace' }, { option: 'B', criterion: 'availability', score: 2, reason: 'Low stock at LCSC (bom_check 3c19aa01d4e5f607).', by: 'trace' },
     ],
   }
 }
