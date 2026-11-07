@@ -40,6 +40,12 @@ export interface IntentView extends IntentStatementRow {
   flags: IntentFlag[]
   /** the person left it uncovered by any requirement, with this reason */
   uncovered: string | null
+  /**
+   * what a person stated themselves, so a drafter does not take it as inferred: who; whether the words that stand are
+   * theirs (they stated or reworded them); the interface fields they gave (set in an edit, or read from their words).
+   * null when every word and field is an agent's.
+   */
+  person: { by: string; words: boolean; fields: InterfaceField[] } | null
 }
 
 /** The topics where a statement that states a quantity needs a number with its unit. */
@@ -220,6 +226,7 @@ export function ownSignatures(r: { signatures: readonly { gate: string; by: stri
 export function intentView(rows: DesignRows, decisions: readonly DesignDecision[], signed: readonly GateSign[] = []): IntentView[] {
   const dec = standing(decisions, 'intent')
   const unc = standing(decisions, 'intent.uncovered')
+  const own = new Set(statedRows(rows.intent, decisions).map((s) => s.id))
   const live = withStated(rows, decisions).intent.filter((s) => s.status !== 'withdrawn')
   const base = live.map((s) => {
     // a statement still in the person's draft (drafted) is not decided yet
@@ -238,10 +245,11 @@ export function intentView(rows: DesignRows, decisions: readonly DesignDecision[
     const changed = wasChanged && !sign
     // the person's fields of an interface (set beside an edit, or filled from their new words) stand over the agent's
     // while their decision does
-    const fields = (decidedState === 'edited' || decidedState === 'accepted') && d?.choice !== 'stated' && d?.detail.interface && typeof d.detail.interface === 'object' ? { ...givenFields(s.interface), ...givenFields(d.detail.interface) } : s.interface
+    const personFields = (decidedState === 'edited' || decidedState === 'accepted') && d?.choice !== 'stated' && d?.detail.interface && typeof d.detail.interface === 'object' ? givenFields(d.detail.interface) : null
+    const fields = personFields ? { ...givenFields(s.interface), ...personFields } : s.interface
     const u = unc.get(s.id)
     return {
-      ...s, interface: fields, words: edited ?? s.text, state, changed_since: changed,
+      ...s, interface: fields, words: edited ?? s.text, state, changed_since: changed, person: own.has(s.id) ? { by: s.by ?? '', words: true, fields: INTERFACE_FIELDS.filter((k) => fields?.[k]) } : personOf(d, edited !== null, s.interface, personFields),
       decided: sign ? { by: sign.by, at: iso(sign.at), gate: sign.gate } : d ? { by: d.by, at: iso(d.at), ...(typeof d.detail.reason === 'string' ? { reason: d.detail.reason } : {}) } : null,
       uncovered: u && u.choice === 'left_out' ? String(u.detail.reason ?? '') : null, flags: [] as IntentFlag[],
     }
@@ -259,6 +267,20 @@ export function intentView(rows: DesignRows, decisions: readonly DesignDecision[
     if (openConflicts(s, alive).length) s.flags.push('conflict')
   }
   return base
+}
+
+/**
+ * What a person stated of an agent's statement (IntentView.person; one a person stated is theirs in full). Of a
+ * person's decision on an agent's statement: the words when they reworded it; the interface fields their decision
+ * holds that differ from the agent's (the decision keeps all five fields, the agent's kept as they were, record
+ * decidedFields), so a field the person typed in an Edit, or their new words gave, is theirs (test-esp32 R22: a pitch
+ * and a bus rate typed in an Edit were drafted as "inferred: the interface record"). Pure.
+ */
+function personOf(d: DesignDecision | undefined, reworded: boolean, was: IntentInterface | null, decided: IntentInterface | null): IntentView['person'] {
+  if (!d || d.choice === 'rejected') return null
+  const agent = givenFields(was)
+  const fields = decided ? INTERFACE_FIELDS.filter((k) => decided[k] !== undefined && decided[k]?.toLowerCase() !== agent[k]?.toLowerCase()) : []
+  return reworded || fields.length ? { by: d.by, words: reworded, fields } : null
 }
 
 /**
