@@ -15,7 +15,7 @@ import { artifactMime, unpackArtifact } from '../core/store.js'
 import { type DesignDecision, loadDesignDecisions } from '../tools/design/decisions.js'
 import { type DesignRows, readDesignRows } from '../tools/design/db.js'
 import type { StockLine } from '../tools/design/key-parts.js'
-import { parseNets, requirementDecisions, requirementsNow } from '../tools/design/record.js'
+import { parseNets, requirementDecisions, requirementsNow, withStated } from '../tools/design/record.js'
 import type { Drawing } from '../tools/kicad/export.js'
 import { type CheckReport, parseDrc, parseErc } from '../tools/kicad/checks.js'
 import { type SetAside, type WaiverRef, requirementVerdict, setAsideWords } from '../tools/verify/verdict.js'
@@ -214,9 +214,10 @@ export function struckRequirements(db: DatabaseSync): { id: string; reason: stri
 
 // ------------------------------------------------------------------ the design record
 
-/** The agents' design rows and people's decisions about them. */
+/** The agents' design rows (with the intent statements people stated themselves) and people's decisions about them. */
 export function designOf(db: DatabaseSync): { rows: DesignRows; decisions: DesignDecision[] } {
-  return { rows: readDesignRows(db), decisions: loadDesignDecisions(db) }
+  const decisions = loadDesignDecisions(db)
+  return { rows: withStated(readDesignRows(db), decisions), decisions }
 }
 
 /** The newest schematic netlist in the record (kicad.netlist's or design.pins_check's nets.tsv), with its run. */

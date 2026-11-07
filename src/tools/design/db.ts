@@ -364,10 +364,11 @@ export class DesignDb {
   }
 
   /** Link a requirement to the intent lines it is derived from (`replace`: drop its other links). */
-  link(requirement: string, intents: readonly string[], replace = false): RequirementIntentRow[] {
+  /** `stated`: the statements people stated themselves (record.ts statedRows), which are not rows here. */
+  link(requirement: string, intents: readonly string[], replace = false, stated: ReadonlySet<string> = new Set()): RequirementIntentRow[] {
     return transaction(this.db, () => {
       if (!this.db.prepare('SELECT 1 FROM requirements WHERE id=?').get(requirement)) throw new ToolError(`no requirement ${requirement}`)
-      const missing = intents.filter((i) => !this.db.prepare('SELECT 1 FROM intent_statements WHERE id=?').get(i))
+      const missing = intents.filter((i) => !stated.has(i) && !this.db.prepare('SELECT 1 FROM intent_statements WHERE id=?').get(i))
       if (missing.length) throw new ToolError(`no intent statement ${missing.join(', ')}`)
       const t = now()
       if (replace) this.db.prepare('UPDATE requirement_intent SET removed=1, updated=?, by=? WHERE requirement=? AND removed=0').run(t, who(), requirement)

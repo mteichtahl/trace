@@ -4,9 +4,11 @@
  * quality bars and the screens read from it. Pure functions over rows, tested on their own.
  *
  *   intentView        each live statement with its state: accepted (a person accepted these words, or signed a gate
- *                     after an agent last wrote them), edited (a person's own words), proposed (an agent's, not yet
- *                     decided), rejected; and the flags the Intent builder shows: needs a number, vague word,
- *                     conflict, not testable
+ *                     after an agent last wrote them, or stated them), edited (a person's own words), proposed (an
+ *                     agent's, not yet decided), rejected; and the flags the Intent builder shows: needs a number, vague
+ *                     word, conflict, not testable
+ *   statedRows        the statements a person stated themselves (the Intent builder's chat notes them in the person's
+ *                     draft; Submit intent records them): kept in their decisions, read as rows beside the agents'
  *   linksView         each requirement's derived_from links to live statements
  *   architectureView  the options with their blocks, connections, trace's scores and recommendation; the criteria
  *                     (fixed by a person, or trace's proposal); the chosen option (a person's decision) and why
@@ -20,7 +22,7 @@
  */
 import { limitsOf } from '../verify/extract.js'
 import { type DesignDecision, fingerprint, standing } from './decisions.js'
-import { type ArchBlockRow, type BlockPart, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_TOPICS, type PinRow, TOPIC_NAMES } from './db.js'
+import { type ArchBlockRow, type BlockPart, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_KINDS, INTENT_TOPICS, type IntentTopic, type PinRow, STAGES, TOPIC_NAMES } from './db.js'
 
 // ------------------------------------------------------------------ intent
 
@@ -138,6 +140,45 @@ export function decidedFields(was: IntentInterface | null, words: string | null,
   return { ...out, ...givenFields(given) }
 }
 
+/**
+ * The statements people stated themselves, as rows: the Intent builder's chat notes each statement it drafts from the
+ * person's answers in their draft (no job, no branch, no change), and Submit intent records it in the journey record as
+ * a decision of kind intent, choice `stated`, with its words, topic and kind. The agents' rows are proposals in the
+ * repository (db.ts) that people decide on; these are a person's own words, so they live with people's decisions and
+ * are live at once. Read beside the agents' rows wherever intent is read (intentView, linksView, designOf).
+ *
+ * `drafted` is the same shape laid over a throwaway copy of the record while the statement is still in the draft (the
+ * quality bar's preview, actions-skills.ts): a proposed statement, not yet decided. Never recorded.
+ *
+ * Each statement's newest stated (or drafted) decision gives its row, even once a later decision on it (an edit, a
+ * rejection) supersedes that one. An id an agent's row already has is the agent's. Pure.
+ */
+export function statedRows(agents: readonly Pick<IntentStatementRow, 'id'>[], decisions: readonly DesignDecision[]): IntentStatementRow[] {
+  const have = new Set(agents.map((s) => s.id))
+  const latest = new Map<string, DesignDecision>()
+  for (const d of decisions) if (d.kind === 'intent' && (d.choice === 'stated' || d.choice === 'drafted') && !have.has(d.target)) latest.set(d.target, d)
+  return [...latest.values()].flatMap((d): IntentStatementRow[] => {
+    const x = d.detail
+    const topic = INTENT_TOPICS.find((t) => t === x.topic)
+    const text = typeof x.text === 'string' ? x.text.trim() : ''
+    if (!topic || !text) return []
+    const kind = INTENT_KINDS.find((k) => k === x.kind) ?? 'statement'
+    // an interface's fields: the ones given, else what its words plainly say
+    const iface = topic === 'interfaces' && kind === 'statement' ? { ...interfaceFromWords(text), ...givenFields(x.interface) } : null
+    return [{
+      id: d.target, topic: topic as IntentTopic, kind, text, source: { kind: 'person', ref: d.by }, interface: iface, limits: [],
+      decide_by: STAGES.find((st) => st === x.decide_by) ?? null, owner: typeof x.owner === 'string' && x.owner.trim() ? x.owner.trim() : null,
+      conflicts: [], testable: null, status: 'proposed', created: d.at, updated: d.at, by: d.by,
+    }]
+  })
+}
+
+/** The design rows with the statements people stated themselves beside the agents' (statedRows). Pure. */
+export function withStated(rows: DesignRows, decisions: readonly DesignDecision[]): DesignRows {
+  const stated = statedRows(rows.intent, decisions)
+  return stated.length ? { ...rows, intent: [...rows.intent, ...stated] } : rows
+}
+
 /** A person's gate signature, as intentView reads it: the gate's name, who, when (seconds). */
 export interface GateSign { gate: string; by: string; at: number }
 
@@ -163,21 +204,25 @@ export function ownSignatures(r: { signatures: readonly { gate: string; by: stri
 export function intentView(rows: DesignRows, decisions: readonly DesignDecision[], signed: readonly GateSign[] = []): IntentView[] {
   const dec = standing(decisions, 'intent')
   const unc = standing(decisions, 'intent.uncovered')
-  const live = rows.intent.filter((s) => s.status !== 'withdrawn')
+  const live = withStated(rows, decisions).intent.filter((s) => s.status !== 'withdrawn')
   const base = live.map((s) => {
-    const d = dec.get(s.id)
+    // a statement still in the person's draft (drafted) is not decided yet
+    const d0 = dec.get(s.id)
+    const d = d0?.choice === 'drafted' ? undefined : d0
     const seen = typeof d?.detail.text === 'string' ? d.detail.text : null
     const edited = d?.choice === 'edited' && typeof d.detail.edited === 'string' ? d.detail.edited : null
+    // a person's own statement (stated) is accepted in their words
+    const accepted = d?.choice === 'accepted' || d?.choice === 'stated'
     // an accepted statement whose words an agent changed afterwards is proposed again
-    const wasChanged = d?.choice === 'accepted' && seen !== null && seen !== s.text
-    const decidedState: IntentState = d?.choice === 'rejected' ? 'rejected' : edited !== null ? 'edited' : d?.choice === 'accepted' && !wasChanged ? 'accepted' : 'proposed'
+    const wasChanged = accepted && seen !== null && seen !== s.text
+    const decidedState: IntentState = d?.choice === 'rejected' ? 'rejected' : edited !== null ? 'edited' : accepted && !wasChanged ? 'accepted' : 'proposed'
     // a gate a person signed after an agent last wrote the words (and after any decision of theirs) accepts them
     const sign = decidedState === 'proposed' ? [...signed].sort((a, b) => a.at - b.at).find((g) => g.at >= s.updated && (!d || g.at >= d.at)) : undefined
     const state: IntentState = sign ? 'accepted' : decidedState
     const changed = wasChanged && !sign
     // the person's fields of an interface (set beside an edit, or filled from their new words) stand over the agent's
     // while their decision does
-    const fields = (decidedState === 'edited' || decidedState === 'accepted') && d?.detail.interface && typeof d.detail.interface === 'object' ? { ...givenFields(s.interface), ...givenFields(d.detail.interface) } : s.interface
+    const fields = (decidedState === 'edited' || decidedState === 'accepted') && d?.choice !== 'stated' && d?.detail.interface && typeof d.detail.interface === 'object' ? { ...givenFields(s.interface), ...givenFields(d.detail.interface) } : s.interface
     const u = unc.get(s.id)
     return {
       ...s, interface: fields, words: edited ?? s.text, state, changed_since: changed,
@@ -238,8 +283,8 @@ export function intentDraft(view: readonly IntentView[]) {
 }
 
 /** Each requirement's links to statements that are not withdrawn (rejected ones still show where a requirement came from). */
-export function linksView(rows: DesignRows): { requirement: string; intent: string }[] {
-  const ids = new Set(rows.intent.filter((s) => s.status !== 'withdrawn').map((s) => s.id))
+export function linksView(rows: DesignRows, decisions: readonly DesignDecision[] = []): { requirement: string; intent: string }[] {
+  const ids = new Set(withStated(rows, decisions).intent.filter((s) => s.status !== 'withdrawn').map((s) => s.id))
   return rows.links.filter((l) => !l.removed && ids.has(l.intent)).map((l) => ({ requirement: l.requirement, intent: l.intent }))
 }
 

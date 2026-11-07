@@ -25,7 +25,7 @@
 import { z } from 'zod'
 import { CHANGE_STAGE, type StageId, applyChange, changeReason, changeWords, decide, loadJourney } from '../core/journey.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
-import { InterfaceSchema, readDesignRows } from '../tools/design/db.js'
+import { INTENT_KINDS, INTENT_TOPICS, InterfaceSchema, STAGES, readDesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, decidedFields, intentView, outscoredBy, outscoredWords, pinPlanPrint } from '../tools/design/record.js'
 import { ActionError, type Context, Repo, def, hashOf, label, openProjectDb, plainly, withProjectDb, writeJourney } from './action-kit.js'
 
@@ -46,6 +46,20 @@ export const Decision = z.discriminatedUnion('kind', [
 ])
 export type DecisionInput = z.output<typeof Decision>
 
+/**
+ * A statement the person stated in the Intent builder (its chat notes each one in their draft): Submit intent records
+ * it in their words (choice stated, record.ts statedRows). `draft`: laid over the bar's throwaway copy of the record
+ * while it is still in the draft (choice drafted, a proposal). Never taken from design.decide: only from the draft.
+ */
+export const Stated = z.object({
+  kind: z.literal('stated'), statement: z.string().regex(/^INT-[0-9a-f]{6,12}$/), topic: z.enum(INTENT_TOPICS), statement_kind: z.enum(INTENT_KINDS).default('statement'),
+  text: z.string().trim().min(3).max(2000), interface: InterfaceSchema.optional(), owner: z.string().trim().max(200).optional(), decide_by: z.enum(STAGES).optional(),
+  draft: z.boolean().default(false),
+})
+export type StatedInput = z.output<typeof Stated>
+/** What a skill's draft records: a decision, or a statement of the person's own. */
+export type PendingDecision = DecisionInput | StatedInput
+
 /** The agents' design rows as the default branch has them (the repository's project database). */
 async function repoRows(ctx: Context, repo: string) {
   return withProjectDb(ctx, repo, (path) => {
@@ -63,7 +77,7 @@ async function repoRows(ctx: Context, repo: string) {
  * Check one decision against what the agents proposed, and say in words what it records. Throws the person's error
  * when the decision names something that is not there, or chooses against the recommendation without a reason.
  */
-export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRows>>['rows'], requirements: ReadonlyMap<string, RequirementWords>, prior: readonly DesignDecision[]): { kind: DesignDecision['kind']; target: string; choice: string; detail: Record<string, unknown>; summary: string } {
+export function prepare(d: PendingDecision, rows: Awaited<ReturnType<typeof repoRows>>['rows'], requirements: ReadonlyMap<string, RequirementWords>, prior: readonly DesignDecision[]): { kind: DesignDecision['kind']; target: string; choice: string; detail: Record<string, unknown>; summary: string } {
   switch (d.kind) {
     case 'intent': {
       const s = intentView(rows, prior).find((x) => x.id === d.statement)
@@ -82,8 +96,17 @@ export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRo
         summary: d.choice === 'accept' ? `Intent ${s.id} was accepted as worded: ${s.text}` : d.choice === 'edit' ? `Intent ${s.id} was reworded: ${d.text}` : `Intent ${s.id} was rejected: ${d.reason}`,
       }
     }
+    case 'stated': {
+      if (rows.intent.some((x) => x.id === d.statement)) throw new ActionError(`The intent statement ${d.statement} is already in the record.`)
+      const words = d.statement_kind === 'dont_care' ? `Don't care: ${d.text}` : d.text
+      return {
+        kind: 'intent', target: d.statement, choice: d.draft ? 'drafted' : 'stated',
+        detail: { text: d.text, topic: d.topic, kind: d.statement_kind, ...(d.interface ? { interface: d.interface } : {}), ...(d.owner ? { owner: d.owner } : {}), ...(d.decide_by ? { decide_by: d.decide_by } : {}) },
+        summary: `Intent ${d.statement} was stated (${d.topic}): ${words}`,
+      }
+    }
     case 'uncovered': {
-      if (!rows.intent.some((x) => x.id === d.statement && x.status !== 'withdrawn')) throw new ActionError(`There is no intent statement ${d.statement} in this project.`)
+      if (!intentView(rows, prior).some((x) => x.id === d.statement)) throw new ActionError(`There is no intent statement ${d.statement} in this project.`)
       return { kind: 'intent.uncovered', target: d.statement, choice: 'left_out', detail: { reason: d.reason }, summary: `Intent ${d.statement} is left without a requirement: ${d.reason}` }
     }
     case 'requirement': {

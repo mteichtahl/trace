@@ -10,7 +10,7 @@
  *   the recommended one first (Decision card), then making the answer specific and saying whether it lasts. Sends
  *   with question.answer.
  */
-import { UseAgentUpdate, useAgent } from '@copilotkit/react-core/v2'
+import { UseAgentUpdate, useAgent, useFrontendTool } from '@copilotkit/react-core/v2'
 import { ArrowRight, Check, Circle, CircleDot } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -36,7 +36,7 @@ import type { CriterionStatus, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
-import { IntentOpening, openingWords, useSkillThread } from './intent-chat'
+import { IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, noteStatements, notedAnswer, openingWords, useSkillThread, withNoted } from './intent-chat'
 import { StepHeader, Unavailable, type Confirmable } from './parts'
 import { type SkillDraftBase, draftChecks, focusSteps, qualityChecks, useSkill } from './use-skill'
 
@@ -61,7 +61,8 @@ const STATE_WORD: Record<IntentStatement['state'], { status: 'met' | 'yours' | '
 
 /** A person's decision on one statement, kept in the draft until Submit records it (actions-skills pendingDecisions). */
 export interface IntentDecision { statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string; interface?: Partial<Record<InterfaceField, string>> }
-interface IntentLocal extends SkillDraftBase { topic?: number; decisions?: IntentDecision[] }
+/** `proposed`: the statements trace's chat noted from the person's answers (intent-chat.tsx noteStatements). */
+interface IntentLocal extends SkillDraftBase { topic?: number; decisions?: IntentDecision[]; proposed?: NotedStatement[] }
 
 /** The draft with one statement's decision replaced, or removed (null). Pure. */
 export function withIntentDecision<D extends { decisions?: IntentDecision[] }>(d: D, statement: string, decision: Omit<IntentDecision, 'statement'> | null): D {
@@ -105,12 +106,14 @@ export function intentSubmitLabel(submit: string, undecided: number): string {
  * chat says the same as the panel (test-esp32 #22: it said the edits had not reached the record while the badge said
  * Accepted). Pure.
  */
-export function intentDraftContext(decisions: readonly IntentDecision[], undecided: readonly string[]) {
+export function intentDraftContext(decisions: readonly IntentDecision[], undecided: readonly string[], noted: readonly NotedStatement[] = []) {
   return {
     submitted: false,
     note: 'These decisions are in the person\'s Intent builder draft, not in the record. They are recorded when the person presses Submit intent; until then the record still has the statements as the agents wrote them. Submit intent also accepts, as worded, every statement still in draft.',
     decisions: decisions.map((d) => ({ statement: d.statement, choice: d.choice, ...(d.text ? { words: d.text } : {}), ...(d.reason ? { reason: d.reason } : {}) })),
     acceptedAtSubmit: undecided,
+    // what trace noted in the draft (note_intent), so it rewords one by its id rather than noting it twice
+    ...(noted.length ? { notedInDraft: noted.map((x) => ({ id: x.id, topic: x.topic, words: x.text, ...(x.kind ? { kind: x.kind } : {}) })) } : {}),
   }
 }
 
@@ -211,12 +214,22 @@ function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; d
   )
 }
 
+/** The Draft intent panel's count: the statements, and how many of them trace noted in this draft (not submitted). Pure. */
+export function draftCount(statements: number, noted: number): string {
+  return `${statements} ${statements === 1 ? 'statement' : 'statements'}${noted ? ` · ${noted} noted in your draft` : ''}`
+}
+
 export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const s = useSkill<IntentLocal>(repo, def, { done: [] })
   const kept = useSkillThread(repo, def.id)
   const { agent } = useAgent({ agentId: FOCUS_AGENT_ID, updates: [UseAgentUpdate.OnStateChanged] })
   const live = intentFromState(agent.state)
-  const intent = live ?? s.view.data?.intent
+  const decisions = s.draft.data.decisions ?? []
+  const proposed = s.draft.data.proposed ?? []
+  const recorded = live ?? s.view.data?.intent
+  // the statements trace noted in the draft show at once, before the saved draft comes back laid over the record
+  const rejectedIds = new Set(decisions.filter((d) => d.choice === 'reject').map((d) => d.statement))
+  const intent = withNoted(recorded, proposed, rejectedIds)
   const v = s.view.data
   // the agent drives the topic; the person can revisit an answered one
   const topic = intent?.topic ?? s.stepIndex
@@ -225,19 +238,36 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const checks = qualityChecks(def, v, draftChecks(v, s.draft.data))
   const left = checks.filter((c) => c.status === 'not_met').length
   const t = def.steps[topic] ?? def.steps[0]!
-  const decisions = s.draft.data.decisions ?? []
   // a statement rejected in the draft drops out of the record's view (skill.get lays the draft over it): listed here
   const shown = new Set((intent?.statements ?? []).map((x) => x.id))
   const rejected = decisions.filter((d) => d.choice === 'reject' && !shown.has(d.statement))
   const decide = (statement: string, d: Omit<IntentDecision, 'statement'> | null) => s.draft.setData((x) => withIntentDecision(x, statement, d))
   const undecided = undecidedStatements(intent?.statements ?? [], decisions)
-  useTraceContext(decisions.length || undecided.length ? { label: 'Intent draft', description: 'The person\'s Intent builder draft, not submitted yet', value: intentDraftContext(decisions, undecided) } : null, 'intent-draft')
+  useTraceContext(decisions.length || undecided.length || proposed.length ? { label: 'Intent draft', description: 'The person\'s Intent builder draft, not submitted yet', value: intentDraftContext(decisions, undecided, proposed) } : null, 'intent-draft')
+
+  // trace's chat notes the statements it drafts in this draft at once (note_intent): no job, no branch, no change
+  const latest = useRef({ draft: s.draft, proposed, record: new Set<string>() })
+  latest.current = { draft: s.draft, proposed, record: new Set((recorded?.statements ?? []).map((x) => x.id).filter((id) => !proposed.some((p) => p.id === id))) }
+  useFrontendTool({
+    name: 'note_intent', agentId: FOCUS_AGENT_ID, description: NOTE_INTENT_DESCRIPTION, parameters: NoteIntent,
+    handler: async (args) => {
+      const { draft, proposed: now, record } = latest.current
+      // the saved draft must be in first, or noting would start a new one over it
+      if (!draft.loaded) return { noted: [], refused: ['The draft is still loading: note them again in a moment.'] }
+      const r = noteStatements(now, args, record)
+      if (r.noted.length || r.withdrawn.length) {
+        latest.current.proposed = r.proposed
+        draft.setData((d) => ({ ...d, proposed: r.proposed }))
+      }
+      return notedAnswer(r)
+    },
+  }, [])
 
   const aside = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-baseline justify-between border-b px-5 py-4">
         <h2 className="font-semibold">Draft intent</h2>
-        <span className="text-xs text-muted-foreground">{intent?.statements.length ?? 0} statements{live ? '' : ' · from the record'}</span>
+        <span className="text-xs text-muted-foreground">{draftCount(intent?.statements.length ?? 0, proposed.filter((x) => !rejectedIds.has(x.id) && x.kind !== 'question').length)}</span>
       </div>
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-4">
         {!intent ? (

@@ -50,8 +50,8 @@ import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 export const QUEUED_DRAFTING = 'This project\'s agent is still being set up, so the drafting is queued: the Verification agent drafts the candidate requirements for Requirements review by itself once the agent is ready. You need not submit again.'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision, standing } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, intentDraft, intentView, linksView, outscoredBy, outscoredWords, matedParts, pinCheck } from '../tools/design/record.js'
-import { type DecisionInput, Decision, changesStage, prepare } from './actions-design.js'
+import { type RequirementWords, architectureView, decidedFields, intentDraft, intentView, linksView, outscoredBy, outscoredWords, matedParts, pinCheck } from '../tools/design/record.js'
+import { type PendingDecision, type StatedInput, Decision, Stated, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
 import { artifactText, checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
 import { keyPartsView } from '../tools/design/key-parts.js'
@@ -345,7 +345,11 @@ export { REQUIREMENTS_FROM_INTENT }
 
 /**
  * The design decisions a skill's draft makes, which Submit records (design.decide's shapes):
- *   intent-builder       draft.decisions [{ statement, choice: accept | edit | reject, text?, reason? }]; every
+ *   intent-builder       draft.proposed [{ id, topic, kind?, text, interface?, owner?, decide_by? }]: the statements
+ *                        trace's chat noted in the draft from the person's answers. Submit records each in the words
+ *                        that stand (stated; the person's edit folded in, a rejected one left out); the preview lays
+ *                        them over the record as proposed (drafted), with the person's decisions on them.
+ *                        draft.decisions [{ statement, choice: accept | edit | reject, text?, reason? }]; every
  *                        proposed statement not named there is accepted as worded (Submit intent accepts the draft;
  *                        the bar's preview, acceptRest false, leaves them proposed)
  *   requirements-review  draft.decisions [{ requirement, choice: accept | strike, reason? }], draft.uncovered
@@ -356,17 +360,30 @@ export { REQUIREMENTS_FROM_INTENT }
  *   pin-plan-review      every part in the plan, or draft.parts [part]: agreed as it stands
  * Entries that are not decisions are left out (the bar then says what is missing).
  */
-export function pendingDecisions(skill: string, draft: Record<string, unknown>, rows: DesignRows, decided: readonly import('../tools/design/decisions.js').DesignDecision[] = [], o: { acceptRest?: boolean } = {}): DecisionInput[] {
-  const parse = (x: unknown): DecisionInput[] => { const r = Decision.safeParse(x); return r.success ? [r.data] : [] }
+export function pendingDecisions(skill: string, draft: Record<string, unknown>, rows: DesignRows, decided: readonly import('../tools/design/decisions.js').DesignDecision[] = [], o: { acceptRest?: boolean } = {}): PendingDecision[] {
+  const parse = (x: unknown): PendingDecision[] => { const r = Decision.safeParse(x); return r.success ? [r.data] : [] }
   switch (skill) {
     case 'intent-builder': {
       const named = list(draft.decisions).flatMap((d) => parse({ kind: 'intent', ...(d as object) }))
-      const inDraft = new Set(named.map((d) => (d.kind === 'intent' ? d.statement : '')))
+      const proposed = draftedStatements(draft, rows)
+      const mine = new Set(proposed.map((x) => x.statement))
       // Submit accepts every statement left undecided; the bar's preview does not, so the draft panel shows a
-      // statement Accepted only once the person accepts it
-      if (o.acceptRest === false) return named
-      const rest = intentView(rows, decided).filter((x) => x.state === 'proposed' && !inDraft.has(x.id)).map((x) => ({ kind: 'intent' as const, statement: x.id, choice: 'accept' as const }))
-      return [...named, ...rest]
+      // statement Accepted only once the person accepts it. The statements noted in the draft come first, so the
+      // person's decisions on them have them to decide on
+      if (o.acceptRest === false) return [...proposed.map((x) => ({ ...x, draft: true })), ...named]
+      const decision = (id: string) => named.find((d) => d.kind === 'intent' && d.statement === id) as Extract<PendingDecision, { kind: 'intent' }> | undefined
+      // each statement noted in the draft is recorded in the words that stand: the person's edit folded in, a
+      // rejected one left out (it was never in the record)
+      const stated = proposed.flatMap((x): StatedInput[] => {
+        const d = decision(x.statement)
+        if (d?.choice === 'reject') return []
+        const text = d?.choice === 'edit' && d.text ? d.text : x.text
+        const iface = x.topic === 'interfaces' && x.statement_kind === 'statement' && d && (d.choice === 'edit' || d.interface) ? decidedFields(x.interface ?? null, d.choice === 'edit' ? text : null, d.interface) : x.interface
+        return [{ ...x, text, ...(iface ? { interface: iface } : {}) }]
+      })
+      const inDraft = new Set(named.map((d) => (d.kind === 'intent' ? d.statement : '')))
+      const rest = intentView(rows, decided).filter((x) => x.state === 'proposed' && !inDraft.has(x.id) && !mine.has(x.id)).map((x) => ({ kind: 'intent' as const, statement: x.id, choice: 'accept' as const }))
+      return [...stated, ...named.filter((d) => !(d.kind === 'intent' && mine.has(d.statement))), ...rest]
     }
     case 'requirements-review':
       return [...list(draft.decisions).flatMap((d) => parse({ kind: 'requirement', ...(d as object) })), ...list(draft.uncovered).flatMap((d) => parse({ kind: 'uncovered', ...(d as object) }))]
@@ -391,6 +408,23 @@ export function pendingDecisions(skill: string, draft: Record<string, unknown>, 
     }
     default: return []
   }
+}
+
+/**
+ * The statements noted in an Intent builder draft (draft.proposed, written by its chat's note_intent tool), as the
+ * person's own: each with a well-formed id that no agent's row has. One that does not parse is left out. Pure.
+ */
+export function draftedStatements(draft: Record<string, unknown>, rows: Pick<DesignRows, 'intent'>): StatedInput[] {
+  const agents = new Set(rows.intent.map((x) => x.id))
+  const seen = new Set<string>()
+  return list(draft.proposed).flatMap((x) => {
+    if (!x || typeof x !== 'object') return []
+    const { id, kind, ...rest } = x as Record<string, unknown>
+    const r = Stated.safeParse({ ...rest, kind: 'stated', statement: id, ...(kind !== undefined ? { statement_kind: kind } : {}) })
+    if (!r.success || agents.has(r.data.statement) || seen.has(r.data.statement)) return []
+    seen.add(r.data.statement)
+    return [r.data]
+  })
 }
 
 const finding = (f: NonNullable<CheckInput['erc']>['findings'][number]) => ({

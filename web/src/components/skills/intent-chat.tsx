@@ -7,10 +7,17 @@
  * - the conversation is kept with the person's preferences (one thread per project and skill), so it is there when
  *   they come back, on any device, as the rail promises: "trace picks up at the topic you left" (test-esp32 #21: a
  *   new, empty chat every visit).
+ * - trace notes each statement it drafts from the person's answers in their draft at once, with its `note_intent` tool
+ *   (the app runs it: noteStatements), so it shows in the Draft intent panel as Draft and the quality bar checks it.
+ *   No job, no branch, no change: Submit intent records them (actions-skills.ts pendingDecisions). Before this the chat
+ *   could only offer a Verification job per answer to record them, and the panel stayed at "0 statements" (test log
+ *   R5; #7, #11, #84).
  */
 import { useCallback } from 'react'
+import { z } from 'zod'
 import { Rich } from '@/components/rich'
 import { getPath, useMe, useSetMe } from '@/lib/prefs'
+import type { IntentDraft, InterfaceField } from '@/lib/types-s1'
 import type { SkillDef } from './definitions'
 
 /** trace's question for each topic of the intent, asked one at a time. */
@@ -67,4 +74,102 @@ export function useSkillThread(repo: string, skill: string): { loaded: boolean; 
   const { mutate } = set
   const keep = useCallback((id: string) => mutate({ key, value: id }), [mutate, key])
   return { loaded: me.isSuccess || me.isError, thread: typeof v === 'string' && v ? v : undefined, keep }
+}
+
+// ------------------------------------------------------------------ statements noted in the draft
+
+/** The topics in the builder's order (definitions.ts intent-builder steps). */
+const TOPICS = Object.keys(TOPIC_QUESTIONS)
+const TOPIC_TITLE = (id: string): string => id.charAt(0).toUpperCase() + id.slice(1)
+
+/** A statement trace noted in the person's draft (draft.proposed): the person's own, recorded by Submit intent. */
+export interface NotedStatement {
+  id: string
+  topic: string
+  kind?: 'statement' | 'dont_care' | 'unknown' | 'question'
+  text: string
+  interface?: Partial<Record<InterfaceField, string>>
+  owner?: string
+  decide_by?: string
+}
+
+const Iface = z.object({ type: z.string(), connector: z.string(), protocol: z.string(), rate: z.string(), direction: z.string() }).partial()
+
+/** note_intent's arguments: what the chat model sends. */
+export const NoteIntent = z.object({
+  statements: z.array(z.object({
+    id: z.string().optional().describe('only to reword a statement you noted before: its id'),
+    topic: z.enum(TOPICS as [string, ...string[]]),
+    kind: z.enum(['statement', 'dont_care', 'unknown', 'question']).optional().describe('statement (default); dont_care: the topic does not matter here; unknown: decided later (give decide_by); question: open, with an owner'),
+    text: z.string().describe('one statement, in plain words, with its number and unit where it has one'),
+    interface: Iface.optional().describe('interfaces: type, connector, protocol, rate, direction'),
+    owner: z.string().optional().describe('question: who answers it'),
+    decide_by: z.enum(['define', 'architect', 'capture', 'prove', 'layout', 'signoff', 'release', 'fabricate', 'bringup']).optional().describe('unknown: the stage it must be decided by'),
+  })).default([]),
+  withdraw: z.array(z.string()).optional().describe('ids of statements you noted that the person took back'),
+})
+export type NoteIntentArgs = z.input<typeof NoteIntent>
+
+export const NOTE_INTENT_DESCRIPTION = 'Note the intent statements you drafted from the person\'s answers in their Intent builder draft. They show at once in the Draft intent panel as Draft, the quality bar checks them, and the person can accept, edit or reject each there; Submit intent records them. No task, branch or change is needed: never offer start_task to record intent. One statement per line of intent, in the person\'s words where you can, with its number and unit. To reword one you noted before, give its id; to take one back, list it in withdraw. A statement already in the record is the person\'s to decide in the panel.'
+
+/** A new statement id, as the record's (INT-<6 hex>). */
+export function newStatementId(): string {
+  const b = new Uint8Array(3)
+  crypto.getRandomValues(b)
+  return `INT-${[...b].map((x) => x.toString(16).padStart(2, '0')).join('')}`
+}
+
+/**
+ * note_intent, run by the app on the person's draft: each statement added (a new id), or put in place of the one it
+ * names that was noted before; withdrawn ones removed. A statement the record already has is not touched: the person
+ * decides on it in the panel. Pure; `newId` gives the ids.
+ */
+export function noteStatements(proposed: readonly NotedStatement[], args: unknown, record: ReadonlySet<string>, newId: () => string = newStatementId): { proposed: NotedStatement[]; noted: { id: string; topic: string; text: string }[]; withdrawn: string[]; refused: string[] } {
+  const a = NoteIntent.safeParse(args)
+  if (!a.success) return { proposed: [...proposed], noted: [], withdrawn: [], refused: [`The statements could not be read: ${a.error.issues[0]?.message ?? 'bad arguments'}.`] }
+  let out = [...proposed]
+  const noted: { id: string; topic: string; text: string }[] = []
+  const refused: string[] = []
+  for (const st of a.data.statements) {
+    const text = st.text.trim()
+    if (text.length < 3) { refused.push(`A ${st.topic} statement has no words.`); continue }
+    if (st.id && record.has(st.id) && !out.some((x) => x.id === st.id)) { refused.push(`${st.id} is in the record: the person accepts, edits or rejects it in the Draft intent panel.`); continue }
+    const id = st.id && out.some((x) => x.id === st.id) ? st.id : newId()
+    const iface = st.interface ? Object.fromEntries(Object.entries(st.interface).filter(([, v]) => typeof v === 'string' && v.trim())) as NotedStatement['interface'] : undefined
+    const row: NotedStatement = {
+      id, topic: st.topic, text, ...(st.kind && st.kind !== 'statement' ? { kind: st.kind } : {}), ...(iface && Object.keys(iface).length ? { interface: iface } : {}),
+      ...(st.owner?.trim() ? { owner: st.owner.trim() } : {}), ...(st.decide_by ? { decide_by: st.decide_by } : {}),
+    }
+    out = out.some((x) => x.id === id) ? out.map((x) => (x.id === id ? row : x)) : [...out, row]
+    noted.push({ id, topic: st.topic, text })
+  }
+  const gone = new Set((a.data.withdraw ?? []).filter((id) => out.some((x) => x.id === id)))
+  out = out.filter((x) => !gone.has(x.id))
+  return { proposed: out, noted, withdrawn: [...gone], refused }
+}
+
+/** What note_intent answers the chat. Pure. */
+export function notedAnswer(r: Pick<ReturnType<typeof noteStatements>, 'noted' | 'withdrawn' | 'refused'>) {
+  return {
+    noted: r.noted, ...(r.withdrawn.length ? { withdrawn: r.withdrawn } : {}), ...(r.refused.length ? { refused: r.refused } : {}),
+    note: 'In the person\'s Draft intent panel now, as Draft, and the quality bar checks them. They are recorded when the person presses Submit intent. Nothing needs to be started.',
+  }
+}
+
+/**
+ * The draft as the panel shows it: the record's view (skill.get lays the draft over the record, so a noted statement
+ * is in it once the draft is saved), with any noted statement it does not hold yet added as Draft, so it shows the
+ * moment trace notes it. One the person rejected in the draft is left out (it is listed under "Rejected in your
+ * draft"). Pure.
+ */
+export function withNoted(intent: IntentDraft | undefined, proposed: readonly NotedStatement[], rejected: ReadonlySet<string>): IntentDraft | undefined {
+  const have = new Set([...(intent?.statements ?? []).map((x) => x.id), ...(intent?.questions ?? []).map((x) => x.id)])
+  const add = proposed.filter((x) => !have.has(x.id) && !rejected.has(x.id))
+  if (!add.length) return intent
+  const words = (x: NotedStatement): string => (x.kind === 'dont_care' ? `Don't care: ${x.text}` : x.kind === 'unknown' ? `Unknown, decide by ${x.decide_by ?? '?'}: ${x.text}` : x.text)
+  const statements = [...(intent?.statements ?? []), ...add.filter((x) => x.kind !== 'question').map((x) => ({ id: x.id, topic: TOPIC_TITLE(x.topic), text: words(x), state: 'draft' as const }))]
+  const questions = [...(intent?.questions ?? []), ...add.filter((x) => x.kind === 'question').map((x) => ({ id: x.id, text: x.text, owner: x.owner ?? 'no owner yet' }))]
+  const answered = [...new Set([...(intent?.answered ?? []), ...add.filter((x) => x.kind !== 'question').map((x) => x.topic)])]
+  const next = TOPICS.findIndex((t) => !answered.includes(t))
+  return { topic: next === -1 ? TOPICS.length - 1 : next, answered, statements, questions }
 }
