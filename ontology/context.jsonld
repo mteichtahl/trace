@@ -432,6 +432,10 @@
       "@id": "trace:reopenedAt",
       "@type": "xsd:dateTime"
     },
+    "replacedByQuote": {
+      "@id": "trace:replacedByQuote",
+      "@type": "@id"
+    },
     "resolvedAt": {
       "@id": "trace:resolvedAt",
       "@type": "xsd:dateTime"

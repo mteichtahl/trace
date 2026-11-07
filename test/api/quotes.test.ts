@@ -124,4 +124,31 @@ describe('JLCPCB quotes', () => {
     expect(b.quotes.find((q: { total: number }) => q.total === 210).order).toMatchObject({ number: 'Y12-0042', paid: 213.4, difference: 3.4 })
     await expect(run(USER, 'order.record', { repo: REPO, number: 'Y12-0043', paid: 1, ship: null, quote: 'qnope' })).rejects.toThrow(/No quote qnope/)
   })
+
+  it('the person confirms an agent\'s quote, corrects a quote entered wrong, and withdraws a mistaken one (#241)', async () => {
+    const before = await run(USER, 'build.get', { repo: REPO })
+    const agents = before.quotes.find((q: { agent?: boolean }) => q.agent)
+    expect(agents).toMatchObject({ total: 205.5, said: 'JLCPCB now says US$205.50 for the twenty.' })
+    await expect(run(REVIEWER, 'quote.confirm', { repo: REPO, quote: agents.id })).rejects.toThrow(/no access|write/)
+    // confirmed: in the journey record once, so an order can be linked to it
+    const c = await run(USER, 'quote.confirm', { repo: REPO, quote: agents.id })
+    expect(c.quote).toMatchObject({ total: 205.5, by: 'the worker agent', confirmedBy: 'q-user@example.com', said: 'JLCPCB now says US$205.50 for the twenty.' })
+    expect(c.quote.agent).toBeUndefined()
+    const b1 = await run(USER, 'build.get', { repo: REPO })
+    expect(b1.quotes).toHaveLength(before.quotes.length)
+
+    // corrected: the old one kept with its values, out of the totals
+    const fix = await run(USER, 'quote.correct', { repo: REPO, quote: c.quote.id, total: 250.5, reason: 'The agent heard 205.50; the cart says 250.50.' })
+    expect(fix.quote).toMatchObject({ total: 250.5, quantity: 20, on: '2026-11-07', corrects: { id: c.quote.id, total: 205.5, reason: 'The agent heard 205.50; the cart says 250.50.' }, change: { amount: 40.5 } })
+    const b2 = await run(USER, 'build.get', { repo: REPO })
+    expect(b2.quotes.find((q: { id: string }) => q.id === c.quote.id)).toMatchObject({ total: 205.5, correctedBy: fix.quote.id, change: null })
+
+    // withdrawn: kept with the reason, out of the totals; a reason is needed
+    await expect(run(USER, 'quote.withdraw', { repo: REPO, quote: fix.quote.id, reason: '' })).rejects.toThrow()
+    const w = await run(USER, 'quote.withdraw', { repo: REPO, quote: fix.quote.id, reason: 'This was for the other board.' })
+    expect(w.quote).toMatchObject({ total: 250.5, withdrawn: { reason: 'This was for the other board.', by: 'q-user@example.com' }, change: null })
+    // the one an order was placed against is corrected, not withdrawn
+    const placed = b2.quotes.find((q: { order: unknown }) => q.order)
+    await expect(run(USER, 'quote.withdraw', { repo: REPO, quote: placed.id, reason: 'Not a mistake' })).rejects.toThrow(/correct it instead/)
+  })
 })

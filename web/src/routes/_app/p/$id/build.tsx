@@ -46,7 +46,7 @@ import type { HardwareLine, HardwareList, OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
 import { DeploysPanel } from '@/components/project/deploys'
-import { againstBudget, estimateRange, exact, orderAmount, orderHeadline } from '@/components/project/order-sheet'
+import { againstBudget, estimateRange, exact, lineChange, orderAmount, orderHeadline, priceChangeLine, unitPrice } from '@/components/project/order-sheet'
 import { QuoteHistory } from '@/components/project/quotes'
 
 export const Route = createFileRoute('/_app/p/$id/build')({
@@ -84,7 +84,7 @@ function Build() {
       {data.quotes && (
         <QuoteHistory
           repo={repo} quotes={data.quotes} estimate={ready?.estimate ?? null}
-          defaults={{ quantity: ready?.boards ?? data.orders[0]?.boards ?? 1, currency: ready?.currency ?? data.orders[0]?.currency ?? 'USD', release: ready?.release ?? data.orders[0]?.release ?? 'this revision', options: ready?.options.filter((x) => !/quantity$/i.test(x.option)).length ?? 0 }}
+          defaults={{ quantity: ready?.boards ?? data.orders[0]?.boards ?? 1, currency: ready?.currency ?? data.orders[0]?.currency ?? 'USD', release: ready?.release ?? data.orders[0]?.release ?? 'this revision', options: ready?.options.filter((x) => !/quantity$/i.test(x.option)).map(({ option, value }) => ({ option, value })) ?? [] }}
         />
       )}
 
@@ -160,8 +160,6 @@ function Build() {
 
 // ------------------------------------------------------------------ the JLCPCB order sheet
 
-/** unit prices below a cent keep their digits (US$0.002, not US$0.00) */
-const price = (n: number, c: string) => (n > 0 && n < 0.01 ? `${money(0, c).replace(/0$/, '')}${n.toFixed(3).slice(1)}`.replace('$.', '$0.') : money(n, c))
 
 type Option = OrderView['options'][number]
 type PartLine = OrderView['parts'][number]
@@ -181,7 +179,6 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
   // the board's picture: the newest accepted renders of the revision (build.get), never a guessed path
   const pictureRef = useMemo(() => (o.render ? { repo, path: o.render.name, run: { id: o.render.run, name: o.render.name } } : null), [repo, o.render])
   const board = useRenderUrl(pictureRef)
-  const changedUp = o.parts.filter((p) => p.now > p.then)
   const need = (p: PartLine): number => p.need ?? o.boards
   const short = o.parts.filter((p) => p.stock < need(p) || (p.status !== undefined && p.status !== 'ok'))
   const head = orderHeadline(o)
@@ -203,14 +200,16 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
     { accessorKey: 'ref', header: 'Ref', size: 160, meta: { label: 'Ref', kind: 'text' }, cell: ({ row }) => <span><span className="font-mono">{row.original.ref}</span><span className="block text-xs text-muted-foreground">{row.original.name}</span></span> },
     { accessorKey: 'lcsc', header: 'LCSC', size: 110, meta: { label: 'LCSC', kind: 'text', mono: true } },
     { accessorKey: 'stock', header: 'Stock', size: 100, meta: { label: 'Stock', kind: 'number', align: 'right' }, cell: ({ row }) => row.original.stock.toLocaleString('en-US') },
-    { accessorKey: 'then', header: 'Price then', size: 100, meta: { label: 'Price then', kind: 'number', align: 'right' }, cell: ({ row }) => price(row.original.then, o.currency) },
-    { accessorKey: 'now', header: 'Price now', size: 100, meta: { label: 'Price now', kind: 'number', align: 'right' }, cell: ({ row }) => price(row.original.now, o.currency) },
+    { accessorKey: 'then', header: 'Price then', size: 100, meta: { label: 'Price then', kind: 'number', align: 'right' }, cell: ({ row }) => unitPrice(row.original.then, o.currency) },
+    { accessorKey: 'now', header: 'Price now', size: 100, meta: { label: 'Price now', kind: 'number', align: 'right' }, cell: ({ row }) => unitPrice(row.original.now, o.currency) },
     {
-      id: 'status', accessorFn: (p) => (p.stock < (p.need ?? o.boards) || (p.status !== undefined && p.status !== 'ok') ? 'Short' : p.now > p.then ? 'Price up' : 'In stock'), header: 'Status', size: 170, meta: { label: 'Status', kind: 'enum' },
+      id: 'status', accessorFn: (p) => (p.stock < (p.need ?? o.boards) || (p.status !== undefined && p.status !== 'ok') ? 'Short' : p.now > p.then ? 'Price up' : p.now < p.then ? 'Price down' : 'In stock'), header: 'Status', size: 170, meta: { label: 'Status', kind: 'enum' },
       cell: ({ row }) => {
         const p = row.original
         if (p.stock < (p.need ?? o.boards) || (p.status !== undefined && p.status !== 'ok')) return <StatusBadge status="failing" label="Short: back to Sign-off" />
-        if (p.now > p.then) return <StatusBadge status="warning" label={`In stock · +${money((p.now - p.then) * (p.need ?? o.boards), o.currency)}`} />
+        const change = lineChange(p, o.boards, o.currency)
+        // a drop is good news; a rise is worth a look, even one under a cent
+        if (change) return <StatusBadge status={p.now > p.then ? 'warning' : 'met'} label={`In stock · ${change}`} />
         return <StatusBadge status="met" label="In stock" />
       },
     },
@@ -276,7 +275,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
               <>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {short.length ? `${short.length} of ${o.parts.length} lines are short: the project goes back to Sign-off.` : `All ${o.parts.length} lines are in stock at LCSC for ${o.boards} boards.`}{' '}
-                  {changedUp.length ? `${changedUp.length} price${changedUp.length > 1 ? 's' : ''} went up since sign-off, adding ${money(changedUp.reduce((n, p) => n + (p.now - p.then) * need(p), 0), o.currency)} for ${o.boards} boards.` : 'No price changed since sign-off.'}
+                  {priceChangeLine(o.parts, o.boards, o.currency)}
                 </p>
                 <div className="mt-3"><DataTable id="order-parts" persist={false} data={o.parts} columns={partCols} getRowId={(r) => r.ref} noun="lines" /></div>
               </>

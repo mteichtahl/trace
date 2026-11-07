@@ -54,6 +54,9 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   // the record's build side and the guided skills (skill.draft is not here: it is saved on every keystroke)
   ['order.record', 'journey'],
   ['quote.record', 'journey'],
+  ['quote.correct', 'journey'],
+  ['quote.withdraw', 'journey'],
+  ['quote.confirm', 'journey'],
   ['order.update', 'journey'],
   ['board.record', 'journey'],
   ['board.check', 'journey'],
