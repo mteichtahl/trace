@@ -29,7 +29,7 @@ import { type Context, Repo, def, withRecordDb } from './action-kit.js'
 import { caseStaleness, caseView } from './case-read.js'
 import { standing } from '../tools/design/decisions.js'
 import { TOPIC_NAMES } from '../tools/design/db.js'
-import { type ArchitectureView, architectureView, intentView, linksView, ownSignatures, pinCheck, pinPlanPrint } from '../tools/design/record.js'
+import { type ArchitectureView, architectureView, intentView, linksView, ownSignatures, matedParts, pinCheck, pinPlanPrint } from '../tools/design/record.js'
 import { type Finding, checkFindings, designOf, latestDrawings, latestNetlist, latestRun, placeOn, requirementEvidence, runImages, runResult, sheetFileOf } from './record-read.js'
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -148,7 +148,7 @@ export const RECORD_ACTIONS = {
       if (shown) notes.push('Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate\'s stock criterion records it.')
       // the pin plan, checked against the newest netlist in the record
       const net = latestNetlist(db)
-      const pinFindings = pinCheck(design.rows.pins, net?.nets ?? null)
+      const pinFindings = pinCheck(design.rows.pins, net?.nets ?? null, matedParts(arch))
       const waived = new Set((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
       const agreed = standing(design.decisions, 'pins.agreed')
       const pins = design.rows.pins.filter((p) => p.status !== 'withdrawn').map((p) => {

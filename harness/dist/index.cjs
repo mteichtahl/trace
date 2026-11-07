@@ -776,7 +776,7 @@ CREATE TABLE IF NOT EXISTS arch_scores (
 CREATE TABLE IF NOT EXISTS arch_blocks (
   option TEXT NOT NULL, id TEXT NOT NULL,
   name TEXT NOT NULL, role TEXT,
-  parts TEXT NOT NULL,            -- JSON [{ mpn, role?, key?, off_board?, size_mm? }]
+  parts TEXT NOT NULL,            -- JSON [{ mpn, role?, key?, off_board?, size_mm?, mates? }]
   requirements TEXT NOT NULL,     -- JSON list of requirement ids it serves
   x REAL, y REAL,                 -- where on the diagram, 0..1 of the frame
   status TEXT NOT NULL DEFAULT 'proposed',

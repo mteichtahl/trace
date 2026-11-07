@@ -49,7 +49,7 @@ import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 export const QUEUED_DRAFTING = 'This project\'s agent is still being set up, so the drafting is queued: the Verification agent drafts the candidate requirements for Requirements review by itself once the agent is ready. You need not submit again.'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision, standing } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
-import { type RequirementWords, architectureView, intentDraft, intentView, linksView, outscoredBy, outscoredWords, pinCheck } from '../tools/design/record.js'
+import { type RequirementWords, architectureView, intentDraft, intentView, linksView, outscoredBy, outscoredWords, matedParts, pinCheck } from '../tools/design/record.js'
 import { type DecisionInput, Decision, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
 import { artifactText, checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
@@ -508,7 +508,7 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
     case 'pin-plan-review': {
       if (!i.design) return {}
       const waived = new Set((i.r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
-      return { items: pinCheck(i.design.rows.pins, i.nets ?? null).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const })) }
+      return { items: pinCheck(i.design.rows.pins, i.nets ?? null, matedParts(architectureView(i.design.rows, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const })) }
     }
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }
