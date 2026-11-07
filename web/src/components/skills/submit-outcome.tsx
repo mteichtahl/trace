@@ -16,7 +16,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import { ArrowRight, CircleAlert, CircleCheck, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { SubmitCriterion } from '@/lib/api'
-import type { Journey } from '@/lib/types'
+import type { Journey, NextStep } from '@/lib/types'
 import { type SkillDef, checksOf } from './definitions'
 
 export type SubmitOutcome =
@@ -51,13 +51,44 @@ export function doneWords(done: string, result: unknown): string {
   return [done, ...extra].join(' ')
 }
 
-/** The criteria a submission set, written into the journey on screen at once (met or not, as recorded). */
+/** The next step while the journey is read again after a submission met the criterion it was about. */
+export const SUBMITTED_STEP: NextStep = { kind: 'working', owner: 'trace', summary: 'Submitted. trace works out what comes next.', short: 'trace works out what comes next' }
+
+const isMet = (s: string): boolean => s === 'met' || s === 'waived'
+
+/**
+ * The criteria a submission set, written into the journey on screen at once (met or not, as recorded), and everything
+ * on screen that counts them with it: the stage's count, and the next step. A next step about a criterion now met
+ * gives way to SUBMITTED_STEP; another one's "(0 of 3 criteria met)" is counted again. Before, the gate box said
+ * "1 of 3 criteria met" while the next step card still said "(0 of 3 criteria met) … Continue" until the journey was
+ * read again (test-esp32-run2 R32).
+ */
 export function applyCriteria(qc: Pick<QueryClient, 'setQueriesData'>, repo: string, result: unknown): void {
   const set = new Map(criteriaOf(result as Answer).map((c) => [c.id, c.status]))
   if (!set.size) return
-  qc.setQueriesData<Journey>({ queryKey: ['journey.get', repo] }, (j) => (j && Array.isArray(j.gates)
-    ? { ...j, gates: j.gates.map((g) => (g.criteria.some((c) => set.has(c.id)) ? { ...g, criteria: g.criteria.map((c) => (set.has(c.id) ? { ...c, status: set.get(c.id)! } : c)) } : g)) }
-    : j))
+  qc.setQueriesData<Journey>({ queryKey: ['journey.get', repo] }, (j) => {
+    if (!j || !Array.isArray(j.gates)) return j
+    const changed = new Set<string>()
+    const gates = j.gates.map((g) => {
+      if (!g.criteria.some((c) => set.has(c.id))) return g
+      changed.add(g.id)
+      return { ...g, criteria: g.criteria.map((c) => (set.has(c.id) ? { ...c, status: set.get(c.id)! } : c)) }
+    })
+    const metOf = (g: Journey['gates'][number]) => g.criteria.filter((c) => isMet(c.status)).length
+    // a stage's count is its gates' (src/core/journey.ts journeyView)
+    const stages = Array.isArray(j.stages) ? j.stages.map((s) => {
+      const own = gates.filter((g) => g.after === s.id)
+      return own.some((g) => changed.has(g.id)) && s.criteria ? { ...s, criteria: { ...s.criteria, met: own.reduce((n, g) => n + metOf(g), 0) } } : s
+    }) : j.stages
+    const ref = j.next?.ref?.kind === 'criterion' ? j.next.ref.id : null
+    let next = j.next
+    if (ref && set.has(ref) && isMet(set.get(ref)!)) next = SUBMITTED_STEP
+    else if (next?.why) {
+      const g = gates.find((x) => (ref ? x.criteria.some((c) => c.id === ref) : changed.has(x.id)))
+      if (g && changed.has(g.id)) next = { ...next, why: next.why.replace(/\b\d+ of \d+ criteria met\b/, `${metOf(g)} of ${g.criteria.length} criteria met`) }
+    }
+    return { ...j, gates, stages, next }
+  })
 }
 
 /** Criteria not met for the same reason, said once ("A; B: not met. why"). Pure. */
