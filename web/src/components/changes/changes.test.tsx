@@ -137,7 +137,8 @@ describe('words people read', () => {
   it('say change, not pull request', () => {
     expect(KIND.review).toBe('Change to review')
     expect(KIND_WORDS.review).toBe('Changes to review')
-    expect(acceptedWords('Power sheet', { next: 'trace is checking stock.', stage: 'capture' }, { index: 3, total: 5, stage: 'Capture' }))
+    // the place after the accept, as given: never one step on from it (test-esp32 #54)
+    expect(acceptedWords('Power sheet', { next: 'trace is checking stock.', stage: 'capture' }, { index: 4, total: 5, stage: 'Capture' }))
       .toEqual({ title: 'Accepted into the design', description: 'Capture is now on step 4 of 5. trace is checking stock.' })
   })
 })
