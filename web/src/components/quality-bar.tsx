@@ -25,6 +25,8 @@ export interface QualityCheck {
   status: CheckStatus
   /** jump to where it is fixed */
   onJump?: () => void
+  /** the step of the skill where it is met, if one: the rail marks that step done only once it is */
+  step?: string
 }
 
 export interface QualityBarProps {
