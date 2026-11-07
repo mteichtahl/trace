@@ -135,11 +135,31 @@ export interface TaskRequest {
 /** What a confirm card answers trace with (the start_task tool's result). */
 export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string; queued?: boolean } | { confirmed: false; reason: string }
 
-/** The job a confirmed card started, as the project's job list has it now (queued until the list knows it). */
+/** A job's state as `job` gives it, in the run card's words. Pure. */
+export function runStateOf(state: string): RunSummary['state'] {
+  switch (state) {
+    case 'succeeded': case 'done': return 'done'
+    case 'aborted': case 'cancelled': return 'cancelled'
+    case 'running': case 'queued': case 'paused': case 'failed': case 'lost': return state
+    default: return 'running'
+  }
+}
+
+/**
+ * The job a confirmed card started, as the project's job list has it now. Until the list knows it, the job itself is
+ * asked (`job`, by the handle `task` answered), so a job that failed at once, or that trace has no record of, says so
+ * on the card instead of showing as queued for ever (test log R25).
+ */
 function StartedRun({ jobId, repo, title }: { jobId: string; repo?: string; title: string }) {
   const list = useQuery({ ...q('jobs.list', { repo: repo ?? '' }), enabled: Boolean(repo) })
-  const run = list.data?.jobs.find((j) => j.id === jobId)
-  return <RunCard data={{ run: run ?? { id: jobId, repo, title, state: 'queued' } }} />
+  const listed = list.data?.jobs.find((j) => j.id === jobId)
+  const job = useQuery({ ...q('job', { id: jobId }), enabled: !listed && (list.isSuccess || list.isError || !repo), retry: 1, refetchInterval: (r) => (r.state.data && ['queued', 'running'].includes(r.state.data.state) ? 15_000 : false) })
+  if (listed) return <RunCard data={{ run: listed }} />
+  if (job.isError) return <RunCard data={{ run: { id: jobId, repo, title, state: 'lost', step: `trace has no record of this job yet: ${job.error instanceof Error ? job.error.message : 'it could not be read'}` } }} />
+  const v = job.data
+  const error = typeof v?.error === 'string' && v.error ? v.error : null
+  const step = error ?? (typeof v?.step === 'string' ? v.step : undefined)
+  return <RunCard data={{ run: { id: jobId, repo, title, state: v ? runStateOf(v.state) : 'queued', ...(step ? { step } : {}) } }} />
 }
 
 const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal' }

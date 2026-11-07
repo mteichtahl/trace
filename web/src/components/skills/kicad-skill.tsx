@@ -11,7 +11,6 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { useTraceContext } from '@/components/chat/context'
 import { DecisionCard } from '@/components/decision-card'
 import { FocusLayout } from '@/components/focus/focus-layout'
@@ -26,6 +25,7 @@ import { FindingsList } from './findings'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, draftChecks, qualityChecks, useSkill } from './use-skill'
+import { SkillChat } from './skill-chat'
 
 interface Draft extends SkillDraftBase {
   /** confirmed reasons per change id */
@@ -96,8 +96,9 @@ export function KicadSkill({ repo, def }: { repo: string; def: SkillDef }) {
       outcome={s.outcome}
       draftSavedAt={s.draft.savedAt}
       trace={
-        <EmbeddedChat
+        <SkillChat
           repo={repo}
+          skill={def.id}
           intro={
             <div className="space-y-3">
               {v?.push && <p className="rounded-md bg-muted px-3 py-2 text-sm">Push <span className="font-mono">{v.push.sha}</span> landed: {v.push.fixed} findings fixed, {v.push.new} new.</p>}
