@@ -19,8 +19,10 @@ const BOX = 44
 const COL = { per: { x: 0, w: 170 }, pin: { x: 240, w: 240 }, net: { x: 550, w: 190 } }
 const FIT = { padding: 0.06 }
 
-export const PIN_STATUS: Record<PinView['status'], { status: 'met' | 'failing' | 'idle' | 'waived'; label: string }> = {
+export const PIN_STATUS: Record<PinView['status'], { status: 'met' | 'failing' | 'idle' | 'waived' | 'yours'; label: string }> = {
   ok: { status: 'met', label: 'Agreed' }, conflict: { status: 'failing', label: 'Conflict' }, spare: { status: 'idle', label: 'Spare' }, waived: { status: 'waived', label: 'Waived' },
+  // an open question names its part: not agreed until it is answered (test-esp32 #106)
+  asked: { status: 'yours', label: 'Open question' },
 }
 
 /** A pin's key: its part (where the plan names one) and its pin. */
