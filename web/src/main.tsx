@@ -7,6 +7,7 @@ import { onAnswer, readRetry, readRetryDelay } from '@/lib/api'
 import { afterWrite } from '@/lib/after-write'
 import { listenForNewVersion } from '@/lib/new-version'
 import { RouteError } from '@/components/route-error'
+import { PageSkeleton } from '@/components/shell/shell-skeleton'
 import { routeTree } from './routeTree.gen'
 
 export const queryClient = new QueryClient({
@@ -31,6 +32,9 @@ const router = createRouter({
   defaultPreload: 'intent',
   // a page whose code a deploy replaced reloads the tab once; anything else is said in words (components/route-error.tsx)
   defaultErrorComponent: RouteError,
+  // a page whose code or data is still on its way shows its outline within a second (test-esp32 #15)
+  defaultPendingComponent: PageSkeleton,
+  defaultPendingMs: 400,
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
 })
