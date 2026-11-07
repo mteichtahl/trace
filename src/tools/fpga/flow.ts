@@ -133,13 +133,25 @@ export async function synthesize(o: SynthOptions): Promise<SynthRun> {
     const err = log.split('\n').find((l) => /^ERROR:/.test(l)) ?? r.text('stdout.log').split('\n').find((l) => /ERROR/.test(l))
     const ok = rc === 0 && r.has('netlist.json')
     return {
-      ok, reason: ok ? `${util?.cells ?? '?'} cells` : `yosys failed${err ? `: ${err.replace(/^ERROR:\s*/, '').slice(0, 300)}` : ` (exit ${rc})`}`,
+      ok, reason: ok ? `${util?.cells ?? '?'} cells` : synthFailure(rc, err, log),
       utilisation: util, warnings, log, statText: r.text('stat.txt'), netlist: r.bytes('netlist.json'), edif: r.bytes('netlist.edif'),
       seconds: r.job.seconds, where: r.job.where,
     }
   } finally {
     r.cleanup()
   }
+}
+
+/**
+ * Why a synthesis failed, in a line: yosys's ERROR, else its exit (a signal named: killed, out of memory or the time
+ * limit), with the log's last line. CI saw a synth with nothing but its log, and only "has no netlist.json" downstream
+ * (#235).
+ */
+export function synthFailure(rc: number, err: string | undefined, log: string): string {
+  if (err) return `yosys failed: ${err.replace(/^ERROR:\s*/, '').slice(0, 300)}`
+  const last = log.trim().split('\n').filter((l) => l.trim()).pop()?.trim().slice(0, 200)
+  const how = rc > 128 ? `killed by signal ${rc - 128}${rc === 137 ? ' (SIGKILL: out of memory or the time limit)' : ''}` : `exit ${rc}`
+  return `yosys failed (${how})${last ? `; its log ends: ${last}` : ''}`
 }
 
 // ------------------------------------------------------------------ place and route

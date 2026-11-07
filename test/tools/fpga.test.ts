@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { clockName, clockScript, regionScript, timingFromReport, utilisation, utilisationFromReport } from '../../src/tools/fpga/flow.js'
+import { clockName, clockScript, regionScript, synthFailure, timingFromReport, utilisation, utilisationFromReport } from '../../src/tools/fpga/flow.js'
+import { Recorder } from '../../src/tools/sim/record.js'
 import { attemptScore } from '../../src/tools/fpga/tools.js'
 import { which } from '../../src/tools/sim/proc.js'
 import { allTools } from '../../src/tools/index.js'
@@ -100,10 +101,34 @@ describe('fpga report readers', () => {
   })
 })
 
+// #235: a synthesis that failed in CI left a run with only its log, and fpga.pnr said "has no netlist.json"; the test
+// had not looked at whether the synthesis passed, so yosys's own reason was never seen
+describe('a failed synthesis', () => {
+  it('says why it failed: the ERROR, else how yosys ended and its last log line', () => {
+    expect(synthFailure(1, 'ERROR: Module `nosuch\' not found!', '')).toBe('yosys failed: Module `nosuch\' not found!')
+    expect(synthFailure(137, undefined, '2.27. Executing ABC pass.\n\n')).toBe('yosys failed (killed by signal 9 (SIGKILL: out of memory or the time limit)); its log ends: 2.27. Executing ABC pass.')
+    expect(synthFailure(2, undefined, '')).toBe('yosys failed (exit 2)')
+  })
+
+  it('place and route of a failed synthesis says the synthesis failed and why, not that a file is missing', async () => {
+    const rec = new Recorder('fpga.synth', 'ice40:blinky', {})
+    rec.artifact('yosys.log', '2.27. Executing ABC pass.')
+    rec.finish('fail', 'blinky (ice40): yosys failed (killed by signal 9)', { ok: false })
+    await expect(call('fpga.pnr', { family: 'ice40', device: 'up5k', synth_run: rec.id, constraints: f('icebreaker.pcf') }))
+      .rejects.toThrow(`run ${rec.id} (fpga.synth) did not pass, so it has no netlist.json: fail: blinky (ice40): yosys failed (killed by signal 9)`)
+  })
+})
+
+/** A synthesis the flow needs: it must have passed, and when it did not, the failure says yosys's reason. */
+const synthOk = async (args: Dict): Promise<Dict> => {
+  const s = await call('fpga.synth', args)
+  expect(s.passed, `fpga.synth ${JSON.stringify(args)}: ${String(s.reason)}`).toBe(true)
+  return s
+}
+
 describe.skipIf(!hasIce40)('ice40 flow (yosys, nextpnr-ice40, icepack installed)', () => {
   it('synth → pnr → timing → bitstream on the iCEBreaker pins', async () => {
-    const s = await call('fpga.synth', { family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
-    expect(s.passed).toBe(true)
+    const s = await synthOk({ family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
     const u = s.utilisation as { resources: Record<string, number> }
     expect(u.resources.lut).toBeGreaterThan(10)
     expect(u.resources.ff).toBeGreaterThanOrEqual(24 + 8 + 1)
@@ -126,7 +151,7 @@ describe.skipIf(!hasIce40)('ice40 flow (yosys, nextpnr-ice40, icepack installed)
   }, 300_000)
 
   it('the same seed gives the same result; closure keeps the best of several', async () => {
-    const s = await call('fpga.synth', { family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
+    const s = await synthOk({ family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
     const args = { family: 'ice40', device: 'up5k', package: 'sg48', synth_run: s.run_id, constraints: f('icebreaker.pcf') }
     const a = await call('fpga.pnr', { ...args, seed: 7 })
     const b = await call('fpga.pnr', { ...args, seed: 7 })
@@ -144,7 +169,7 @@ describe.skipIf(!hasIce40)('ice40 flow (yosys, nextpnr-ice40, icepack installed)
   }, 600_000)
 
   it('misses a target it cannot reach, and constrains cells to a region', async () => {
-    const s = await call('fpga.synth', { family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
+    const s = await synthOk({ family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
     const slow = await call('fpga.pnr', { family: 'ice40', device: 'up5k', package: 'sg48', synth_run: s.run_id, constraints: f('icebreaker.pcf'), clocks: { clk: 500 } })
     expect(slow.passed).toBe(false)
     expect(slow.routed).toBe(true) // it routes; timing fails
@@ -156,7 +181,7 @@ describe.skipIf(!hasIce40)('ice40 flow (yosys, nextpnr-ice40, icepack installed)
   }, 300_000)
 
   it('refuses missing constraints and a wrong constraint file', async () => {
-    const s = await call('fpga.synth', { family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
+    const s = await synthOk({ family: 'ice40', files: [f('blinky.v')], top: 'blinky' })
     await expect(call('fpga.pnr', { family: 'ice40', device: 'up5k', synth_run: s.run_id })).rejects.toThrow(/give constraints/)
     await expect(call('fpga.pnr', { family: 'ice40', device: 'up5k', synth_run: s.run_id, constraints: f('ulx3s.lpf') })).rejects.toThrow(/\.pcf/)
     const bad = await call('fpga.synth', { family: 'ice40', files: [f('blinky.v')], top: 'nosuch' })
@@ -167,8 +192,7 @@ describe.skipIf(!hasIce40)('ice40 flow (yosys, nextpnr-ice40, icepack installed)
 
 describe.skipIf(!hasEcp5)('ecp5 flow (nextpnr-ecp5, ecppack installed)', () => {
   it('synth → pnr → bitstream on the ULX3S pins, with the LPF clock target', async () => {
-    const s = await call('fpga.synth', { family: 'ecp5', files: [f('blinky.v')], top: 'blinky' })
-    expect(s.passed).toBe(true)
+    const s = await synthOk({ family: 'ecp5', files: [f('blinky.v')], top: 'blinky' })
     const p = await call('fpga.pnr', { family: 'ecp5', device: '25k', package: 'CABGA381', synth_run: s.run_id, constraints: f('ulx3s.lpf') })
     expect(p.passed).toBe(true)
     expect((p.timing as { clocks: { target_mhz: number }[] }).clocks[0]?.target_mhz).toBe(25)
@@ -180,8 +204,7 @@ describe.skipIf(!hasEcp5)('ecp5 flow (nextpnr-ecp5, ecppack installed)', () => {
 
 describe.skipIf(!hasGowin)('gowin flow (nextpnr for Gowin, gowin_pack installed)', () => {
   it('synth → pnr → bitstream on the Tang Nano 9K pins', async () => {
-    const s = await call('fpga.synth', { family: 'gowin', files: [f('blinky.v')], top: 'blinky' })
-    expect(s.passed).toBe(true)
+    const s = await synthOk({ family: 'gowin', files: [f('blinky.v')], top: 'blinky' })
     const p = await call('fpga.pnr', { family: 'gowin', device: 'GW1NR-LV9QN88PC6/I5', gowin_family: 'GW1N-9C', synth_run: s.run_id, constraints: f('tangnano9k.cst'), clocks: { clk: 27 } })
     expect(p.routed).toBe(true)
     const b = await call('fpga.bitstream', { family: 'gowin', run_id: p.run_id, gowin_family: 'GW1N-9C' })
@@ -193,8 +216,7 @@ describe.skipIf(!hasYosys)('xilinx synthesis (yosys installed)', () => {
   it('maps to 7-series primitives and writes EDIF', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'fpga-x-'))
     try {
-      const s = await call('fpga.synth', { family: 'xilinx', files: [f('blinky.v')], top: 'blinky', out_dir: dir })
-      expect(s.passed).toBe(true)
+      const s = await synthOk({ family: 'xilinx', files: [f('blinky.v')], top: 'blinky', out_dir: dir })
       const r = (s.utilisation as { resources: Record<string, number> }).resources
       expect(r.lut).toBeGreaterThan(0)
       expect(r.ff).toBeGreaterThan(0)
@@ -214,9 +236,8 @@ describe.skipIf(!hasYosys)('synthesis with an include in a sub-folder (yosys ins
       writeFileSync(join(d, 'inc', 'reset.vh'), '`define RST_VAL 0\n')
       writeFileSync(join(d, 'rtl', 'core.v'), '`include "sub/w.vh"\n`include "reset.vh"\nmodule core(input clk, output reg [`W-1:0] q); initial q = `RST_VAL; always @(posedge clk) q <= q + 1; endmodule\n')
       writeFileSync(join(d, 'rtl', 'alt', 'core.v'), 'module top(input clk, output [3:0] q); core c(.clk(clk), .q(q)); endmodule\n')
-      const s = await call('fpga.synth', { family: 'ice40', files: [join(d, 'rtl', 'core.v'), join(d, 'rtl', 'alt', 'core.v')], include_dirs: [join(d, 'inc')], top: 'top' })
+      const s = await synthOk({ family: 'ice40', files: [join(d, 'rtl', 'core.v'), join(d, 'rtl', 'alt', 'core.v')], include_dirs: [join(d, 'inc')], top: 'top' })
       expect(s.reason).toMatch(/cells/)
-      expect(s.passed).toBe(true)
       expect((s.utilisation as { resources: Record<string, number> }).resources.ff).toBe(4)
     } finally {
       rmSync(d, { recursive: true, force: true })

@@ -36,6 +36,8 @@ function artifactFile(runId: string, name: string, dir: string): string {
     if (!rec) throw new ToolError(`no run ${runId}`)
     const raw = w.getArtifact(runId, `${name}.gz`)
     const plain = raw ? gunzip(raw) : w.getArtifact(runId, name)
+    // a run that did not pass says so, with why: "has no netlist.json" hid that the synthesis had failed (#235)
+    if (!plain && rec.status !== 'pass') throw new ToolError(`run ${runId} (${rec.kind}) did not pass, so it has no ${name}: ${rec.status}${rec.summary ? `: ${rec.summary}` : ''}`)
     if (!plain) throw new ToolError(`run ${runId} (${rec.kind}) has no ${name} (it has: ${rec.artifacts.map((a) => a.name).join(', ') || 'none'})`)
     const p = join(dir, name)
     writeFileSync(p, plain)
