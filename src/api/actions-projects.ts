@@ -277,6 +277,9 @@ const stepState = (status: string, conclusion: string | null): UpdateStep['state
 export function updateSteps(jobs: readonly RunJob[]): UpdateStep[] {
   const many = jobs.length > 1
   return jobs.flatMap((j) => {
+    // the deploy job skipped is no update at all: it is what adds the project (test-esp32 log R7, where the run
+    // "succeeded", every line had a tick, and trace waited for an agent that was never added)
+    if (j.name === DEPLOY_JOB && j.status === 'completed' && j.conclusion === 'skipped') return [{ name: `${j.name} (skipped: nothing was deployed)`, state: 'failed' as const }]
     const steps = (j.steps ?? []).filter((s) => !BOOKKEEPING.test(s.name)).sort((a, b) => a.number - b.number)
     if (!steps.length) return [{ name: j.name, state: stepState(j.status, j.conclusion) }]
     // an unnamed step is its job when it is the job's only step, else "step n" of the job
@@ -290,6 +293,9 @@ export function updateSteps(jobs: readonly RunJob[]): UpdateStep[] {
 
 /** The first failed job (the one whose log is read), or null. Pure. */
 export const failedJob = (jobs: readonly RunJob[]): RunJob | null => jobs.find((j) => stepState(j.status, j.conclusion) === 'failed') ?? null
+
+/** The job in trace's ci workflow that deploys the installation, and so adds new projects. */
+export const DEPLOY_JOB = 'update-installation'
 
 /** A job log's last `n` lines, GitHub's timestamps taken off the front of each line. Pure. */
 export function logTail(text: string, n: number = FAILED_LOG_LINES): string {
@@ -320,7 +326,7 @@ export function updateRunFor(runs: readonly RunSummary[], branch: string, reques
  * are read apart from the run (updateProgress), and the notice never says "queued" above a step that is done. Pure.
  */
 export function runStatus(r: RunSummary, steps?: readonly UpdateStep[]): NonNullable<AgentSetup['update']>['status'] {
-  if (r.status === 'completed') return r.conclusion === 'success' ? 'finished' : 'failed'
+  if (r.status === 'completed') return r.conclusion === 'success' && !steps?.some((s) => s.state === 'failed') ? 'finished' : 'failed'
   if (r.status === 'in_progress' || steps?.some((s) => s.state !== 'waiting')) return 'running'
   return 'queued'
 }

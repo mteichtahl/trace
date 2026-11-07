@@ -232,6 +232,19 @@ describe('the update\'s steps, read from its run\'s jobs', () => {
     expect(updateSteps([{ id: 16, name: 'checkout', status: 'completed', conclusion: 'success', steps: [step(1, 'Run actions/checkout@v4', 'completed', 'success')] }]).map((s) => s.name)).toEqual(['Run actions/checkout@v4'])
   })
 
+  it('an update whose deploy job was skipped deployed nothing: failed, not finished (test-esp32 log R7)', () => {
+    const skipped: RunJob[] = [
+      { id: 21, name: 'typescript', status: 'completed', conclusion: 'skipped' },
+      { id: 22, name: 'tests pass', status: 'completed', conclusion: 'success' },
+      { id: 23, name: 'update-installation', status: 'completed', conclusion: 'skipped' },
+    ]
+    const steps = updateSteps(skipped)
+    expect(steps.at(-1)).toEqual({ name: 'update-installation (skipped: nothing was deployed)', state: 'failed' })
+    const run = { id: 1, status: 'completed', conclusion: 'success', created_at: '2026-11-07T19:26:39Z', url: 'u', path: '.github/workflows/ci.yml', branch: 'main' }
+    expect(runStatus(run as never, steps)).toBe('failed')
+    expect(runStatus(run as never, updateSteps(skipped.slice(0, 2)))).toBe('finished')
+  })
+
   it('a failed step is failed, and its job is the one whose log is read', () => {
     const failing: RunJob[] = [jobs[0]!, { id: 12, name: 'update-installation', status: 'completed', conclusion: 'failure', steps: [step(1, 'Test', 'completed', 'success'), step(2, 'Deploy', 'completed', 'failure')] }]
     expect(updateSteps(failing).at(-1)).toEqual({ name: 'update-installation › Deploy', state: 'failed' })
