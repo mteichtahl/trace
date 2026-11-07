@@ -281,6 +281,9 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
     reads the newest build from the project's graph and records the criterion: met when the build still stands, the case
     closes around the board, and every clash, gap, missing opening and failing rule is fixed or waived on its own (a
     waiver of kind finding on `layout.fit@<the problem's record>`, which names the part, so it outlasts a rebuild).
+    A case file the same as the one already in `mechanical/out/` apart from what every export changes (a STEP
+    header's FILE_NAME time stamp; a 3MF's random `p:UUID`s and creation dates) is left as it is
+    (`src/tools/mech/stable-output.ts`), so a build that changed nothing changes no file in a change (test-esp32 log #222).
   - `mech.fit` — the latest `mech.build` run's fit, and whether it is stale (`src/tools/mech/stale.ts`): the build
     records its `inputs` (the board and its sha256, what of the board the case depends on (`case_facts`,
     `src/tools/mech/case-facts.ts`: the outline, the mounting and unplated holes, the parts at the edge and every part's

@@ -193,6 +193,15 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
       const fit = await call('mech.fit', {})
       expect(fit).toMatchObject({ build_run: b.run_id, stale: false })
 
+      // built again with nothing changed: the case files are left as they were, export time stamps and all (log #222)
+      const before = Object.fromEntries(['case.step', 'case-base.step', 'case-lid.step'].map((f) => [f, readFileSync(join(repo, 'mechanical', 'out', f))]))
+      await new Promise((ok) => setTimeout(ok, 1100))
+      const again = await call('mech.build', {})
+      for (const [f, bytes] of Object.entries(before)) {
+        expect(again.files, f).toContain(`mechanical/out/${f}`)
+        expect(readFileSync(join(repo, 'mechanical', 'out', f)).equals(bytes), f).toBe(true)
+      }
+
       // a change away from the recommendation needs its reason; then the fit is stale until rebuilt
       await expect(call('mech.settings', { clearance: [{ ref: 'J1', mm: 2 }] })).rejects.toThrow(/needs its reason/)
       await call('mech.settings', { clearance: [{ ref: 'J1', mm: 2, reason: 'mating face of the plug' }] })
