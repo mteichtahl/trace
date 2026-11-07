@@ -361,7 +361,9 @@ export const ownBranch = (branch: string, rule: Pick<TraceRule, 'defaultBranch' 
 /**
  * Each branch's newest job (a resumed task works on its paused one's branch, and names it). With a rule, only trace's
  * own branches are indexed, only for jobs that make changes: the default branch never is (a work item on it is not a
- * change), nor a person's branch a ci-red or conflict work item worked on.
+ * change), nor a person's branch a ci-red or conflict work item worked on. A work item on a branch a task already made
+ * works on that task's change (merges the default branch in, fixes its checks): the change stays the task's, its
+ * specialist's and its criteria (test-esp32 #219: "Bring it up to date" credited the renders to Verification).
  */
 export function jobsByBranch(jobs: readonly JobRow[], rule?: Pick<TraceRule, 'defaultBranch' | 'prefix'>): Map<string, JobRow> {
   const byBranch = new Map<string, JobRow>()
@@ -369,7 +371,10 @@ export function jobsByBranch(jobs: readonly JobRow[], rule?: Pick<TraceRule, 'de
     if (!j.branch) continue
     if (rule && (!CHANGE_JOB_KINDS.has(j.kind) || !ownBranch(j.branch, rule))) continue
     // a delegated worker commits for its specialist: the change is the specialist's job's, never the worker's
-    byBranch.set(j.branch, (j.parentJob ? jobs.find((x) => x.id === j.parentJob) : undefined) ?? j)
+    const made = (j.parentJob ? jobs.find((x) => x.id === j.parentJob) : undefined) ?? j
+    const held = byBranch.get(j.branch)
+    if (held && held.kind === 'task' && made.kind === 'work-item') continue
+    byBranch.set(j.branch, made)
   }
   return byBranch
 }
