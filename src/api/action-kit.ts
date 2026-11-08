@@ -249,6 +249,30 @@ export async function withProjectDb<T>(ctx: Context, repo: string, fn: (db: stri
   }
 }
 
+/**
+ * The record of an open change holding `has` (a run, an artifact) that the default branch does not, with that change:
+ * a person is asked about a run on a change not yet accepted (the renders to approve before the layout is accepted,
+ * test-esp32 #129, test-esp32-run2 R49), and its run lives only on the change's branch until then. Null when no open
+ * change of this repository's own branches holds it. The newest changes are looked at first, at most `max`.
+ */
+export async function withOpenChangeDb<T>(ctx: Context, repo: string, has: (db: string) => boolean, fn: (db: string, change: { number: number; title: string }) => T | Promise<T>, max = 8): Promise<T | null> {
+  const gh = await ctx.deps.github()
+  const open = await gh.openPulls(repo).catch(() => [] as Awaited<ReturnType<typeof gh.openPulls>>)
+  const own = open.filter((p) => !p.headRepo || p.headRepo.toLowerCase() === repo.toLowerCase())
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, max)
+  for (const p of own) {
+    const bytes = await gh.rawFile(repo, PROJECT_DB_PATH, p.sha ?? p.head).catch(() => null)
+    if (!bytes) continue
+    const t = tempDb(ctx.deps.scratch, bytes)
+    try {
+      if (has(t.db)) return await fn(t.db, { number: p.number, title: p.title })
+    } finally {
+      t.cleanup()
+    }
+  }
+  return null
+}
+
 export const slugify = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'change'
 
 /**
