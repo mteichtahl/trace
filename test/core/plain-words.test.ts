@@ -29,6 +29,8 @@ describe('plain words', () => {
 
   it('a job\'s card line is its first plain sentence, never a prompt cut off mid-word', () => {
     expect(plainTitle('Re-render the board. Use render.board { side: "top" } and attach the PNGs.')).toBe('Re-render the board')
+    // a brief that opens with where the project stands (test-esp32-run2 R48)
+    expect(plainTitle('The schematic is proven (design proven gate signed). Lay out the 2-layer board for the wifi desk clock.')).toBe('Lay out the 2-layer board for the wifi desk clock')
     const cut = plainTitle(`Check ${'the flash rate and '.repeat(10)}report.`)
     expect(cut.length).toBeLessThanOrEqual(100)
     expect(cut).toMatch(/(?:the|flash|rate|and)…$/)

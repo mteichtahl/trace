@@ -123,7 +123,9 @@ export function plainLine(line: string): string | null {
  * the project is in Architect." (test-esp32-run2 R28: the Architect job's card was titled with it), "The project is in
  * Architect."
  */
-const WHY_STARTED = /^(?:The [^.:]+ (?:gate was signed|is accepted)(?::[^.]*)?|The project is in [A-Z][\w-]*)\.?$/
+// …and a delegated worker's brief that opens with where the project stands: "The schematic is proven (design proven
+// gate signed)." (test-esp32-run2 R48: the worker's card was titled with it)
+const WHY_STARTED = /^(?:The [^.:]+ (?:gate was signed|is accepted)(?::[^.]*)?|The project is in [A-Z][\w-]*|[^.]*\((?:the )?[\w -]+ gate (?:was )?signed\))\.?$/
 
 export function plainTitle(request: string, max = 100): string {
   const all = sentences(request)
