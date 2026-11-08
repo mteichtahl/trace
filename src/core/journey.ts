@@ -60,7 +60,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import { type JobLook, jobRefs, plainJobRefs, plainJobRefsOf, refKey } from './job-refs.js'
-import { plainCodeRefs, plainEvidenceLabel, plainQuestionText, plainRecordRefs } from './record-refs.js'
+import { plainCodeRefs, plainCriterionRefs, plainEvidenceLabel, plainQuestionText, plainRecordRefs } from './record-refs.js'
 import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
@@ -1681,7 +1681,9 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
     stages, gates, next,
     questions: r.questions.map((q) => questionView(q, viewer, r)),
     waivers: r.waivers.map((w) => waiverView(r, w, viewer, opened)),
-    decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: d.summary, by: d.by })),
+    // said as the rest of the page says them: datasheets, findings and criteria in words, not codes (test-esp32-run2
+    // R55: the log read "ea9a571f p2" and "five layout.fit findings" where the gate page said "the datasheet, page 2")
+    decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: plainCriterionRefs(plainCodeRefs(d.summary), r.criteria), by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
   }
 }
