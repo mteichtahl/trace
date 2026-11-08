@@ -91,6 +91,11 @@ describe('datasheets and findings named by code (test-esp32-run2 R39)', () => {
     expect(plainCodeRefs('on the regulator output, as the ams hand-off hoda5b1502f4f144 asked.')).toBe('on the regulator output, as the ams hand-off asked.')
   })
 
+  it('keeps a datasheet\'s own word before it (R44)', () => {
+    expect(plainCodeRefs('SSD1306-0.96-128x64-I2C-4pin has 1 VCC, 2 GND (its datasheet ea9a571f p2 (pin description))'))
+      .toBe('SSD1306-0.96-128x64-I2C-4pin has 1 VCC, 2 GND (its datasheet, page 2 (pin description))')
+  })
+
   it('leaves what it cannot tell is a datasheet', () => {
     expect(plainCodeRefs('commit deadbeef and run 84ac569329e8472d')).toBe('commit deadbeef and run 84ac569329e8472d')
     expect(plainCodeRefs('see 1a2b3c4d')).toBe('see 1a2b3c4d')
