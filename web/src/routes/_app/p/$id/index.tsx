@@ -41,7 +41,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, Loading, SlowLoad } from '@/components/states'
 import { Explained } from '@/components/term'
 import { WaitLine } from '@/components/wait-line'
-import { OutOfDateNote, ShowDetail } from '@/components/question-notes'
+import { CloseOutOfDate, OutOfDateNote, ShowDetail } from '@/components/question-notes'
 import { call, repoOf } from '@/lib/api'
 import { ago, money, plural, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
@@ -139,6 +139,7 @@ function Overview() {
             {qn.detail && <ShowDetail detail={qn.detail} />}
           </div>
           {/* each opens its own question, by id (test-esp32 #107: both opened the oldest) */}
+          {part !== 'reviewer' && qn.outOfDate && <CloseOutOfDate repo={repo} question={qn.id} />}
           {part !== 'reviewer' && (
             <Link to="/p/$id/do/$skill" params={{ id, skill: 'question-answer' }} search={{ question: qn.id }} className="shrink-0 text-sm text-primary hover:underline" aria-label={`Answer it: ${qn.text}`}>
               Answer it
