@@ -338,9 +338,32 @@ export function partsDrift(db: DatabaseSync, parts: Pick<EstimateInput['parts'],
   return `The schematic's parts list has changed since this parts check (its bill of materials of ${new Date(b.started * 1000).toISOString().slice(0, 10)} ${what}), so the estimate leaves those out until the parts are checked again.`
 }
 
-/** The newest parts check that did not error, as the estimate reads it. */
+/**
+ * Before the schematic has a parts list (no kicad.bom yet), the parts check the architecture stands on: the one the
+ * chosen option cites (status chosen), else the recommended one's, by its run id in the option's words or scores. A
+ * smaller check made later (the display block alone, 2 lines) is not the board: run 3 read US$26.83 to US$83.04 for
+ * 10 boards from it while option A's own check gave US$61.74 to US$90.97 (test-esp32-run3 S7). Null: none cited.
+ */
+export function architectureCheck(db: DatabaseSync): string | null {
+  if (newest(db, 'kicad.bom') || !hasTable(db, 'arch_options')) return null
+  const o = db.prepare("SELECT id, summary, why FROM arch_options WHERE status != 'withdrawn' ORDER BY (status = 'chosen') DESC, recommended DESC, id LIMIT 1").get() as Record<string, unknown> | undefined
+  if (!o) return null
+  const scores = hasTable(db, 'arch_scores') ? (db.prepare('SELECT reason FROM arch_scores WHERE option=?').all(String(o.id)) as { reason?: unknown }[]).map((r) => String(r.reason ?? '')) : []
+  const words = [String(o.why ?? ''), String(o.summary ?? ''), ...scores].join(' ')
+  for (const m of words.matchAll(/parts\.bom_check[\s(:]*([0-9a-f]{12,32})/g)) {
+    const id = m[1] as string
+    const r = db.prepare("SELECT id FROM runs WHERE kind='parts.bom_check' AND status != 'error' AND (id = ? OR id LIKE ?) LIMIT 1").get(id, `${id}%`) as { id?: string } | undefined
+    if (r?.id) return r.id
+  }
+  return null
+}
+
+/** The parts check the estimate reads: the architecture's (architectureCheck) before the schematic, else the newest that did not error. */
 function newestParts(db: DatabaseSync): EstimateInput['parts'] | null {
-  const check = newest(db, 'parts.bom_check')
+  const cited = architectureCheck(db)
+  const check = cited
+    ? ((r) => (r ? { id: String(r.id), started: Number(r.started), result: json(r.result) } : null))(db.prepare('SELECT id, started, result FROM runs WHERE id=?').get(cited) as Record<string, unknown> | undefined)
+    : newest(db, 'parts.bom_check')
   if (!check) return null
   const res = (check.result ?? {}) as { boards?: unknown; total?: unknown; currency?: unknown }
   const boardsMeasured = hasTable(db, 'measurements') ? (db.prepare("SELECT value FROM measurements WHERE run_id=? AND name='boards'").get(check.id) as { value?: number } | undefined)?.value : undefined

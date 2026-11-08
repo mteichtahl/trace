@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { costLimitOf, costLimits, excludedLines, orderEstimate, orderEstimateFrom } from '../../src/core/order-estimate.js'
+import { architectureCheck, costLimitOf, costLimits, excludedLines, orderEstimate, orderEstimateFrom } from '../../src/core/order-estimate.js'
 
 const parts = (o: Partial<Parameters<typeof orderEstimate>[0]['parts']> = {}) => ({
   run: 'p1', at: 1_793_850_000, boards: 10, total: 47.12, currency: 'USD',
@@ -101,6 +101,31 @@ describe('from the record', () => {
     db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('p2', 'parts.bom_check', 'pass', 1_794_200_000, JSON.stringify({ boards: 10, total: 31, currency: 'USD' }))
     for (const [i, c, n] of [[1, 'C1', 1], [2, 'C2', 3], [3, 'C15127', 1]] as const) db.prepare('INSERT INTO parts_list_lines VALUES (?,?,?,?,?,?)').run('p2', i, c, n, '[]', 1)
     expect(orderEstimateFrom(db)!.partsChanged).toBeUndefined()
+  })
+
+  it('before the schematic, stands on the parts check the architecture cites, not a later partial one (test-esp32-run3 S7)', () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(`CREATE TABLE runs (id TEXT, kind TEXT, status TEXT, started REAL, result TEXT);
+      CREATE TABLE parts_list_lines (run_id TEXT, line INTEGER, order_code TEXT, per_board REAL, flags TEXT, line_total REAL);
+      CREATE TABLE arch_options (id TEXT, name TEXT, summary TEXT, recommended INTEGER, why TEXT, status TEXT);
+      CREATE TABLE arch_scores (option TEXT, criterion TEXT, score REAL, reason TEXT);`)
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('099ffff2b3824257', 'parts.bom_check', 'pass', 1, JSON.stringify({ boards: 10, total: 37.63, currency: 'USD' }))
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('e073297290f74bbd', 'parts.bom_check', 'pass', 2, JSON.stringify({ boards: 10, total: 52.46, currency: 'USD' }))
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('ace80fa56148472c', 'parts.bom_check', 'fail', 3, JSON.stringify({ boards: 10, total: 0.23, currency: 'USD' }))
+    db.prepare('INSERT INTO arch_options VALUES (?,?,?,?,?,?)').run('A', 'ESP32-C3', 'C3 module', 1, 'Lowest cost: order estimate USD 61.74-90.97 (parts.bom_check 099ffff2b3824257).', 'proposed')
+    db.prepare('INSERT INTO arch_options VALUES (?,?,?,?,?,?)').run('B', 'ESP32-S3', 'S3 module', 0, 'Headroom.', 'proposed')
+    db.prepare('INSERT INTO arch_scores VALUES (?,?,?,?)').run('B', 'cost', 2, 'USD 76.57-105.80 (e073297290f74bbd).')
+    // the recommended option's check, not the newest (the display block alone)
+    expect(architectureCheck(db)).toBe('099ffff2b3824257')
+    expect(orderEstimateFrom(db)!.partsRun).toBe('099ffff2b3824257')
+    // a chosen option wins over the recommendation; its check is cited in a score
+    db.exec("UPDATE arch_options SET status='chosen' WHERE id='B'")
+    db.exec("UPDATE arch_scores SET reason='parts.bom_check e073297290f74bbd: USD 76.57-105.80.'")
+    expect(architectureCheck(db)).toBe('e073297290f74bbd')
+    // once the schematic has a parts list, the newest check is the board's
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('bom1', 'kicad.bom', 'pass', 4, '{}')
+    expect(architectureCheck(db)).toBeNull()
+    expect(orderEstimateFrom(db)!.partsRun).toBe('ace80fa56148472c')
   })
 
   it('is null without a parts check', () => {
