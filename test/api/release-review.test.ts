@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { type ReleaseView, inactiveLifecycle, partLine, releaseView } from '../../src/api/release-review.js'
+import { type ReleaseView, inactiveLifecycle, partLine, releaseRecommendation, releaseView } from '../../src/api/release-review.js'
 import { type CheckInput, checkSkill } from '../../src/api/skill-checks.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -128,6 +128,20 @@ describe('Release review: each step from the record', () => {
 })
 
 describe('Release review: pure pieces', () => {
+  it('recommends release with untested requirements under the coverage waiver; an emission estimate over the limit is a concern (R59, R60)', () => {
+    const stages = [{ id: 'layout', ord: 5 }, { id: 'signoff', ord: 6 }]
+    const rec = (waivers: unknown[]) => ({ journey: { currentStage: 'signoff' }, stages, waivers, criteria: [], gates: [], questions: [], decisions: [] }) as never
+    const v = (estimates: { status: string }[]) => ({ emc: { estimates }, fab: { drc: null }, parts: null }) as never
+    const coverage = { closedAt: null, targetKind: 'criterion', target: 'signoff.coverage' }
+    const reqs = [{ id: 'REQ-1', evidence: 'untested' }]
+    expect(releaseRecommendation(rec([]), v([]), reqs)?.recommended).toBe('return:signoff')
+    expect(releaseRecommendation(rec([coverage]), v([]), reqs)).toMatchObject({ recommended: 'release' })
+    const over = releaseRecommendation(rec([coverage]), v([{ status: 'fail' }]), reqs)
+    expect(over?.recommended).toBe('return:signoff')
+    expect(over?.why).toMatch(/1 emission estimate is over the limit/)
+    expect(releaseRecommendation(rec([coverage, { closedAt: null, targetKind: 'criterion', target: 'signoff.emc' }]), v([{ status: 'fail' }]), reqs)?.recommended).toBe('release')
+  })
+
   it('lifecycle: active, not active, not known', () => {
     expect(inactiveLifecycle('Active')).toBe(false)
     expect(inactiveLifecycle('Production (Last Updated: 1 month ago)')).toBe(false)

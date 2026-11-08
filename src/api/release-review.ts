@@ -186,8 +186,18 @@ export function releaseRecommendation(r: JourneyRecord | null, v: ReleaseView, r
   const cur = r.stages.find((s) => s.id === r.journey.currentStage)
   const stages = r.stages.filter((s) => cur && s.ord <= cur.ord).sort((a, b) => b.ord - a.ord)
   const concerns: { text: string; stage: StageId }[] = []
-  const untested = requirements.filter((q) => q.evidence === 'untested' || q.evidence === 'failing')
-  if (untested.length) concerns.push({ text: `${untested.length} requirement${untested.length === 1 ? ' is' : 's are'} untested or failing`, stage: r.journey.currentStage })
+  // untested under the coverage criterion's waiver is not a concern; failing always is (test-esp32-run2 R59: trace
+  // recommended that waiver, then recommended returning to Sign-off because of what it covers)
+  const covered = r.waivers.some((w) => w.closedAt === null && w.targetKind === 'criterion' && w.target === 'signoff.coverage')
+  const failing = requirements.filter((q) => q.evidence === 'failing')
+  const untested = covered ? [] : requirements.filter((q) => q.evidence === 'untested')
+  if (failing.length) concerns.push({ text: `${failing.length} requirement${failing.length === 1 ? ' is' : 's are'} failing`, stage: r.journey.currentStage })
+  if (untested.length) concerns.push({ text: `${untested.length} requirement${untested.length === 1 ? ' is' : 's are'} untested`, stage: r.journey.currentStage })
+  // an emission estimate over the limit is said, even with the precheck criterion met, unless that criterion is
+  // waived for it (R60)
+  const emcWaived = r.waivers.some((w) => w.closedAt === null && w.targetKind === 'criterion' && w.target === 'signoff.emc')
+  const over = emcWaived ? [] : v.emc.estimates.filter((e) => e.status === 'fail')
+  if (over.length) concerns.push({ text: `${over.length} emission estimate${over.length === 1 ? ' is' : 's are'} over the limit`, stage: r.journey.currentStage })
   for (const c of reviewWaitsOn(r, 'signoff.report')) concerns.push({ text: `${c.text.replace(/\.$/, '').toLowerCase()} is not met yet`, stage: r.journey.currentStage })
   if (v.fab.drc && v.fab.drc.errors > 0) concerns.push({ text: `DRC has ${v.fab.drc.errors} error${v.fab.drc.errors === 1 ? '' : 's'}`, stage: stages.some((s) => s.id === 'layout') ? 'layout' : r.journey.currentStage })
   if (v.parts && v.parts.blocking > 0) concerns.push({ text: `${v.parts.blocking} parts list line${v.parts.blocking === 1 ? ' is' : 's are'} out, short or not found`, stage: r.journey.currentStage })
