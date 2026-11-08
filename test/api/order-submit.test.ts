@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { type OrderView, orderLines, orderOptions } from '../../src/api/order-submit.js'
+import { type OrderView, caseOrderOf, orderLines, orderOptions } from '../../src/api/order-submit.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
@@ -155,5 +155,18 @@ describe('Order submit: pure pieces', () => {
     expect(orderOptions(r, { parts: null, signedParts: null, fab, board: { id: 'b', result: { copper_layers: 2 } } }).map((o) => [o.id, o.value])).toEqual([
       ['layers', '4'], ['surface-finish', 'HASL'], ['quantity', '5'], ['assembly-side', 'Top side (3 placed parts)'], ['assembled', '5'],
     ])
+  })
+
+  it('the printed case, ordered apart from the boards: its prepared sheet, or that none is prepared yet (test-esp32-run2 R66)', () => {
+    const none = { parts: null, signedParts: null, fab: null, board: null }
+    expect(caseOrderOf(none)).toBeNull()
+    const caseBuild = { id: 'm1', started: 100, result: { process: { service: 'jlc3dp', process: 'MJF', material: 'PA12' } } }
+    expect(caseOrderOf({ ...none, caseBuild })).toEqual({ build: 'm1', process: 'MJF', material: 'PA12', sheet: null })
+    const order = { service: 'jlc3dp', process: 'MJF', material: 'PA12', finish: 'standard', quantity: 10, files: ['mechanical/out/case-base.step', 'mechanical/out/case-lid.step'], upload: 'https://jlc3dp.com/3d-printing-quote' }
+    expect(caseOrderOf({ ...none, caseBuild, caseOrder: { id: 'o1', started: 200, result: { order } } })?.sheet).toEqual({
+      run: 'o1', service: 'JLC3DP 3D printing', finish: 'standard', quantity: 10, files: order.files, upload: order.upload,
+    })
+    // a sheet prepared before the newest build is for an earlier case
+    expect(caseOrderOf({ ...none, caseBuild, caseOrder: { id: 'o0', started: 50, result: { order } } })?.sheet).toBeNull()
   })
 })

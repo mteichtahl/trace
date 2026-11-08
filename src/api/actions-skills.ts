@@ -173,7 +173,8 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     const boardRun = latestRun(db, 'kicad.board')
     const placement = latestRun(db, 'pcb.placement_check')
     // the newest build that finished with a fit (an errored or running one has no result to read)
-    const caseRow = hasTable(db, 'runs') ? db.prepare("SELECT id, status, summary FROM runs WHERE kind='mech.build' AND status IN ('pass','fail') ORDER BY started DESC LIMIT 1").get() as { id: string; status: string; summary: string | null } | undefined : undefined
+    const caseRow = hasTable(db, 'runs') ? db.prepare("SELECT id, status, summary, started FROM runs WHERE kind='mech.build' AND status IN ('pass','fail') ORDER BY started DESC LIMIT 1").get() as { id: string; status: string; summary: string | null; started: number } | undefined : undefined
+    const caseStarted = caseRow ? Number(caseRow.started) : 0
     const caseRun = caseRow ? { id: String(caseRow.id), status: String(caseRow.status), summary: caseRow.summary === null ? null : String(caseRow.summary) } : null
     // the case designs that could work (mech.options), for the process step
     const optRow = hasTable(db, 'runs') ? db.prepare("SELECT id FROM runs WHERE kind='mech.options' AND status IN ('pass','fail') ORDER BY started DESC LIMIT 1").get() as { id: string } | undefined : undefined
@@ -226,6 +227,9 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
         signedParts: before ? runRow({ id: String(before.id), status: String(before.status), summary: before.summary === null ? null : String(before.summary), started: Number(before.started) }) : null,
         fab: fab ? { ...runRow(fab)!, result: fabResult, outDir: typeof args.out_dir === 'string' ? args.out_dir : null, bomCsv: artifactText(db, fab.id, 'bom.csv') } : null,
         board: boardRun ? { id: boardRun.id, result: runResult(db, boardRun.id) } : null,
+        // the case, ordered apart from the boards (order-submit.ts caseOrderOf)
+        caseBuild: caseRun ? { id: caseRun.id, started: caseStarted, result: runResult(db, caseRun.id) } : null,
+        caseOrder: ((o) => (o ? { id: String(o.id), started: Number(o.started), result: runResult(db, String(o.id)) } : null))(hasTable(db, 'runs') ? db.prepare("SELECT id, started FROM runs WHERE kind='mech.order' AND status='pass' ORDER BY started DESC LIMIT 1").get() as { id: string; started: number } | undefined : undefined),
       }
     })() : null
     return {
