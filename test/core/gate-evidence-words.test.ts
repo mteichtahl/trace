@@ -122,6 +122,9 @@ describe('a criterion\'s evidence label (test-esp32-run2 R34)', () => {
     expect(plainEvidenceLabel('architect.mapped: checked 23 requirements: every one keeps to its shape')).toBe('Checked 23 requirements: all pass')
     expect(plainEvidenceLabel('architect.stock: checked 19 key parts: 1 finding, 1 waived')).toBe('Checked 19 key parts: 1 finding, 1 waived')
     expect(plainEvidenceLabel('kicad_erc: 0 errors')).toBe('kicad_erc: 0 errors')
+  })
+})
+
 describe('a failed run whose finding a person waived (test-esp32-run2 R42)', () => {
   it('may be cited for the criterion the waiver counts for', async () => {
     const { failedEvidence } = await import('../../src/tools/journey/tools.js')
