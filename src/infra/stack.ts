@@ -354,6 +354,8 @@ export class TraceStack extends Stack {
       runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
+        // the build of the image it runs, which its jobs name (src/agents/runtime/job-index.ts whereWords)
+        TRACE_BUILD: contentTag,
         // where its jobs and tool calls write their logs (src/agents/runtime/log-stream.ts); by name, so a nested stack
         // takes no parameter for it (the group is made above, before any project)
         [RUNS_LOG_GROUP_ENV]: runsLogGroup(cfg.prefix),

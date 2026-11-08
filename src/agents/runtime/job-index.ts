@@ -90,8 +90,16 @@ export function batchOfWait(what: string): { id: string; pool: 'gpu' | 'cpu' } |
 /** The microVM's memory now, for a job's row: a microVM that runs out of it ends without a word. */
 export const vitals = (): string => JSON.stringify({ usedMb: Math.round((totalmem() - freemem()) / 2 ** 20), totalMb: Math.round(totalmem() / 2 ** 20) })
 
-/** Where it runs, in words. */
-const WHERE = 'on the project\'s agent runtime'
+/**
+ * Where it runs, in words, with the trace build of its image (TRACE_BUILD, the image's content tag the stack writes):
+ * a job that ran on code older than main says so (test-esp32-run2 R56: an agent refused an option merged minutes
+ * before, its image not yet updated, and nothing showed which trace it ran on).
+ */
+export function whereWords(build: string | undefined = process.env.TRACE_BUILD): string {
+  const b = build?.trim()
+  return `on the project's agent runtime${b ? `, trace build ${b.slice(0, 12)}` : ''}`
+}
+const WHERE = whereWords()
 
 export interface IndexOptions {
   now?: () => number

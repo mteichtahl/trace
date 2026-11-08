@@ -444,3 +444,12 @@ describe('pause', () => {
     expect(await saveTranscript(projects, REPO, 'job-q', 'bbbb2222-3333', cwd, home)).toBeNull()
   })
 })
+
+describe('where a job ran (test-esp32-run2 R56)', () => {
+  it('names the trace build of its image when the stack gave one', async () => {
+    const { whereWords } = await import('../../src/agents/runtime/job-index.js')
+    expect(whereWords('7f3e21a9c0d4b6e85a1f')).toBe("on the project's agent runtime, trace build 7f3e21a9c0d4")
+    expect(whereWords('')).toBe("on the project's agent runtime")
+    expect(whereWords(undefined)).toBe("on the project's agent runtime")
+  })
+})
