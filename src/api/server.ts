@@ -39,7 +39,7 @@ import { ATTR, type Attrs, type Outcome, type Span, flush, personHash, setAttrs 
 import { observeInvocation } from '../agents/runtime/observe.js'
 import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, projectKbsFromEnv } from './actions.js'
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
-import { HttpGitHub } from './github.js'
+import { GitHubError, HttpGitHub } from './github.js'
 import { GitHubBudget, GitHubCache } from './github-cache.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
 import { backendPrincipal, peekClient } from './backend-auth.js'
@@ -231,7 +231,7 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
         return done(200, { ok: true, result: r.result }, 'ok')
       } catch (e) {
         if (e instanceof AccessDenied) return done(403, { ok: false, error: NO_ACCESS }, `denied: ${e.message}`)
-        if (e instanceof ActionError || e instanceof ToolError || e instanceof ConfigError || e instanceof z.ZodError) {
+        if (e instanceof ActionError || e instanceof ToolError || e instanceof ConfigError || e instanceof z.ZodError || (e instanceof GitHubError && e.rateLimited)) {
           return done(200, { ok: false, error: message(e) }, 'error')
         }
         // an outside system is never told what went wrong inside: a reference to the log line instead
