@@ -141,6 +141,22 @@ export function drillHits(text: string): number {
   return n
 }
 
+/**
+ * Whether a Gerber in the package is a copper layer. Its name says so only while the board keeps KiCad's layer names
+ * (F.Cu → -F_Cu): a board that renames them (top_layer, bottom_layer) gets files named after its own names, so the
+ * Gerber job file's FileFunction ("Copper,L1,Top"), the file's own X2 attribute (%TF.FileFunction,Copper…) or a Protel
+ * copper extension (.gtl, .gbl, .g1…) say it instead (test-esp32-run2: "no copper Gerbers" for a 2-layer board).
+ */
+function isCopper(dir: string, f: string, job: { Path?: string; FileFunction?: string }[] | null): boolean {
+  if (/_Cu\.[^.]+$/.test(f)) return true
+  if (job?.some((a) => basename(a.Path ?? '') === f && /^Copper\b/i.test(a.FileFunction ?? ''))) return true
+  if (/\.(gtl|gbl|g\d+)$/i.test(f)) return true
+  if (!/\.(gbr|g[a-z]{2}|gm\d+)$/i.test(f)) return false
+  try {
+    return /%TF\.FileFunction,Copper\b/.test(readFileSync(join(dir, f), 'utf8').slice(0, 2000))
+  } catch { return false }
+}
+
 export interface FabCheck {
   /** what was asked and was not done: the package must not be sent */
   problems: string[]
@@ -158,24 +174,25 @@ export function checkFab(dir: string, name: string, s: FabSettings, board: HoleC
   const problems: string[] = []
   const notes: string[] = []
   const files = readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile()).sort()
-  const copper = files.filter((f) => f.startsWith(`${name}-`) && /_Cu\.[^.]+$/.test(f))
+  const job = files.find((f) => f.endsWith('.gbrjob'))
+  let jobFiles: { Path?: string; FileFunction?: string }[] | null = null
+  if (job) {
+    try {
+      jobFiles = (JSON.parse(readFileSync(join(dir, job), 'utf8')) as { FilesAttributes?: { Path?: string; FileFunction?: string }[] }).FilesAttributes ?? []
+    } catch { jobFiles = null }
+  }
+  const copper = files.filter((f) => f.startsWith(`${name}-`) && isCopper(dir, f, jobFiles))
   if (!copper.length) problems.push('no copper Gerbers were written')
   if (s.gerber_source === 'explicit') {
     const gbr = copper.filter((f) => f.endsWith('.gbr'))
     if (s.protel_ext && gbr.length) problems.push(`Protel extensions were asked for, but kicad-cli wrote ${gbr.join(', ')}`)
     if (!s.protel_ext && copper.length > gbr.length) problems.push(`.gbr names were asked for, but kicad-cli wrote ${copper.filter((f) => !f.endsWith('.gbr')).join(', ')}`)
   } else notes.push("Gerber names and silkscreen clipping follow the settings saved in the board file")
-  const job = files.find((f) => f.endsWith('.gbrjob'))
   if (!job) problems.push('no Gerber job file (.gbrjob) was written')
+  else if (!jobFiles) problems.push(`the Gerber job file ${job} is not readable JSON`)
   else {
-    try {
-      const named = ((JSON.parse(readFileSync(join(dir, job), 'utf8')) as { FilesAttributes?: { Path?: string }[] }).FilesAttributes ?? [])
-        .map((a) => a.Path ?? '').filter(Boolean)
-      const missing = named.filter((p) => !files.includes(basename(p)))
-      if (missing.length) problems.push(`the Gerber job file names files that are not in the package: ${missing.join(', ')}`)
-    } catch {
-      problems.push(`the Gerber job file ${job} is not readable JSON`)
-    }
+    const missing = jobFiles.map((a) => a.Path ?? '').filter(Boolean).filter((p) => !files.includes(basename(p)))
+    if (missing.length) problems.push(`the Gerber job file names files that are not in the package: ${missing.join(', ')}`)
   }
   const drl = files.filter((f) => f.endsWith('.drl'))
   const hits = (f: string): number => drillHits(readFileSync(join(dir, f), 'utf8'))
