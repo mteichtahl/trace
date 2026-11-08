@@ -40,7 +40,7 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { isAdmin } from '../core/access.js'
-import { answerLook, plainArchitecture, plainQuestionText, runKindsOf } from '../core/record-refs.js'
+import { answerLook, plainArchitecture, plainCodeRefs, plainQuestionText, runKindsOf } from '../core/record-refs.js'
 import { ActionError, type Context, Repo, agentFacts, agentFactsStore, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
 import { type QuoteRow, allQuotes, loadAgentQuotes, loadQuotes } from '../core/quotes.js'
 import { type Lasts, askedBy, carryOn, designBefore, ruleFromAnswer, viewerOf, waivedWords } from './actions-journey.js'
@@ -575,7 +575,9 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
           detail: `${q.askedBy} asks. Answer it before agreeing the plan${q.blocks ? `; it holds back ${plainQuestionText(q.blocks, i.r?.criteria ?? []).replace(/\.$/, '')}` : ''}.`,
         }
       })
-      return { items: [...asked, ...pinCheck(design.pins, i.nets ?? null, matedParts(architectureView(design, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const }))] }
+      // a finding in words (its datasheet's hash as "the datasheet, page 2"), and a waived one says so rather than
+      // asking to be fixed or waived again (test-esp32-run2 R44)
+      return { items: [...asked, ...pinCheck(design.pins, i.nets ?? null, matedParts(architectureView(design, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: plainCodeRefs(f.text), detail: waived.has(f.id) ? 'Waived: nothing to do here.' : f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const }))] }
     }
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }

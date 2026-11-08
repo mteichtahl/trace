@@ -156,9 +156,10 @@ export function plainCodeRefs(text: string): string {
     })
     // "the library datasheet (ea9a571f p2)": the datasheet is said, its page is what is left
     .replace(new RegExp(String.raw`(datasheet\s*)\(\s*${HASH}${PAGE}\s*\)`, 'gi'), (_w, d: string, page: string) => `${d}(page ${page})`)
-    .replace(new RegExp(String.raw`(\b(?:the\s+)?datasheet\s+)?${HASH}${PAGE}`, 'gi'), (_w, _d, page: string, at: number, all: string) =>
-      `${STARTS.test(all.slice(0, at)) ? 'The' : 'the'} datasheet, page ${page}`)
-    .replace(new RegExp(String.raw`\b(?:the\s+)?datasheet\s+${HASH}`, 'gi'), (_w, at: number, all: string) => `${STARTS.test(all.slice(0, at)) ? 'The' : 'the'} datasheet`)
+    // "its datasheet ea9a571f p2" keeps its own word: "its datasheet, page 2" (test-esp32-run2 R44)
+    .replace(new RegExp(String.raw`(\b(?:(the|its|their|this)\s+)?datasheet\s+)?${HASH}${PAGE}`, 'gi'), (_w, _d, own: string | undefined, page: string, at: number, all: string) =>
+      `${own ?? (STARTS.test(all.slice(0, at)) ? 'The' : 'the')} datasheet, page ${page}`)
+    .replace(new RegExp(String.raw`\b(?:(the|its|their|this)\s+)?datasheet\s+${HASH}`, 'gi'), (_w, own: string | undefined, at: number, all: string) => `${own ?? (STARTS.test(all.slice(0, at)) ? 'The' : 'the')} datasheet`)
     .replace(new RegExp(String.raw`\b(with|against|per|from)\s+${HASH}`, 'gi'), (_w, prep: string) => `${prep} the datasheet`)
     // "the ams hand-off hoda5b1502f4f144": the hand-off is said already (test-esp32-run2 R40)
     .replace(/\b(hand-?offs?)\s+`?ho[0-9a-f]{14}\b`?/gi, '$1')
