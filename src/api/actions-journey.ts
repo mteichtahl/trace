@@ -589,10 +589,16 @@ export async function startOwnedWork(ctx: Context, repo: string, r: Pick<Journey
   const work = ownedWork(stage, id, text)
   const what = text.replace(/\.$/, '')
   const by = o.auto ? 'trace' : label(ctx.principal)
+  // the criterion as the record has it now, agents' checks included: a start decided from an older read is not made
+  // when the criterion has been met since (test-esp32-run2 R33: a job ran for "every requirement maps to at least one
+  // block" after a check had met it, and still made a change to review)
+  const facts = o.auto ? await agentFacts(ctx, repo).catch(() => null) : null
   const claimed = await writeJourney(ctx, repo, (db) => {
     const now = loadJourney(db)
     const since = now ? stageSince(now) : 0
     if (o.auto && now?.decisions.some((d) => (d.kind === OWNED_STARTED || d.kind === OWNED_REFUSED) && d.ref === id && d.at >= since)) return { result: { ok: false }, changed: false }
+    const seen = now && facts ? mergeAgentFacts(now, facts) : now
+    if (o.auto && seen?.criteria.find((c) => c.id === id)?.status === 'met') return { result: { ok: false }, changed: false }
     decide(db, {
       kind: OWNED_STARTED, stage, ref: id, by,
       summary: o.auto ? `Nothing was working on "${what}", so trace started its work. ${work.started}` : `${by} started trace's work on "${what}". ${work.started}`,

@@ -253,3 +253,19 @@ describe('journey.get with trace\'s criterion and nothing running (#161)', () =>
     await expect(run(USER, 'journey.start_work', { repo: REPO })).rejects.toThrow(/trace is working on this project already/)
   })
 })
+
+describe('a start decided from an older read (test-esp32-run2 R33)', () => {
+  it('is not made when the criterion has been met since', async () => {
+    const r = (await journeyStore(ctx(ADMIN), REPO).read((d) => loadJourney(d)!)).result
+    await journeyStore(ctx(ADMIN), REPO).update((d) => {
+      d.prepare("DELETE FROM decisions WHERE kind LIKE 'work.%'").run()
+      setCriterion(d, 'signoff.coverage', 'met', [{ kind: 'run', ref: 'run-coverage' }], 'seed')
+      return { result: null }
+    })
+    const before = started.length
+    const { startOwnedWork } = await import('../../src/api/actions-journey.js')
+    expect(await startOwnedWork(ctx(ADMIN), REPO, r, 'signoff.coverage', 'Every requirement is verified or waived.', { auto: true })).toEqual({ skipped: true })
+    expect(started.length).toBe(before)
+    expect(await decisions()).toEqual([])
+  })
+})
