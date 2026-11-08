@@ -169,3 +169,17 @@ export function plainCodeRefs(text: string): string {
 export function plainQuestionText(text: string, criteria: readonly { id: string; text: string }[], look: RecordLook = {}): string {
   return plainCriterionRefs(plainCodeRefs(plainRecordRefs(text, look)), criteria)
 }
+
+/**
+ * A criterion's evidence label as people read it under that criterion (test-esp32-run2 R34: "architect.mapped:
+ * checked 23 requirements: every one keeps to its shape"): without the criterion's id in front, which the criterion
+ * already says, and with the shape check's own words said plainly ("Checked 23 requirements: all pass"). Pure.
+ */
+export function plainEvidenceLabel(label: string): string {
+  if (!/^[a-z][a-z]*(?:\.[a-z_]+){1,2}:\s/.test(label)) return label
+  const out = label
+    .replace(/^[a-z][a-z]*(?:\.[a-z_]+){1,2}:\s+/, '')
+    .replace(/:\s*every one keeps to its shape/, ': all pass')
+    .replace(/, so nothing was shown to keep to its shape$/, '')
+  return out ? cap(out) : label
+}
