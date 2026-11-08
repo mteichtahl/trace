@@ -693,7 +693,11 @@ export interface OrderEstimateView {
   lines: { key: string; what: string; low: number; high: number; source: string }[]
   notIn: string[]
   verdict: 'under' | 'at_risk' | 'over' | null
-  limits: { requirement: string | null; kind: 'total' | 'per_board'; amount: number; currency: string; verdict: 'under' | 'at_risk' | 'over' | 'not_compared'; text: string }[]
+  limits: {
+    requirement: string | null; kind: 'total' | 'per_board'; amount: number; currency: string; verdict: 'under' | 'at_risk' | 'over' | 'not_compared'; text: string
+    /** what the limit leaves out of the order (its requirement or an answer says so), and the range compared without it */
+    excludes?: ('shipping' | 'case')[]; compared?: { low: number; high: number }
+  }[]
   text: string
 }
 
@@ -719,7 +723,7 @@ export interface CostView {
   /** the build: the newest order estimate's high end, else quantity × unit cost; null without either */
   forecast: number | null
   /** where the forecast comes from: the order estimate (its range, its parts check's date), or the build plan's target */
-  forecastBasis?: { kind: 'quote'; total: number; on: string; id: string } | { kind: 'estimate'; low: number; high: number; at: string; partsRun: string } | { kind: 'target' }
+  forecastBasis?: { kind: 'quote'; total: number; on: string; id: string } | { kind: 'estimate'; low: number; high: number; at: string; partsRun: string; without?: ('shipping' | 'case')[] } | { kind: 'target' }
   /** the build budget: what the order (boards, parts, case) may cost; cloud work never counts against it */
   budget?: number
   /** the cloud-work allowance: what trace's own cloud work may cost (US$); absent while none is set */
