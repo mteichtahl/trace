@@ -151,3 +151,15 @@ describe('a rule check with warnings left (test-esp32-run2 R45)', () => {
   })
 })
 
+
+describe('an option that waives a rule check finding and its criterion (test-esp32-run2 R50)', () => {
+  it('waives the finding only, named as the check names it', async () => {
+    const { narrowedTargets } = await import('../../src/core/journey.js')
+    expect(narrowedTargets([{ kind: 'criterion', id: 'layout.drc' }, { kind: 'finding', id: 'lib_footprint_mismatch:J1' }]))
+      .toEqual([{ kind: 'finding', id: 'drc:lib_footprint_mismatch:J1' }])
+    expect(narrowedTargets([{ kind: 'finding', id: 'erc:pin_not_driven:U2' }, { kind: 'criterion', id: 'capture.erc' }])).toEqual([{ kind: 'finding', id: 'erc:pin_not_driven:U2' }])
+    // a criterion alone, or one that is not a rule check's, is waived as named
+    expect(narrowedTargets([{ kind: 'criterion', id: 'layout.drc' }])).toEqual([{ kind: 'criterion', id: 'layout.drc' }])
+    expect(narrowedTargets([{ kind: 'criterion', id: 'layout.fit' }, { kind: 'finding', id: 'x' }])).toEqual([{ kind: 'criterion', id: 'layout.fit' }, { kind: 'finding', id: 'x' }])
+  })
+})
