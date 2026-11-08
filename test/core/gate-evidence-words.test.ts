@@ -69,6 +69,10 @@ describe('a waiver counts for its own criterion only (#156)', () => {
     // an option's block's key part, not its path (test-esp32-run2 R34)
     expect(waiverTargetWords({ kind: 'finding', id: 'architect.stock@block%20A%2Fdisplay%2FusesPart%2F1' }, () => 'Every key part is in stock'))
       .toBe("the finding of “Every key part is in stock” on the display block's key part (option A)")
+    // a module's pin order against its connector counts for capture.datasheets (test-esp32-run2 R42)
+    expect(waiverCriterion({ kind: 'finding', id: 'mate:J2:SSD1306-0.96-128x64-I2C-4pin:order' })).toBe('capture.datasheets')
+    expect(waiverTargetWords({ kind: 'finding', id: 'mate:J2:SSD1306-0.96-128x64-I2C-4pin:order' }, () => undefined))
+      .toBe("the pin plan check's pin order finding on J2 (the SSD1306-0.96-128x64-I2C-4pin module)")
     expect(waiverCriterion({ kind: 'finding', id: 'erc:pin_not_driven:U2' })).toBe('capture.erc')
     expect(waiverCriterion({ kind: 'criterion', id: 'layout.route' })).toBe('layout.route')
     expect(waiverCriterion({ kind: 'requirement', id: 'REQ-1' })).toBeNull()
@@ -118,5 +122,14 @@ describe('a criterion\'s evidence label (test-esp32-run2 R34)', () => {
     expect(plainEvidenceLabel('architect.mapped: checked 23 requirements: every one keeps to its shape')).toBe('Checked 23 requirements: all pass')
     expect(plainEvidenceLabel('architect.stock: checked 19 key parts: 1 finding, 1 waived')).toBe('Checked 19 key parts: 1 finding, 1 waived')
     expect(plainEvidenceLabel('kicad_erc: 0 errors')).toBe('kicad_erc: 0 errors')
+describe('a failed run whose finding a person waived (test-esp32-run2 R42)', () => {
+  it('may be cited for the criterion the waiver counts for', async () => {
+    const { failedEvidence } = await import('../../src/tools/journey/tools.js')
+    const run = { id: '00f6ecdfdeac4f51', kind: 'design.pins', status: 'fail', summary: 'J2 pin order differs from the module datasheet' }
+    const waiver = { closedAt: null, targetKind: 'finding', target: 'mate:J2:SSD1306-0.96-128x64-I2C-4pin:order' }
+    const r = (waivers: unknown[]) => ({ waivers }) as unknown as Parameters<typeof failedEvidence>[2]
+    expect(failedEvidence('capture.datasheets', [run] as unknown as Parameters<typeof failedEvidence>[1], r([]))).toMatch(/not met on a run that did not pass/)
+    expect(failedEvidence('capture.datasheets', [run] as unknown as Parameters<typeof failedEvidence>[1], r([waiver]))).toBeNull()
+    expect(failedEvidence('capture.erc', [run] as unknown as Parameters<typeof failedEvidence>[1], r([waiver]))).toMatch(/not met/)
   })
 })
