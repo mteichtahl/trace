@@ -93,7 +93,7 @@ describe('Intent builder draft panel', () => {
 
   it('says which field each interface lacks, and shows the fields beside the words (test-esp32 #20)', async () => {
     const v = await view([])
-    expect(v.checks.find((c) => c.id === 'interfaces')).toMatchObject({ status: 'not_met', detail: '1 interface not fully given: INT-old lacks protocol, rate and direction.' })
+    expect(v.checks.find((c) => c.id === 'interfaces')).toMatchObject({ status: 'not_met', detail: '1 interface not fully given: the USB-C sink lacks protocol, rate and direction.' })
     expect(v.intent.statements.find((s) => s.id === 'INT-old')).toMatchObject({ flag: 'Missing protocol, rate, direction', interface: { type: 'USB-C sink', connector: 'USB-C receptacle' }, missing: ['protocol', 'rate', 'direction'] })
   })
 
@@ -109,7 +109,7 @@ describe('Intent builder draft panel', () => {
     expect(v.intent.statements.find((s) => s.id === 'INT-old')?.interface).toMatchObject({ protocol: 'none (sink, 5.1 kΩ on CC1 and CC2)', rate: 'not applicable', direction: 'in' })
     // a reworded statement that still leaves one out names it
     const w = await view([{ statement: 'INT-old', choice: 'edit', text: 'Works with USB-C chargers at 5 V.' }])
-    expect(w.checks.find((c) => c.id === 'interfaces')?.detail).toBe('1 interface not fully given: INT-old lacks protocol, rate and direction.')
+    expect(w.checks.find((c) => c.id === 'interfaces')?.detail).toBe('1 interface not fully given: the USB-C sink lacks protocol, rate and direction.')
   })
 })
 

@@ -203,7 +203,7 @@ describe('the guided skills read the design record', () => {
 
   it('Requirements review: coverage of the intent and struck reasons are checked; a pending strike in the draft counts', async () => {
     let c = await checks('requirements-review')
-    expect(c.covered).toMatchObject({ status: 'not_met', detail: '2 intent statements no requirement covers, and not left out with a reason: INT-purpose, INT-board.' })
+    expect(c.covered).toMatchObject({ status: 'not_met', detail: '2 intent statements no requirement covers, and not left out with a reason: “Reports soil moisture to a LoRa gateway”; “The board is at most 50 × 30 mm”.' })
     expect(c.struck).toMatchObject({ status: 'not_met', detail: expect.stringMatching(/1 struck requirement without a reason: REQ-3/) })
     await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 5, data: {
       decisions: [{ requirement: 'REQ-3', choice: 'strike', reason: 'The farm manager reads it on the phone app.' }],

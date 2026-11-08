@@ -135,7 +135,7 @@ function reviewChecks(d: ReviewDraft = {}): SkillView['checks'] {
       : d.no_conflicts ? { id: 'conflicts', status: 'met', detail: 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other.', by_draft: 'no_conflicts' }
       : { id: 'conflicts', status: 'not_met', detail: 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.', by_draft: 'no_conflicts' },
     { id: 'sources', status: 'met' },
-    d.uncovered?.some((x) => x.statement === 'I-6') ? { id: 'covered', status: 'met' } : { id: 'covered', status: 'not_met', detail: '1 intent statement no requirement covers, and not left out with a reason: I-6.' },
+    d.uncovered?.some((x) => x.statement === 'I-6') ? { id: 'covered', status: 'met' } : { id: 'covered', status: 'not_met', detail: '1 intent statement no requirement covers, and not left out with a reason: “Fits a 50 × 30 mm board in the IP67 probe housing”.' },
     { id: 'struck', status: 'met', detail: struck.length ? undefined : 'No requirement is struck.' },
   ]
 }
