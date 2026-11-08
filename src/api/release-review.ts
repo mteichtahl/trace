@@ -154,7 +154,9 @@ export function releaseView(r: JourneyRecord | null, rec: ReleaseRecord | null, 
     } : null,
     fab: {
       drc,
-      board: o.board ? { size: outline?.width_mm ? `${outline.width_mm} × ${outline.height_mm} mm` : null, layers: strs(o.board.layers) } : null,
+      // the copper layers only: kicad.board lists every layer (silk, mask, paste, …), and the review read "20 layers" for a
+      // 2-layer board (test-esp32-run2 R61)
+      board: o.board ? { size: outline?.width_mm ? `${outline.width_mm} × ${outline.height_mm} mm` : null, layers: copperLayers(o.board) } : null,
       hand_placed: o.handPlaced,
     },
     changes: {
@@ -202,4 +204,12 @@ export function releaseRecommendation(r: JourneyRecord | null, v: ReleaseView, r
     ],
     why: concerns.length ? `${concerns.map((c) => c.text).join('; ').replace(/^./, (x) => x.toUpperCase())}.` : 'Every requirement is verified or waived, and nothing in the report stands in the way.',
   }
+}
+
+/** A board check's copper layers by name ("F.Cu", "In1.Cu", "B.Cu"), from its layer list, else its count; null when neither. */
+export function copperLayers(board: Record<string, unknown>): string[] | null {
+  const named = Array.isArray(board.layers) ? board.layers.filter((l): l is string => typeof l === 'string' && /\.Cu$/.test(l)) : []
+  if (named.length) return named
+  const n = typeof board.copper_layers === 'number' ? board.copper_layers : null
+  return n ? Array.from({ length: n }, (_, i) => (i === 0 ? 'F.Cu' : i === n - 1 ? 'B.Cu' : `In${i}.Cu`)) : null
 }

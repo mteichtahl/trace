@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { type ReleaseView, inactiveLifecycle, partLine, releaseView } from '../../src/api/release-review.js'
+import { type ReleaseView, copperLayers, inactiveLifecycle, partLine, releaseView } from '../../src/api/release-review.js'
 import { type CheckInput, checkSkill } from '../../src/api/skill-checks.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -128,6 +128,13 @@ describe('Release review: each step from the record', () => {
 })
 
 describe('Release review: pure pieces', () => {
+  it('the board\'s copper layers only, not every layer of the board check (test-esp32-run2 R61)', () => {
+    const all = ['F.Cu', 'B.Cu', 'F.Adhes', 'B.Adhes', 'F.Paste', 'B.Paste', 'F.SilkS', 'B.SilkS', 'F.Mask', 'B.Mask', 'Edge.Cuts', 'F.CrtYd', 'B.CrtYd', 'F.Fab', 'B.Fab']
+    expect(copperLayers({ layers: all })).toEqual(['F.Cu', 'B.Cu'])
+    expect(copperLayers({ copper_layers: 4 })).toEqual(['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'])
+    expect(copperLayers({})).toBeNull()
+  })
+
   it('lifecycle: active, not active, not known', () => {
     expect(inactiveLifecycle('Active')).toBe(false)
     expect(inactiveLifecycle('Production (Last Updated: 1 month ago)')).toBe(false)
