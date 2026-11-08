@@ -36,7 +36,10 @@ export interface Budgets {
 export function forecastSource(c: Pick<CostView, 'quantity' | 'unit_cost' | 'forecastBasis'>, currency: string): string | null {
   const e = c.forecastBasis
   if (e?.kind === 'quote') return `the JLCPCB quote of ${e.on}, the newest recorded (not the estimate)`
-  if (e?.kind === 'estimate') return `the high end of the order estimate of ${e.at.slice(0, 10)}, ${money(e.low, currency)} to ${money(e.high, currency)}, from its parts check and the fab's published prices`
+  if (e?.kind === 'estimate') {
+    const without = e.without?.length ? ` without ${e.without.map((k) => (k === 'case' ? 'the case' : k)).join(' or ')}, which the budget leaves out` : ''
+    return `the high end of the order estimate of ${e.at.slice(0, 10)}${without}, ${money(e.low, currency)} to ${money(e.high, currency)}, from its parts check and the fab's published prices`
+  }
   return c.quantity && c.unit_cost ? `${c.quantity} boards at ${money(c.unit_cost, currency)} each, the build plan's target unit cost` : null
 }
 
@@ -202,8 +205,10 @@ function limitsSaid(e: NonNullable<CostView['orderEstimate']>): string[] {
   const m = (n: number) => money(n, e.currency)
   const r = (a: number, b: number) => (a === b ? m(a) : `${m(a)} to ${m(b)}`)
   return e.limits.filter((l) => l.verdict !== 'not_compared').map((l) => {
-    const what = l.requirement ?? (l.kind === 'total' ? 'the build budget' : 'the target unit cost')
-    const got = l.kind === 'total' ? [e.low, e.high] as const : [e.perBoard.low, e.perBoard.high] as const
+    // a limit that leaves shipping or the case out is compared without them, and says so (test-esp32-run2 R35)
+    const without = l.compared && l.excludes?.length ? ` without ${l.excludes.map((k) => (k === 'case' ? 'the case' : k)).join(' or ')}` : ''
+    const what = `${l.requirement ?? (l.kind === 'total' ? 'the build budget' : 'the target unit cost')}${without}`
+    const got = l.compared ? [l.compared.low, l.compared.high] as const : l.kind === 'total' ? [e.low, e.high] as const : [e.perBoard.low, e.perBoard.high] as const
     return l.verdict === 'under' ? `under ${what} (${m(l.amount)})`
       : l.verdict === 'over' ? `over ${what} (${m(l.amount)}) by ${r(got[0] - l.amount, got[1] - l.amount)}`
         : `at risk against ${what} (${m(l.amount)}): up to ${m(got[1] - l.amount)} over`

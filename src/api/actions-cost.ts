@@ -213,7 +213,13 @@ export function orderForecast(o: { target: number | null; estimate: OrderEstimat
   const q = o.quote
   if (q && q.currency === o.currency) return { planned: q.total, basis: { kind: 'quote' as const, total: q.total, on: q.on, id: q.id } }
   const e = o.estimate
-  if (e && e.currency === o.currency) return { planned: e.high, basis: { kind: 'estimate' as const, low: e.low, high: e.high, at: iso(e.at) as string, partsRun: e.partsRun } }
+  if (e && e.currency === o.currency) {
+    // the order's own cost limit leaves lines out (shipping, the case): the forecast against the budget does too
+    // (test-esp32-run2 R35: "US$29.77 over" from the high end with shipping, which the US$100 excludes)
+    const t = (e.limits ?? []).find((l) => l.kind === 'total' && l.compared && l.excludes?.length)
+    if (t?.compared) return { planned: t.compared.high, basis: { kind: 'estimate' as const, low: t.compared.low, high: t.compared.high, at: iso(e.at) as string, partsRun: e.partsRun, without: [...(t.excludes ?? [])] } }
+    return { planned: e.high, basis: { kind: 'estimate' as const, low: e.low, high: e.high, at: iso(e.at) as string, partsRun: e.partsRun } }
+  }
   return { planned: o.target, basis: o.target !== null ? { kind: 'target' as const } : null }
 }
 
