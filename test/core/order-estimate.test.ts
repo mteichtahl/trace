@@ -82,6 +82,27 @@ describe('from the record', () => {
     expect(e.limits.map((l) => [l.requirement, l.kind, l.amount])).toEqual([['REQ-1', 'total', 100], [null, 'per_board', 9]])
   })
 
+  it('says when the schematic\'s parts list changed since the parts check (test-esp32-run2 R51)', () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(`CREATE TABLE runs (id TEXT, kind TEXT, status TEXT, started REAL, result TEXT);
+      CREATE TABLE parts_list_lines (run_id TEXT, line INTEGER, order_code TEXT, per_board REAL, flags TEXT, line_total REAL);`)
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('bom0', 'kicad.bom', 'pass', 1, JSON.stringify({ lines: [{ qty: 1, lcsc: 'C1' }, { qty: 2, lcsc: 'C2' }] }))
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('p1', 'parts.bom_check', 'pass', 2, JSON.stringify({ boards: 10, total: 30, currency: 'USD' }))
+    db.prepare('INSERT INTO parts_list_lines VALUES (?,?,?,?,?,?)').run('p1', 1, 'C1', 1, '[]', 10)
+    db.prepare('INSERT INTO parts_list_lines VALUES (?,?,?,?,?,?)').run('p1', 2, 'C2', 2, '[]', 20)
+    // the same parts list since: nothing to say
+    expect(orderEstimateFrom(db)!.partsChanged).toBeUndefined()
+    // Prove adds Q1 (C15127) and a second C2, and drops nothing
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('bom1', 'kicad.bom', 'pass', 1_794_100_000, JSON.stringify({ lines: [{ qty: 1, lcsc: 'C1' }, { qty: 3, lcsc: 'C2' }, { qty: 1, lcsc: 'C15127' }] }))
+    const e = orderEstimateFrom(db)!
+    expect(e.partsChanged).toMatch(/adds C2 ×1, C15127 ×1\), so the estimate leaves those out until the parts are checked again\.$/)
+    expect(e.text.endsWith(e.partsChanged!)).toBe(true)
+    // a check after the schematic changed stands again
+    db.prepare('INSERT INTO runs VALUES (?,?,?,?,?)').run('p2', 'parts.bom_check', 'pass', 1_794_200_000, JSON.stringify({ boards: 10, total: 31, currency: 'USD' }))
+    for (const [i, c, n] of [[1, 'C1', 1], [2, 'C2', 3], [3, 'C15127', 1]] as const) db.prepare('INSERT INTO parts_list_lines VALUES (?,?,?,?,?,?)').run('p2', i, c, n, '[]', 1)
+    expect(orderEstimateFrom(db)!.partsChanged).toBeUndefined()
+  })
+
   it('is null without a parts check', () => {
     const db = new DatabaseSync(':memory:')
     db.exec('CREATE TABLE runs (id TEXT, kind TEXT, status TEXT, started REAL, result TEXT)')

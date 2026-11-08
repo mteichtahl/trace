@@ -107,6 +107,7 @@ export function estimateView(e: OrderEstimate) {
     lines: e.lines, notIn: e.notIn, verdict: e.verdict,
     limits: e.limits.map((l) => ({ requirement: l.requirement, kind: l.kind, amount: l.amount, currency: l.currency, verdict: l.verdict, text: l.text, ...(l.excludes?.length ? { excludes: [...l.excludes] } : {}), ...(l.compared ? { compared: l.compared } : {}) })),
     text: e.text,
+    ...(e.partsChanged ? { partsChanged: e.partsChanged } : {}),
   }
 }
 
