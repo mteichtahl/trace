@@ -218,7 +218,7 @@ function Fab({ v }: { v: ReleaseView['fab'] }) {
         <span className="min-w-0 flex-1">DRC{v.drc ? <span className="block text-xs text-muted-foreground">{v.drc.findings} findings{v.drc.waived ? `, ${v.drc.waived} waived` : ''}{v.drc.at ? ` · ${day(v.drc.at)}` : ''}</span> : <span className="block text-xs text-muted-foreground">No design rule check is recorded yet.</span>}</span>
         {v.drc?.run && run(v.drc.run)}
       </li>
-      <li className="px-4 py-2">Board<span className="block text-xs text-muted-foreground">{v.board ? [v.board.size, v.board.layers ? `${v.board.layers.length} layers` : null].filter(Boolean).join(' · ') || 'Size and layers not recorded.' : 'No board check (kicad.board) is recorded yet.'}</span></li>
+      <li className="px-4 py-2">Board<span className="block text-xs text-muted-foreground">{v.board ? [v.board.size, v.board.layers ? `${v.board.layers.length} copper layers` : null].filter(Boolean).join(' · ') || 'Size and layers not recorded.' : 'No board check (kicad.board) is recorded yet.'}</span></li>
       <li className="px-4 py-2">Placed by hand<span className="block text-xs text-muted-foreground">{v.hand_placed === null ? 'No fabrication run says which parts JLCPCB places yet.' : v.hand_placed.length ? v.hand_placed.join(', ') : 'None: JLCPCB places every part.'}</span></li>
     </ul>
   )
