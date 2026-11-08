@@ -137,6 +137,22 @@ describe('Release review: pure pieces', () => {
     expect(partLine({ line: 1, mpn: 'X', need: 1, status: 'ok' })).toMatchObject({ single: null, inactive: null })
   })
 
+  it('untested requirements under the coverage criterion\'s waiver pass; a budget states the expected cost (test-esp32-run2 R59)', () => {
+    const req = (id: string, evidence: string) => ({ id, evidence, status: 'accepted' })
+    const waiver = { closedAt: null, targetKind: 'criterion', target: 'signoff.coverage', caughtWhere: 'bring-up: TST-004, TST-007.' }
+    const input = (waivers: unknown[], build: Record<string, unknown>, reqs = [req('REQ-1', 'untested'), req('REQ-2', 'partial')]) => ({
+      r: { waivers, journey: { build: { quantity: 10, currency: 'USD', unit_cost: null, budget: null, ...build } } }, viewer: { admin: false }, requirements: reqs, struck: [], erc: null, drc: null, bom: null, board: null, placement: null, instruments: [], orders: [], tests: [], draft: null, gate: null, question: null, release: null,
+    }) as unknown as CheckInput
+    const of = (i: CheckInput, id: string) => checkSkill('release-review', i)?.find((c) => c.id === id)
+    expect(of(input([], {}), 'untested')).toMatchObject({ status: 'not_met', detail: '1 requirement untested: REQ-1.' })
+    expect(of(input([waiver], {}), 'untested')).toMatchObject({ status: 'met', detail: '1 requirement untested, under the waiver of the coverage criterion (checked at bring-up: TST-004, TST-007).' })
+    // a failing requirement still needs its own waiver
+    expect(of(input([waiver], {}, [req('REQ-1', 'untested'), req('REQ-3', 'failing')]), 'untested')).toMatchObject({ status: 'not_met', detail: '1 requirement failing and not waived: REQ-3.' })
+    expect(of(input([], {}), 'cost')).toMatchObject({ status: 'not_met', detail: "Set the expected unit cost or the build budget in the project's build plan." })
+    expect(of(input([], { budget: 100 }), 'cost')).toMatchObject({ status: 'met', detail: '10 boards within USD 100.' })
+    expect(of(input([], { unit_cost: 9, budget: 100 }), 'cost')).toMatchObject({ status: 'met', detail: '10 boards at USD 9 each.' })
+  })
+
   it('a parts check with no sellers or lifecycle leaves single-source to the person, saying so', () => {
     const i = {
       r: null, viewer: { admin: false }, requirements: [], struck: [], erc: null, drc: null, bom: null, board: null, placement: null, instruments: [], orders: [], tests: [], draft: null, gate: null, question: null,
