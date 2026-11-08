@@ -80,6 +80,8 @@ export interface OrderEstimate {
   verdict: 'under' | 'at_risk' | 'over' | null
   /** one paragraph: the range, what it is from, and each limit */
   text: string
+  /** the schematic's parts list since the parts check, when it differs: what the estimate does not count yet */
+  partsChanged?: string
 }
 
 export interface EstimateInput {
@@ -305,10 +307,35 @@ export function orderEstimateFrom(db: DatabaseSync, o: { quantity?: number; part
   const process = typeof proc === 'string' ? proc : proc && typeof proc === 'object' ? String((proc as { process?: unknown }).process ?? '') || null : null
   const kase = m && vol > 0 ? { run: m.id, volumeMm3: vol, process } : null
 
-  return orderEstimate({
+  const e = orderEstimate({
     quantity,
     parts, board, case: kase, limits: costLimits(db),
   })
+  const changed = o.parts ? null : partsDrift(db, parts)
+  return changed ? { ...e, partsChanged: changed, text: `${e.text} ${changed}` } : e
+}
+
+/**
+ * How the schematic's parts list differs from the parts check the estimate stands on, in words, or null: the newest
+ * kicad.bom made after the check, by order code and count per board (test-esp32-run2 R51: through Layout the
+ * estimate stood on Architect's check, without the four parts Prove added, and nothing said so).
+ */
+export function partsDrift(db: DatabaseSync, parts: Pick<EstimateInput['parts'], 'run' | 'at' | 'lines'>): string | null {
+  const b = newest(db, 'kicad.bom')
+  if (!b || b.started <= parts.at) return null
+  const rows = ((b.result ?? {}) as { lines?: { qty?: unknown; lcsc?: unknown; value?: unknown }[] }).lines
+  if (!Array.isArray(rows) || !rows.length) return null
+  const count = (m: Map<string, number>, k: string, n: number): void => { m.set(k, (m.get(k) ?? 0) + n) }
+  const now = new Map<string, number>()
+  for (const l of rows) count(now, typeof l.lcsc === 'string' && l.lcsc ? l.lcsc : `${String(l.value ?? '?')} (no LCSC code)`, Number(l.qty ?? 0))
+  const was = new Map<string, number>()
+  for (const l of parts.lines) count(was, l.lcsc ?? '?', l.perBoard)
+  const added = [...now].filter(([k, n]) => (was.get(k) ?? 0) < n).map(([k, n]) => `${k} ×${n - (was.get(k) ?? 0)}`)
+  const removed = [...was].filter(([k, n]) => k !== '?' && (now.get(k) ?? 0) < n).map(([k, n]) => `${k} ×${n - (now.get(k) ?? 0)}`)
+  if (!added.length && !removed.length) return null
+  const list = (xs: string[]): string => (xs.length > 4 ? `${xs.slice(0, 4).join(', ')} and ${xs.length - 4} more` : xs.join(', '))
+  const what = [added.length ? `adds ${list(added)}` : '', removed.length ? `drops ${list(removed)}` : ''].filter(Boolean).join('; ')
+  return `The schematic's parts list has changed since this parts check (its bill of materials of ${new Date(b.started * 1000).toISOString().slice(0, 10)} ${what}), so the estimate leaves those out until the parts are checked again.`
 }
 
 /** The newest parts check that did not error, as the estimate reads it. */
