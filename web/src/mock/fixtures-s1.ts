@@ -608,6 +608,7 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
         { id: 'side', group: 'assembly', label: 'Assembly side', value: 'Top side', source: 'kicad.board 17aa5088: no part on the bottom', decided: true },
         { id: 'assembled', group: 'assembly', label: 'Boards assembled', value: '10', source: 'the build plan', decided: true },
       ],
+      case: { build: 'run_case4a91c2e0', process: 'MJF', material: 'PA12', sheet: { run: 'run_caseord7b3e', service: 'JLC3DP 3D printing', finish: 'standard', quantity: 10, files: ['mechanical/out/case-base.step', 'mechanical/out/case-lid.step'], upload: 'https://jlc3dp.com/3d-printing-quote' } },
       lines_from: 'package',
       lines: [
         { key: 'C1 C2', refs: 'C1 C2', value: '10uF', mpn: 'CL21A106KAYNNNE', lcsc: 'C15850', qty: 2 },

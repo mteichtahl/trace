@@ -113,6 +113,28 @@ function Package({ repo, v }: { repo: string; v: OrderSheetView['package'] }) {
   )
 }
 
+/**
+ * The printed case: ordered apart from the boards, at JLC3DP or JLCCNC, so it has no "Entered" tick here; its prepared
+ * sheet (mech.order) when there is one, else that it is not prepared yet (test-esp32-run2 R66: the order estimate
+ * counted the case and the order sheet never said how it gets ordered).
+ */
+function CaseOrder({ c }: { c: NonNullable<OrderSheetView['case']> }) {
+  const what = [c.process, c.material].filter(Boolean).join(' ')
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <p className="border-b px-4 py-2 text-sm font-medium">Case<span className="ml-2 text-xs font-normal text-muted-foreground">a separate order, not on JLCPCB's PCB page</span></p>
+      {c.sheet ? (
+        <div className="space-y-1 px-4 py-2 text-sm">
+          <p>{c.sheet.service}{what ? `, ${what}` : ''}{c.sheet.finish ? `, ${c.sheet.finish} finish` : ''}{c.sheet.quantity !== null ? `, ${c.sheet.quantity} of each part` : ''}. {run(c.sheet.run)}</p>
+          {c.sheet.files.length > 0 && <p className="text-xs text-muted-foreground">Upload: {c.sheet.files.map((f) => f.split('/').at(-1)).join(', ')}{c.sheet.upload ? <> at <a className="underline" href={c.sheet.upload} target="_blank" rel="noreferrer">{c.sheet.upload.replace(/^https?:\/\//, '')}</a></> : null}, and pay there.</p>}
+        </div>
+      ) : (
+        <p className="px-4 py-2 text-sm">The case{what ? ` (${what})` : ''} is not prepared for ordering yet: ask trace for the case order sheet (mech.order), which lists the files to upload and the options. {run(c.build)}</p>
+      )}
+    </div>
+  )
+}
+
 function Options({ v, entered, toggle: tick }: { v: OrderSheetView; entered: string[]; toggle: (id: string) => void }) {
   if (!v.board_run) return <EmptyState className="mt-2">The board's own options are not recorded yet: trace records them with the release package (kicad.fab).</EmptyState>
   const groups = [['board', 'PCB'], ['assembly', 'PCB assembly']] as const
@@ -136,6 +158,7 @@ function Options({ v, entered, toggle: tick }: { v: OrderSheetView; entered: str
           </div>
         )
       })}
+      {v.case && <CaseOrder c={v.case} />}
     </div>
   )
 }

@@ -228,6 +228,11 @@ export interface OrderSheetView {
     problems: string[]; placements: number | null; hand_placed: string[] | null
   } | null
   options: { id: string; group: 'board' | 'assembly'; label: string; value: string; source: string; decided: boolean }[]
+  /** the printed case, ordered apart from the boards (absent from an older API; null: no case build) */
+  case?: {
+    build: string; process: string | null; material: string | null
+    sheet: { run: string; service: string; finish: string | null; quantity: number | null; files: string[]; upload: string | null } | null
+  } | null
   board_run: string | null
   lines: { key: string; refs: string; value: string | null; mpn: string | null; lcsc: string | null; qty: number | null }[]
   lines_from: 'package' | 'parts' | null

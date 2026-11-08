@@ -9,6 +9,9 @@
  *             the board (kicad.board) and the package, with the build plan's quantities; an option no record decides is JLCPCB's default, and says so
  *   matching  each line of the package's parts list (kicad.fab's bom.csv) with its LCSC part
  *   pay       the order gate, the newest JLCPCB quote of this revision (src/core/quotes.ts) and the order recorded
+ *   case      the printed case, ordered apart from the boards: the case order sheet (mech.order) when one is prepared,
+ *             else the newest case build and that its sheet is not prepared yet (test-esp32-run2 R66: the estimate
+ *             counted the case, the order sheet never mentioned it)
  *
  * The draft records what the person did: `entered` (option ids), `matched` and `unplaced` (line keys: matched as
  * intended, or a part JLCPCB will not place).
@@ -30,6 +33,16 @@ export interface OrderRecord {
   fab: (RunRow & { outDir: string | null; bomCsv: string | null }) | null
   /** the newest kicad.board run */
   board: { id: string; result: Record<string, unknown> | null } | null
+  /** the newest case build (mech.build, with a fit) and case order sheet (mech.order) */
+  caseBuild?: { id: string; started: number; result: Record<string, unknown> | null } | null
+  caseOrder?: { id: string; started: number; result: Record<string, unknown> | null } | null
+}
+
+/** The case's order, apart from the boards'. `sheet`: the prepared order (mech.order) when it is newer than the build. */
+export interface CaseOrderView {
+  build: string
+  process: string | null; material: string | null
+  sheet: { run: string; service: string; finish: string | null; quantity: number | null; files: string[]; upload: string | null } | null
 }
 
 export interface StockLineView {
@@ -56,6 +69,8 @@ export interface OrderView {
     problems: string[]; placements: number | null; hand_placed: string[] | null
   } | null
   options: OrderOption[]
+  /** the printed case, ordered apart from the boards (null: the project has no case build) */
+  case: CaseOrderView | null
   /** the run the board options come from: kicad.fab's recorded options, else kicad.board; null when neither */
   board_run: string | null
   lines: OrderLine[]
@@ -235,6 +250,25 @@ export function orderLines(rec: OrderRecord): { lines: OrderLine[]; from: OrderV
   }
 }
 
+/** The case's order from the newest build and case order sheet; a sheet older than the build is for an earlier case. */
+export function caseOrderOf(rec: OrderRecord): CaseOrderView | null {
+  const b = rec.caseBuild
+  if (!b) return null
+  const proc = b.result?.process
+  const p = proc && typeof proc === 'object' ? proc as Record<string, unknown> : null
+  const o = rec.caseOrder && rec.caseOrder.started >= b.started ? rec.caseOrder : null
+  const ord = o?.result?.order && typeof o.result.order === 'object' ? o.result.order as Record<string, unknown> : null
+  return {
+    build: b.id,
+    process: str(ord?.process) ?? str(p?.process) ?? (typeof proc === 'string' ? str(proc) : null),
+    material: str(ord?.material) ?? str(p?.material),
+    sheet: o && ord ? {
+      run: o.id, service: str(ord.service) === 'jlccnc' ? 'JLCCNC machining' : 'JLC3DP 3D printing', finish: str(ord.finish), quantity: num(ord.quantity),
+      files: Array.isArray(ord.files) ? ord.files.filter((f): f is string => typeof f === 'string') : [], upload: str(ord.upload),
+    } : null,
+  }
+}
+
 /** The steps' content from the record (`now`: seconds, for "today"). */
 export function orderView(r: JourneyRecord | null, rec: OrderRecord | null, orders: readonly OrderRow[], now: number, quotes: readonly QuoteRow[] = []): OrderView {
   const R: OrderRecord = rec ?? { parts: null, signedParts: null, fab: null, board: null }
@@ -245,7 +279,7 @@ export function orderView(r: JourneyRecord | null, rec: OrderRecord | null, orde
   const sheetWaived = sheet && r?.waivers.some((w) => w.targetKind === 'criterion' && w.target === sheet.id && w.closedAt === null)
   const o = orders.find((x) => x.revision === r?.journey.revision && x.state !== 'cancelled')
   return {
-    stock: stockOf(r, R, now), package: packageOf(R), options: orderOptions(r, R), board_run: optionsRun(R), lines, lines_from: from,
+    stock: stockOf(r, R, now), package: packageOf(R), options: orderOptions(r, R), case: caseOrderOf(R), board_run: optionsRun(R), lines, lines_from: from,
     pay: {
       gate: gate ? { id: gate.id, signed: signed ? { by: signed.by, at: iso(signed.at) } : null } : null,
       sheet: sheet ? (sheet.status === 'met' ? 'met' : sheetWaived ? 'waived' : 'not_met') : null,
