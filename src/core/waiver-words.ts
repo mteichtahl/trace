@@ -17,8 +17,13 @@ export function waiverCriterion(target: { kind: string; id: string }): string | 
   const shape = /^([a-z][a-z.]*\.[a-z]+)@/.exec(target.id)
   if (shape) return shape[1] as string
   const rule = /^(erc|drc):/.exec(target.id)
-  return rule ? RULE_CRITERIA[rule[1] as 'erc' | 'drc'] : null
+  if (rule) return RULE_CRITERIA[rule[1] as 'erc' | 'drc']
+  // a module's pins against its connector (src/tools/design/record.ts mateCheck): capture.datasheets is not met over
+  // one (src/tools/journey/tools.ts mateConflicts), so its waiver counts there (test-esp32-run2 R42: the waiver was
+  // taken and the agent still could not cite the pin plan check it waives)
+  return /^mate:/.test(target.id) ? MATE_CRITERION : null
 }
+const MATE_CRITERION = 'capture.datasheets'
 
 const unescape = (s: string): string => { try { return decodeURIComponent(s) } catch { return s } }
 
@@ -51,6 +56,9 @@ export function waiverTargetWords(target: { kind: string; id: string }, criterio
       const at = where === 'board' ? '' : /^-?[\d.]+,-?[\d.]+(#\d+)?$/.test(where) ? ` at ${where.replace(/#\d+$/, '')} mm` : ` on ${where.replace(/#\d+$/, '')}`
       return `the ${RULE_WORDS[rule[1] as 'erc' | 'drc']}'s ${(rule[2] as string).replace(/_/g, ' ')} finding${at}`
     }
+    // "mate:J2:SSD1306-0.96-128x64-I2C-4pin:order": the connector, the module, and what differs
+    const mate = /^mate:([^:]+):(.+):(order|unknown)$/.exec(target.id)
+    if (mate) return `the pin plan check's ${mate[3] === 'order' ? 'pin order' : 'unknown pin order'} finding on ${mate[1] as string} (the ${mate[2] as string} module)`
     return `the finding ${unescape(target.id)}`
   }
   return `${target.kind.replace(/_/g, ' ')} ${target.id}`
