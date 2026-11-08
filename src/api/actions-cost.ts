@@ -105,7 +105,7 @@ export function estimateView(e: OrderEstimate) {
   return {
     currency: e.currency, quantity: e.quantity, low: e.low, high: e.high, perBoard: e.perBoard, at: iso(e.at) as string, partsRun: e.partsRun,
     lines: e.lines, notIn: e.notIn, verdict: e.verdict,
-    limits: e.limits.map((l) => ({ requirement: l.requirement, kind: l.kind, amount: l.amount, currency: l.currency, verdict: l.verdict, text: l.text })),
+    limits: e.limits.map((l) => ({ requirement: l.requirement, kind: l.kind, amount: l.amount, currency: l.currency, verdict: l.verdict, text: l.text, ...(l.excludes?.length ? { excludes: [...l.excludes] } : {}), ...(l.compared ? { compared: l.compared } : {}) })),
     text: e.text,
   }
 }
