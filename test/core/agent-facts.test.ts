@@ -341,7 +341,7 @@ describe('merging the agents\' facts into the journey views', () => {
     await s.facts.update((db) => ({ result: addCriterionCheck(db, VERIFY, { criterion: 'signoff.emc', status: 'met', evidence: [{ kind: 'run', ref: 'run-emc' }] }, r) }))
     f = await s.read()
     const v = journeyView(r, CONTRIB, undefined, f)
-    expect(v.questions[0]).toMatchObject({ id, out_of_date: 'signoff.emc is met now, so this may no longer need an answer.' })
+    expect(v.questions[0]).toMatchObject({ id, out_of_date: '“The radio interference prechecks are run and within the target” is met now, so this may no longer need an answer.' })
     expect(v.next.ref).not.toEqual({ kind: 'question', id })
 
     // a change it waits on: out of date once that change is no longer open (known only to journey.get, which lists them)

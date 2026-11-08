@@ -1352,7 +1352,9 @@ export function outOfDate(q: QuestionRow, r: JourneyRecord, open?: readonly numb
     })
     if (state.every((x) => x !== null)) {
       const how = state.every((x) => x === 'met') ? 'met' : state.every((x) => x === 'waived') ? 'waived' : 'met or waived'
-      return `${about.join(', ')} ${about.length === 1 ? 'is' : 'are'} ${how} now, so this may no longer need an answer.`
+      // the criteria in their words, as the question says them (test-esp32-run2 R57: "layout.fit is met now")
+      const said = about.map((id) => { const t = r.criteria.find((c) => c.id === id)?.text; return t ? `“${t.replace(/\.$/, '')}”` : id })
+      return `${said.join(', ')} ${about.length === 1 ? 'is' : 'are'} ${how} now, so this may no longer need an answer.`
     }
   }
   const named = changesOf(q)
