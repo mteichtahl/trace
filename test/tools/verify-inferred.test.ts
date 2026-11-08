@@ -62,12 +62,23 @@ describe('verify.requirements lists the numbers left unmarked', () => {
     const fixed = await call('verify.requirements', { action: 'update', id: 'REQ-ntp', set: { acceptance: 'After Wi-Fi connects, the board sets its clock within 5 s (inferred: a typical NTP exchange).' } })
     expect(fixed.unmarked_numbers).toBeUndefined()
   })
+
+  it('lists criteria without a number, as Requirements review would refuse them (test-esp32-run3 S3)', async () => {
+    const added = await call('verify.requirements', { action: 'add', requirements: [
+      { id: 'REQ-rtc', text: 'No clock chip that keeps time without power.', kind: 'functional', acceptance: 'The schematic and BOM contain no real-time clock chip (inspection).' },
+      { id: 'REQ-hdr', text: 'A 4-pin display header.', kind: 'functional', acceptance: 'The board has exactly 4 header pins (inspection).' },
+    ] })
+    expect(added.without_number).toMatchObject({ ids: ['REQ-rtc'], note: expect.stringMatching(/0 real-time clock chips/) })
+    const fixed = await call('verify.requirements', { action: 'update', id: 'REQ-rtc', set: { acceptance: 'The schematic and BOM contain 0 real-time clock chips (inspection).' } })
+    expect(fixed.without_number).toBeUndefined()
+  })
 })
 
 describe('the drafting request', () => {
   it('asks for every number trace chose to be marked, and still knows a job started with the earlier words', () => {
     expect(REQUIREMENTS_FROM_INTENT).toMatch(/\(inferred: where it comes from\)/)
     expect(REQUIREMENTS_FROM_INTENT).toMatch(/unmarked_numbers/)
+    expect(REQUIREMENTS_FROM_INTENT).toMatch(/without_number/)
     const row = (request: string): JobRow => ({ id: 'j1', handle: null, session: null, kind: 'task', agent: 'verify', title: 't', number: null, requestedBySub: null, requestedBy: null, state: 'running', step: null, queuedAt: 1, startedAt: 1, endedAt: null, beatAt: 1, where: null, branch: null, parentJob: null, handoff: null, resumeOf: null, resumedBy: null, summary: null, error: null, payload: JSON.stringify({ kind: 'task', request }), claudeSession: null, pausedBy: null, pausedAt: null, tail: null, vitals: null, updatedAt: 1 })
     expect(draftingJobs([row(REQUIREMENTS_FROM_INTENT)])).toHaveLength(1)
     expect(EARLIER_REQUESTS[0]).not.toMatch(/inferred: where/)
