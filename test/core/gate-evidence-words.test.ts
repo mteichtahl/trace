@@ -136,3 +136,18 @@ describe('a failed run whose finding a person waived (test-esp32-run2 R42)', () 
     expect(failedEvidence('capture.erc', [run] as unknown as Parameters<typeof failedEvidence>[1], r([waiver]))).toMatch(/not met/)
   })
 })
+
+describe('a rule check with warnings left (test-esp32-run2 R45)', () => {
+  it('does not meet capture.erc, alone or beside a clean run', async () => {
+    const { failedEvidence } = await import('../../src/tools/journey/tools.js')
+    type Runs = Parameters<typeof failedEvidence>[1]
+    const old = { id: 'a70561dca4c446f4', kind: 'kicad.erc', status: 'pass', summary: 'ERC: 0 errors, 67 warnings' }
+    const clean = { id: '443e3beb1df24dd3', kind: 'kicad.erc', status: 'pass', summary: 'ERC: 0 errors, 0 warnings' }
+    const none = { waivers: [] } as unknown as Parameters<typeof failedEvidence>[2]
+    expect(failedEvidence('capture.erc', [old, clean] as unknown as Runs, none)).toMatch(/warnings left: run a70561dca4c446f4/)
+    expect(failedEvidence('capture.erc', [clean] as unknown as Runs, none)).toBeNull()
+    // another criterion citing it is not judged on its warnings
+    expect(failedEvidence('capture.datasheets', [old] as unknown as Runs, none)).toBeNull()
+  })
+})
+

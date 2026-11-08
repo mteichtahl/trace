@@ -111,6 +111,11 @@ const Evidence = EvidenceSchema.extend({
   kind: z.enum(['run', 'artifact', 'file', 'record', 'report', 'datasheet', 'kb']).describe('run (a run_id), artifact (run_id/name), file (a path in the repository), record, report, datasheet (part, sha256, page), kb (a knowledge-base path)'),
 }).describe('{ kind, ref, label? }')
 
+/** The rule check each rule-check criterion is met on (src/core/waiver-words.ts RULE_CRITERIA). */
+const RULE_CHECK_KINDS: ReadonlyMap<string, string> = new Map([['capture.erc', 'kicad.erc'], ['layout.drc', 'kicad.drc']])
+/** The warnings a rule check's summary counts ("ERC: 0 errors, 67 warnings"), 0 when it names none. */
+const warningsOf = (summary: string | null): number => Number(/(\d+) warnings?\b/.exec(summary ?? '')?.[1] ?? 0)
+
 /** A run an agent cited, as its record holds it. */
 interface CitedRun { id: string; kind: string; status: string; summary: string | null }
 
@@ -152,6 +157,12 @@ function checkEvidence(evidence: readonly z.output<typeof Evidence>[]): CitedRun
  * findings (an ERC run fails on errors each waived).
  */
 export function failedEvidence(criterion: string, runs: readonly CitedRun[], r: JourneyRecord | null): string | null {
+  // a rule check that passed with warnings left (its warnings count: test-esp32 #51) is not clean either, and cited
+  // beside a clean run it shows on the gate as "0 errors, 67 warnings" (test-esp32-run2 R45)
+  const unclean = RULE_CHECK_KINDS.has(criterion) ? runs.filter((x) => x.status === 'pass' && RULE_CHECK_KINDS.get(criterion) === x.kind && warningsOf(x.summary) > 0) : []
+  if (unclean.length && !(r?.waivers ?? []).some((w) => w.closedAt === null && waiverCriterion({ kind: w.targetKind, id: w.target }) === criterion)) {
+    return `journey: ${criterion} is not met on a check with warnings left: ${unclean.map((x) => `run ${x.id} (${x.summary ?? x.kind})`).join('; ')}. Cite only the newest clean run, or record it not_met and fix or ask a person (journey.ask) to waive what is left.`
+  }
   const failed = runs.filter((x) => x.status !== 'pass')
   if (!failed.length) return null
   const waived = (r?.waivers ?? []).some((w) => w.closedAt === null && waiverCriterion({ kind: w.targetKind, id: w.target }) === criterion)
