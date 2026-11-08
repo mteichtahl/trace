@@ -636,10 +636,9 @@ export const optionsTool = defineTool({
     try { scope = journeyScope() } catch { return { ...out, asked: null, next: 'Not asked: no project in scope here. Put the options to a person in your report.' } }
     const rec = (await scope.journey.read((db) => loadJourney(db))).result
     const shown = out.offered.slice(0, 6)
-    const dropped = out.not_offered.map((n) => `${n.label}: ${n.why}`)
     const { result: id } = await scope.facts.update((db) => ({
       result: addAgentQuestion(db, scope.asker, {
-        text: `Which case should trace build for ${board}?${dropped.length ? ` Not offered: ${dropped.join('; ')}.` : ''}`.slice(0, 2000),
+        text: caseQuestionText(board, out.offered.length, out.not_offered).slice(0, 2000),
         blocks: 'building the case (mech.init, then mech.build)',
         options: shown.map((o, i) => ({ id: `case-${i + 1}`, label: o.label, recommended: Boolean(o.recommended), why: (o.why ?? []).join('; ') || 'it fits the board and the process', ...(o.gives_up ? { gives_up: o.gives_up } : {}) })),
         sources: [{ kind: 'run', ref: out.run_id, label: 'the case options and the rules that pruned the rest' }],
@@ -648,6 +647,26 @@ export const optionsTool = defineTool({
     return { ...out, asked: { question_id: id }, next: `Asked (question ${id}). Read the answer with journey.status, then mech.init with that template and process.` }
   },
 })
+
+/**
+ * The case question in words: which board (by name, not its path), how many designs fit, and the designs left out
+ * once each, with why and the processes they would have used (test-esp32-run2 R52: it read "Which case should trace
+ * build for hardware/wifi-desk-clock/wifi-desk-clock.kicad_pcb? Not offered: Extruded box with end plates, MJF … ;
+ * Extruded box with end plates, SLA … ; Extruded box with end plates, CNC …", the same reason three times). Pure.
+ */
+export function caseQuestionText(board: string, offered: number, notOffered: readonly { label: string; why: string }[]): string {
+  const name = board.replace(/^.*\//, '').replace(/\.kicad_pcb$/, '')
+  const groups = new Map<string, { design: string; processes: string[] }>()
+  for (const n of notOffered) {
+    const [design = n.label, process] = n.label.split(/, (?=[^,]+$)/)
+    const key = `${design}\u0000${n.why}`
+    const g = groups.get(key) ?? { design, processes: [] }
+    if (process) g.processes.push(process.replace(/ at .*$/, ''))
+    groups.set(key, g)
+  }
+  const left = [...groups.entries()].map(([k, g]) => `${g.design}${g.processes.length > 1 ? ` (${g.processes.join(', ')})` : ''}, because ${k.split('\u0000')[1]!.replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}`)
+  return `Which case should trace build for the ${name} board? ${offered === 1 ? 'One design fits' : `${offered} designs fit`}.${left.length ? ` Left out: ${left.join('; ')}.` : ''}`
+}
 
 export const tools: AnyTool[] = [
   boardTool, initTool, settingsTool, buildTool, fitTool, handInTool, capabilitiesTool, capabilitiesCheckTool, orderTool, optionsTool,
