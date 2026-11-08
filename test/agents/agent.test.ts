@@ -302,7 +302,7 @@ describe('worker-dispatch', () => {
     const run = async (pr: Record<string, unknown>, item: WorkItem = { ...ITEM, kind: 'conflict' }) => {
       const f = fakeGithub({ 'pulls.get': pr })
       const sent: WorkItem[] = []
-      await dispatchTask(deps(f, fakeCore(), cfgOf(), context(), { ITEM: JSON.stringify(item), TRACE_AGENT_RUNTIME_ARN: 'arn:rt' }), async (it) => { sent.push(it); return { accepted: true, jobId: 'job-1' } })
+      await dispatchTask(deps(f, fakeCore(), cfgOf(), context(), { ITEM: JSON.stringify(item), TRACE_AGENT_RUNTIME_ARN: 'arn:rt' } as never), async (it) => { sent.push(it); return { accepted: true, jobId: 'job-1' } })
       return { sent, said: f.called('issues.createComment').map((c) => String(c.args.body)) }
     }
     // trace merged the default branch in 2 s after the pick: the head moved on
