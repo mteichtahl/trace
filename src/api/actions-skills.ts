@@ -40,7 +40,7 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { isAdmin } from '../core/access.js'
-import { answerLook, plainArchitecture, plainCriterionRefs, runKindsOf } from '../core/record-refs.js'
+import { answerLook, plainArchitecture, plainQuestionText, runKindsOf } from '../core/record-refs.js'
 import { ActionError, type Context, Repo, agentFacts, agentFactsStore, def, hashOf, label, plainly, storeAt, openProjectDb, withJourneyDb, withProjectDb, withRecordDb, writeJourney } from './action-kit.js'
 import { type QuoteRow, allQuotes, loadAgentQuotes, loadQuotes } from '../core/quotes.js'
 import { type Lasts, askedBy, carryOn, designBefore, ruleFromAnswer, viewerOf, waivedWords } from './actions-journey.js'
@@ -485,14 +485,15 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       const rec = q.options.find((o) => o.recommended)
       // what it asks about has moved on since (test-esp32 #108): the page says so above the question
       const stale = i.r ? outOfDate(q, i.r) : null
-      // a gate criterion it names by id, in its words (test-esp32-run2 R29: "so architect.stock is not met")
-      const w = (t: string): string => plainCriterionRefs(t, i.r?.criteria ?? [])
+      // a gate criterion, answer, datasheet or finding it names by id or code, in words (test-esp32-run2 R29, R39: "so
+      // architect.stock is not met", "(ea9a571f p2)", "the design.pins mate_order finding")
+      const w = (t: string): string => plainQuestionText(t, i.r?.criteria ?? [])
       return {
         question: {
           ...(stale ? { outOfDate: stale } : {}),
           id: q.id, to: q.askedOf || q.askedOfSub ? 'you' : q.askedPart === 'admins' ? 'the admins' : 'the contributors', text: w(q.text), askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: w(q.blocks) } : {}),
           ...(rec ? { recommended: { id: rec.id, label: w(rec.label) } } : {}), options: q.options.map((o) => ({ id: o.id, label: w(o.label), ...(o.why ? { detail: w(o.why) } : {}), ...(o.waives ? { waiver: optionWaiverWords(o.waives) } : {}), ...(o.needs ? { needs: o.needs } : {}) })),
-          sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ?? s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
+          sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ? w(s.label) : s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
         },
       }
     }
@@ -570,8 +571,8 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
       const asked = questionsOn('pin-plan-review', i.r, design).map((q) => {
         const parts = questionParts(q, design)
         return {
-          id: `question:${q.id}`, title: `${parts.length ? `Open question about ${parts.join(', ')}` : 'Open question'}: ${plainCriterionRefs(q.text, i.r?.criteria ?? [])}`, status: 'open' as const, label: 'Unanswered', question: q.id,
-          detail: `${q.askedBy} asks. Answer it before agreeing the plan${q.blocks ? `; it holds back ${plainCriterionRefs(q.blocks, i.r?.criteria ?? []).replace(/\.$/, '')}` : ''}.`,
+          id: `question:${q.id}`, title: `${parts.length ? `Open question about ${parts.join(', ')}` : 'Open question'}: ${plainQuestionText(q.text, i.r?.criteria ?? [])}`, status: 'open' as const, label: 'Unanswered', question: q.id,
+          detail: `${q.askedBy} asks. Answer it before agreeing the plan${q.blocks ? `; it holds back ${plainQuestionText(q.blocks, i.r?.criteria ?? []).replace(/\.$/, '')}` : ''}.`,
         }
       })
       return { items: [...asked, ...pinCheck(design.pins, i.nets ?? null, matedParts(architectureView(design, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const }))] }

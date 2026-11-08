@@ -69,7 +69,7 @@ export function plainRecordRefs(text: string, look: RecordLook = {}): string {
     return STARTS.test(before) ? cap(said) : said
   })
   // the space left where an id went ("Parts check : all")
-  out = out.replace(/ +([:;,)])/g, '$1').replace(/ {2,}/g, ' ')
+  out = out.replace(/ +([:;,)])/g, '$1').replace(/(\S) {2,}/g, '$1 ')
   return out.replace(ANSWER_ID, (_whole, _ans: string | undefined, id: string, at: number, all: string) => {
     const said = look.answer?.(id.toLowerCase()) === 'you' ? 'your answer' : 'the answer'
     return STARTS.test(all.slice(0, at)) ? cap(said) : said
@@ -127,6 +127,48 @@ export const answerLook = (questions: readonly { id: string; answeredAt: number 
     const q = questions.find((x) => x.id.toLowerCase() === id)
     return q && q.answeredAt !== null && viewerHash && q.answeredByHash === viewerHash ? 'you' : null
   }
+
+/** What a finding of each kind is, in words; others are said from the kind ("no_net" → "no net"). */
+const FINDING_WORDS: Readonly<Record<string, string>> = {
+  mate_order: 'connector pin order', mate_unknown: 'unknown connector pin order', strap_pull: 'strapping pin pull',
+}
+const RUN_KINDS = Object.keys(RUN_WORDS).map((k) => k.replace(/\./g, '\\.')).join('|')
+// "the design.pins mate_order finding", "design.pins check: mate_order on J2"
+const FINDING = new RegExp(String.raw`\b(the\s+)?(${RUN_KINDS})(\s+check)?(:)?\s+([a-z]+(?:_[a-z]+)+)\b`, 'gi')
+// a datasheet's short hash (a sha256's first 8 characters), with a digit so a word is never taken for one
+const HASH = String.raw`(?:sha256\s+)?\b(?=[0-9a-f]*[0-9])[0-9a-f]{8}\b`
+const PAGE = String.raw`,?\s*p(?:age|\.)?\s?(\d+)\b`
+
+/**
+ * The text with the datasheets and findings it names by code said in words (test-esp32-run2 R39: a question quoted
+ * "(ea9a571f p2)", "waive the mismatch with ea9a571f" and "the design.pins mate_order finding on J2"): a datasheet's
+ * short hash reads "the datasheet" (with its page), a finding "the pin plan check's connector pin order finding". A
+ * hash is only taken for a datasheet where the words say so (a page, "datasheet", "with"): another may be something
+ * else. Pure.
+ */
+export function plainCodeRefs(text: string): string {
+  if (!text) return text
+  return text
+    .replace(FINDING, (_w, the: string | undefined, kind: string, _check: string | undefined, colon: string | undefined, finding: string) => {
+      const run = runWords(kind.toLowerCase())
+      const f = FINDING_WORDS[finding.toLowerCase()] ?? finding.toLowerCase().replace(/_/g, ' ')
+      return colon ? `${the ? (the.startsWith('T') ? 'The ' : 'the ') : ''}${run}: ${f}` : `${the ? (the.startsWith('T') ? 'The ' : 'the ') : ''}${run}'s ${f}`
+    })
+    // "the library datasheet (ea9a571f p2)": the datasheet is said, its page is what is left
+    .replace(new RegExp(String.raw`(datasheet\s*)\(\s*${HASH}${PAGE}\s*\)`, 'gi'), (_w, d: string, page: string) => `${d}(page ${page})`)
+    .replace(new RegExp(String.raw`(\b(?:the\s+)?datasheet\s+)?${HASH}${PAGE}`, 'gi'), (_w, _d, page: string, at: number, all: string) =>
+      `${STARTS.test(all.slice(0, at)) ? 'The' : 'the'} datasheet, page ${page}`)
+    .replace(new RegExp(String.raw`\b(?:the\s+)?datasheet\s+${HASH}`, 'gi'), (_w, at: number, all: string) => `${STARTS.test(all.slice(0, at)) ? 'The' : 'the'} datasheet`)
+    .replace(new RegExp(String.raw`\b(with|against|per|from)\s+${HASH}`, 'gi'), (_w, prep: string) => `${prep} the datasheet`)
+}
+
+/**
+ * A question's words as people read them: its gate criteria (plainCriterionRefs), answers (plainRecordRefs: "the
+ * answer", "your answer" with `look`), datasheets and findings (plainCodeRefs) said in words. Pure.
+ */
+export function plainQuestionText(text: string, criteria: readonly { id: string; text: string }[], look: RecordLook = {}): string {
+  return plainCriterionRefs(plainCodeRefs(plainRecordRefs(text, look)), criteria)
+}
 
 /**
  * A criterion's evidence label as people read it under that criterion (test-esp32-run2 R34: "architect.mapped:

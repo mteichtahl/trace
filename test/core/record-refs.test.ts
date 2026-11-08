@@ -4,7 +4,7 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { answerLook, plainArchitecture, plainCriterionRefs, plainRecordRefs, runKindsOf, runWords } from '../../src/core/record-refs.js'
+import { answerLook, plainArchitecture, plainCodeRefs, plainCriterionRefs, plainQuestionText, plainRecordRefs, runKindsOf, runWords } from '../../src/core/record-refs.js'
 
 const RUNS = new Map([['84ac569329e8472d', 'parts check'], ['c56658a7bd0f4783', 'parts check']])
 const look = { run: (id: string) => RUNS.get(id) ?? null, answer: (id: string) => (id === 'aq472364d7dd6243' ? 'you' as const : null) }
@@ -69,5 +69,29 @@ describe('an architecture as the views show it', () => {
     expect(p.current).toBe('A')
     // someone else's answer
     expect(plainArchitecture(a, { answer: answerLook([{ id: 'aq472364d7dd6243', answeredAt: 1, answeredByHash: 'h-marc' }], 'h-alex') }).options[0]?.why).toBe('Kept (the answer).')
+  })
+})
+
+describe('datasheets and findings named by code (test-esp32-run2 R39)', () => {
+  it('says a datasheet hash and a finding code in words, as the run 2 question quoted them', () => {
+    expect(plainCodeRefs('The library datasheet (ea9a571f p2) gives the module pins as VCC, GND, SCL, SDA'))
+      .toBe('The library datasheet (page 2) gives the module pins as VCC, GND, SCL, SDA')
+    expect(plainCodeRefs('Keep J2 as GND-VCC-SCL-SDA and waive the mismatch with ea9a571f'))
+      .toBe('Keep J2 as GND-VCC-SCL-SDA and waive the mismatch with the datasheet')
+    expect(plainCodeRefs('Rewire J2 to VCC-GND-SCL-SDA to match datasheet ea9a571f p2'))
+      .toBe('Rewire J2 to VCC-GND-SCL-SDA to match the datasheet, page 2')
+    expect(plainCodeRefs('a module arrives VCC-first, as ea9a571f p2 shows')).toBe('a module arrives VCC-first, as the datasheet, page 2 shows')
+    expect(plainCodeRefs('the design.pins mate_order finding on J2 stays open')).toBe("the pin plan check's connector pin order finding on J2 stays open")
+    expect(plainCodeRefs('design.pins check: mate_order on J2')).toBe('pin plan check: connector pin order on J2')
+  })
+
+  it('leaves what it cannot tell is a datasheet', () => {
+    expect(plainCodeRefs('commit deadbeef and run 84ac569329e8472d')).toBe('commit deadbeef and run 84ac569329e8472d')
+    expect(plainCodeRefs('see 1a2b3c4d')).toBe('see 1a2b3c4d')
+  })
+
+  it('says a question\'s ids and codes together', () => {
+    expect(plainQuestionText('It blocks architect.stock (answer aq6bd438416fb440, ea9a571f p2)', [{ id: 'architect.stock', text: 'Every key part is in stock' }]))
+      .toBe('It blocks "every key part is in stock" (the answer, the datasheet, page 2)')
   })
 })

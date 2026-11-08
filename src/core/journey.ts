@@ -60,7 +60,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import { type JobLook, jobRefs, plainJobRefs, plainJobRefsOf, refKey } from './job-refs.js'
-import { plainCriterionRefs, plainCriterionRefsOf, plainEvidenceLabel } from './record-refs.js'
+import { plainEvidenceLabel, plainQuestionText } from './record-refs.js'
 import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
@@ -1393,11 +1393,14 @@ function questionView(q0: QuestionRow, v: Viewer, r?: JourneyRecord): QuestionVi
   }
 }
 
-/** A question as people read it: the gate criteria it names by id said in their words (plainCriterionRefs). */
+/**
+ * A question as people read it: the gate criteria, answers, datasheets and findings it names by id or code said in
+ * words (plainQuestionText).
+ */
 export function plainQuestion<Q extends Pick<QuestionRow, 'text' | 'blocks' | 'options' | 'recommendation'>>(q: Q, r: Pick<JourneyRecord, 'criteria'>): Q {
-  const w = (t: string): string => plainCriterionRefs(t, r.criteria)
+  const w = (t: string): string => plainQuestionText(t, r.criteria)
   return {
-    ...q, text: w(q.text), blocks: plainCriterionRefsOf(q.blocks, r.criteria),
+    ...q, text: w(q.text), blocks: q.blocks === null ? null : w(q.blocks),
     options: q.options.map((o) => ({ ...o, label: w(o.label), why: w(o.why) })),
     ...(q.recommendation ? { recommendation: w(q.recommendation) } : {}),
   }
