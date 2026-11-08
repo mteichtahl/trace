@@ -178,3 +178,34 @@ export function withSilenced(r: CheckReport, silenced: readonly string[]): Check
   }))
   return { ...summarise('drc', r.kicad_version, [...r.violations, ...added]), unconnected: r.unconnected, parity: r.parity }
 }
+
+/**
+ * The libraries a check says the project's configuration does not include ("The current configuration does not
+ * include the symbol library 'power'"): KiCad's own libraries the project's library tables leave out, not a fault of
+ * the design. test-esp32-run2: 67 such warnings on a fresh schematic, and the next step asked a person to waive 50 of
+ * them, where adding the libraries to sym-lib-table / fp-lib-table clears them all (run 2 of test-esp32 did so). Pure.
+ */
+export function missingLibraries(r: Pick<CheckReport, 'violations'>): { symbol: string[]; footprint: string[]; findings: number } {
+  const symbol = new Set<string>()
+  const footprint = new Set<string>()
+  let findings = 0
+  for (const v of r.violations) {
+    const m = /does not include the (symbol|footprint) library '([^']+)'/i.exec(v.description)
+    if (!m) continue
+    findings++
+    ;(m[1]!.toLowerCase() === 'symbol' ? symbol : footprint).add(m[2]!)
+  }
+  return { symbol: [...symbol].sort(), footprint: [...footprint].sort(), findings }
+}
+
+/** What to do about them, for the agent: add the libraries, then check again. Null when there are none. */
+export function libraryTablesHint(r: Pick<CheckReport, 'violations' | 'kicad_version'>): Record<string, unknown> | null {
+  const m = missingLibraries(r)
+  if (!m.findings) return null
+  // KiCad names its library folders by major version: KICAD9_SYMBOL_DIR, KICAD10_SYMBOL_DIR
+  const major = /^(\d+)\./.exec(r.kicad_version ?? '')?.[1] ?? '9'
+  return {
+    findings: m.findings, missing_symbol_libraries: m.symbol, missing_footprint_libraries: m.footprint,
+    next: `${m.findings} of these findings say the project's library tables leave out KiCad libraries it uses. They are fixed, not waived: add each to the project's sym-lib-table (uri "\${KICAD${major}_SYMBOL_DIR}/<name>.kicad_sym") and fp-lib-table (uri "\${KICAD${major}_FOOTPRINT_DIR}/<name>.pretty"), type KiCad, next to the project's own entries, commit, and run the check again. Never ask a person to waive them.`,
+  }
+}

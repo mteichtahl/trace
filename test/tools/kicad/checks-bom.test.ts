@@ -141,3 +141,19 @@ describe.skipIf(!hasKicad)('checks and placements through kicad-cli', () => {
     expect(p.find((x) => x.ref === 'R101')).toMatchObject({ side: 'bottom', x_mm: 40, rotation_deg: 180 })
   })
 })
+
+describe('KiCad libraries the project leaves out (test-esp32-run2)', () => {
+  it('are listed with what to do, never as findings to waive', async () => {
+    const { libraryTablesHint, missingLibraries } = await import('../../../src/tools/kicad/checks.js')
+    const v = (description: string) => ({ type: 'lib_symbol_issues', severity: 'warning', description, where: '/', items: [] })
+    const r = { kicad_version: '9.0.4', violations: [
+      v("The current configuration does not include the symbol library 'power'"), v("The current configuration does not include the symbol library 'power'"),
+      v("The current configuration does not include the footprint library 'Connector_USB'"), v('Pin not driven'),
+    ] }
+    expect(missingLibraries(r)).toEqual({ symbol: ['power'], footprint: ['Connector_USB'], findings: 3 })
+    const h = libraryTablesHint(r)!
+    expect(h.next).toMatch(/KICAD9_SYMBOL_DIR/)
+    expect(h.next).toMatch(/Never ask a person to waive them/)
+    expect(libraryTablesHint({ kicad_version: '9.0.4', violations: [v('Pin not driven')] })).toBeNull()
+  })
+})

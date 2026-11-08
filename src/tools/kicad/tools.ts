@@ -17,7 +17,7 @@ import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { buildBom, bomCsv, jlcBomCsv, jlcCplCsv, placements } from './bom.js'
 import { buildHardware, hardwareCsv, readCaseRecords, type Hardware } from './hardware.js'
 import { boardFacts } from '../mech/board.js'
-import { drc, erc, type CheckReport } from './checks.js'
+import { drc, erc, libraryTablesHint, type CheckReport } from './checks.js'
 import { boardHoles, checkFab, type Drawing, EXPORT_KINDS, FAB_TECH_LAYERS, drawingArtifacts, exportOne, type FabSettings, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
 import { describeLayer, designRules, LENGTH_DEFINITION, loadBoard, Net, netNames, signalLength, stackupKnown, type Board, type SignalLength } from './pcb.js'
 import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, kicadWhere, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
@@ -217,8 +217,10 @@ const ercTool = defineTool({
       run.measure('errors', r.errors)
       run.measure('warnings', r.warnings)
       run.measure('excluded', r.excluded)
-      return { status: r.errors ? 'fail' as const : 'pass' as const, summary: `ERC: ${r.errors} errors, ${r.warnings} warnings`,
-        result: { project: p.name, ...compactReport(r, a.limit, a.severity) } }
+      // KiCad libraries the project's tables leave out: the agent adds them, not a person's waiver (test-esp32-run2)
+      const tables = libraryTablesHint(r)
+      return { status: r.errors ? 'fail' as const : 'pass' as const, summary: `ERC: ${r.errors} errors, ${r.warnings} warnings${tables ? ` (${tables.findings as number} from libraries the project's tables leave out)` : ''}`,
+        result: { project: p.name, ...compactReport(r, a.limit, a.severity), ...(tables ? { library_tables: tables } : {}) } }
     })
   },
 })
