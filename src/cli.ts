@@ -85,6 +85,8 @@ import { flush } from './core/telemetry.js'
 import { Work, packArtifacts, transaction } from './core/store.js'
 import { allTools } from './tools/index.js'
 import { engineAvailable, mechSkipReason } from './tools/mech/engine.js'
+import { unwaivedCaseFindings } from './api/case-read.js'
+import { loadJourney } from './core/journey.js'
 import { CASE_JSON } from './tools/mech/settings.js'
 import { cmdConnect, cmdLogin, cmdLogout, cmdRemote, cmdUsers, cmdWhoami } from './login/commands.js'
 import { cmdKb } from './login/kb.js'
@@ -251,10 +253,15 @@ async function cmdCheck(): Promise<number> {
       out(stepLine('Case fit check'))
       try {
         const r = (await reg.call('mech.build', {}, { hardware: false, via: 'cli' })) as Record<string, unknown>
-        const passed = r.passed === true
+        // a failing build whose every problem a person waived passes, as the layout gate counts it
+        const wdb = r.passed === true ? null : new Work().db
+        const left = wdb ? unwaivedCaseFindings(wdb, loadJourney(wdb)) : null
+        const allWaived = left !== null && left.all > 0 && left.open.length === 0
+        const passed = r.passed === true || allWaived
         failures += passed ? 0 : 1
         const problems = Array.isArray(r.problems) ? (r.problems as string[]).slice(0, 5).join('; ') : ''
-        out(`${passed ? ok : fail} mech.build ${CASE_JSON}: fit ${String(r.fit_status)}${problems ? ` (${problems})` : ''}; rules ${Array.isArray(r.rules_failing) && r.rules_failing.length ? `${r.rules_failing.length} failing` : 'within limits'} (run ${String(r.run_id)})`)
+        const waivedNote = allWaived ? `, all ${left.all} waived` : left && left.all > left.open.length ? `, ${left.all - left.open.length} of ${left.all} waived` : ''
+        out(`${passed ? ok : fail} mech.build ${CASE_JSON}: fit ${String(r.fit_status)}${problems ? ` (${problems})` : ''}${waivedNote}; rules ${Array.isArray(r.rules_failing) && r.rules_failing.length ? `${r.rules_failing.length} failing` : 'within limits'} (run ${String(r.run_id)})`)
       } catch (x) {
         failures++
         out(`${fail} mech.build ${CASE_JSON}: ${x instanceof Error ? x.message : String(x)}`)

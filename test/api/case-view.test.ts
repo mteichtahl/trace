@@ -10,9 +10,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
+import { unwaivedCaseFindings } from '../../src/api/case-read.js'
 import { assign } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
-import { addWaiver, startJourney } from '../../src/core/journey.js'
+import { addWaiver, loadJourney, startJourney } from '../../src/core/journey.js'
 import { normalisedHash } from '../../src/core/normalise.js'
 import { Registry } from '../../src/core/registry.js'
 import { Work, openProject } from '../../src/core/store.js'
@@ -37,10 +38,12 @@ const run = async (who: Context['principal'], action: string, args: Record<strin
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
 const finding = (key: string): string => `layout.fit@${nodeIri({ installation: process.env.TRACE_PREFIX ?? 'trace', project: REPO }, 'case-finding', key)}`
 let build = ''
+let seed = ''
 
 beforeAll(async () => {
   await assign(ADMIN, USER, REPO, { class: 'user' })
   const dir = mkdtempSync(join(scratch, 'seed-'))
+  seed = dir
   mkdirSync(join(dir, '.git'))
   const db = openProject(dir)
   startJourney(db, { template: 'board', by: 'seed', name: 'Cased' })
@@ -100,6 +103,24 @@ describe('the case in design.get', () => {
       expect.objectContaining({ source: 'case:enclosure', target: 'component:J2', kind: 'fails' }),
     ]))
     github.files.set(`${REPO}:main:${BOARD}`, enc(PCB))
+  })
+})
+
+describe('the case in tracectl check', () => {
+  it('counts a problem waived in the app, whatever installation named it; passes only when every one is (R54)', () => {
+    const w = new Work(join(seed, '.trace', 'project.db'))
+    try {
+      const left = unwaivedCaseFindings(w.db, loadJourney(w.db))
+      expect(left).toMatchObject({ all: 9 })
+      expect(left!.open.map((f) => f.id)).not.toContain(finding('clash/J2/lid'))
+      expect(left!.open).toHaveLength(8)
+      // the rest waived under another installation's name: the check runs under the repository's
+      for (const f of left!.open) {
+        const tail = f.id.slice(f.id.search(/:case-(?:finding|rule):/))
+        addWaiver(w.db, { target: { kind: 'finding', id: `layout.fit@urn:trace:elsewhere:${encodeURIComponent(REPO)}${tail}` }, reason: 'Checked by hand on the printed case.', risk: 'A part may touch the case.', severity: 'cosmetic', caught_where: null, scope: 'this revision only' }, { hash: 'h'.repeat(16), label: 'admin@example.com' })
+      }
+      expect(unwaivedCaseFindings(w.db, loadJourney(w.db))).toEqual({ all: 9, open: [] })
+    } finally { w.close() }
   })
 })
 

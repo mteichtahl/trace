@@ -107,3 +107,19 @@ export function caseView(db: DatabaseSync, rec: JourneyRecord | null, o: { insta
     findings, inputs: result.inputs ?? null,
   }
 }
+
+/** A finding's record without the installation and project that name it: ":case-finding:gap%3AC6%3Aabove". */
+const recordTail = (id: string): string => { const i = id.search(/:case-(?:finding|rule):/); return i < 0 ? id : id.slice(i) }
+
+/**
+ * The newest build's problems that no open waiver covers, for `tracectl check` (test-esp32-run2 R54: a pull request's
+ * required check failed on a C6 gap a person had been asked to waive, so the change could not pass while the waiver
+ * was the agreed answer). A waiver is matched by the problem's record, not its whole IRI: the check runs under the
+ * repository's name, the app under its installation's. null when the project has no case build.
+ */
+export function unwaivedCaseFindings(db: DatabaseSync, rec: JourneyRecord | null): { all: number; open: CaseFinding[] } | null {
+  const v = caseView(db, null, { installation: 'check', project: 'check' })
+  if (!v) return null
+  const waived = new Set((rec?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding' && w.target.startsWith('layout.fit@')).map((w) => recordTail(w.target)))
+  return { all: v.findings.length, open: v.findings.filter((f) => !waived.has(recordTail(f.id))) }
+}
