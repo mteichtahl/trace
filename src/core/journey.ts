@@ -60,7 +60,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import { type JobLook, jobRefs, plainJobRefs, plainJobRefsOf, refKey } from './job-refs.js'
-import { plainCriterionRefs, plainCriterionRefsOf } from './record-refs.js'
+import { plainCriterionRefs, plainCriterionRefsOf, plainEvidenceLabel } from './record-refs.js'
 import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
@@ -1203,7 +1203,8 @@ function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): Criteri
   return r.criteria.filter((c) => c.gate === gate).map((c) => {
     const w = waived.get(c.id)
     return {
-      id: c.id, text: c.text, owner: c.owner, status: c.status === 'met' ? 'met' : w ? 'waived' : 'not_met', evidence: c.evidence,
+      // a label in words under its criterion: "Checked 23 requirements: all pass", not "architect.mapped: … shape" (R34)
+      id: c.id, text: c.text, owner: c.owner, status: c.status === 'met' ? 'met' : w ? 'waived' : 'not_met', evidence: c.evidence.map((e) => (e.label ? { ...e, label: plainEvidenceLabel(e.label) } : e)),
       evidence_label: c.evidenceLabel, waiver: w?.id ?? null, opened_by_you: opened.has(c.id), checked_at: iso(c.checkedAt),
       ...(c.staleBecause ? { stale: c.staleBecause } : {}),
       ...(added.has(c.id) ? { added: true as const } : {}),

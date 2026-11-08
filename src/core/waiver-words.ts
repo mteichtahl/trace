@@ -31,6 +31,9 @@ const unescape = (s: string): string => { try { return decodeURIComponent(s) } c
 function recordWords(focus: string): string {
   const v = unescape(focus)
   if (v === 'project') return 'the project'
+  // an architecture option's block's key part ("block A/display/usesPart/1"): the part of that block (test-esp32-run2 R34)
+  const part = /^block ([A-Z0-9]+)\/([^/]+)\/usesPart\/\d+$/.exec(v)
+  if (part) return `the ${(part[2] as string).replace(/[-_]/g, ' ')} block's key part (option ${part[1] as string})`
   const m = /^urn:trace:.*:([a-z_-]+):([^:]+)$/.exec(v)
   if (!m) return v
   const kind = (m[1] as string).replace(/[-_]/g, ' ')
