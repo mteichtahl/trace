@@ -173,7 +173,7 @@ import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompt
 import { parseProjectKbs } from '../tools/kb/env.js'
 import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
-  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, TaskBranch, toolNeed, tempDb, withProjectDb,
+  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, TaskBranch, toolNeed, tempDb, withOpenChangeDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS, author as chatAuthor, limited, store as chatStore } from './actions-chats.js'
 import { ThreadId, isAuthor } from '../core/chats.js'
@@ -552,17 +552,29 @@ export const ACTIONS = {
   runs: def('read', Repo.extend({ kind: z.string().max(100).optional(), limit: z.number().int().min(1).max(500).default(20), agent: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/).optional() }), async (a, ctx) =>
     withProjectDb(ctx, a.repo, (db) => { const w = new Work(db); try { return w.runs(a.kind, a.limit, a.agent) } finally { w.close() } })),
 
-  run: def('read', Repo.extend({ id: z.string().min(1).max(64) }), async (a, ctx) => withProjectDb(ctx, a.repo, (db) => {
-    const w = new Work(db)
-    try {
-      const r = w.run(a.id)
-      if (!r) throw new ActionError(`no run ${a.id}`)
-      // the other runs of the same job's session: its steps (docs/ui/phone-results.md)
-      return { ...r, session: w.session(a.id) }
-    } finally { w.close() }
-  })),
+  run: def('read', Repo.extend({ id: z.string().min(1).max(64) }), async (a, ctx) => {
+    const read = (db: string) => {
+      const w = new Work(db)
+      try {
+        const r = w.run(a.id)
+        // the other runs of the same job's session: its steps (docs/ui/phone-results.md)
+        return r ? { ...r, session: w.session(a.id) } : null
+      } finally { w.close() }
+    }
+    const main = await withProjectDb(ctx, a.repo, read)
+    if (main) return main
+    // a run of a change not accepted yet: read from its branch, and said so (test-esp32-run2 R49)
+    const held = await withOpenChangeDb(ctx, a.repo, (db) => read(db) !== null, (db, change) => ({ ...read(db)!, in_change: change }))
+    if (held) return held
+    throw new ActionError(`no run ${a.id}`)
+  }),
 
-  artifact: def('read', Repo.extend({ id: z.string().min(1).max(64), name: z.string().min(1).max(300) }), async (a, ctx) => withProjectDb(ctx, a.repo, async (db) => {
+  artifact: def('read', Repo.extend({ id: z.string().min(1).max(64), name: z.string().min(1).max(300) }), async (a, ctx) => {
+    const holds = (db: string): boolean => { const w = new Work(db); try { return Boolean(w.db.prepare('SELECT 1 FROM artifacts WHERE run_id=? AND name=?').get(a.id, a.name)) } finally { w.close() } }
+    const onMain = await withProjectDb(ctx, a.repo, holds)
+    // an artifact of a change not accepted yet (the renders to approve: test-esp32-run2 R49) is read from its branch
+    return onMain ? withProjectDb(ctx, a.repo, readArtifact) : (await withOpenChangeDb(ctx, a.repo, holds, readArtifact)) ?? Promise.reject(new ActionError(`no artifact ${a.name} on run ${a.id}`))
+    async function readArtifact(db: string) {
     const w = new Work(db)
     try {
       const row = w.db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(a.id, a.name)
@@ -574,7 +586,8 @@ export const ACTIONS = {
       if (bytes.length > MAX_ARTIFACT) throw new ActionError(`${a.name} is ${bytes.length} bytes; the API returns at most ${MAX_ARTIFACT}`)
       return { id: a.id, name: a.name, mime, size: bytes.length, base64: Buffer.from(bytes).toString('base64') }
     } finally { w.close() }
-  })),
+    }
+  }),
 
   // a connected system is not shown the shared library's and the parts search's tools: it may not run them
   'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware && !API_HIDDEN_TOOLS.has(t.name) && (!isService(ctx.principal) || toolOpenToSystems(t.name))).map((t) => ({

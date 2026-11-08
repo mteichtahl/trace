@@ -410,6 +410,29 @@ describe('settings', () => {
     expect(Object.fromEntries(list.map((x) => [x.id, x.job]))).toEqual({ [a]: 'job-x', [b]: 'job-x', [solo]: null })
   })
 
+  // test-esp32-run2 R49: the renders to approve were a run on the layout change, not accepted yet: "no run 98b7…"
+  it('run and artifact read a run of an open change when the default branch does not have it, and say which change', async () => {
+    const dir = mkdtempSync(join(scratch, 'runs-'))
+    mkdirSync(join(dir, '.git'))
+    openProject(dir).close()
+    const main = readFileSync(join(dir, '.trace', 'project.db'))
+    const w = new Work(join(dir, '.trace', 'project.db'))
+    const r = w.start('render.board', { job: 'job-l', agent: 'impl' }); w.artifact(r, 'top.png', new Uint8Array([137, 80, 78, 71]), 'image/png'); w.finish(r, 'pass', 'rendered top, bottom, iso', {})
+    w.close()
+    github.files.set('acme/board:main:.trace/project.db', main)
+    github.files.set('acme/board:claude/layout:.trace/project.db', readFileSync(join(dir, '.trace', 'project.db')))
+    rmSync(dir, { recursive: true, force: true })
+    github.openList = [{ number: 14, title: 'Place and route the board', head: 'claude/layout', draft: false, labels: [], url: '', updated_at: '2026-11-08T04:00:00Z' }]
+    const guest = { principal: { sub: 'guest-1', email: null, groups: ['trace-guests'] }, deps }
+    try {
+      expect((await perform('run', { repo: 'acme/board', id: r }, guest)).result).toMatchObject({ id: r, kind: 'render.board', in_change: { number: 14, title: 'Place and route the board' } })
+      expect((await perform('artifact', { repo: 'acme/board', id: r, name: 'top.png' }, guest)).result).toMatchObject({ name: 'top.png', mime: 'image/png' })
+      await expect(perform('run', { repo: 'acme/board', id: 'nope' }, guest)).rejects.toThrow(/no run nope/)
+    } finally {
+      github.openList = []
+    }
+  })
+
   it('settings.set commits on a trace/settings- branch, never main', async () => {
     put()
     const r = await perform('settings.set', { repo: 'acme/board', key: 'prs.auto_merge', value: false }, { principal: { sub: 'user-1', email: 'user-1@example.com', groups: ['trace-users'] }, deps })
