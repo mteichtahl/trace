@@ -38,6 +38,7 @@ import { SPECIALIST_KINDS } from '../agents/kinds.js'
 import { type AppEdit, EDIT_WORDS, type EditKind } from '../core/app-edits.js'
 import { plumbingTitle } from '../core/change-contents.js'
 import { plainLine } from '../core/plain-words.js'
+import { plainCodeRefs } from '../core/record-refs.js'
 import type { JobRow } from '../core/job-index.js'
 import { indexedHandle, isLive } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
@@ -890,7 +891,8 @@ export function summaryBullets(o: { jobSummary: string | null; body: string; com
   // a record's or a merge commit's subject says nothing of the work: never a bullet (test-esp32 log #59, #154)
   const clean = (xs: readonly string[]): string[] => [...new Set(xs.map((x) => x.replace(/^[0-9a-f]{7,40}\s+/, '').replace(/<!--[\s\S]*?-->/g, '').trim()).filter((x) => x && !plumbingTitle(x)))].slice(0, 12)
   // a report's line as a person reads it: the agent's internals left out, its report kept behind More (test-esp32 #24)
-  const plain = (xs: readonly string[]): string[] => clean(xs).map(plainLine).filter((x): x is string => x !== null)
+  // datasheets and hand-offs said in words, not by hash or id (test-esp32-run2 R40: "(ce6fd419 p13)", "hoda5b1502f4f144")
+  const plain = (xs: readonly string[]): string[] => clean(xs).map((x) => plainLine(plainCodeRefs(x))).filter((x): x is string => x !== null)
   // every job's on the branch, oldest first: a change two jobs made is not said by the second one's alone (log #18)
   const jobs = [...(o.earlier ?? []), o.jobSummary].map((s) => reportOf(s)).filter(Boolean)
   if (jobs.length) {

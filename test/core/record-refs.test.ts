@@ -85,6 +85,12 @@ describe('datasheets and findings named by code (test-esp32-run2 R39)', () => {
     expect(plainCodeRefs('design.pins check: mate_order on J2')).toBe('pin plan check: connector pin order on J2')
   })
 
+  it('says a change report\'s datasheets and hand-offs in words (R40)', () => {
+    expect(plainCodeRefs("The module's strapping table (ce6fd419 p13) needs GPIO8 high for download boot."))
+      .toBe("The module's strapping table (the datasheet, page 13) needs GPIO8 high for download boot.")
+    expect(plainCodeRefs('on the regulator output, as the ams hand-off hoda5b1502f4f144 asked.')).toBe('on the regulator output, as the ams hand-off asked.')
+  })
+
   it('leaves what it cannot tell is a datasheet', () => {
     expect(plainCodeRefs('commit deadbeef and run 84ac569329e8472d')).toBe('commit deadbeef and run 84ac569329e8472d')
     expect(plainCodeRefs('see 1a2b3c4d')).toBe('see 1a2b3c4d')

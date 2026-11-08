@@ -160,6 +160,8 @@ export function plainCodeRefs(text: string): string {
       `${STARTS.test(all.slice(0, at)) ? 'The' : 'the'} datasheet, page ${page}`)
     .replace(new RegExp(String.raw`\b(?:the\s+)?datasheet\s+${HASH}`, 'gi'), (_w, at: number, all: string) => `${STARTS.test(all.slice(0, at)) ? 'The' : 'the'} datasheet`)
     .replace(new RegExp(String.raw`\b(with|against|per|from)\s+${HASH}`, 'gi'), (_w, prep: string) => `${prep} the datasheet`)
+    // "the ams hand-off hoda5b1502f4f144": the hand-off is said already (test-esp32-run2 R40)
+    .replace(/\b(hand-?offs?)\s+`?ho[0-9a-f]{14}\b`?/gi, '$1')
 }
 
 /**
