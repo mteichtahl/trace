@@ -86,3 +86,26 @@ describe('the drafting request', () => {
     expect(draftingJobs([row('Something else.')])).toHaveLength(0)
   })
 })
+
+describe('verify.requirements list with people\'s decisions (test-esp32-run3 S8)', () => {
+  it('reads accepted, struck and edited as people decided, not the table\'s proposed', async () => {
+    const { withPeoplesDecisions } = await import('../../src/tools/verify/tools.js')
+    const rows = [
+      { id: 'REQ-001', text: 'Shows the time.', acceptance: 'Shows HH:MM in 10 of 10 power-ups.', status: 'proposed', updated: 100, kind: 'functional' },
+      { id: 'REQ-002', text: 'No clock chip.', acceptance: 'No RTC (inspection).', status: 'proposed', updated: 100, kind: 'functional' },
+      { id: 'REQ-003', text: 'Old idea.', acceptance: '1 of 1.', status: 'proposed', updated: 100, kind: 'functional' },
+      { id: 'REQ-004', text: 'Undecided.', acceptance: '2 of 2.', status: 'proposed', updated: 100, kind: 'functional' },
+    ]
+    const d = (id: string, target: string, choice: string, detail: Record<string, unknown>, at = 200) => ({ id, kind: 'requirement' as const, target, choice, detail, by: 'marc@example.com', byHash: 'h', at, supersededAt: null })
+    const out = withPeoplesDecisions(rows, [
+      d('d1', 'REQ-001', 'accepted', { text: 'Shows the time.', acceptance: 'Shows HH:MM in 10 of 10 power-ups.' }),
+      d('d2', 'REQ-002', 'accepted', { text: 'No clock chip.', acceptance: 'No RTC (inspection).', edited: { acceptance: '0 RTC chips (inspection).' } }),
+      d('d3', 'REQ-003', 'struck', { text: 'Old idea.', acceptance: '1 of 1.', reason: 'not needed' }),
+    ] as never)
+    expect(out.map((q) => [q.id, q.status])).toEqual([['REQ-001', 'accepted'], ['REQ-002', 'accepted'], ['REQ-003', 'rejected'], ['REQ-004', 'proposed']])
+    expect(out[1]).toMatchObject({ acceptance: '0 RTC chips (inspection).', decided_by: 'marc@example.com' })
+    // an agent's later change of the words reopens the decision: the row reads as the agents' again
+    const changed = withPeoplesDecisions([{ ...rows[0]!, text: 'Shows the time and date.', updated: 300 }], [d('d1', 'REQ-001', 'accepted', { text: 'Shows the time.', acceptance: 'Shows HH:MM in 10 of 10 power-ups.' })] as never)
+    expect(changed[0]!.status).toBe('proposed')
+  })
+})
