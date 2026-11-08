@@ -211,6 +211,7 @@ function Review() {
             <ChangeRequirements
               ids={d.requirements}
               unknown={d.requirements_unknown}
+              tested={d.requirements_tested}
               rows={coverage.data?.requirements}
               loading={coverage.isPending}
               link={(rid, children, className) => <Link to="/p/$id/requirements/$rid" params={{ id, rid }} className={className}>{children}</Link>}
