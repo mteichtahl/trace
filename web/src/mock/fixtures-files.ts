@@ -372,6 +372,8 @@ export function fileContent(path: string, commit?: string): { bytes: Uint8Array 
     case 'fab/soil-sensor-jlcpcb.zip': return { bytes: FAB_ZIP, mime: 'application/zip' }
     case 'fab/soil-sensor-F_Cu.gtl': return { bytes: FCU, mime: 'text/plain' }
     case 'runs/run_8f2c/i2c-capture.vcd': return { bytes: VCD, mime: 'text/plain' }
+    // the panel controller's case fit, whose picture its question shows (test-esp32-run2 R49)
+    case 'runs/run_fit7/fit-top.svg': return { bytes: DRAWING_SVG, mime: 'image/svg+xml' }
     case 'evidence/sim/3v3-burst.sim.json': return { bytes: SIM_JSON, mime: 'application/json' }
     case 'evidence/i2c-write.wavedrom.json': return { bytes: WAVEDROM, mime: 'application/json' }
     case 'runs/run_77aa/build.log': return { bytes: BUILD_LOG, mime: 'text/plain' }

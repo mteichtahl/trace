@@ -24,7 +24,8 @@ import { useTraceContext } from '@/components/chat/context'
 import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { SkillChat } from './skill-chat'
 import { DecisionCard, WaiverNote, chosenWords } from '@/components/decision-card'
-import { EvidenceChip } from '@/components/evidence-chip'
+import { EvidenceChip, runOfChip } from '@/components/evidence-chip'
+import { RunPictures } from '@/components/skills/evidence-sheet'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { OutOfDateNote } from '@/components/question-notes'
 import { sharedReason, type QualityCheck } from '@/components/quality-bar'
@@ -33,7 +34,7 @@ import { EmptyState, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { type ResultOf, call } from '@/lib/api'
 import { useCall } from '@/lib/queries'
-import type { CriterionStatus, Question } from '@/lib/types'
+import type { CriterionStatus, EvidenceRef, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
 import type { SkillDef } from './definitions'
 import { DECIDE_INTENT_DESCRIPTION, DecideIntent, type IntentDecision, IntentOpening, NOTE_INTENT_DESCRIPTION, NoteIntent, type NotedStatement, type ShownStatement, changedFields, decideStatements, decidedAnswer, interfacesCheck, mergedFields, noteStatements, notedAnswer, openingWords, TOPIC_QUESTIONS, useSkillThread, withDecided, withNoted } from './intent-chat'
@@ -464,6 +465,17 @@ export function arrivingChoice(options: readonly { id: string }[], option: strin
   return options.some((o) => o.id === option) ? option : null
 }
 
+/** The runs a question cites (its sources, then what it looked at), at most three, once each. Pure. */
+export function questionRuns(q: { sources?: readonly EvidenceRef[] | undefined; searched?: readonly EvidenceRef[] | undefined }): { repo: string; id: string }[] {
+  const seen = new Set<string>()
+  return [...(q.sources ?? []), ...(q.searched ?? [])].flatMap((e) => {
+    const r = runOfChip(e)
+    if (!r || seen.has(r.id)) return []
+    seen.add(r.id)
+    return [r]
+  }).slice(0, 3)
+}
+
 /** The question-answer bar, from the draft. Pure. */
 export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[]; question?: string; needs?: Record<string, string> }): Record<string, CriterionStatus> {
   // a draft written for another question answers nothing here, even when that question had the same option ids
@@ -606,6 +618,8 @@ export function QuestionAnswer({ repo, def, question, option }: { repo: string; 
             <p className="text-lg font-medium">{q.text}</p>
             {q.context && <p className="mt-2">{q.context}</p>}
             {q.blocks && <p className="mt-1 text-muted-foreground">It blocks {q.blocks}.</p>}
+            {/* the pictures of the runs it cites, so "approve the renders" shows them (test-esp32-run2 R49) */}
+            {questionRuns(q).map((r) => <div key={r.id} className="mt-3"><RunPictures repo={r.repo} id={r.id} /></div>)}
             {q.searched?.length ? (
               <div className="mt-3"><p className="text-xs text-muted-foreground">What it already looked at</p><div className="mt-1 flex flex-wrap gap-1.5">{q.searched.map((e, i) => <EvidenceChip key={i} evidence={e} />)}</div></div>
             ) : null}
