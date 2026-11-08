@@ -83,6 +83,13 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'project.members': return ok(MEMBERS[repo] ?? MEMBERS['acme/soil-sensor'])
     case 'tools.waits': return ok({ repo, version: 1, waits: WAITS[repo] ?? [] })
     case 'tools.check_now': case 'job.check_now': return new Promise<Response>((r) => setTimeout(() => r(ok({ ok: true })), 900)) as unknown as Response
+    case 'question.close': {
+      // an out-of-date question closed without an answer: it leaves the journey, and no agent is started
+      inbox = inbox.filter((i) => i.questionId !== a.question)
+      const j = JOURNEYS[repo]
+      if (j) j.questions = j.questions.filter((x) => x.id !== a.question)
+      return ok({ repo, summary: 'Closed: no answer was needed, and no agent was started.' })
+    }
     case 'question.answer': {
       inbox = inbox.filter((i) => i.questionId !== a.question)
       // the answered question leaves the journey, and the step it was: trace carries on with the agent's work

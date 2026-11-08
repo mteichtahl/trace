@@ -3,8 +3,10 @@
  * test-esp32 #108), and, for a stuck agent's report shown in plain words, the agent's own words behind "Show detail"
  * (#35: run ids, a stack frame and tool names were the question).
  */
-import { ChevronRight, CircleAlert } from 'lucide-react'
+import { ChevronRight, CircleAlert, Loader2 } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
+import { call } from '@/lib/api'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 
@@ -35,5 +37,30 @@ export function ShowDetail({ detail, className }: { detail: string; className?: 
         <p className="mt-1 whitespace-pre-wrap break-words rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">{detail}</p>
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+/**
+ * Close an out-of-date question without answering it (question.close): what it asked about is settled, so no agent is
+ * started (test-esp32-run2 R62: a question about a PR merged hours before stayed under Waiting on people, and answering
+ * it would have started a job for nothing). The server refuses it if the question still stands.
+ */
+export function CloseOutOfDate({ repo, question, className }: { repo: string; question: string; className?: string }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      className={cn('inline-flex shrink-0 items-center gap-1 text-sm text-muted-foreground hover:text-foreground hover:underline disabled:opacity-60', className)}
+      onClick={() => {
+        setBusy(true)
+        call('question.close', { repo, question })
+          .then((r) => toast.success(r.summary))
+          .catch((e: unknown) => toast.error('Could not close it', { description: e instanceof Error ? e.message : String(e) }))
+          .finally(() => setBusy(false))
+      }}
+    >
+      {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden />}Close it: no answer needed
+    </button>
   )
 }

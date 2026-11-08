@@ -5,7 +5,7 @@ import {
 } from '../../src/core/agent-facts.js'
 import { S3Backend } from '../../src/core/central.js'
 import {
-  type AgentFacts, type JourneyRecord, type Viewer, answerQuestion, gateView, inboxItems, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, outOfDate, returnGate, setCriterion,
+  type AgentFacts, type JourneyRecord, type Viewer, answerQuestion, closeOutOfDate, gateView, inboxItems, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, outOfDate, returnGate, setCriterion,
   signGate, recordOpen, startJourney,
 } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
@@ -355,5 +355,24 @@ describe('merging the agents\' facts into the journey views', () => {
     // "pin #3" is not a change
     expect(of(markOutOfDate(view, rec, []), pin)).not.toHaveProperty('out_of_date')
     expect(outOfDate(rec.questions.find((q) => q.id === docs)!, rec)).toBeNull()
+  })
+
+  // test-esp32-run2 R62: a question about a PR merged hours before stayed under Waiting on people, and answering it
+  // would have started a job for nothing
+  it('a question out of date is closed without an answer; one still needed is refused', async () => {
+    const s = await started()
+    const r = await s.record()
+    const EMC = { agent: 'emc', label: 'the EMC & Simulation specialist', jobId: 'job-2' }
+    const id = (await s.facts.update((db) => ({ result: addAgentQuestion(db, EMC, { text: 'signoff.emc is not met: the cable estimate is 3.5 dB over. Waive it, or length-match USB D+/D- now?', blocks: 'release approval', options: opts }, r) }))).result
+    const by = { hash: CONTRIB.hash, label: CONTRIB.label }
+    let f = await s.read()
+    await expect(s.journey.update((db) => ({ result: closeOutOfDate(db, id, by, [], { facts: f }) }))).rejects.toThrow(/still needs an answer/)
+    await s.facts.update((db) => ({ result: addCriterionCheck(db, VERIFY, { criterion: 'signoff.emc', status: 'met', evidence: [{ kind: 'run', ref: 'run-emc' }] }, r) }))
+    f = await s.read()
+    const closed = (await s.journey.update((db) => ({ result: closeOutOfDate(db, id, by, [], { facts: f }) }))).result
+    expect(closed.answered?.answer).toBe('No answer needed: “The radio interference prechecks are run and within the target” is met now.')
+    const v = journeyView(await s.record(), CONTRIB, undefined, await s.read())
+    expect(v.questions.find((q) => q.id === id && q.answered === null)).toBeUndefined()
+    await expect(s.journey.update((db) => ({ result: closeOutOfDate(db, id, by, [], { facts: f }) }))).rejects.toThrow(/already answered/)
   })
 })

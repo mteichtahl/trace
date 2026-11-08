@@ -37,6 +37,7 @@ const lifecycle = (r: string): QueryKey[] => [['projects'], ['projects.retired']
 const BY_ACTION: Partial<Record<ActionName, (r: string, a: Args) => QueryKey[]>> = {
   // the journey record: questions, gates and their criteria, waivers, the guided skills, the build
   'question.answer': project,
+  'question.close': project,
   'stuck.dismiss': project,
   'handoff.decline': project,
   'waiver.add': project,
@@ -123,8 +124,8 @@ export function applyWrite(qc: Pick<QueryClient, 'setQueriesData'>, action: stri
   if (!repo) return
   const journey = (f: (j: Journey) => Journey): void => { qc.setQueriesData<Journey>({ queryKey: ['journey.get', repo] }, (j) => (j ? f(j) : j)) }
   const inbox = (keep: (i: InboxItem) => boolean): void => { qc.setQueriesData<InboxItem[]>({ queryKey: ['inbox'] }, (xs) => (Array.isArray(xs) ? xs.filter(keep) : xs)) }
-  if ((action === 'question.answer' && typeof args.question === 'string') || (action === 'stuck.dismiss' && typeof args.job === 'string')) {
-    const id = (action === 'question.answer' ? args.question : args.job) as string
+  if (((action === 'question.answer' || action === 'question.close') && typeof args.question === 'string') || (action === 'stuck.dismiss' && typeof args.job === 'string')) {
+    const id = (action === 'stuck.dismiss' ? args.job : args.question) as string
     journey((j) => {
       const asked = j.questions.some((x) => x.id === id)
       const next = stepAnswers(j.next, id)

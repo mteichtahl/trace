@@ -96,6 +96,8 @@ export interface Actions {
   'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[]; time_zone?: string }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }
   'gate.return': { args: Repo & { gate: string; reason: string; reopen?: string }; result: { repo: string; reopened: string | null; summary: string } }
   'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string; started?: string[]; rule?: RuleProposed; rule_error?: string } }
+  /** close a question that is out of date without answering it: no agent is started (test-esp32-run2 R62) */
+  'question.close': { args: Repo & { question: string }; result: { repo: string; summary: string } }
   /** `job`: the stuck agent's job id, or the stuck item's own id (an inbox item's questionId) */
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
   'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string; replaces?: string }; result: { repo: string; waiver: { id: string } } }

@@ -78,6 +78,14 @@ describe('applied to the screens at once', () => {
     expect(qc.getQueryData<Journey>(['journey.get', 'c/d', { repo: 'c/d' }])!.questions).toHaveLength(2)
   })
 
+  it('an out-of-date question closed without an answer leaves at once too (test-esp32-run2 R62)', () => {
+    const qc = seeded()
+    applyWrite(qc, 'question.close', { repo: R, question: 'aq1' })
+    expect(qc.getQueryData<Journey>(journeyKey)!.questions.map((x) => x.id)).toEqual(['aq2'])
+    expect(qc.getQueryData<InboxItem[]>(inboxKey)!.map((x) => x.id)).toEqual(['i2'])
+    expect(writeInvalidations('question.close', { repo: R, question: 'aq1' })).toEqual(writeInvalidations('question.answer', { repo: R, question: 'aq1' }))
+  })
+
   it('an answered question stops being the next step at once, as Waiting on people says 0 (#199)', () => {
     const qc = seeded()
     const use = { kind: 'task', owner: 'you', summary: 'Which rail?', action: { label: 'Use 3.3 V', to: '/p/a~b/do/question-answer?question=aq1&option=o1' }, ref: { kind: 'question', id: 'aq1' } } as Journey['next']

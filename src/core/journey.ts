@@ -1365,6 +1365,23 @@ export function outOfDate(q: QuestionRow, r: JourneyRecord, open?: readonly numb
   return null
 }
 
+/**
+ * Close a question that is out of date (outOfDate: what it is about is met or waived since it was asked, or the changes
+ * it names are no longer open) without answering it: its answer reads "No answer needed: <why>", and nothing is carried
+ * on to an agent. An open question about a PR long merged stayed under Waiting on people, and answering it would have
+ * started a job for nothing (test-esp32-run2 R62). A question still needed is refused: answer it instead.
+ */
+export function closeOutOfDate(db: DatabaseSync, id: string, by: Signer, open: readonly number[] | null, o: { facts?: AgentFacts | null | undefined } = {}): QuestionView {
+  const r = withFacts(need(db), o.facts)
+  const q = r.questions.find((x) => x.id === id)
+  if (!q) throw new JourneyError(`There is no question ${id} in this project.`)
+  if (q.answeredAt !== null) throw new JourneyError('This question is already answered.')
+  const why = outOfDate(q, r, open)
+  if (!why) throw new JourneyError('This question still needs an answer: what it is about is not settled yet. Answer it instead.')
+  const recommended = q.options.find((x) => x.recommended)
+  return answerQuestion(db, id, by, { answer: `No answer needed: ${why.replace(/, so this may no longer need an answer\.$/, '.')}`, ...(recommended ? { reason: 'Closed as out of date, not answered.' } : {}) }, o)
+}
+
 /** The view's questions marked out of date against the changes open now (journey.get, which knows them). */
 export function markOutOfDate(view: JourneyView, r: JourneyRecord, open: readonly number[]): JourneyView {
   const rows = new Map(r.questions.map((q) => [q.id, q]))

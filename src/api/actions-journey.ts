@@ -29,6 +29,7 @@
  *                                    problem belongs to
  *   question.answer         write    answer an agent's question: an option (the recommended one, or another with a
  *                                    reason) or an answer in words
+ *   question.close          write    close a question that is out of date without answering it: no agent is started
  *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope;
  *                                    `replaces` takes an earlier one again, withdrawing it (as waiver.withdraw)
  *   waiver.withdraw         write    withdraw a waiver in force with a reason, kept in the decisions log: its author
@@ -69,7 +70,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
-  confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withAsks, withChanges, withPending, withStaleEvidence, staleCriteria,
+  closeOutOfDate, confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withAsks, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -1023,6 +1024,16 @@ export const JOURNEY_ACTIONS = {
     const started = [...(carried.started ?? []), ...(docs.started ? [docs.started] : []), ...(rule.started ?? [])]
     const said = (carried as { summary?: string }).summary
     return { ...answered, ...carried, ...ruled, ...(said ? { summary: said.replace(/^Answered\./, `Answered.${waivedWords(answered.question)}`) } : {}), ...(started.length ? { started } : {}) }
+  }),
+
+  // a question out of date closed without an answer: no agent is started (test-esp32-run2 R62)
+  'question.close': def('write', Repo.extend({ question: Id }), async (a, ctx) => {
+    const facts = await agentFacts(ctx, a.repo)
+    const open = await openChanges(ctx, a.repo).then((x) => x.map((c) => c.change.number), () => null)
+    return journeyWrite(ctx, a.repo, (db) => {
+      const q = closeOutOfDate(db, a.question, signer(ctx), open, { facts })
+      return { result: { repo: a.repo, question: q, summary: 'Closed: no answer was needed, and no agent was started.' } }
+    })
   }),
 
   'stuck.dismiss': def('write', Repo.extend({ job: Id, reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {
