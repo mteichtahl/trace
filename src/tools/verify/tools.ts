@@ -31,7 +31,8 @@ import { extractCandidates } from './extract.js'
 import { unmarkedNote } from './inferred.js'
 import { readDesignRows } from '../design/db.js'
 import { loadDesignDecisions } from '../design/decisions.js'
-import { intentView } from '../design/record.js'
+import { intentView, requirementDecisions, requirementsNow } from '../design/record.js'
+import type { DesignDecision } from '../design/decisions.js'
 import { tail } from './job.js'
 import { buildMatrix, reportMarkdown } from './matrix.js'
 import { releaseFacts, type ReleaseFacts } from './release.js'
@@ -114,6 +115,10 @@ export const requirementsTool = defineTool({
     if ((a.action === 'add' || a.action === 'update') && agent && agent !== 'verify' && agent !== 'worker' && agent !== 'local') {
       throw new ToolError(`${a.action}: the requirements are the Verification specialist's to change. Read them with action list, and hand the change to it with journey.handoff (the requirement, the new wording or criterion, and why).`)
     }
+    // people's decisions on the requirements (Requirements review) live in the journey store: read them for list, so an
+    // agent sees accepted and struck as people decided, not the table's proposed (test-esp32-run3 S8: the docs said all
+    // 27 were "still at status proposed" after all 27 were accepted)
+    const decisions = a.action === 'list' ? await liveDesignDecisions() : null
     return withVerify((v) => {
       if (a.action === 'add') {
         if (!a.requirements?.length) throw new ToolError('add: give requirements')
@@ -129,7 +134,9 @@ export const requirementsTool = defineTool({
         const bare = withoutNumber([requirement])
         return { requirement, ...(unmarked ? { unmarked_numbers: unmarked } : {}), ...(bare ? { without_number: bare } : {}) }
       }
-      const list = v.requirements({ kind: a.kind, status: a.status })
+      const decided = decisions ?? loadDesignDecisions(v.db)
+      const all = withPeoplesDecisions(v.requirements({ kind: a.kind }), decided)
+      const list = a.status ? all.filter((q) => q.status === a.status) : all
       const notes = v.mergeNotes()
       return { total: list.length, requirements: list.slice(0, a.limit), ...(notes.length ? { merge_notes: notes } : {}) }
     })
@@ -536,4 +543,26 @@ export const tools: AnyTool[] = [
 export function withoutNumber(reqs: readonly { id: string; acceptance?: string | null }[]): { ids: string[]; note: string } | null {
   const ids = reqs.filter((r) => !/\d/.test(r.acceptance ?? '')).map((r) => r.id)
   return ids.length ? { ids, note: 'Each acceptance criterion needs a number with its unit or count, or Requirements review refuses it. For an inspection, count what is checked: "0 real-time clock chips", "exactly 1 USB-C opening". Update each one.' } : null
+}
+
+/** The design decisions in the journey store, when this runs where it can reach it (an agent job); else null. */
+async function liveDesignDecisions(): Promise<DesignDecision[] | null> {
+  let scope: ReturnType<typeof journeyScope> | null = null
+  try { scope = journeyScope() } catch { return null }
+  try { return (await scope.journey.read((db) => loadDesignDecisions(db))).result } catch { return null }
+}
+
+/**
+ * The requirement rows with people's standing decisions laid over them: status accepted or rejected (struck) as they
+ * decided, their own wording where they edited it, and decided_by. A decision an agent's later change reopened is left
+ * out (requirementDecisions), so that requirement reads as the agents' row does.
+ */
+export function withPeoplesDecisions<T extends { id: string; text: string; acceptance?: string | null; status: string; updated?: number | null; kind?: string }>(rows: readonly T[], decisions: readonly DesignDecision[]): (T & { decided_by?: string })[] {
+  const now = requirementsNow(rows as unknown as Record<string, unknown>[])
+  const d = requirementDecisions(decisions, now)
+  return rows.map((q) => {
+    const x = d.get(q.id)
+    if (!x) return q
+    return { ...q, ...(x.edited?.text ? { text: x.edited.text } : {}), ...(x.edited?.acceptance ? { acceptance: x.edited.acceptance } : {}), ...(x.edited?.kind ? { kind: x.edited.kind } : {}), status: x.choice === 'struck' ? 'rejected' : 'accepted', decided_by: x.by }
+  })
 }
