@@ -69,7 +69,7 @@ export function plainRecordRefs(text: string, look: RecordLook = {}): string {
     return STARTS.test(before) ? cap(said) : said
   })
   // the space left where an id went ("Parts check : all")
-  out = out.replace(/ +([:;,)])/g, '$1').replace(/ {2,}/g, ' ')
+  out = out.replace(/ +([:;,)])/g, '$1').replace(/(\S) {2,}/g, '$1 ')
   return out.replace(ANSWER_ID, (_whole, _ans: string | undefined, id: string, at: number, all: string) => {
     const said = look.answer?.(id.toLowerCase()) === 'you' ? 'your answer' : 'the answer'
     return STARTS.test(all.slice(0, at)) ? cap(said) : said
