@@ -76,7 +76,7 @@ describe('who the next step waits on', () => {
   })
 
   it('a met or waived criterion has no findings to waive', () => {
-    expect(findingsOf(gates, 'layout.drc')).toEqual({ text: criterion().text, findings: 2 })
+    expect(findingsOf(gates, 'layout.drc')).toEqual({ text: criterion().text, findings: 2, libraries: 0 })
     expect(findingsOf([{ criteria: [criterion({ status: 'waived' })] }], 'layout.drc')).toBeNull()
     expect(findingsOf(gates, 'layout.fit')).toBeNull()
   })
@@ -102,5 +102,19 @@ describe('who the next step waits on', () => {
     expect(runningOn([row('running', AT - 10, 'Record layout.drc with journey.check.')], 'layout.fit', AT)).toBe(false)
     expect(runningOn([row('running', AT - 3 * 3600, 'Record layout.fit.')], 'layout.fit', AT)).toBe(false)
     expect(runningOn([row('succeeded', null, 'Record layout.fit.'), row('queued', null, 'Record layout.fit.')], 'layout.fit', AT)).toBe(false)
+  })
+
+  // test-esp32-run2: the step asked a person to waive 50 "library not in the configuration" findings
+  it('findings that are only KiCad libraries the tables leave out are added by trace, not waived', () => {
+    const lib = (ref: string, what: string) => ({ kind: 'finding', ref, label: `The current configuration does not include the ${what}` })
+    const g = [{ criteria: [criterion({ evidence: [lib('erc:a', "symbol library 'power' (#PWR02)"), lib('erc:b', "footprint library 'Connector_USB' (J1)")] })] }]
+    expect(findingsOf(g, 'layout.drc')).toMatchObject({ findings: 2, libraries: 2 })
+    const s = waitsOn(working, { changes: [], working: 0, gates: g, viewer: admin, at: AT }).step
+    expect(s.summary).toMatch(/ask trace to add the KiCad libraries/)
+    expect(s.summary).not.toMatch(/: waive the/)
+    expect(s.why).toMatch(/not faults in the design/)
+    // one real finding among them: waive or fix as before
+    const mixed = [{ criteria: [criterion({ evidence: [lib('erc:a', "symbol library 'power' (#PWR02)"), { kind: 'finding', ref: 'erc:c', label: 'pin_not_driven U2' }] })] }]
+    expect(waitsOn(working, { changes: [], working: 0, gates: mixed, viewer: admin, at: AT }).step.summary).toMatch(/waive the 2 findings/)
   })
 })

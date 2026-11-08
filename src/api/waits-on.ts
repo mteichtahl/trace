@@ -37,16 +37,19 @@ export const runningOn = (rows: readonly JobRow[], id: string, at = Date.now() /
   rows.some((j) => j.kind !== 'sweep' && !j.parentJob && j.state === 'running' && isLive(j, at) && ((named) => !named.length || named.includes(id))(criteriaNamed(jobRequest(j), j.title)))
 
 /** The findings on the criterion `id` that a person can waive (its evidence of kind finding), while it is not met. */
-export function findingsOf(gates: readonly Pick<GateView, 'criteria'>[], id: string): { text: string; findings: number } | null {
+export function findingsOf(gates: readonly Pick<GateView, 'criteria'>[], id: string): { text: string; findings: number; libraries: number } | null {
   for (const g of gates) {
     const c = g.criteria.find((x) => x.id === id)
     if (!c) continue
     if (c.status === 'met' || c.status === 'waived') return null
-    const n = c.evidence.filter((e) => e.kind === 'finding').length
-    return n ? { text: c.text, findings: n } : null
+    const found = c.evidence.filter((e) => e.kind === 'finding')
+    const libraries = found.filter((e) => LIBRARY_LEFT_OUT.test(e.label ?? '')).length
+    return found.length ? { text: c.text, findings: found.length, libraries } : null
   }
   return null
 }
+/** A rule check's finding that the project's library tables leave out a KiCad library (src/tools/kicad/checks.ts missingLibraries). */
+const LIBRARY_LEFT_OUT = /does not include the (?:symbol|footprint) library/i
 
 export interface WaitsOn { step: NextStep; owner: StepOwner | null }
 
@@ -64,6 +67,20 @@ export function waitsOn(next: NextStep, o: { changes: readonly Change[]; working
   const first = stuck[0]?.stuck
   const alsoStuck = first ? ` Separately, the checks of ${named(stuck)} cannot start: ${first.why}. An admin fixes that.` : ''
   const f = o.working === 0 && next.ref.kind === 'criterion' ? findingsOf(o.gates, next.ref.id) : null
+  if (f && f.libraries === f.findings) {
+    // every finding is a KiCad library the project's tables leave out: fixed by adding them, never waived
+    // (test-esp32-run2: the step asked a person to waive 50 of them)
+    return {
+      owner: mine ? 'you' : 'contributors',
+      step: {
+        ...next, kind: 'task', belongs_to: mine ? 'you' : 'contributors', yours: mine,
+        summary: `${stage}: ask trace to add the KiCad libraries the project's library tables leave out (${plural(f.findings, 'finding')} on "${f.text.replace(/\.$/, '')}").`,
+        why: `trace is not working on it now. These findings are not faults in the design: the project's library tables do not list KiCad libraries its parts come from. Adding them clears every one; waiving them would leave the footprints unfound in Layout.${alsoStuck}`,
+        recommendation: null, button: mine ? 'See the findings' : 'Read the stage',
+        after: 'Once the libraries are added and the check runs again, the criterion is met.',
+      },
+    }
+  }
   if (f) {
     const them = f.findings === 1 ? 'it' : 'them'
     return {
