@@ -8,6 +8,7 @@ import { clipToBox, convexHull, pointInPoly, polyArea, readGeometry } from '../.
 import { cisprLimit } from '../../../src/tools/emc/limits.js'
 import { DEFAULTS, precheck } from '../../../src/tools/emc/precheck.js'
 import { canImport, openemsPython, siPython } from '../../../src/tools/emc/python.js'
+import { spectrumAssumptions } from '../../../src/tools/emc/tools.js'
 import { axisLines, buildModel, modelScript } from '../../../src/tools/emc/setup.js'
 import { cmCurrentFor, cmField, dBuV, dmField, envelope, envelopeCorners, harmonic, K_CM, K_DM } from '../../../src/tools/emc/spectrum.js'
 import { backendFor } from '../../../src/gpu/jobs.js'
@@ -58,6 +59,14 @@ describe('emc spectrum closed forms (hand-computed)', () => {
     expect(cisprLimit('A', 2e9, 3)?.db_uv_m).toBe(56)
     expect(cisprLimit('B', 2e9, 10)?.db_uv_m).toBeCloseTo(50 + 20 * Math.log10(0.3), 6)
     expect(cisprLimit('B', 10e6, 3)).toBeNull()
+  })
+
+  it('emc.spectrum says what it assumed, so two spectra of one board can be told apart (test-esp32-run2 R61)', () => {
+    expect(spectrumAssumptions({ cm: { cable_length_m: 1, cm_fraction: 0.01 } })).toBe('1 % of the signal current as common mode on a 1 m cable')
+    expect(spectrumAssumptions({ cm: { cable_length_m: 1, cm_fraction: 0.0005 } })).toBe('0.05 % of the signal current as common mode on a 1 m cable')
+    expect(spectrumAssumptions({ cm: { cable_length_m: 1.5, current_ua: 8 }, dm: { loop_area_mm2: 40 } })).toBe('8 µA common mode on a 1.5 m cable, a 40 mm² loop')
+    expect(spectrumAssumptions({ cm: { cable_length_m: 1 } })).toBe('100 % of the signal current as common mode on a 1 m cable')
+    expect(spectrumAssumptions({})).toBeNull()
   })
 
   it('emc.spectrum: a clock against class B', async () => {

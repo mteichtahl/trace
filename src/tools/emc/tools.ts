@@ -58,6 +58,24 @@ const SpectrumInput = z.object({
   ground_reflection: z.boolean().optional().describe('x2 (6 dB) for a reflecting ground, as on a test site (default true)'),
 })
 
+/**
+ * What an estimate assumed, in words for its summary: the common-mode share or current and the cable, and the loop.
+ * Two spectra of one board read "-18.1 dB" and "7.97 dB" with nothing saying the first took 1 % of the signal current
+ * as common mode and the second 0.05 % (test-esp32-run2 R61). Null when nothing is assumed beyond the signal.
+ */
+export function spectrumAssumptions(a: Pick<z.infer<typeof SpectrumInput>, 'cm' | 'dm'>): string | null {
+  const pct = (f: number): string => `${Number((f * 100).toPrecision(3))} %`
+  const parts: string[] = []
+  if (a.cm) {
+    const cable = `a ${a.cm.cable_length_m} m cable`
+    parts.push(a.cm.current_ua !== undefined ? `${a.cm.current_ua} µA common mode on ${cable}`
+      // without either, the whole signal current is taken as common mode (cm_fraction defaults to 1 below)
+      : `${pct(a.cm.cm_fraction ?? 1)} of the signal current as common mode on ${cable}`)
+  }
+  if (a.dm) parts.push(`a ${a.dm.loop_area_mm2} mm² loop${a.dm.current_a !== undefined ? ` carrying ${a.dm.current_a} A` : ''}`)
+  return parts.length ? parts.join(', ') : null
+}
+
 export const spectrumTool = defineTool({
   name: 'emc.spectrum',
   description: 'EMI closed forms, no solver: trapezoidal pulse-train harmonics and envelope (Paul, Introduction to EMC, §3.2: 2Ad, -20 dB/dec from 1/(pi tau), -40 dB/dec from 1/(pi tr)); differential-mode loop radiation E = 1.316e-14 f² A I / r and common-mode wire radiation E = 6.283e-7 f L I / r (Ott, EMC Engineering 2009, §12.1-12.2; x2 with ground reflection; L capped at lambda/2), the cable common-mode current that meets a limit, all against CISPR 32 class A/B at the given distance. Far-field, maximum-over-angle estimates for pre-compliance, not predictions of a test result. Recorded (the release report lists it); returns run_id.',
@@ -69,9 +87,11 @@ export const spectrumTool = defineTool({
       const out = spectrum(a)
       const w = out.worst as Record<string, unknown> | undefined
       const margin = w ? Math.min(Number(w.dm_margin_db ?? Infinity), Number(w.cm_margin_db ?? Infinity)) : null
+      const assumed = spectrumAssumptions(a)
+      const note = `pre-compliance estimate${assumed ? `; ${assumed}` : ''}`
       const summary = w && margin !== null && Number.isFinite(margin)
-        ? `worst margin ${r(margin, 3)} dB at ${r(Number(w.f_hz) / 1e6, 4)} MHz against CISPR 32 class ${String(out.cispr_class)} (pre-compliance estimate)`
-        : 'estimate without a limit to compare (pre-compliance estimate)'
+        ? `worst margin ${r(margin, 3)} dB at ${r(Number(w.f_hz) / 1e6, 4)} MHz against CISPR 32 class ${String(out.cispr_class)} (${note})`
+        : `estimate without a limit to compare (${note})`
       rec.finish(out.pass === false ? 'fail' : 'pass', summary, { worst: w ?? null, pass: out.pass ?? null, cispr_class: out.cispr_class, distance_m: out.distance_m })
       return { ...out, run_id: rec.id }
     } catch (e) {
