@@ -119,13 +119,15 @@ export const requirementsTool = defineTool({
         if (!a.requirements?.length) throw new ToolError('add: give requirements')
         const added = a.requirements.map((r) => v.addRequirement(r))
         const unmarked = unmarkedNote(added, intentWords(v.db))
-        return { added: added.map((r) => r.id), requirements: added, ...(unmarked ? { unmarked_numbers: unmarked } : {}) }
+        const bare = withoutNumber(added)
+        return { added: added.map((r) => r.id), requirements: added, ...(unmarked ? { unmarked_numbers: unmarked } : {}), ...(bare ? { without_number: bare } : {}) }
       }
       if (a.action === 'update') {
         if (!a.id || !a.set) throw new ToolError('update: give id and set')
         const requirement = v.updateRequirement(a.id, a.set)
         const unmarked = a.set.acceptance !== undefined ? unmarkedNote([requirement], intentWords(v.db)) : null
-        return { requirement, ...(unmarked ? { unmarked_numbers: unmarked } : {}) }
+        const bare = withoutNumber([requirement])
+        return { requirement, ...(unmarked ? { unmarked_numbers: unmarked } : {}), ...(bare ? { without_number: bare } : {}) }
       }
       const list = v.requirements({ kind: a.kind, status: a.status })
       const notes = v.mergeNotes()
@@ -524,3 +526,14 @@ export const formalTool = defineTool({
 export const tools: AnyTool[] = [
   requirementsTool, planTool, runTool, coverageTool, reportTool, verilatorTool, cocotbTool, formalTool,
 ] as unknown as AnyTool[]
+
+/**
+ * Requirements whose acceptance criterion has no number: Requirements review refuses them ("one testable criterion
+ * each", src/api/skill-checks.ts), so the agent hears it when it adds them, not the person at review. An inspection
+ * counts something: "0 real-time clock chips", "exactly 1 USB-C opening" (test-esp32-run3 S3: REQ-026 "contain no
+ * real-time clock chip … (inspection)" reached review and failed there).
+ */
+export function withoutNumber(reqs: readonly { id: string; acceptance?: string | null }[]): { ids: string[]; note: string } | null {
+  const ids = reqs.filter((r) => !/\d/.test(r.acceptance ?? '')).map((r) => r.id)
+  return ids.length ? { ids, note: 'Each acceptance criterion needs a number with its unit or count, or Requirements review refuses it. For an inspection, count what is checked: "0 real-time clock chips", "exactly 1 USB-C opening". Update each one.' } : null
+}

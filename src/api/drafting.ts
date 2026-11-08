@@ -33,7 +33,7 @@ const NO_QUEUE: QueueFile = { queued: [], started: [] }
 export const REQUIREMENTS_FROM_INTENT = [
   'The intent was submitted in the Intent builder. Draft the candidate requirements from it for Requirements review.',
   'Read the intent statements with the people\'s decisions (design.intent list): use the accepted ones as accepted and the edited ones in their edited words; leave rejected ones out.',
-  'For each requirement: one testable acceptance criterion with a number and a unit, a kind, and its source (stated by a person, or inferred). Add them with verify.requirements and link each to the intent statements it comes from (design.intent link).',
+  'For each requirement: one testable acceptance criterion with a number and a unit, a kind, and its source (stated by a person, or inferred). An inspection has a number too: count what is checked ("0 real-time clock chips", "exactly 1 USB-C opening"). Add them with verify.requirements and link each to the intent statements it comes from (design.intent link). verify.requirements lists criteria without a number (without_number): give each one its number and update it.',
   'Mark every number you chose yourself in the acceptance criterion itself, right after it: "(inferred: where it comes from)", e.g. "within 5 s (inferred: a typical NTP exchange)" or "in 10 of 10 attempts (inferred: a repeatable reset)". That holds for test conditions too (a resolution, a distance, a count of tries, a sampling time). A number a person gave in the intent is not marked. A statement\'s person field says what a person stated themselves: its words when words is true, and the interface fields it lists (fields a person typed in an Edit). Those words and field values are the person\'s, not inferred: do not mark them, and give the requirement\'s source as stated by that person. verify.requirements lists the numbers left unmarked (unmarked_numbers): mark each one and update the requirement.',
   'Keep the requirements already in the record that still match the intent, under their ids, rather than adding duplicates. Leave every requirement proposed: people accept or strike them in Requirements review.',
   'Do not change the design files.',
@@ -43,10 +43,15 @@ export const REQUIREMENTS_FROM_INTENT = [
  * The request as earlier versions of trace sent it, so a drafting job started before it changed is still known as one
  * (draftingJobs).
  */
+// before inspections were told to count (test-esp32-run3 S3)
+const BEFORE_COUNTS = REQUIREMENTS_FROM_INTENT
+  .replace(' An inspection has a number too: count what is checked ("0 real-time clock chips", "exactly 1 USB-C opening").', '')
+  .replace(' verify.requirements lists criteria without a number (without_number): give each one its number and update it.', '')
 export const EARLIER_REQUESTS: readonly string[] = [
-  REQUIREMENTS_FROM_INTENT.split('\n').filter((l) => !l.startsWith('Mark every number you chose yourself')).join('\n'),
+  BEFORE_COUNTS.split('\n').filter((l) => !l.startsWith('Mark every number you chose yourself')).join('\n'),
   // before the person field (test-esp32 R22)
-  REQUIREMENTS_FROM_INTENT.replace(/ A statement's person field says .*? as stated by that person\./, ''),
+  BEFORE_COUNTS.replace(/ A statement's person field says .*? as stated by that person\./, ''),
+  BEFORE_COUNTS,
 ]
 
 /** How long after Submit (or a retry) a drafting job not yet in the job index is taken as starting, not as missing. */
