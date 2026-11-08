@@ -81,7 +81,7 @@ describe('statements noted in the Intent builder draft', () => {
     // the bar reads them: a vague word with no number is flagged, and the topics not noted yet are named
     expect(st('INT-a00006')).toMatchObject({ state: 'needs_number', flag: 'Needs a number' })
     const c = Object.fromEntries(v.checks.map((x) => [x.id, x]))
-    expect(c.vague).toMatchObject({ status: 'not_met', detail: expect.stringContaining('INT-a00006') })
+    expect(c.vague).toMatchObject({ status: 'not_met', detail: expect.stringContaining('“A small board”') })
     expect(c.answered).toMatchObject({ status: 'not_met', detail: '4 topics not answered or marked: Compliance, Build, Constraints, References.' })
     // an interface's fields are read from its words
     expect(c.interfaces?.status).toBe('met')

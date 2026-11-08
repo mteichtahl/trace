@@ -124,6 +124,18 @@ const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 const andList = (xs: readonly string[]): string => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`
 const ids = (xs: { id: string }[], n = 5): string => `${xs.slice(0, n).map((x) => x.id).join(', ')}${xs.length > n ? ` and ${xs.length - n} more` : ''}`
 
+/**
+ * Intent statements named by what they say, not by id: an interface by its type, any other statement by its opening
+ * words. "INT-c20e48 lacks rate" told the person nothing until they matched ids by hand (test-esp32-run3 S2).
+ */
+const shortText = (t: string, n = 48): string => (t.length > n ? `${t.slice(0, n).replace(/\s+\S*$/, '')}…` : t.replace(/\.$/, ''))
+const statementName = (s: { text: string; interface?: { type?: string | null } | null }): string => {
+  const type = s.interface?.type?.trim()
+  return type ? `the ${type.replace(/^(?:an?|the)\s+/i, '')}` : `“${shortText(s.text)}”`
+}
+const said = (xs: { text: string; interface?: { type?: string | null } | null }[], n = 4): string =>
+  `${xs.slice(0, n).map(statementName).join('; ')}${xs.length > n ? `; and ${xs.length - n} more` : ''}`
+
 /** A gate criterion of the journey, as a check: met, waived (an open waiver on it), or not met with its words. */
 function criterion(input: CheckInput, id: string, criterionId: string): CheckResult {
   const c = input.r?.criteria.find((x) => x.id === criterionId)
@@ -198,7 +210,7 @@ function withIntent(i: CheckInput, id: string, fn: (v: ReturnType<typeof intentV
 function flagged(i: CheckInput, id: string, flag: Parameters<ReturnType<typeof intentView>[number]['flags']['includes']>[0], words: string, note?: string): CheckResult {
   return withIntent(i, id, (v) => {
     const open = v.filter((s) => s.state !== 'rejected' && s.flags.includes(flag))
-    return open.length ? notMet(id, `${plural(open.length, 'statement')} ${words}: ${ids(open)}.`) : met(id, note)
+    return open.length ? notMet(id, `${plural(open.length, 'statement')} ${words}: ${said(open)}.`) : met(id, note)
   })
 }
 
@@ -247,7 +259,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const open = INTENT_TOPICS.filter((t) => !live.some((s) => s.topic === t))
     const undated = live.filter((s) => s.kind === 'unknown' && !s.decide_by)
     if (open.length) return notMet('answered', `${plural(open.length, 'topic')} not answered or marked: ${open.map((t) => TOPIC_NAMES[t]).join(', ')}.`)
-    return undated.length ? notMet('answered', `${plural(undated.length, 'unknown')} without the stage it is decided by: ${ids(undated)}.`) : met('answered')
+    return undated.length ? notMet('answered', `${plural(undated.length, 'unknown')} without the stage it is decided by: ${said(undated)}.`) : met('answered')
   }),
   'intent-builder/quantities': (i) => flagged(i, 'quantities', 'needs_number', 'without a number and unit'),
   'intent-builder/vague': (i) => flagged(i, 'vague', 'vague', 'with a vague word and no number'),
@@ -256,14 +268,14 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (!live.length) return notMet('interfaces', 'No interface is stated, nor is the topic marked "don\'t care".')
     const open = live.filter((s) => s.flags.includes('interface_incomplete'))
     // which field each one lacks, so the person knows what to add (test-esp32 #20)
-    const lacks = open.map((s) => `${s.id} lacks ${andList(missingFields(s.interface))}`)
+    const lacks = open.map((s) => `${statementName(s)} lacks ${andList(missingFields(s.interface))}`)
     return open.length ? notMet('interfaces', `${plural(open.length, 'interface')} not fully given: ${lacks.slice(0, 4).join('; ')}${open.length > 4 ? `; and ${open.length - 4} more` : ''}.`) : met('interfaces')
   }),
   'intent-builder/conflicts': (i) => flagged(i, 'conflicts', 'conflict', 'in conflict with another, neither given way'),
   'intent-builder/testable': (i) => flagged(i, 'testable', 'not_testable', 'that cannot become a testable requirement as worded', 'As the agents judged each statement.'),
   'intent-builder/owners': (i) => withIntent(i, 'owners', (v) => {
     const open = v.filter((s) => s.state !== 'rejected' && s.flags.includes('no_owner'))
-    return open.length ? notMet('owners', `${plural(open.length, 'open question')} without an owner: ${ids(open)}.`) : met('owners')
+    return open.length ? notMet('owners', `${plural(open.length, 'open question')} without an owner: ${said(open)}.`) : met('owners')
   }),
 
   // ---- Requirements review
@@ -309,7 +321,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const live = new Set(i.requirements.map((q) => q.id))
     const links = linksView(i.design!.rows).filter((l) => live.has(l.requirement))
     const open = v.filter((s) => s.state !== 'rejected' && s.kind === 'statement' && s.uncovered === null && !links.some((l) => l.intent === s.id))
-    return open.length ? notMet('covered', `${plural(open.length, 'intent statement')} no requirement covers, and not left out with a reason: ${ids(open)}.`) : met('covered')
+    return open.length ? notMet('covered', `${plural(open.length, 'intent statement')} no requirement covers, and not left out with a reason: ${said(open)}.`) : met('covered')
   }),
   'requirements-review/struck': (i) => {
     const bare = i.struck.filter((q) => !q.reason?.trim())
