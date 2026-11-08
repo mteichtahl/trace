@@ -6,7 +6,7 @@
 import { JOURNEYS, MEMBERS } from './fixtures'
 import { OPS_RUNS } from './fixtures-admin'
 import {
-  BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, PANEL_GATE, QUESTIONS, QUESTIONS_BY_ID, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
+  BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, OTHER_RUNS, PANEL_GATE, QUESTIONS, QUESTIONS_BY_ID, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
 } from './fixtures-s1'
 import { QUOTES, confirmQuote, correctQuote, payWithQuote, quoteCheck, recordQuote, withQuotes, withdrawQuote } from './quotes'
 import type { Gate } from '@/lib/types'
@@ -106,7 +106,7 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'run': {
       // the Evidence page lists runs from the admin fixtures (OPS_RUNS): a listed run must open too, so fall back to
       // its row when this file's fuller records do not have it
-      const r = RUNS.find((x) => x.id === a.id) ?? Object.values(OPS_RUNS).flat().find((x) => x.id === a.id)
+      const r = RUNS.find((x) => x.id === a.id) ?? OTHER_RUNS.find((x) => x.id === a.id) ?? Object.values(OPS_RUNS).flat().find((x) => x.id === a.id)
       return r ? ok(r) : fail(`no run ${String(a.id)}`)
     }
     case 'job':

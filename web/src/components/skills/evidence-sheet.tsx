@@ -97,6 +97,23 @@ export function RunEvidence({ repo, id, fallback }: { repo: string; id: string; 
   )
 }
 
+/**
+ * The pictures a cited run made (renders, plots it saved as images), or nothing: shown in a question that asks a
+ * person to look at them, so they are seen without opening the run (test-esp32-run2 R49: "approve the renders" showed
+ * only a chip). Silent while loading and when the run made none or cannot be read.
+ */
+export function RunPictures({ repo, id }: { repo: string; id: string }) {
+  const run = useAction('run', { repo, id })
+  const r = run.data as RunRecordView | undefined
+  const pictures = (r?.artifacts ?? []).filter((a) => a.mime?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(a.name))
+  if (!r || pictures.length === 0) return null
+  return (
+    <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label={`Pictures from ${r.summary ?? `run ${r.id.slice(0, 8)}`}`}>
+      {pictures.map((a) => <RunPicture key={a.name} file={{ repo, path: `runs/${r.id}/${a.name}`, run: { id: r.id, name: a.name }, size: a.size }} />)}
+    </ul>
+  )
+}
+
 function RunPicture({ file }: { file: FileRef }) {
   const url = useFileUrl(file)
   const name = file.run?.name ?? file.path

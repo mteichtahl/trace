@@ -39,3 +39,13 @@ describe('Question answer, the side panel', () => {
     expect(document.getElementById('qa-answer')!.className).toMatch(/field-sizing-fixed/)
   })
 })
+
+describe('Question answer, the runs it cites', () => {
+  it('shows the pictures of at most three cited runs, once each (test-esp32-run2 R49)', async () => {
+    const { questionRuns } = await import('./conversation-skills')
+    const run = (id: string) => ({ kind: 'run' as const, id, label: `run ${id}`, to: `/p/acme~board/runs/${id}` })
+    expect(questionRuns({ sources: [run('r1'), { kind: 'datasheet' as const, id: 'd', label: 'datasheet' }, run('r1'), run('r2')], searched: [run('r3'), run('r4')] }))
+      .toEqual([{ repo: 'acme/board', id: 'r1' }, { repo: 'acme/board', id: 'r2' }, { repo: 'acme/board', id: 'r3' }])
+    expect(questionRuns({})).toEqual([])
+  })
+})

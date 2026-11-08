@@ -127,6 +127,16 @@ const plot: PlotData = {
   runId: 'run_9d4e',
 }
 
+/** Runs of other projects, which `run` opens but the soil sensor's list leaves out. */
+export const OTHER_RUNS: RunRecordView[] = [
+  // the panel controller's case fit: its question shows the picture (test-esp32-run2 R49)
+  {
+    id: 'run_fit7', kind: 'mech.build', subject: 'hardware/panel.kicad_pcb', started: sec(20 * MIN), finished: sec(19 * MIN), status: 'fail',
+    summary: 'Case fit: 3 findings under the display window (Q1, R4, R5).', title: 'Case fit',
+    artifacts: [{ name: 'fit-top.svg', mime: 'image/svg+xml', size: 2400 }, { name: 'fit.json', mime: 'application/json', size: 1800 }],
+  },
+]
+
 export const RUNS: RunRecordView[] = [
   {
     id: 'run_7b02', kind: 'pcb.autoroute', subject: 'soil-sensor.kicad_pcb', started: sec(12 * MIN), finished: null, status: 'running', summary: null,
@@ -698,8 +708,8 @@ QUESTIONS['acme/panel-controller'] = {
     { id: 'waive', label: 'Waive the Q1, R4, R5 findings', detail: 'The module glass covers the window; the fit engine does not model it.', waiver: 'Records a waiver in your name: 3 findings, rated cosmetic, this revision only. Risk: A part under the window could touch the display glass. Checked instead: Bring up, when the lid is fitted.' },
     { id: 'model', label: 'Model the module under the lid in case.py', detail: 'The fit is measured, not waived; about an hour more of agent time.' },
   ],
-  sources: [{ kind: 'run', label: 'run_fit7', summary: 'Case fit: 3 findings.' }],
-  searched: [{ kind: 'run', label: 'run_fit7' }],
+  sources: [{ kind: 'run', id: 'run_fit7', label: 'run_fit7', summary: 'Case fit: 3 findings.', to: '/p/acme~panel-controller/runs/run_fit7' }],
+  searched: [{ kind: 'run', id: 'run_fit7', label: 'run_fit7', to: '/p/acme~panel-controller/runs/run_fit7' }],
 }
 
 /**
