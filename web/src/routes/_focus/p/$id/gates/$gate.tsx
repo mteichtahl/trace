@@ -48,7 +48,7 @@ import { gateSpendItems } from '@/components/project/gate-spend'
 import { ago, money } from '@/lib/format'
 import { useLiveStatus } from '@/lib/live'
 import { q, useCall, useJourney } from '@/lib/queries'
-import type { Criterion, Journey } from '@/lib/types'
+import type { Criterion, Journey, Waiver } from '@/lib/types'
 import type { GateMore } from '@/lib/types-s1'
 
 import { cn } from '@/lib/utils'
@@ -445,7 +445,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
         <Button variant="ghost" className="mt-1 w-full" onClick={() => setReturning(true)}>Return…</Button>
       </div>
 
-      <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={g.waivers.filter((w) => isWaiverRead(w, state)).map((w) => w.title)} onSigned={onDone} />
+      <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={g.waivers.filter((w) => isWaiverRead(w, state))} onSigned={onDone} />
       <ReturnDialog open={returning} onOpenChange={setReturning} repo={repo} gate={g} stage={from?.name} id={id} onReturned={onDone} />
       <SignOffDialog criterion={signingOff} onClose={() => setSigningOff(null)} pending={confirmCriterion.isPending}
         onSignOff={(note) => signingOff && confirmCriterion.mutate({ repo, criterion: signingOff.id, met: true, note }, {
@@ -487,8 +487,11 @@ function WaitingForAdmin({ names }: { names: string[] }) {
 
 // ------------------------------------------------------------------ the confirmation, with the re-check for spend gates
 
+/** "The pin plan check's …" inside a sentence: "the pin plan check's …" (a name like "JLCPCB …" stays). */
+const lowerFirst = (t: string): string => (/^[A-Z][a-z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t)
+
 function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknowledged, onSigned }: {
-  open: boolean; onOpenChange: (o: boolean) => void; journey: Journey; gate: GateMore; to?: string; notes: string; acknowledged: string[]; onSigned: () => void
+  open: boolean; onOpenChange: (o: boolean) => void; journey: Journey; gate: GateMore; to?: string; notes: string; acknowledged: Pick<Waiver, 'id' | 'title'>[]; onSigned: () => void
 }) {
   const { user } = useAuth()
   const sign = useCall('gate.sign', (a) => [['journey.get', a.repo], ['inbox']])
@@ -503,7 +506,7 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
 
   const doSign = () =>
     // the signer's time zone: a release's renders carry the day it was cut, as the signer saw it (docs/revision-renders.md)
-    sign.mutate({ repo: j.repo, gate: g.id, notes: notes || undefined, acknowledge: acknowledged, time_zone: browserTimeZone() }, {
+    sign.mutate({ repo: j.repo, gate: g.id, notes: notes || undefined, acknowledge: acknowledged.map((w) => w.id), time_zone: browserTimeZone() }, {
       onSuccess: (r) => {
         onOpenChange(false)
         toast(`${cap(g.name.replace(/^the /, ''))} signed.`, { description: r.started?.length ? `Started: ${r.started.join('; ')}` : `${to ?? 'The next stage'} starts now.` })
@@ -550,8 +553,9 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
           <DialogTitle>{label}?</DialogTitle>
           <DialogDescription>
             You are signing {g.name} for {j.name} {j.revision}. {to ? `${to} work starts as soon as you sign.` : 'The next stage starts as soon as you sign.'}
-            {/* the waivers by what they are on, not their ids (test-esp32-run2 R34: "You acknowledged 31b94f91770c4677") */}
-            {acknowledged.length > 0 && ` You acknowledged ${acknowledged.length === 1 ? 'the waiver of' : `${acknowledged.length} waivers:`} ${acknowledged.join('; ')}.`}
+            {/* the waivers by what they are on, not their ids (test-esp32-run2 R34: "You acknowledged 31b94f91770c4677");
+                gate.sign still gets their ids (R46: sending the titles refused the signing, "Too big … <=80 characters") */}
+            {acknowledged.length > 0 && ` You acknowledged ${acknowledged.length === 1 ? 'the waiver of' : `${acknowledged.length} waivers:`} ${acknowledged.map((w) => lowerFirst(w.title)).join('; ')}.`}
           </DialogDescription>
         </DialogHeader>
         {reauth && (
