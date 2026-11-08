@@ -49,6 +49,27 @@ describe('checkFab', () => {
     expect(c.holes.files).toEqual({ plated: 3, unplated: 1 })
   })
 
+  it('finds the copper Gerbers of a board that renamed its copper layers (test-esp32-run2)', () => {
+    const d = mkdtempSync(join(tmpdir(), 'fabchk-'))
+    const names = ['b-top_layer.gtl', 'b-bottom_layer.gbl', 'b-Edge_Cuts.gm1']
+    for (const n of names) writeFileSync(join(d, n), 'G04*\nM02*\n')
+    writeFileSync(join(d, 'b-job.gbrjob'), JSON.stringify({ FilesAttributes: names.map((Path) => ({ Path })) }))
+    writeFileSync(join(d, 'b-PTH.drl'), pth)
+    writeFileSync(join(d, 'b-NPTH.drl'), npth)
+    expect(checkFab(d, 'b', EXPLICIT, board).problems).toEqual([])
+    // .gbr names: the job file's FileFunction, or the file's own X2 attribute, says which are copper
+    const g = mkdtempSync(join(tmpdir(), 'fabchk-'))
+    writeFileSync(join(g, 'b-top_layer.gbr'), '%TF.FileFunction,Copper,L1,Top*%\nM02*\n')
+    writeFileSync(join(g, 'b-bottom_layer.gbr'), 'G04*\nM02*\n')
+    writeFileSync(join(g, 'b-Edge_Cuts.gbr'), '%TF.FileFunction,Profile,NP*%\nM02*\n')
+    writeFileSync(join(g, 'b-job.gbrjob'), JSON.stringify({ FilesAttributes: [{ Path: 'b-top_layer.gbr' }, { Path: 'b-bottom_layer.gbr', FileFunction: 'Copper,L2,Bot' }, { Path: 'b-Edge_Cuts.gbr', FileFunction: 'Profile,NP' }] }))
+    writeFileSync(join(g, 'b-PTH.drl'), pth)
+    writeFileSync(join(g, 'b-NPTH.drl'), npth)
+    const c = checkFab(g, 'b', { ...EXPLICIT, protel_ext: false }, board)
+    expect(c.problems).toEqual([])
+    expect(checkFab(g, 'b', EXPLICIT, board).problems.join(' ')).toMatch(/Protel extensions were asked for, but kicad-cli wrote b-bottom_layer.gbr, b-top_layer.gbr/)
+  })
+
   it('fails .gbr names when Protel extensions were asked for', () => {
     const c = checkFab(pkg({ protel: false, drills: { 'b-PTH.drl': pth, 'b-NPTH.drl': npth } }), 'b', EXPLICIT, board)
     expect(c.problems.join(' ')).toMatch(/Protel extensions were asked for/)
