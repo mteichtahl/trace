@@ -60,6 +60,13 @@ describe('a waiver says what it is on in plain words (#155)', () => {
     expect(summary).not.toMatch(/urn:|%2F/)
     expect(journeyView(rec(), ADMIN).waivers[0]).toMatchObject({ about: 'the finding of “The board fits its enclosure, or each clash is waived” on requirement REQ-8fc402', criterion: 'layout.fit', severity: 'cosmetic' })
   })
+
+  it('the journey view\'s log says datasheets and criteria in words (test-esp32-run2 R55)', () => {
+    addWaiver(db, { target: { kind: 'finding', id: FIT }, reason: 'Five layout.fit findings stay open; the module is 2.37 mm thick (ea9a571f p2).', risk: 'A part could touch the glass.', severity: 'cosmetic', caught_where: null, scope: 'this revision only' }, SIGNER)
+    const said = journeyView(rec(), ADMIN).decisions.find((d) => d.kind === 'waiver.added')?.summary ?? ''
+    expect(said).toMatch(/\(the datasheet, page 2\)/)
+    expect(said).not.toMatch(/ea9a571f|layout\.fit/)
+  })
 })
 
 describe('a waiver counts for its own criterion only (#156)', () => {
