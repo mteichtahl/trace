@@ -35,4 +35,13 @@ describe('what a shape checked', () => {
     const scope = shapeScope('layout.fit', quads('<urn:f> a trace:FitFinding . <urn:r1> a trace:Requirement . <urn:r2> a trace:Requirement . <urn:c> a trace:FitCheck .'))
     expect(shapeSummary('layout.fit', scope, 0, 0)).toBe('layout.fit: checked 1 fit finding, 0 rule results, 1 fit check and 2 requirements: every one keeps to its shape')
   })
+
+  it('says when the records come from several checks: 90 lines of six 15-line parts checks are not a 90-line parts list (test-esp32-run2 R59)', () => {
+    const lines = Array.from({ length: 6 }, (_, r) => Array.from({ length: 15 }, (_, l) => `<urn:l${r}-${l}> a trace:PartsListLine ; trace:ofRun <urn:run${r}> .`).join(' ')).join(' ')
+    const scope = shapeScope('signoff.bom', quads(lines))
+    expect(scope.find((s) => s.kind === 'PartsListLine')).toMatchObject({ count: 90, runs: { count: 6, each: 15 } })
+    expect(shapeSummary('signoff.bom', scope.filter((s) => s.kind === 'PartsListLine'), 0, 0)).toBe('signoff.bom: checked 90 parts list lines from 6 checks (15 each): every one keeps to its shape')
+    const one = shapeScope('signoff.bom', quads('<urn:a> a trace:PartsListLine ; trace:ofRun <urn:r> . <urn:b> a trace:PartsListLine ; trace:ofRun <urn:r> .')).find((s) => s.kind === 'PartsListLine')
+    expect(one).toEqual({ kind: 'PartsListLine', words: 'parts list line', count: 2 })
+  })
 })

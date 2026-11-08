@@ -78,9 +78,15 @@ const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
 const SUBCLASS = 'http://www.w3.org/2000/01/rdf-schema#subClassOf'
 const TARGET_CLASS = 'http://www.w3.org/ns/shacl#targetClass'
 const TRACE = 'https://trace-eda.com/ns/trace#'
+const OF_RUN = `${TRACE}ofRun`
 
 /** What a shape checked: each kind of record it targets (the project itself left out) and how many the graph has. */
-export interface ShapeScope { kind: string; words: string; count: number }
+export interface ShapeScope {
+  kind: string; words: string; count: number
+  /** when the records come from several runs (a parts list line belongs to one parts check): how many runs, and how
+   * many records each has when every run has the same number (null otherwise) */
+  runs?: { count: number; each: number | null }
+}
 
 /** "KeyPart" → "key part" */
 const classWords = (iri: string): string => iri.replace(TRACE, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
@@ -96,7 +102,9 @@ export function shapeScope(criterion: string, quads: Quads, shapes = readFileSyn
   const classes = [...new Set(new Parser().parse(shapes).filter((q) => q.predicate.value === TARGET_CLASS).map((q) => q.object.value))].filter((c) => c !== `${TRACE}Journey`)
   const sub = new Map<string, string[]>()
   const types = new Map<string, Set<string>>()
+  const runOf = new Map<string, string>()
   for (const q of quads) {
+    if (q.predicate.value === OF_RUN) runOf.set(q.subject.value, q.object.value)
     if (q.predicate.value === SUBCLASS) sub.set(q.object.value, [...(sub.get(q.object.value) ?? []), q.subject.value])
     else if (q.predicate.value === RDF_TYPE) { const s = types.get(q.object.value) ?? new Set<string>(); s.add(q.subject.value); types.set(q.object.value, s) }
   }
@@ -105,14 +113,19 @@ export function shapeScope(criterion: string, quads: Quads, shapes = readFileSyn
     const nodes = new Set<string>()
     const walk = (k: string): void => { if (seen.has(k)) return; seen.add(k); for (const n of types.get(k) ?? []) nodes.add(n); for (const s of sub.get(k) ?? []) walk(s) }
     walk(c)
-    return { kind: c.replace(TRACE, ''), words: classWords(c), count: nodes.size }
+    const per = new Map<string, number>()
+    for (const n of nodes) { const r = runOf.get(n); if (r) per.set(r, (per.get(r) ?? 0) + 1) }
+    const sizes = new Set(per.values())
+    return { kind: c.replace(TRACE, ''), words: classWords(c), count: nodes.size, ...(per.size > 1 ? { runs: { count: per.size, each: sizes.size === 1 ? [...sizes][0] as number : null } } : {}) }
   })
 }
 
 /** "7 key parts and 3 fit findings", or "the project" when the shape looks at the project only. */
 export function scopeWords(scope: readonly ShapeScope[]): string {
   if (!scope.length) return 'the project'
-  const parts = scope.map((s) => plural(s.count, s.words))
+  // a count over several runs says so: "90 parts list lines" over six parts checks of 15 lines read as a 90-line parts
+  // list (test-esp32-run2 R59)
+  const parts = scope.map((s) => `${plural(s.count, s.words)}${s.runs ? ` from ${s.runs.count} checks${s.runs.each !== null ? ` (${s.runs.each} each)` : ''}` : ''}`)
   return parts.length === 1 ? parts[0] as string : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1) as string}`
 }
 
