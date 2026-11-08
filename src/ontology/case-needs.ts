@@ -28,7 +28,8 @@ const OFF_BOARD = /\b(?:headers?|connectors?|sockets?|cables?|wires?|wired|leads
  *  ("over a 60 s window"): the window must be through, in or of the case. */
 const WINDOW: readonly RegExp[] = [
   /\b(?:visible|seen|readable|viewable|viewed|read|shown|shows?)\s+through\s+(?:a|an|the|its)\s+(?:[a-z-]+\s+)?(?:window|opening|cut-?out|aperture|lid|case|enclosure|housing|front|top|cover)\b/i,
-  /\b(?:window|cut-?out|aperture)\s+(?:in|on|of|for|through)\s+(?:a|an|the|its)\s+(?:[a-z-]+\s+)?(?:case|lid|enclosure|housing|front|top|cover|display|screen|oled|lcd)\b/i,
+  // the part may carry its size: "a window for the 0.96 inch display"
+  /\b(?:window|cut-?out|aperture)\s+(?:in|on|of|for|through)\s+(?:a|an|the|its)\s+(?:[\w.-]+\s+){0,3}?(?:case|lid|enclosure|housing|front|top|cover|display|screen|oled|lcd)\b/i,
   /\b(?:case|lid|enclosure|housing|cover)(?:'s)?\s+(?:display\s+)?(?:window|cut-?out|aperture)\b/i,
   /\b(?:display|screen|viewing)\s+window\b/i,
 ]
@@ -40,6 +41,10 @@ export interface CaseNeed {
   offBoard: string | null
 }
 
+/** Words of money: a sentence about what a budget covers ("case printing and the OLED module are outside this budget",
+ *  run 2's REQ-1db18b) names a part without putting it in the case. */
+const COST = /\b(?:budget|costs?|price[sd]?|USD|US\$|AUD|EUR|GBP)\b|\$\s?\d/i
+
 /** The sentences of `text`, so a part and the word that puts it off the board are read together. */
 const sentences = (text: string): string[] => text.split(/(?<=[.;!?])\s+|\n+/).filter(Boolean)
 
@@ -49,6 +54,7 @@ export function caseNeed(...texts: (string | null | undefined)[]): CaseNeed {
   const window = all.some((t) => WINDOW.some((w) => w.test(t)))
   let offBoard: string | null = null
   for (const s of all.flatMap(sentences)) {
+    if (COST.test(s)) continue
     const part = PARTS.find(([p]) => p.test(s))
     if (!part) continue
     // a display seen through a window sits in the case even when nothing says how it is wired
