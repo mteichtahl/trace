@@ -64,10 +64,23 @@ describe.skipIf(!ok)('mech.options on the sample board', () => {
     expect(r.asked.question_id).toMatch(/^aq/)
     const f = (await new AgentFactsStore(projects, 'acme/cased').read((db) => loadAgentFacts(db))).result
     const q = f.questions.find((x) => x.id === r.asked.question_id)!
-    expect(q.text).toMatch(/^Which case should trace build for hardware\/trace-sample\.kicad_pcb\?/)
+    expect(q.text).toMatch(/^Which case should trace build for the trace-sample board\? \d+ designs fit/)
     expect(q.options.length).toBe(Math.min(6, r.offered.length))
     expect(q.options.filter((o) => o.recommended).map((o) => o.label)).toEqual([r.offered[0].label])
     expect(q.options[0]).toMatchObject({ id: 'case-1', recommended: true })
     expect(q.sources).toEqual([expect.objectContaining({ kind: 'run', ref: r.run_id })])
   }, 60_000)
+})
+
+describe('the case question in words (test-esp32-run2 R52)', () => {
+  it('names the board, counts the designs, and gives each left-out design its reason once', async () => {
+    const { caseQuestionText } = await import('../../../src/tools/mech/tools.js')
+    const why = 'U1 sits where a guide holds the board\'s long edge'
+    expect(caseQuestionText('hardware/wifi-desk-clock/wifi-desk-clock.kicad_pcb', 3, [
+      { label: 'Extruded box with end plates, MJF PA12-HP at JLC3DP', why },
+      { label: 'Extruded box with end plates, SLA Ledo6060 at JLC3DP', why },
+      { label: 'Extruded box with end plates, CNC aluminium 6061 at JLCCNC', why },
+    ])).toBe('Which case should trace build for the wifi-desk-clock board? 3 designs fit. Left out: Extruded box with end plates (MJF PA12-HP, SLA Ledo6060, CNC aluminium 6061), because U1 sits where a guide holds the board\'s long edge.')
+    expect(caseQuestionText('a/b.kicad_pcb', 1, [])).toBe('Which case should trace build for the b board? One design fits.')
+  })
 })
