@@ -48,10 +48,18 @@ export interface CostLimit {
   currency: string
   /** where it comes from, in words */
   source: string
+  /**
+   * What the limit leaves out of the order, as its requirement or a person's answer about it says ("case printing and
+   * the OLED module are outside this budget", "not shipping"): compared without those lines (test-esp32-run2 R35).
+   */
+  excludes?: ExcludedLine[]
 }
+export type ExcludedLine = 'shipping' | 'case'
 export interface LimitCheck extends CostLimit {
   verdict: 'under' | 'at_risk' | 'over' | 'not_compared'
   text: string
+  /** what was compared with the limit, when it is not the order's whole range or the per-board range (excludes) */
+  compared?: { low: number; high: number }
 }
 export interface EstimateLine { key: 'parts' | 'boards' | 'assembly' | 'case' | 'shipping'; what: string; low: number; high: number; source: string }
 
@@ -160,13 +168,17 @@ export function orderEstimate(i: EstimateInput): OrderEstimate {
   const perBoard = { low: cents(board.reduce((n, l) => n + l.low, 0) / q), high: cents(board.reduce((n, l) => n + l.high, 0) / q) }
 
   const limits = i.limits.map((l): LimitCheck => {
-    const r: Range = l.kind === 'total' ? [low, high] : [perBoard.low, perBoard.high]
+    // a total that leaves lines out is compared without them; per board never holds the case or shipping
+    const out = l.kind === 'total' ? (l.excludes ?? []).filter((k) => lines.some((x) => x.key === k)) : []
+    const kept = lines.filter((x) => !out.includes(x.key as ExcludedLine))
+    const r: Range = l.kind === 'total' ? (out.length ? [cents(kept.reduce((n, x) => n + x.low, 0)), cents(kept.reduce((n, x) => n + x.high, 0))] : [low, high]) : [perBoard.low, perBoard.high]
     const name = l.requirement ?? l.source
-    const what = l.kind === 'total' ? 'the order' : 'per board'
+    const what = l.kind === 'total' ? (out.length ? `the order without ${out.map((k) => (k === 'case' ? 'the case' : k)).join(' or ')}` : 'the order') : 'per board'
+    const compared = out.length ? { compared: { low: r[0], high: r[1] } } : {}
     if (l.currency !== 'USD') return { ...l, verdict: 'not_compared', text: `${name} (at most ${l.amount} ${l.currency}) is not compared: the estimate is in US$.` }
-    if (r[1] <= l.amount) return { ...l, verdict: 'under', text: `${name}: ${what} ${range(r)}, under ${usd(l.amount)}.` }
-    if (r[0] > l.amount) return { ...l, verdict: 'over', text: `${name}: ${what} ${range(r)}, over ${usd(l.amount)} by ${range([r[0] - l.amount, r[1] - l.amount])}.` }
-    return { ...l, verdict: 'at_risk', text: `${name}: ${what} ${range(r)}, at risk against ${usd(l.amount)} (up to ${usd(r[1] - l.amount)} over).` }
+    if (r[1] <= l.amount) return { ...l, ...compared, verdict: 'under', text: `${name}: ${what} ${range(r)}, under ${usd(l.amount)}.` }
+    if (r[0] > l.amount) return { ...l, ...compared, verdict: 'over', text: `${name}: ${what} ${range(r)}, over ${usd(l.amount)} by ${range([r[0] - l.amount, r[1] - l.amount])}.` }
+    return { ...l, ...compared, verdict: 'at_risk', text: `${name}: ${what} ${range(r)}, at risk against ${usd(l.amount)} (up to ${usd(r[1] - l.amount)} over).` }
   })
   const order = ['under', 'at_risk', 'over'] as const
   const compared = limits.filter((l) => l.verdict !== 'not_compared')
@@ -193,6 +205,23 @@ function currencyOf(sym: string): string {
   return 'USD'
 }
 
+const LEAVES_OUT = String.raw`(?:not|excludes?|excluding|without|except|outside|apart from|other than|before)`
+const LINE_WORDS: Readonly<Record<ExcludedLine, string>> = { shipping: String.raw`(?:shipping|postage|delivery|freight)`, case: String.raw`(?:case|enclosure|housing)(?:\s+printing)?` }
+
+/**
+ * What words about a cost limit leave out of it: "not shipping", "excluding shipping", "case printing and the OLED
+ * module are outside this budget". Pure.
+ */
+export function excludedLines(text: string): ExcludedLine[] {
+  const out: ExcludedLine[] = []
+  for (const [k, w] of Object.entries(LINE_WORDS) as [ExcludedLine, string][]) {
+    const before = new RegExp(String.raw`\b${LEAVES_OUT}\b[^.;:]{0,40}?\b${w}\b`, 'i')
+    const after = new RegExp(String.raw`\b${w}\b[^.;:]{0,60}?\b(?:(?:is|are)\s+(?:outside|excluded|not (?:included|covered|counted))|(?:is|are)\s+not\s+in)\b`, 'i')
+    if (before.test(text) || after.test(text)) out.push(k)
+  }
+  return out
+}
+
 /** A requirement's cost limit, when it states one ("shall cost at most 275 USD"). Pure. */
 export function costLimitOf(r: { id: string; text: string; tags?: readonly string[] }): CostLimit | null {
   const about = (r.tags ?? []).some((t) => t.toLowerCase() === 'cost') || ABOUT_COST.test(r.text)
@@ -201,7 +230,8 @@ export function costLimitOf(r: { id: string; text: string; tags?: readonly strin
   if (!m) return null
   const amount = Number(m[2] ?? m[3])
   if (!Number.isFinite(amount)) return null
-  return { requirement: r.id, kind: PER_BOARD.test(r.text) ? 'per_board' : 'total', amount, currency: currencyOf(m[1] ?? m[4] ?? 'USD'), source: `${r.id}: ${r.text}` }
+  const excludes = excludedLines(r.text)
+  return { requirement: r.id, kind: PER_BOARD.test(r.text) ? 'per_board' : 'total', amount, currency: currencyOf(m[1] ?? m[4] ?? 'USD'), source: `${r.id}: ${r.text}`, ...(excludes.length ? { excludes } : {}) }
 }
 
 // ------------------------------------------------------------------ from the record
@@ -225,6 +255,16 @@ export function costLimits(db: DatabaseSync): CostLimit[] {
     const l = costLimitOf({ id: String(r.id), text: String(r.text ?? ''), tags: Array.isArray(tags) ? tags.map(String) : [] })
     return l ? [l] : []
   })
+  // a person's answer about a cost requirement ("USD 100 covers PCB, assembly, parts …, not shipping") says what it
+  // leaves out as much as its own words do (test-esp32-run2 R35)
+  const answers = hasTable(db, 'questions')
+    ? (db.prepare("SELECT text, answer, answer_reason FROM questions WHERE answered_at IS NOT NULL AND answer IS NOT NULL").all() as Record<string, unknown>[])
+    : []
+  for (const l of fromReqs) {
+    const said = answers.filter((q) => String(q.text ?? '').includes(l.requirement as string)).flatMap((q) => excludedLines(`${String(q.answer ?? '')}. ${String(q.answer_reason ?? '')}`))
+    const all = [...new Set([...(l.excludes ?? []), ...said])]
+    if (all.length) l.excludes = all
+  }
   const build = buildOf(db)
   const out = [...fromReqs]
   if (build && !out.some((l) => l.kind === 'total') && build.budget !== null) out.push({ requirement: null, kind: 'total', amount: build.budget, currency: build.currency, source: 'the build plan\'s budget' })

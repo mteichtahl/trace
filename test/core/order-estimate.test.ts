@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { costLimitOf, orderEstimate, orderEstimateFrom } from '../../src/core/order-estimate.js'
+import { costLimitOf, costLimits, excludedLines, orderEstimate, orderEstimateFrom } from '../../src/core/order-estimate.js'
 
 const parts = (o: Partial<Parameters<typeof orderEstimate>[0]['parts']> = {}) => ({
   run: 'p1', at: 1_793_850_000, boards: 10, total: 47.12, currency: 'USD',
@@ -86,5 +86,31 @@ describe('from the record', () => {
     const db = new DatabaseSync(':memory:')
     db.exec('CREATE TABLE runs (id TEXT, kind TEXT, status TEXT, started REAL, result TEXT)')
     expect(orderEstimateFrom(db)).toBeNull()
+  })
+})
+
+describe('what a cost limit leaves out (test-esp32-run2 R35)', () => {
+  it('reads it from the requirement and from an answer about it', () => {
+    expect(excludedLines('USD 100 covers the boards and assembly for all 10 units; case printing and the OLED module are outside this budget.')).toEqual(['case'])
+    expect(excludedLines('USD 100 covers PCB, assembly, parts and extended-part fees, not shipping; keep option A.')).toEqual(['shipping'])
+    expect(excludedLines('At most 100 USD before shipping.')).toEqual(['shipping'])
+    expect(excludedLines('The whole project shall cost at most 100 USD.')).toEqual([])
+    const db = new DatabaseSync(':memory:')
+    db.exec(`CREATE TABLE requirements (id TEXT, text TEXT, tags TEXT, status TEXT);
+      CREATE TABLE questions (text TEXT, answer TEXT, answer_reason TEXT, answered_at REAL);`)
+    db.prepare('INSERT INTO requirements VALUES (?,?,?,?)').run('REQ-1db18b', 'USD 100 covers the boards and assembly for all 10 units; case printing and the OLED module are outside this budget.', '["cost"]', 'accepted')
+    db.prepare('INSERT INTO questions VALUES (?,?,?,?)').run('…at risk against the USD 100 budget (REQ-1db18b). Without shipping it is USD 60.54 to 89.77. Does the USD 100 cover shipping?', 'USD 100 covers PCB, assembly, parts and extended-part fees, not shipping; keep option A.', null, 5)
+    expect(costLimits(db)).toMatchObject([{ requirement: 'REQ-1db18b', amount: 100, excludes: ['case', 'shipping'] }])
+  })
+
+  it('compares the order without those lines, and says so', () => {
+    const limits = [{ requirement: 'REQ-1db18b', kind: 'total' as const, amount: 100, currency: 'USD', source: 'REQ-1db18b', excludes: ['shipping' as const] }]
+    const e = orderEstimate({ quantity: 10, parts: parts({ total: 30 }), board: null, case: null, limits })
+    const ship = e.lines.find((l) => l.key === 'shipping')!
+    const l = e.limits[0]!
+    expect(l.compared).toEqual({ low: Math.round((e.low - ship.low) * 100) / 100, high: Math.round((e.high - ship.high) * 100) / 100 })
+    expect(l.text).toMatch(/^REQ-1db18b: the order without shipping US\$/)
+    // a limit with nothing to leave out is compared as before
+    expect(orderEstimate({ quantity: 10, parts: parts({ total: 30 }), board: null, case: null, limits: [{ ...limits[0]!, excludes: ['case'] }] }).limits[0]!.compared).toBeUndefined()
   })
 })
