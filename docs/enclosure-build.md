@@ -315,7 +315,10 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
 - `src/agents/impl/index.ts`: the mech tools, workflow lines (init when the project has no case and the intent asks for
   an enclosure; build; read clashes; delegate script changes; shape.check layout.fit after each build), keywords
   (enclosure, case, housing, fit check), escalation (a clash that needs the board outline or a part moved).
-- `tracectl check`: with `mechanical/case.json` present, runs `mech.build` and fails on a failing fit; when build123d
+- `tracectl check`: with `mechanical/case.json` present, runs `mech.build` and fails on a failing fit, unless every
+  problem is waived: an open journey waiver on it (where the check can read the journey), or its key listed in
+  case.json's `waived` (`{"gap/C6/above": "what was waived, by whom"}`, set with mech.settings `waived` once a person
+  has waived it), since CI cannot read the journey. The layout gate counts only the journey's waivers; when build123d
   is not importable it says so and skips (not a failure); with `TRACE_CHECK_MECH=0` it skips with
   `TRACE_CHECK_MECH_WHY` (or that variable) as the reason. `templates/build/kicad.yml` installs build123d when the
   repository has `mechanical/case.json`, and sets `TRACE_CHECK_MECH=0` for a pull request from a fork (see Trust).

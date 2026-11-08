@@ -111,15 +111,21 @@ export function caseView(db: DatabaseSync, rec: JourneyRecord | null, o: { insta
 /** A finding's record without the installation and project that name it: ":case-finding:gap%3AC6%3Aabove". */
 const recordTail = (id: string): string => { const i = id.search(/:case-(?:finding|rule):/); return i < 0 ? id : id.slice(i) }
 
+/** A problem's key as the build and case.json's `waived` name it: "gap/C6/above", or a rule's name. */
+export const caseProblemKey = (id: string): string => decodeURIComponent(recordTail(id).replace(/^:case-(?:finding|rule):/, ''))
+
 /**
- * The newest build's problems that no open waiver covers, for `tracectl check` (test-esp32-run2 R54: a pull request's
+ * The newest build's problems that are not waived, for `tracectl check` (test-esp32-run2 R54: a pull request's
  * required check failed on a C6 gap a person had been asked to waive, so the change could not pass while the waiver
- * was the agreed answer). A waiver is matched by the problem's record, not its whole IRI: the check runs under the
- * repository's name, the app under its installation's. null when the project has no case build.
+ * was the agreed answer). Waived is an open journey waiver on the problem, matched by its record (the check names the
+ * project by its repository, the app by its installation), or the problem's key listed in case.json's `waived`
+ * (`listed`): in CI the check cannot read the journey, which lives in the installation's store. The layout gate
+ * counts only the journey's waivers. null when the project has no case build.
  */
-export function unwaivedCaseFindings(db: DatabaseSync, rec: JourneyRecord | null): { all: number; open: CaseFinding[] } | null {
+export function unwaivedCaseFindings(db: DatabaseSync, rec: JourneyRecord | null, listed: Iterable<string> = []): { all: number; open: CaseFinding[] } | null {
   const v = caseView(db, null, { installation: 'check', project: 'check' })
   if (!v) return null
-  const waived = new Set((rec?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding' && w.target.startsWith('layout.fit@')).map((w) => recordTail(w.target)))
-  return { all: v.findings.length, open: v.findings.filter((f) => !waived.has(recordTail(f.id))) }
+  const waived = new Set((rec?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding' && w.target.startsWith('layout.fit@')).map((w) => caseProblemKey(w.target)))
+  for (const k of listed) waived.add(k)
+  return { all: v.findings.length, open: v.findings.filter((f) => !waived.has(caseProblemKey(f.id))) }
 }

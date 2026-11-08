@@ -71,6 +71,10 @@ export const CaseSettingsSchema = z.object({
   openings: OpeningsSchema,
   quantity: z.number().int().min(1).max(100_000).default(5),
   reasons: z.record(z.string(), z.string()).default({}),
+  // problems of the fit a person waived in the journey, by key ("gap/C6/above", a rule's name) -> the waiver it stands
+  // on, so `tracectl check` (which cannot read the journey in CI) passes a build whose every problem is listed. The
+  // layout gate does not read this: it counts only the journey's waivers (test-esp32-run2 R54)
+  waived: z.record(z.string(), z.string().min(3)).optional(),
 }).loose().superRefine((s, ctx) => {
   if (s.source === 'file' && !s.file) ctx.addIssue({ code: 'custom', path: ['file'], message: 'source "file" names the handed-in STEP in `file`' })
 })
@@ -134,6 +138,18 @@ export function withValue(s: CaseSettings, path: string, value: unknown, reason?
   const r = CaseSettingsSchema.safeParse(next)
   if (!r.success) throw new ToolError(`mech.settings: ${r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)
   return r.data
+}
+
+/** The settings with a fit problem listed as waived in the journey (why null: taken off the list). */
+export function withWaived(s: CaseSettings, problem: string, why: string | null): CaseSettings {
+  const waived = { ...(s.waived ?? {}) }
+  if (why === null) delete waived[problem]
+  else {
+    if (why.trim().length < 3) throw new ToolError(`mech.settings: say which waiver ${problem} stands on`)
+    waived[problem] = why.trim()
+  }
+  const { waived: _was, ...rest } = s
+  return Object.keys(waived).length ? { ...rest, waived } : rest
 }
 
 /** The settings with a per-part clearance (mm null: removed). The reason is kept with the clearance and in `reasons`. */

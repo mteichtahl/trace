@@ -41,7 +41,7 @@ import { CASE_VIEW, caseFactHashes, caseViewHashOf } from './case-facts.js'
 import { normalisedHash } from '../../core/normalise.js'
 import {
   CASE_JSON, CASE_PY, type CaseSettings, type CaseTemplate, MECH_DIR, OUT_DIR, SETTABLE, TEMPLATE_IDS, defaults, describe, missingReasons,
-  needSettings, readSettings, withClearance, withValue, writeSettings,
+  needSettings, readSettings, withClearance, withValue, withWaived, writeSettings,
 } from './settings.js'
 
 /** The case script mech.init writes for each template (the engine's python/tracebridge/mech/templates/<id>.py). */
@@ -200,10 +200,11 @@ const Value = z.union([z.number(), z.string(), z.boolean(), z.array(z.string())]
 
 export const settingsTool = defineTool({
   name: 'mech.settings',
-  description: `The case's settings (${CASE_JSON}) with each value's recommendation and reason. set: [{path, value, reason}] changes values (paths: ${SETTABLE.join(', ')}); clearance: [{ref, mm, reason}] gives one part the gap it needs (a mating face, a heatsink; mm null removes it). A value away from its recommendation is refused without a reason; set back to the recommendation, its reason goes. Changes are written to ${CASE_JSON}; run mech.build after. Recorded; returns run_id.`,
+  description: `The case's settings (${CASE_JSON}) with each value's recommendation and reason. set: [{path, value, reason}] changes values (paths: ${SETTABLE.join(', ')}); clearance: [{ref, mm, reason}] gives one part the gap it needs (a mating face, a heatsink; mm null removes it). waived: [{problem, waiver}] lists a fit problem a person has waived in the journey (its key, as the build names it: "gap/C6/above", "clash/J1/lid", a rule's name; waiver: what was waived and by whom; null takes it off), so tracectl check, which cannot read the journey in CI, passes the pull request; the layout gate still counts only the journey's waivers. A value away from its recommendation is refused without a reason; set back to the recommendation, its reason goes. Changes are written to ${CASE_JSON}; run mech.build after. Recorded; returns run_id.`,
   input: z.object({
     set: z.array(z.object({ path: z.string(), value: Value, reason: z.string().optional() }).strict()).default([]),
     clearance: z.array(z.object({ ref: z.string(), mm: z.number().min(0).nullable(), reason: z.string().optional() }).strict()).default([]),
+    waived: z.array(z.object({ problem: z.string().min(1), waiver: z.string().nullable() }).strict()).default([]),
   }),
   run: async (a) => {
     const r = await root()
@@ -220,9 +221,10 @@ export const settingsTool = defineTool({
         s = withValue(s, c.path, v, c.reason)
       }
       for (const c of a.clearance) s = withClearance(s, c.ref, c.mm, c.reason)
+      for (const w of a.waived) s = withWaived(s, w.problem, w.waiver)
       if (!processOk(s.process)) throw new ToolError(`mech.settings: ${s.process.service} ${s.process.process} ${s.process.material} is not in the capabilities (${processList()}; or service jlccnc for CNC)`)
       s = { ...s, process: canonicalProcess(s.process) }
-      const changed = a.set.length + a.clearance.length > 0
+      const changed = a.set.length + a.clearance.length + a.waived.length > 0
       if (changed) writeSettings(r, s)
       const warnings = unknownRefs(r, s, a)
       const rows = describe(s)
@@ -230,7 +232,7 @@ export const settingsTool = defineTool({
       const unexplained = missingReasons(s)
       return {
         status: unexplained.length ? 'fail' as const : 'pass' as const,
-        summary: `${changed ? `${plural(a.set.length + a.clearance.length, 'change')} written; ` : ''}${plural(away.length, 'value')} away from the recommendation${unexplained.length ? `, ${unexplained.length} without a reason: ${unexplained.join(', ')}` : ''}${warnings.length ? `; ${plural(warnings.length, 'warning')}` : ''}`,
+        summary: `${changed ? `${plural(a.set.length + a.clearance.length + a.waived.length, 'change')} written; ` : ''}${plural(away.length, 'value')} away from the recommendation${unexplained.length ? `, ${unexplained.length} without a reason: ${unexplained.join(', ')}` : ''}${warnings.length ? `; ${plural(warnings.length, 'warning')}` : ''}`,
         result: { settings: s, values: rows, without_reason: unexplained, warnings, ...(changed ? { written: CASE_JSON, next: 'mech.build to rebuild the case and check its fit.' } : {}) },
       }
     })
@@ -356,7 +358,7 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
         inputs,
         next: passed
           ? 'The case fits and is within the process\'s rules: run shape.check with criterion "layout.fit", which reads this build and records the criterion.'
-          : 'Read the clashes and gaps: a clearance or wall change is mech.settings; a shape change is an edit to mechanical/case.py (delegate it); a clash that needs the board outline or a part moved is for a person, who may waive that one problem in the journey. shape.check layout.fit records the criterion from the newest build and its waivers.',
+          : 'Read the clashes and gaps: a clearance or wall change is mech.settings; a shape change is an edit to mechanical/case.py (delegate it); a clash that needs the board outline or a part moved is for a person, who may waive that one problem in the journey; once waived, list it with mech.settings waived so the pull request\'s check passes. shape.check layout.fit records the criterion from the newest build and its waivers.',
       },
     }
   })
