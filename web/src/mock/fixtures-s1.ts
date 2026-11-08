@@ -648,7 +648,7 @@ export const SKILL_VIEWS: Record<string, Partial<SkillView>> = {
             { severity: 'warn', rule: 'edge_spectrum', text: '/SCK 8 MHz harmonics: 4.1 dB margin to CISPR 32 class B at 120 MHz', where: '/SCK' },
           ],
         },
-        estimates: [],
+        estimates: [{ run: 'run_spec1', kind: 'emc.spectrum', status: 'fail', summary: 'USB cable common mode at 1 %: 18.05 dB over the class B limit at 30 MHz', at: ago(3 * HOUR) }, { run: 'run_spec0', kind: 'emc.spectrum', status: 'pass', summary: 'USB cable common mode at 0.05 %: 7.97 dB margin at 30 MHz', at: ago(3 * HOUR) }],
         criterion: { id: 'signoff.emc', text: 'Interference prechecks pass or are waived.', status: 'waived' },
         waivers: [{ id: 'W-7', target: 'signoff.emc', reason: 'The radiated scan is booked with the lab for the first boards.', risk: 'A re-spin if the USB harmonics fail.', severity: 'degraded', by: 'Marc Teichtahl' }],
       },

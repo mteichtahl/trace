@@ -63,6 +63,10 @@ beforeAll(async () => {
     { rule: 'edge_proximity', severity: 'warn', net: '/SCK', layer: 'F.Cu', at: null, message: '/SCK runs 0.8 mm from the board edge', evidence: {} },
     { rule: 'return_path', severity: 'error', net: '/USB_D+', layer: 'F.Cu', at: null, message: '/USB_D+ crosses a split in the ground plane', evidence: {} },
   ])))
+  // the cable's emission spectra: one made before the newest precheck (an older board) and two with it (R60)
+  runRow.run('spec-old', 'emc.spectrum', 'hw/board.kicad_pcb', t - 60, 'pass', 'an older board', '{}')
+  runRow.run('spec-005', 'emc.spectrum', 'hw/board.kicad_pcb', t - 48, 'pass', '0.05 % common mode: 7.97 dB margin at 30 MHz', '{}')
+  runRow.run('spec-1', 'emc.spectrum', 'hw/board.kicad_pcb', t - 47, 'fail', '1 % common mode: 18.05 dB over at 30 MHz', '{}')
   runRow.run('bom-1', 'parts.bom_check', 'rows', t - 40, 'pass', '3 lines for 10 boards: every line in stock; 47.16 USD', JSON.stringify(parts))
   db.close()
   github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
@@ -77,6 +81,8 @@ describe('Release review: each step from the record', () => {
     expect(v.release.emc.precheck?.findings.map((f) => f.severity)).toEqual(['error', 'warn'])
     expect(v.release.emc.criterion).toMatchObject({ id: 'signoff.emc', status: 'waived' })
     expect(v.release.emc.waivers).toHaveLength(1)
+    // the spectra made with the newest precheck, newest first; the one over the limit says so (test-esp32-run2 R60)
+    expect(v.release.emc.estimates.map((e) => [e.run, e.kind, e.status])).toEqual([['spec-1', 'emc.spectrum', 'fail'], ['spec-005', 'emc.spectrum', 'pass']])
   })
 
   it('the parts list has cost per board and for the build, sellers and lifecycle, and what to acknowledge', async () => {

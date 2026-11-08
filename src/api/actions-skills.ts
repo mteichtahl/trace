@@ -201,7 +201,14 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       const parts = latestRun(db, 'parts.bom_check')
       return {
         precheck: pre ? { id: pre.id, status: pre.status, summary: pre.summary, started: pre.started, findings: Array.isArray(findings) ? findings : null } : null,
-        estimates: ['emc.run', 'emc.si'].flatMap((k) => { const x = latestRun(db, k); return x ? [{ id: x.id, kind: k, status: x.status, summary: x.summary, started: x.started }] : [] }),
+        estimates: [
+          ...['emc.run', 'emc.si'].flatMap((k) => { const x = latestRun(db, k); return x ? [{ id: x.id, kind: k, status: x.status, summary: x.summary, started: x.started }] : [] }),
+          // the emission spectra made with the newest precheck, each assumption its own run (test-esp32-run2 R60: the USB
+          // cable's common-mode estimate passed at 0.05 % mode conversion and failed by 18 dB at 1 %, and the review
+          // showed neither)
+          ...(db.prepare("SELECT id, status, summary, started FROM runs WHERE kind='emc.spectrum' AND started >= ? ORDER BY started DESC, id DESC LIMIT 6")
+            .all(pre ? pre.started : 0) as { id: string; status: string; summary: string | null; started: number }[]).map((x) => ({ ...x, kind: 'emc.spectrum' })),
+        ],
         parts: parts ? { id: parts.id, status: parts.status, summary: parts.summary, started: parts.started, result: runResult(db, parts.id) } : null,
         drcRun: drc.run ? { id: drc.run.id, started: drc.run.started } : null,
       }
