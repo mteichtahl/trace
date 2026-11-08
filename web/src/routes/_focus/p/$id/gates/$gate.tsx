@@ -354,7 +354,6 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                   return (
                     <li key={w.id} className="py-3 first:pt-0 last:pb-0">
                       <div className="flex gap-3">
-                        <span className="h-fit rounded border bg-muted px-1.5 font-mono text-xs text-muted-foreground">{w.id}</span>
                         <div className="min-w-0 flex-1 space-y-1 text-sm">
                           <p className="font-medium">{w.title}</p>
                           <p><span className="text-muted-foreground">Reason: </span>{w.reason}</p>
@@ -446,7 +445,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
         <Button variant="ghost" className="mt-1 w-full" onClick={() => setReturning(true)}>Return…</Button>
       </div>
 
-      <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={g.waivers.filter((w) => isWaiverRead(w, state)).map((w) => w.id)} onSigned={onDone} />
+      <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={g.waivers.filter((w) => isWaiverRead(w, state)).map((w) => w.title)} onSigned={onDone} />
       <ReturnDialog open={returning} onOpenChange={setReturning} repo={repo} gate={g} stage={from?.name} id={id} onReturned={onDone} />
       <SignOffDialog criterion={signingOff} onClose={() => setSigningOff(null)} pending={confirmCriterion.isPending}
         onSignOff={(note) => signingOff && confirmCriterion.mutate({ repo, criterion: signingOff.id, met: true, note }, {
@@ -551,7 +550,8 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
           <DialogTitle>{label}?</DialogTitle>
           <DialogDescription>
             You are signing {g.name} for {j.name} {j.revision}. {to ? `${to} work starts as soon as you sign.` : 'The next stage starts as soon as you sign.'}
-            {acknowledged.length > 0 && ` You acknowledged ${acknowledged.join(', ')}.`}
+            {/* the waivers by what they are on, not their ids (test-esp32-run2 R34: "You acknowledged 31b94f91770c4677") */}
+            {acknowledged.length > 0 && ` You acknowledged ${acknowledged.length === 1 ? 'the waiver of' : `${acknowledged.length} waivers:`} ${acknowledged.join('; ')}.`}
           </DialogDescription>
         </DialogHeader>
         {reauth && (
@@ -686,7 +686,7 @@ export function GateRecord({ journey: j, gate: g }: { journey: Journey; gate: Ga
             </ul>
           )}
           <h2 className="mt-6 text-sm font-semibold">Waivers acknowledged</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{g.record?.acknowledged?.length ? g.record.acknowledged.join(', ') : g.waivers.length ? g.waivers.map((w) => w.id).join(', ') : 'None were taken in this stage.'}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{g.record?.acknowledged?.length ? g.record.acknowledged.map((id) => g.waivers.find((w) => w.id === id)?.title ?? id).join('; ') : g.waivers.length ? g.waivers.map((w) => w.title).join('; ') : 'None were taken in this stage.'}</p>
           <h2 className="mt-6 text-sm font-semibold">Notes</h2>
           <p className="mt-1 text-sm text-muted-foreground">{g.record?.notes || 'No notes.'}</p>
         </div>
