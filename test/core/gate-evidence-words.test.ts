@@ -66,6 +66,9 @@ describe('a waiver counts for its own criterion only (#156)', () => {
   it('a shape finding counts for its criterion, a rule check finding for the rule check, a requirement for none', () => {
     expect(waiverCriterion({ kind: 'finding', id: FIT })).toBe('layout.fit')
     expect(waiverCriterion({ kind: 'finding', id: 'drc:lib_footprint_mismatch:J1' })).toBe('layout.drc')
+    // an option's block's key part, not its path (test-esp32-run2 R34)
+    expect(waiverTargetWords({ kind: 'finding', id: 'architect.stock@block%20A%2Fdisplay%2FusesPart%2F1' }, () => 'Every key part is in stock'))
+      .toBe("the finding of “Every key part is in stock” on the display block's key part (option A)")
     expect(waiverCriterion({ kind: 'finding', id: 'erc:pin_not_driven:U2' })).toBe('capture.erc')
     expect(waiverCriterion({ kind: 'criterion', id: 'layout.route' })).toBe('layout.route')
     expect(waiverCriterion({ kind: 'requirement', id: 'REQ-1' })).toBeNull()
@@ -106,5 +109,14 @@ describe('the datasheet criterion is met on the datasheets compared (#52)', () =
     expect(ok.status).toBe('met')
     // not met needs no datasheet: there is nothing it was met on
     expect(addCriterionCheck(db, by, { criterion: 'capture.datasheets', status: 'not_met', evidence: [] }, r).status).toBe('not_met')
+  })
+})
+
+describe('a criterion\'s evidence label (test-esp32-run2 R34)', () => {
+  it('drops the criterion id and says the shape check plainly', async () => {
+    const { plainEvidenceLabel } = await import('../../src/core/record-refs.js')
+    expect(plainEvidenceLabel('architect.mapped: checked 23 requirements: every one keeps to its shape')).toBe('Checked 23 requirements: all pass')
+    expect(plainEvidenceLabel('architect.stock: checked 19 key parts: 1 finding, 1 waived')).toBe('Checked 19 key parts: 1 finding, 1 waived')
+    expect(plainEvidenceLabel('kicad_erc: 0 errors')).toBe('kicad_erc: 0 errors')
   })
 })
