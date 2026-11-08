@@ -8,7 +8,24 @@ export class GitHubError extends Error {
   override name = 'GitHubError'
   /** `said`: GitHub's own message from the body, when it gave one (a merge refused: "At least 1 approving review is
    * required…"), so the caller can tell a review rule from a conflict and say which in plain words */
-  constructor(readonly status: number, message: string, readonly said: string | null = null) { super(message) }
+  constructor(readonly status: number, message: string, readonly said: string | null = null, readonly rateLimited = false) { super(message) }
+}
+
+/**
+ * When a refusal is GitHub's rate limit (403 or 429 with no requests left, a Retry-After, or GitHub saying "rate
+ * limit"), the words for it: whose limit and when to try again. Null for any other refusal. A rate limit is not
+ * trace failing: shown as "internal error: GitHub GET pull 22: 403" it read as a fault (test-esp32-run2 R65).
+ */
+export function rateLimitWords(status: number, headers: Headers, said: string | null, now = Date.now()): string | null {
+  if (status !== 403 && status !== 429) return null
+  const reset = Number(headers.get('x-ratelimit-reset') ?? NaN)
+  const after = Number(headers.get('retry-after') ?? NaN)
+  const out = headers.get('x-ratelimit-remaining') === '0'
+  if (!out && Number.isNaN(after) && !/rate limit/i.test(said ?? '')) return null
+  const at = !Number.isNaN(after) ? now + after * 1000 : out && !Number.isNaN(reset) ? reset * 1000 : null
+  const when = at === null ? 'in a few minutes' : at <= now + 60_000 ? 'in a minute' : `after ${new Date(at).toISOString().slice(11, 16)} UTC (in about ${Math.ceil((at - now) / 60_000)} min)`
+  const kind = /secondary/i.test(said ?? '') ? "GitHub's secondary rate limit (too many requests at once)" : "GitHub's rate limit for trace's GitHub token"
+  return `${kind} is used up, so GitHub refused this for now. Nothing changed: try again ${when}.`
 }
 
 /**
@@ -303,7 +320,11 @@ export class HttpGitHub implements GitHubApi {
 
   private async json(method: string, path: string, body?: unknown): Promise<unknown> {
     const r = await this.req(method, path, body)
-    if (!r.ok) throw new GitHubError(r.status, `GitHub ${method} ${path.split('?')[0]}: ${r.status}`, await saidBy(r))
+    if (!r.ok) {
+      const said = await saidBy(r)
+      const limit = rateLimitWords(r.status, r.headers, said)
+      throw new GitHubError(r.status, limit ?? `GitHub ${method} ${path.split('?')[0]}: ${r.status}`, said, limit !== null)
+    }
     return r.status === 204 ? null : r.json()
   }
 

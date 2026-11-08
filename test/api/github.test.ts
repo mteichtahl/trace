@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HttpGitHub } from '../../src/api/github.js'
+import { GitHubError, HttpGitHub, rateLimitWords } from '../../src/api/github.js'
 
 /** A fetch that answers from a table of "METHOD path" → [status, body], and records what was asked. */
 function fakeFetch(routes: Record<string, [number, unknown]>): { fetch: typeof fetch; asked: { url: string; accept: string }[] } {
@@ -86,5 +86,27 @@ describe('checks for a fine-grained token (no "Checks: read" exists for one)', (
   it('uses whichever of the two it may read, and refuses only when both are refused', async () => {
     expect((await gh({ actions: 403, statuses: 200 }).checkRuns('acme/board', 'abc')).map((c) => c.name)).toEqual(['drc'])
     await expect(gh({ actions: 403, statuses: 403 }).checkRuns('acme/board', 'abc')).rejects.toMatchObject({ status: 403 })
+  })
+})
+
+describe('GitHub rate limits in plain words (test-esp32-run2 R65)', () => {
+  const now = Date.parse('2026-11-08T13:20:00Z')
+  it('says whose limit is used up and when to try again', () => {
+    const h = new Headers({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Date.parse('2026-11-08T13:47:00Z') / 1000) })
+    expect(rateLimitWords(403, h, 'API rate limit exceeded for installation ID 1.', now)).toBe("GitHub's rate limit for trace's GitHub token is used up, so GitHub refused this for now. Nothing changed: try again after 13:47 UTC (in about 27 min).")
+    expect(rateLimitWords(403, new Headers({ 'retry-after': '30' }), 'You have exceeded a secondary rate limit.', now)).toMatch(/^GitHub's secondary rate limit .* try again in a minute\.$/)
+    expect(rateLimitWords(429, new Headers(), 'API rate limit exceeded', now)).toMatch(/try again in a few minutes/)
+  })
+  it('leaves every other refusal alone', () => {
+    expect(rateLimitWords(403, new Headers({ 'x-ratelimit-remaining': '4000' }), 'Resource not accessible by integration', now)).toBeNull()
+    expect(rateLimitWords(404, new Headers({ 'x-ratelimit-remaining': '0' }), null, now)).toBeNull()
+  })
+  it('a rate-limited call throws a GitHubError marked rateLimited, with the words as its message', async () => {
+    const f = (async () => new Response('{"message":"API rate limit exceeded for installation ID 1."}', { status: 403, headers: { 'x-ratelimit-remaining': '0' } })) as typeof fetch
+    const e = await new HttpGitHub('t', { fetch: f }).tree('acme/board', 'main').catch((x: unknown) => x)
+    expect(e).toBeInstanceOf(GitHubError)
+    expect((e as GitHubError).rateLimited).toBe(true)
+    expect((e as GitHubError).status).toBe(403)
+    expect((e as GitHubError).message).toMatch(/^GitHub's rate limit for trace's GitHub token is used up/)
   })
 })
