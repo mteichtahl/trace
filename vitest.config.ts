@@ -10,6 +10,8 @@ export default defineConfig({
     // per core, a suite's setup outran the 10-second default (test/api/gaps.test.ts, web.test.ts)
     hookTimeout: 60_000,
     setupFiles: ['test/setup.ts'],
+    // one temporary folder per run, removed at its end (test/global-tmp.ts)
+    globalSetup: ['test/global-tmp.ts'],
     pool: 'forks',
   },
 })
