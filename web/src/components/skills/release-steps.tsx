@@ -144,7 +144,11 @@ function Emc({ v }: { v: ReleaseView['emc'] }) {
         </div>
       )}
       {v.estimates.map((e) => (
-        <p key={e.run} className="flex flex-wrap items-center gap-2 text-sm"><span className="font-medium">{e.kind === 'emc.si' ? 'Signal integrity' : 'Field solver'}</span><span className="text-muted-foreground">{e.summary ?? e.status}</span>{run(e.run)}</p>
+        <p key={e.run} className="flex flex-wrap items-center gap-2 text-sm">
+          {e.status === 'fail' && <StatusBadge status="failing" label="Over the limit" />}
+          <span className="font-medium">{e.kind === 'emc.si' ? 'Signal integrity' : e.kind === 'emc.spectrum' ? 'Emission spectrum' : 'Field solver'}</span>
+          <span className="text-muted-foreground">{e.summary ?? e.status}</span>{run(e.run)}
+        </p>
       ))}
       {v.waivers.length > 0 && (
         <ul className="divide-y rounded-xl border">
