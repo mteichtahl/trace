@@ -161,6 +161,8 @@ export function plainCodeRefs(text: string): string {
       `${own ?? (STARTS.test(all.slice(0, at)) ? 'The' : 'the')} datasheet, page ${page}`)
     .replace(new RegExp(String.raw`\b(?:(the|its|their|this)\s+)?datasheet\s+${HASH}`, 'gi'), (_w, own: string | undefined, at: number, all: string) => `${own ?? (STARTS.test(all.slice(0, at)) ? 'The' : 'the')} datasheet`)
     .replace(new RegExp(String.raw`\b(with|against|per|from)\s+${HASH}`, 'gi'), (_w, prep: string) => `${prep} the datasheet`)
+    // "finding mate:J2:SSD1306-0.96-128x64-I2C-4pin:order": the pin order finding on J2 (test-esp32-run2 R45)
+    .replace(/\b(?:the\s+)?(?:finding\s+)?mate:([^:\s]+):[^\s]+?:(order|unknown)\b/gi, (_w, at: string, what: string) => `the ${what === 'order' ? 'pin order' : 'unknown pin order'} finding on ${at}`)
     // "the ams hand-off hoda5b1502f4f144": the hand-off is said already (test-esp32-run2 R40)
     .replace(/\b(hand-?offs?)\s+`?ho[0-9a-f]{14}\b`?/gi, '$1')
 }

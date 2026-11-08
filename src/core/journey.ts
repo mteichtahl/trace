@@ -60,7 +60,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import { type JobLook, jobRefs, plainJobRefs, plainJobRefsOf, refKey } from './job-refs.js'
-import { plainEvidenceLabel, plainQuestionText } from './record-refs.js'
+import { plainCodeRefs, plainEvidenceLabel, plainQuestionText, plainRecordRefs } from './record-refs.js'
 import { plainSummary } from './plain-words.js'
 import type { HandoffFact } from './handoffs.js'
 import type { StageGuide } from './stage-guides.js'
@@ -1204,7 +1204,7 @@ function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): Criteri
     const w = waived.get(c.id)
     return {
       // a label in words under its criterion: "Checked 23 requirements: all pass", not "architect.mapped: … shape" (R34)
-      id: c.id, text: c.text, owner: c.owner, status: c.status === 'met' ? 'met' : w ? 'waived' : 'not_met', evidence: c.evidence.map((e) => (e.label ? { ...e, label: plainEvidenceLabel(e.label) } : e)),
+      id: c.id, text: c.text, owner: c.owner, status: c.status === 'met' ? 'met' : w ? 'waived' : 'not_met', evidence: c.evidence.map((e) => (e.label ? { ...e, label: plainEvidenceLabel(plainCodeRefs(plainRecordRefs(e.label))) } : e)),
       evidence_label: c.evidenceLabel, waiver: w?.id ?? null, opened_by_you: opened.has(c.id), checked_at: iso(c.checkedAt),
       ...(c.staleBecause ? { stale: c.staleBecause } : {}),
       ...(added.has(c.id) ? { added: true as const } : {}),
@@ -2202,9 +2202,10 @@ function waiverView(r: JourneyRecord, w: WaiverRow, viewer: Viewer, opened: Read
   const out = withdrawalOf(r, w.id)
   const blocked = w.closedAt === null ? withdrawProblem(r, w, viewer) : null
   return {
-    id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: w.reason, risk: w.risk, severity: w.severity,
+    // its words as people read them: an agent's option wrote "as ea9a571f p2 shows" into the risk (test-esp32-run2 R45)
+    id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: plainCodeRefs(w.reason), risk: plainCodeRefs(w.risk), severity: w.severity,
     about: targetWords(r, w.targetKind, w.target), criterion: waiverCriterion({ kind: w.targetKind, id: w.target }),
-    caught_where: w.caughtWhere, scope: w.scope, by: w.by, at: isoN(w.at), acknowledged: w.acknowledgedAt !== null ? { by: w.acknowledgedBy, at: isoN(w.acknowledgedAt) } : null,
+    caught_where: w.caughtWhere === null ? null : plainCodeRefs(w.caughtWhere), scope: w.scope, by: w.by, at: isoN(w.at), acknowledged: w.acknowledgedAt !== null ? { by: w.acknowledgedBy, at: isoN(w.acknowledgedAt) } : null,
     closed: w.closedAt !== null, opened_by_you: opened.has(`waiver:${w.id}`),
     withdrawn: out ? { by: out.by, at: isoN(out.at), reason: out.reason, replaced_by: out.replacedBy } : null,
     may_withdraw: w.closedAt === null && blocked === null, withdraw_blocked: blocked,
