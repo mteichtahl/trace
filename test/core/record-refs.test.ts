@@ -96,6 +96,12 @@ describe('datasheets and findings named by code (test-esp32-run2 R39)', () => {
       .toBe('SSD1306-0.96-128x64-I2C-4pin has 1 VCC, 2 GND (its datasheet, page 2 (pin description))')
   })
 
+  it('says a pin order finding and a datasheet in a gate\'s evidence (R45)', () => {
+    expect(plainCodeRefs('conflict waived by M in the answer (finding mate:J2:SSD1306-0.96-128x64-I2C-4pin:order, design.pins run 243e21affbca4bde)'))
+      .toBe('conflict waived by M in the answer (the pin order finding on J2, design.pins run 243e21affbca4bde)')
+    expect(plainCodeRefs('If a module arrives VCC-first, as ea9a571f p2 shows, plugging it in')).toBe('If a module arrives VCC-first, as the datasheet, page 2 shows, plugging it in')
+  })
+
   it('leaves what it cannot tell is a datasheet', () => {
     expect(plainCodeRefs('commit deadbeef and run 84ac569329e8472d')).toBe('commit deadbeef and run 84ac569329e8472d')
     expect(plainCodeRefs('see 1a2b3c4d')).toBe('see 1a2b3c4d')
