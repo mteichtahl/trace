@@ -2348,7 +2348,7 @@ function waiversFromAnswer(db: DatabaseSync, r: JourneyRecord, q: QuestionRow, o
   if (!w) return []
   const why = reason || opt.why.trim()
   const ids: string[] = []
-  for (const target of w.targets) {
+  for (const target of narrowedTargets(w.targets)) {
     const open = r.waivers.some((x) => x.closedAt === null && x.targetKind === target.kind && x.target === target.id)
     const met = target.kind === 'criterion' && r.criteria.find((c) => c.id === target.id)?.status === 'met'
     if (open || met) continue
@@ -2357,6 +2357,23 @@ function waiversFromAnswer(db: DatabaseSync, r: JourneyRecord, q: QuestionRow, o
     ids.push(insertWaiver(db, r, input, by, { question: q.id }))
   }
   return ids
+}
+
+/** The rule checks whose findings a criterion is met over, and the prefix of their finding ids (src/core/waiver-words.ts). */
+const RULE_PREFIX: Readonly<Record<string, string>> = { 'capture.erc': 'erc', 'layout.drc': 'drc' }
+
+/**
+ * What an option's waiver is on, no wider than its findings: an option that names a rule check's findings and that
+ * check's criterion too waives the findings only, named as the check names them ("lib_footprint_mismatch:J1" is
+ * "drc:lib_footprint_mismatch:J1"). Waiving the criterion as well would let any later finding of that check through
+ * unseen (test-esp32-run2 R50: one J1 silkscreen warning recorded a waiver of the whole design rule check). Pure.
+ */
+export function narrowedTargets(targets: readonly { kind: (typeof WAIVER_TARGETS)[number]; id: string }[]): { kind: (typeof WAIVER_TARGETS)[number]; id: string }[] {
+  const criteria = targets.filter((t) => t.kind === 'criterion' && RULE_PREFIX[t.id])
+  const findings = targets.filter((t) => t.kind === 'finding')
+  if (!criteria.length || !findings.length) return [...targets]
+  const prefix = (id: string): string => (criteria.length === 1 && !/^(erc|drc):/.test(id) ? `${RULE_PREFIX[criteria[0]!.id]}:${id}` : id)
+  return targets.filter((t) => !(t.kind === 'criterion' && RULE_PREFIX[t.id])).map((t) => (t.kind === 'finding' ? { ...t, id: prefix(t.id) } : t))
 }
 
 /** An agent asks a person (or the project's contributors) a question, or says it is stuck. */
