@@ -14,6 +14,8 @@ const OTHERS: readonly (readonly [string, string])[] = [
   ['The board draws at most 500 mA from USB at 5 V, including Wi-Fi transmit bursts, so it runs from any USB 2.0 port.', 'Peak VBUS input current <= 500 mA at 5 V, measured over 60 s of Wi-Fi transmit with the display fully lit (60 s window inferred).'],
   ['The OLED shows the Wi-Fi connection status.', 'With the access point switched off, the displayed Wi-Fi status changes from connected to disconnected within 2 s.'],
   ['The USB-C receptacle (through-hole mounting legs) has 5.1 kOhm pull-downs from CC1 and from CC2 to GND.', 'Netlist: CC1 and CC2 each reach GND through one 5.1 kOhm resistor.'],
+  // run 2's REQ-1db18b: a budget naming the module it leaves out
+  ['USD 100 covers the boards and assembly for all 10 units; case printing and the OLED module are outside this budget.', 'Order total for 10 units <= USD 100, excluding case printing and the OLED module.'],
   ['The ESP32 module connects to the USB connector through a CH340C bridge.', 'Enumerates as a CH340 device.'],
 ]
 
@@ -23,6 +25,8 @@ describe('what a requirement asks of the case', () => {
     expect(caseNeedWords(caseNeed(...CASE))).toBe('a window in the case, with the display behind it')
     expect(caseNeed('The status LEDs are visible through the lid.')).toEqual({ window: true, offBoard: null })
     expect(caseNeedWords(caseNeed('The lid has a window for the display.'))).toBe('a window in the case, with the display behind it')
+    // run 2: the display's size between "the" and "display"
+    expect(caseNeedWords(caseNeed('The case has one USB-C opening and a window for the 0.96 inch display.'))).toBe('a window in the case, with the display behind it')
   })
 
   it('a display, module or battery on a header, connector or cable sits off the board', () => {
