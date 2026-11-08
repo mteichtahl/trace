@@ -44,6 +44,11 @@ export const impl: Specialist = {
       + ' strapping pin that anything else drives (an auto-reset transistor, a button, a peripheral) gets an external'
       + ' pull to its boot level (10 kOhm is usual), never the part\'s internal pull alone; design_pins check flags one'
       + ' without it. Leave one out only for a reason you write in the report, for the person to agree or waive.',
+    'A footprint made from another part\'s (a sibling module\'s copied and renamed, a library part edited) is checked'
+      + ' against this part\'s own datasheet land pattern before the change is reported: pad count, pitch, pad sizes'
+      + ' and any exposed pad, read from the footprint (its .kicad_mod, or the board file with kicad_board) and the'
+      + ' datasheet page. The change says what was compared, with the page. A worker\'s word that it matches is not a check; one you'
+      + ' cannot check is an open finding for the person, never a pass.',
     'Schematic sheets are drawn to be read: one sheet per architecture block (USB, power, bridge, MCU, display …)'
       + ' under a root sheet of hierarchical sheet symbols. On each sheet, place the block\'s parts as one circuit'
       + ' spread over the page (not packed into a corner), wired to each other, with a text title per group; net'
