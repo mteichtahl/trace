@@ -53,4 +53,11 @@ describe('ChangeRequirements', () => {
     expect(screen.getByText('The change names R1, R2, R3, R4, R5, R6 and R7, which are not requirements of this project.')).toBeInTheDocument()
     expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual(['/req/REQ-9b1b96'])
   })
+
+  // test-esp32-run2 R47: a change adding 33 tests showed "No test yet" on every requirement it covers
+  it('says a requirement is tested in this change when the accepted design has no test for it', () => {
+    render(<ChangeRequirements ids={['REQ-001', 'REQ-002']} tested={['REQ-001']} rows={[row('REQ-001', { verdict: 'no_test' }), row('REQ-002', { verdict: 'no_test' })]} link={link} />)
+    expect(screen.getAllByText('Tested in this change')).toHaveLength(1)
+    expect(screen.getAllByText('No test yet')).toHaveLength(1)
+  })
 })

@@ -407,6 +407,9 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
     ...(named.unknown.length ? { requirements_unknown: named.unknown } : {}),
+    // the requirements its own tests cover: the accepted design has no test for them yet, this change adds one
+    // (test-esp32-run2 R47: 33 tests added and every requirement read "No test yet")
+    ...(read?.record?.tested?.requirements.length ? { requirements_tested: [...read.record.tested.requirements] } : {}),
     recommendation: withRequirementEdits(recommendationOf(facts, { passed, requirements, from: sum.from }), edits),
     ...(edits ? { requirement_edits: edits } : {}),
     ...acceptance(facts, write),

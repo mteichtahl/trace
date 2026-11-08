@@ -142,6 +142,8 @@ export interface ChangeDetail extends ChangeSummary {
   requirements: string[]
   /** what it cites as a requirement that the project has none of ("R3"); absent: none */
   requirements_unknown?: string[]
+  /** the requirements the tests it adds or runs cover (change-contents testedRequirements); absent: none */
+  requirements_tested?: string[]
   recommendation: Recommendation
   may_accept: boolean
   blockers: string[]

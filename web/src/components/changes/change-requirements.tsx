@@ -60,6 +60,8 @@ export interface ChangeRequirementsProps {
   ids: string[]
   /** what it cites as a requirement that the project does not have */
   unknown?: string[]
+  /** the requirements this change's own tests cover (test-esp32-run2 R47) */
+  tested?: string[]
   /** verify.coverage's rows; undefined while they load */
   rows: CoverageRow[] | undefined
   loading?: boolean
@@ -67,7 +69,7 @@ export interface ChangeRequirementsProps {
   link: (rid: string, children: ReactNode, className?: string) => ReactNode
 }
 
-export function ChangeRequirements({ ids, unknown = [], rows, loading, link }: ChangeRequirementsProps) {
+export function ChangeRequirements({ ids, unknown = [], tested = [], rows, loading, link }: ChangeRequirementsProps) {
   const [open, setOpen] = useState<Record<string, boolean>>(() => Object.fromEntries(ids.map((r) => [r, ids.length <= OPEN_UP_TO])))
   const isOpen = (r: string) => open[r] ?? ids.length <= OPEN_UP_TO
   const allOpen = ids.every(isOpen)
@@ -87,7 +89,9 @@ export function ChangeRequirements({ ids, unknown = [], rows, loading, link }: C
         {ids.map((rid) => {
           const r = findRequirement(rows, rid)
           const id = r?.id ?? rid
-          const v = r ? VERDICT_BADGE[r.verdict] : null
+          // the accepted design has no test for it yet, and this change brings one: say that, not "No test yet"
+          const here = !!r && (r.verdict === 'no_test' || r.verdict === 'untested') && tested.some((t) => norm(t) === norm(r.id))
+          const v = here ? { status: 'untested' as const, label: 'Tested in this change' } : r ? VERDICT_BADGE[r.verdict] : null
           return (
             <li key={rid} className="rounded-lg border">
               <Collapsible open={isOpen(rid)} onOpenChange={(o) => setOpen((s) => ({ ...s, [rid]: o }))}>
@@ -113,7 +117,7 @@ export function ChangeRequirements({ ids, unknown = [], rows, loading, link }: C
                         <dt className="text-muted-foreground">Tests</dt>
                         <dd>
                           {r.tests.length === 0 ? (
-                            <span className="text-muted-foreground">None planned yet.</span>
+                            <span className="text-muted-foreground">{here ? 'This change adds its tests; they count once it is accepted.' : 'None planned yet.'}</span>
                           ) : (
                             <ul className="space-y-1">
                               {r.tests.map((t) => (

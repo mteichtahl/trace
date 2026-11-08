@@ -217,6 +217,7 @@ export function readChange(raw: unknown): ChangeDetail {
     requirements: (Array.isArray(c.requirements) ? c.requirements : []).map(String),
     // what it cites that the project has no requirement for: absent from an older API
     ...(Array.isArray(c.requirements_unknown) && c.requirements_unknown.length ? { requirements_unknown: c.requirements_unknown.map(String) } : {}),
+    ...(Array.isArray(c.requirements_tested) && c.requirements_tested.length ? { requirements_tested: c.requirements_tested.map(String) } : {}),
     recommendation: { verdict, why: str(rec.why) ?? '' },
     may_accept: c.may_accept === true,
     blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),

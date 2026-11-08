@@ -376,6 +376,8 @@ export interface ChangeDetail extends ChangeSummary {
   requirements: string[]
   /** what it cites as a requirement that the project does not have: ["R3"]; absent: none */
   requirements_unknown?: string[]
+  /** the requirements the tests it adds or runs cover: tested here, though the accepted design has no test yet */
+  requirements_tested?: string[]
   recommendation: { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
   /** this person, now */
   may_accept: boolean
