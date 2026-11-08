@@ -7,7 +7,7 @@ import {
   CAPABILITIES, FIGURES, RECOMMENDED, STALE_DAYS, engineCapabilities, figureStatus, minWall, pageText, processRow, staleness,
 } from '../../../src/tools/mech/capabilities.js'
 import {
-  CASE_JSON, CaseSettingsSchema, defaults, describe as describeSettings, missingReasons, readSettings, recommendations, withClearance, withValue, writeSettings,
+  CASE_JSON, CaseSettingsSchema, defaults, describe as describeSettings, missingReasons, readSettings, recommendations, withClearance, withValue, withWaived, writeSettings,
 } from '../../../src/tools/mech/settings.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'mech-settings-'))
@@ -64,6 +64,16 @@ describe('case settings', () => {
     const u = withClearance(t, 'J1', null)
     expect(u.clearance.parts).toEqual({})
     expect(u.reasons).toEqual({})
+  })
+
+  it('list a fit problem waived in the journey, with what it stands on, and take it off (test-esp32-run2 R54)', () => {
+    const s = defaults('b')
+    expect('waived' in s).toBe(false)
+    expect(() => withWaived(s, 'gap/C6/above', ' ')).toThrow(/which waiver/)
+    const t = withWaived(s, 'gap/C6/above', 'waived by marc: the OLED module covers C6')
+    expect(t.waived).toEqual({ 'gap/C6/above': 'waived by marc: the OLED module covers C6' })
+    expect(CaseSettingsSchema.parse(t).waived).toEqual(t.waived)
+    expect('waived' in withWaived(t, 'gap/C6/above', null)).toBe(false)
   })
 
   it('say which values differ without a reason (a hand-edited file) and describe each with its recommendation', () => {

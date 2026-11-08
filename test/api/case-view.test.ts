@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { unwaivedCaseFindings } from '../../src/api/case-read.js'
+import { caseProblemKey, unwaivedCaseFindings } from '../../src/api/case-read.js'
 import { assign } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { addWaiver, loadJourney, startJourney } from '../../src/core/journey.js'
@@ -114,6 +114,11 @@ describe('the case in tracectl check', () => {
       expect(left).toMatchObject({ all: 9 })
       expect(left!.open.map((f) => f.id)).not.toContain(finding('clash/J2/lid'))
       expect(left!.open).toHaveLength(8)
+      // in CI the journey is not there: the problems case.json lists as waived count instead
+      const keys = left!.open.map((f) => caseProblemKey(f.id))
+      expect(keys).toContain('clash/J1/lid')
+      expect(unwaivedCaseFindings(w.db, null, keys)!.open.map((f) => caseProblemKey(f.id))).toEqual(['clash/J2/lid'])
+      expect(unwaivedCaseFindings(w.db, loadJourney(w.db), keys)).toEqual({ all: 9, open: [] })
       // the rest waived under another installation's name: the check runs under the repository's
       for (const f of left!.open) {
         const tail = f.id.slice(f.id.search(/:case-(?:finding|rule):/))

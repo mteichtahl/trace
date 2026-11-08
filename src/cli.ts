@@ -66,7 +66,7 @@
  *   The project's knowledge base (your credentials, or the workflow's role; TRACE_KB_ID; through the API: tracectl remote kb)
  *     tracectl kb sync [--force] [--dry-run] [--wait MINUTES] | search "query" [--source S] [--kind K] [--path P] | status
  */
-import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ConfigError, changed, leaves, load, parseCliValue, resolve, setValue, unset } from './core/config.js'
@@ -255,7 +255,9 @@ async function cmdCheck(): Promise<number> {
         const r = (await reg.call('mech.build', {}, { hardware: false, via: 'cli' })) as Record<string, unknown>
         // a failing build whose every problem a person waived passes, as the layout gate counts it
         const wdb = r.passed === true ? null : new Work().db
-        const left = wdb ? unwaivedCaseFindings(wdb, loadJourney(wdb)) : null
+        let listed: string[] = []
+        try { listed = Object.keys((JSON.parse(readFileSync(join(root, CASE_JSON), 'utf8')) as { waived?: Record<string, string> }).waived ?? {}) } catch { /* unreadable: mech.build said so already */ }
+        const left = wdb ? unwaivedCaseFindings(wdb, loadJourney(wdb), listed) : null
         const allWaived = left !== null && left.all > 0 && left.open.length === 0
         const passed = r.passed === true || allWaived
         failures += passed ? 0 : 1
