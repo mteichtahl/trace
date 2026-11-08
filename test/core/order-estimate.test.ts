@@ -114,3 +114,14 @@ describe('what a cost limit leaves out (test-esp32-run2 R35)', () => {
     expect(orderEstimate({ quantity: 10, parts: parts({ total: 30 }), board: null, case: null, limits: [{ ...limits[0]!, excludes: ['case'] }] }).limits[0]!.compared).toBeUndefined()
   })
 })
+
+describe('the order estimate as cost.get answers it (test-esp32-run2 R35)', () => {
+  it('keeps what a limit leaves out and the range it was compared on', async () => {
+    const { estimateView } = await import('../../src/api/actions-cost.js')
+    const limits = [{ requirement: 'REQ-1db18b', kind: 'total' as const, amount: 100, currency: 'USD', source: 'REQ-1db18b', excludes: ['shipping' as const] }]
+    const e = orderEstimate({ quantity: 10, parts: parts({ total: 30 }), board: null, case: null, limits })
+    const l = estimateView(e).limits[0]!
+    expect(l).toMatchObject({ requirement: 'REQ-1db18b', excludes: ['shipping'] })
+    expect(l.compared).toEqual(e.limits[0]!.compared)
+  })
+})
