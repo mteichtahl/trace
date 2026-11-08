@@ -480,6 +480,13 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const untested = i.requirements.filter((q) => q.evidence === 'untested')
     const failing = i.requirements.filter((q) => q.evidence === 'failing')
     if (!i.requirements.length) return notMet('untested', 'No requirements are recorded.')
+    // the coverage criterion waived for the revision covers what is untested before boards exist (test-esp32-run2
+    // R59: trace recommended that waiver, and this check still said "23 requirements untested"); failing still counts
+    const covered = i.r?.waivers.find((w) => w.closedAt === null && w.targetKind === 'criterion' && w.target === 'signoff.coverage')
+    if (untested.length && covered) {
+      if (failing.length) return notMet('untested', `${plural(failing.length, 'requirement')} failing and not waived: ${ids(failing)}.`)
+      return met('untested', `${plural(untested.length, 'requirement')} untested, under the waiver of the coverage criterion${covered.caughtWhere ? ` (checked at ${covered.caughtWhere.replace(/\.$/, '')})` : ''}.`)
+    }
     if (untested.length) return notMet('untested', `${plural(untested.length, 'requirement')} untested: ${ids(untested)}.`)
     return failing.length ? notMet('untested', `${plural(failing.length, 'requirement')} failing and not waived: ${ids(failing)}.`) : met('untested')
   },
@@ -498,7 +505,11 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   },
   'release-review/cost': (i) => {
     const b = i.r?.journey.build
-    return b && b.unit_cost !== null ? met('cost', `${b.quantity} boards at ${b.currency} ${b.unit_cost} each.`) : notMet('cost', 'Set the expected unit cost in the project\'s build plan.')
+    if (b && b.unit_cost !== null) return met('cost', `${b.quantity} boards at ${b.currency} ${b.unit_cost} each.`)
+    // a build budget states the expected cost for the build quantity as well (test-esp32-run2 R59: a US$100 budget for
+    // 10 boards, and the check asked for a unit cost no one had set)
+    if (b && b.budget !== null) return met('cost', `${b.quantity} boards within ${b.currency} ${b.budget}.`)
+    return notMet('cost', 'Set the expected unit cost or the build budget in the project\'s build plan.')
   },
 
   'release-review/decision': (i) => {
