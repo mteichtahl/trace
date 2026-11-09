@@ -18,6 +18,7 @@ import type { Criterion, EvidenceRef } from '@/lib/types'
 import type { RunRecordView } from '@/lib/types-s1'
 import { type FileRef, useFileUrl } from '@/components/files/data'
 import { FindingsList } from './findings'
+import { CRITERION_SKILLS, SKILL_NAMES } from '@/lib/step-skills'
 
 const PlotCard = lazy(() => import('@/components/chat/cards').then((m) => ({ default: m.PlotCard })))
 
@@ -36,8 +37,27 @@ export function EvidenceBody({ repo, criterion, opened }: { repo: string; criter
       {criterion.stale && <p className="text-muted-foreground">{criterion.stale}</p>}
       {listed.length > 0 && <CheckedList repo={repo} items={listed} />}
       {!isRun && !listed.length && <p>{ev?.summary ?? 'trace has not recorded what this criterion was checked on yet.'}</p>}
+      {criterion.status === 'not_met' && <DoneIn repo={repo} criterion={criterion.id} />}
       {isRun && ev?.id && <RunEvidence repo={repo} id={ev.id} fallback={ev.summary} />}
     </div>
+  )
+}
+
+/**
+ * Where a person meets a criterion that is theirs to do (the pin plan is met in Pin plan review): a not-met panel
+ * that said only "not recorded yet" left the signer with nowhere to go (test-esp32-run3 S10).
+ */
+function DoneIn({ repo, criterion }: { repo: string; criterion: string }) {
+  const skill = CRITERION_SKILLS[criterion]
+  if (!skill) return null
+  return (
+    <p>
+      You meet this in{' '}
+      <Link to="/p/$id/do/$skill" params={{ id: projectId(repo), skill }} className="inline-flex items-center gap-1 text-primary hover:underline">
+        {SKILL_NAMES[skill] ?? skill} <ExternalLink className="size-3" />
+      </Link>
+      .
+    </p>
   )
 }
 
