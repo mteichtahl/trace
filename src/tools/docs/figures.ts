@@ -27,7 +27,7 @@ import { openProject, Work } from '../../core/store.js'
 import { readOutput } from '../../core/artifact-store.js'
 import { VALUE_KINDS } from '../../docs/catalog.js'
 import { recordedValues, valuesTable } from '../../docs/values.js'
-import { backendFor, runJob } from '../../gpu/jobs.js'
+import { FUNCTION_MAX_SECONDS, backendFor, runJob } from '../../gpu/jobs.js'
 import { pyDir } from '../mech/engine.js'
 import { tools as protocolTools } from '../protocol/tools.js'
 import { logoPaths } from '../../docs/logo.js'
@@ -158,7 +158,9 @@ const figures = defineTool({
           const id = work.start('docs.drawing', { subject: step, args: { step } })
           try {
             const r = await runJob({
-              kind: 'cad', timeoutSeconds: 600, env, inputs: { 'case.step': join(root, step) }, outputs: ['drawing.svg', 'exploded.svg', 'drawing.json'],
+              // the cad function's whole allowance: 600 s killed a 270-face case twice on it (test-esp32-run3 S19), a
+              // drawing that took 64 s on a laptop; four exact hidden-line projections are slow there
+              kind: 'cad', timeoutSeconds: FUNCTION_MAX_SECONDS, env, inputs: { 'case.step': join(root, step) }, outputs: ['drawing.svg', 'exploded.svg', 'drawing.json'],
               argv: [python, '-m', 'tracebridge.mech', 'drawing', '--step', '{in:case.step}', '--out', '{dir}/out'],
             })
             const svg = r.outputs['drawing.svg']
