@@ -5,7 +5,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { answeredRequest } from '../../src/api/actions-journey.js'
-import { REQUIREMENT_CHANGE_SAID, editsView, requirementAsked, requirementEdits, withRequirementEdits } from '../../src/api/requirement-edits.js'
+import { REQUIREMENT_CHANGE_SAID, editsView, quotedChange, requirementAsked, requirementEdits, withRequirementEdits } from '../../src/api/requirement-edits.js'
 import type { JobRow } from '../../src/core/job-index.js'
 
 const PIN = 'J2 pin order is GND, 3V3, SCL, SDA'
@@ -111,5 +111,19 @@ describe('the words and the recommendation', () => {
     expect(withRequirementEdits(failing, editsView(edit, true, null)).why).toMatch(/^Changes a requirement .* The erc check failed/)
     expect(editsView([], true, null)).toBeNull()
     expect(withRequirementEdits(accept, null)).toBe(accept)
+  })
+})
+
+describe('quotedChange', () => {
+  it('quotes a long criterion around where it changed, not its unchanged opening twice (test-esp32-run3 S11)', () => {
+    const head = 'The board has a 4-pin 2.54 mm header with pins in the order GND, VCC, SCL, SDA starting at pin 1 (inferred: the listed order read from pin 1), and VCC on it '
+    const [b, a] = quotedChange(`${head}measures 3.3 V ± 0.1 V with the module running.`, `${head}measures between 3.0 V and 3.6 V with the module running (the ESP32-C3-MINI-1 VDD33 range).`)
+    expect(b).not.toBe(a)
+    expect(b).toContain('3.3 V ± 0.1 V')
+    expect(a).toContain('between 3.0 V and 3.6 V')
+    expect(b.startsWith('"…')).toBe(true)
+    // short ones in full
+    expect(quotedChange('3.3 V', '3.0 to 3.6 V')).toEqual(['"3.3 V"', '"3.0 to 3.6 V"'])
+    expect(quotedChange(null, 'x')).toEqual(['none', '"x"'])
   })
 })
