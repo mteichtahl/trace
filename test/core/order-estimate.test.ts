@@ -9,6 +9,13 @@ const parts = (o: Partial<Parameters<typeof orderEstimate>[0]['parts']> = {}) =>
 })
 
 describe('cost limits from the requirements', () => {
+  it('reads "USD 100 covers PCB, assembly, parts and extended-part fees …; not shipping" as a total that leaves shipping out (test-esp32-run3 S9)', () => {
+    const l = costLimitOf({ id: 'REQ-027', text: 'USD 100 covers PCB, assembly, parts and extended-part fees for the 10 units; not shipping, case printing or the OLED module.', tags: ['stated'] })
+    expect(l).toMatchObject({ requirement: 'REQ-027', kind: 'total', amount: 100, currency: 'USD' })
+    expect(l!.excludes).toEqual(expect.arrayContaining(['shipping', 'case']))
+    // an amount with no cost word is still not a cost limit
+    expect(costLimitOf({ id: 'REQ-9', text: 'The display shows 100 lines.' })).toBeNull()
+  })
   it('reads a total and a per-board limit', () => {
     expect(costLimitOf({ id: 'REQ-4ce9e8', text: 'The whole project shall cost at most 100 USD.', tags: ['cost'] })).toMatchObject({ kind: 'total', amount: 100, currency: 'USD' })
     expect(costLimitOf({ id: 'REQ-f3f79d', text: 'Each board shall cost at most 8 USD.' })).toMatchObject({ kind: 'per_board', amount: 8 })

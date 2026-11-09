@@ -197,7 +197,9 @@ export function orderEstimate(i: EstimateInput): OrderEstimate {
 
 const MONEY = /(?:(US\$|USD|AU\$|A\$|AUD|EUR|€|GBP|£|\$)\s*(\d+(?:\.\d+)?))|(?:(\d+(?:\.\d+)?)\s*(USD|US\$|AUD|EUR|GBP|dollars?)\b)/i
 const PER_BOARD = /\b(?:per|each|every|a)\s+(?:board|unit|pcb|device)\b|\bper[- ]board\b|\/\s*board\b|\bunit cost\b/i
-const ABOUT_COST = /\b(?:cost|costs|price|budget|spend)\b/i
+// "USD 100 covers PCB, assembly, parts and extended-part fees …" is a cost limit too: it names no cost word but covers
+// fees with an amount (test-esp32-run3 S9: missed, the estimate fell back to the build plan's US$100 with shipping in)
+const ABOUT_COST = /\b(?:cost|costs|price|prices|priced|budget|spend|fees?|covers?)\b/i
 
 function currencyOf(sym: string): string {
   const s = sym.toUpperCase()
