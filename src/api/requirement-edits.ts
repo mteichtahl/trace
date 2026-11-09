@@ -122,13 +122,35 @@ export interface RequirementEditsView {
 const list = (xs: readonly string[]): string => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`)
 const quoted = (s: string | null): string => (s === null || s === '' ? 'none' : `"${s.length > 160 ? `${s.slice(0, 157)}…` : s}"`)
 
+/**
+ * Before and after, quoted: in full when short, or else around where they differ, so a long criterion whose change
+ * comes late does not read "from X … to X …" with the change cut off both times (test-esp32-run3 S11).
+ */
+export function quotedChange(before: string | null, after: string | null): [string, string] {
+  if (before === null || after === null || (before.length <= 160 && after.length <= 160)) return [quoted(before), quoted(after)]
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start++
+  let end = 0
+  while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++
+  // start a few words before the first difference, at a word boundary
+  let from = Math.max(0, start - 40)
+  if (from > 0) from = before.lastIndexOf(' ', from) + 1
+  const cut = (s: string): string => {
+    const stop = s.length - end
+    const piece = s.slice(from, Math.min(s.length, Math.max(stop, from) + 20))
+    const short = piece.length > 200 ? `${piece.slice(0, 197)}…` : piece
+    return `"${from > 0 ? '…' : ''}${short}${from + piece.length < s.length && piece.length <= 200 ? '…' : ''}"`
+  }
+  return [cut(before), cut(after)]
+}
+
 /** One requirement's edit in words. */
 export function editWords(e: RequirementEdit): string {
   if (e.parts.includes('removed')) return `${e.id} is removed from the record.`
   const out: string[] = []
   if (e.parts.includes('struck')) out.push(`it is marked ${e.after?.status ?? 'struck'}`)
-  if (e.parts.includes('acceptance')) out.push(`its acceptance criterion changes from ${quoted(e.before.acceptance)} to ${quoted(e.after?.acceptance ?? null)}`)
-  if (e.parts.includes('words')) out.push(`its words change from ${quoted(e.before.text)} to ${quoted(e.after?.text ?? null)}`)
+  if (e.parts.includes('acceptance')) { const [b, a] = quotedChange(e.before.acceptance, e.after?.acceptance ?? null); out.push(`its acceptance criterion changes from ${b} to ${a}`) }
+  if (e.parts.includes('words')) { const [b, a] = quotedChange(e.before.text, e.after?.text ?? null); out.push(`its words change from ${b} to ${a}`) }
   return `${e.id}: ${out.join('; ')}.`
 }
 
