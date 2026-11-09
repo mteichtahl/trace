@@ -15,6 +15,8 @@ Lines only, no shading: they print sharply at any size and the PDF keeps them as
 from __future__ import annotations
 
 import json
+import sys
+import time
 from pathlib import Path
 
 from build123d import Compound, Draft, ExportSVG, ExtensionLine, LineType, Location, Shape, Unit, import_step
@@ -30,6 +32,11 @@ def _parts(shape: Shape) -> list[tuple[str, Shape]]:
     if not kids:
         return [(getattr(shape, "label", "") or "case", shape)]
     return [(getattr(k, "label", "") or f"part {i + 1}", k) for i, k in enumerate(kids)]
+
+
+def _said(what: str, since: float) -> None:
+    """How long a step took, on stderr: a drawing killed at its time limit says where it was (test-esp32-run3 S19)."""
+    print(f"drawing: {what} in {time.monotonic() - since:.1f} s", file=sys.stderr, flush=True)
 
 
 def _project(shape: Shape, eye: tuple[float, float, float], up: tuple[float, float, float]):
@@ -51,7 +58,9 @@ def _dim(a: tuple[float, float], b: tuple[float, float], offset: float, draft: D
 
 def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, object]:
     out.mkdir(parents=True, exist_ok=True)
+    t = time.monotonic()
     case = import_step(str(step))
+    _said(f"read {step.name} ({len(case.faces())} faces)", t)
     whole: Shape = case
     if board and board.exists():
         whole = Compound(children=[case, import_step(str(board))])
@@ -60,9 +69,15 @@ def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, objec
     draft = Draft(font_size=3.5, decimal_precision=1, display_units=False, unit=Unit.MM, arrow_length=2.5, extension_gap=1)
 
     # third-angle: top above front, right side to the right of front
+    t = time.monotonic()
     top_v, top_h, (tw, td) = _project(whole, (0, 0, 1), (0, 1, 0))
+    _said("top view", t)
+    t = time.monotonic()
     front_v, front_h, (fw, fh) = _project(whole, (0, -1, 0), (0, 0, 1))
+    _said("front view", t)
+    t = time.monotonic()
     side_v, side_h, (sw, sh) = _project(whole, (1, 0, 0), (0, 0, 1))
+    _said("side view", t)
     at_top = Location((0, fh + GAP_MM, 0))
     at_side = Location((fw + GAP_MM, 0, 0))
     svg = ExportSVG(unit=Unit.MM, line_weight=LINE, margin=12)
@@ -75,9 +90,11 @@ def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, objec
         if edges:
             svg.add_shape([e.moved(loc) for e in edges], layer=layer)
     # overall width under the front view, height left of it, depth right of the side view
+    t = time.monotonic()
     svg.add_shape(_dim((0, 0), (fw, 0), 8, draft), layer="dims")
     svg.add_shape(_dim((0, fh), (0, 0), 8, draft), layer="dims")
     svg.add_shape(_dim((fw + GAP_MM, 0), (fw + GAP_MM + sw, 0), 8, draft), layer="dims")
+    _said("dimensions (their text loads the system fonts)", t)
     svg.write(str(out / "drawing.svg"))
 
     # exploded three-quarter view: each part lifted by its order, the lowest first
@@ -87,7 +104,9 @@ def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, objec
     if board and board.exists():
         b = import_step(str(board))
         moved.insert(1 if len(moved) > 1 else 0, b.moved(Location((0, 0, lift * 0.5))))
+    t = time.monotonic()
     ex_v, ex_h, _ = _project(Compound(children=moved), (1, -1, 0.8), (0, 0, 1))
+    _said("exploded view", t)
     ex = ExportSVG(unit=Unit.MM, line_weight=LINE, margin=12)
     ex.add_layer("visible", line_weight=LINE)
     ex.add_layer("hidden", line_weight=THIN, line_color=0xbebebe, line_type=LineType.ISO_DASH)
