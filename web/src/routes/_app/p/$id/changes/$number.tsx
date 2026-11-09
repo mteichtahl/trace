@@ -19,6 +19,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ChevronRight, CircleCheck, CircleDashed, FileStack, Loader2, ShieldAlert, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { MoreForAdmins } from '@/components/more-for-admins'
+import { ErrorState } from '@/components/states'
 import { CHECK_ICON, CheckRow, CheckSheet, ChecksSheet, checksLine, checksState, order } from '@/components/changes/check-sheet'
 import { ChangeChecks, jobFor } from '@/components/changes/change-checks'
 import { RunSheet } from '@/components/run-sheet'
@@ -34,7 +35,7 @@ import { viewerKind } from '@/components/files/kinds'
 import { ChangeRequirements } from '@/components/changes/change-requirements'
 import { DecisionBar } from '@/components/changes/decision-bar'
 import { RequirementEditsNotice, acceptWithEdits } from '@/components/changes/requirement-edits'
-import { useChangeActions } from '@/components/changes/use-change-actions'
+import { refusalWords, useChangeActions } from '@/components/changes/use-change-actions'
 import { TabSkeleton, useCoverage } from '@/components/project/shared'
 import { Rich } from '@/components/rich'
 import { Markdown } from '@/components/chat/markdown'
@@ -128,6 +129,11 @@ function Review() {
         </div>
         <MoreForAdmins links={[d.url ? { label: 'This change on GitHub', href: d.url } : null]} />
       </div>
+      {/* a refused accept is kept on the page until the next try, not only in a toast that is gone in seconds
+          (test-esp32-run3 S18: GitHub refused the merge and the page looked unchanged) */}
+      {d.state === 'open' && actions.accept.isError && actions.accept.variables?.number === number && (
+        <ErrorState className="mt-4" title={<><strong className="font-medium">The change was not accepted.</strong> {refusalWords(actions.accept.error)}</>} />
+      )}
       {d.requirement_edits && d.state === 'open' && <RequirementEditsNotice className="mt-4" edits={d.requirement_edits} />}
       {d.rule_blocks && d.state === 'open' && <RuleFix repo={repo} change={d} onFixed={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })} note={note.trim()} />}
 
