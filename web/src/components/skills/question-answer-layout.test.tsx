@@ -48,4 +48,12 @@ describe('Question answer, the runs it cites', () => {
       .toEqual([{ repo: 'acme/board', id: 'r1' }, { repo: 'acme/board', id: 'r2' }, { repo: 'acme/board', id: 'r3' }])
     expect(questionRuns({})).toEqual([])
   })
+
+  it('finds a cited run the view sends as its id only, as the question view does (test-esp32-run3 S13)', async () => {
+    const { questionRuns, withRunLinks } = await import('./conversation-skills')
+    const q = withRunLinks({ sources: [{ kind: 'run' as const, id: '3831604cf5694c02', label: 'render.board top/bottom/iso' }, { kind: 'record' as const, id: 'x', label: 'x' }] }, 'mteichtahl/test-esp32-run3')
+    expect(q!.sources![0]!.to).toBe('/p/mteichtahl~test-esp32-run3/runs/3831604cf5694c02')
+    expect(q!.sources![1]!.to).toBeUndefined()
+    expect(questionRuns(q!)).toEqual([{ repo: 'mteichtahl/test-esp32-run3', id: '3831604cf5694c02' }])
+  })
 })
