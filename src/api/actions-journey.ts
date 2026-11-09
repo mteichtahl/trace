@@ -70,7 +70,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, type CriterionRow, carryStage, designWorkLeft, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, withdrawWaiver, inboxItems,
-  closeOutOfDate, confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withAsks, withChanges, withPending, withStaleEvidence, staleCriteria,
+  closeOutOfDate, confirmCriterion, dismissStuck, guardsFabricate, isViewer, journeyView, loadJourney, markOutOfDate, mergeAgentFacts, nextStep, openedBy, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withAsks, withChanges, withPending, withStaleEvidence, staleCriteria, type EvidenceCheck,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -585,7 +585,7 @@ export function ownedWork(stage: StageId, id: string, text: string): { agent?: (
  * The start is logged before the job is asked for, so a look while it starts reads "starting"; a refused start is
  * logged too, with its reason, so the next step says why. Answers what started, or why not.
  */
-export async function startOwnedWork(ctx: Context, repo: string, r: Pick<JourneyRecord, 'journey'>, id: string, text: string, o: { auto: boolean }): Promise<{ started?: string; jobId?: string; jobError?: string; skipped?: true }> {
+export async function startOwnedWork(ctx: Context, repo: string, r: Pick<JourneyRecord, 'journey'>, id: string, text: string, o: { auto: boolean; evidence?: EvidenceCheck | null | undefined }): Promise<{ started?: string; jobId?: string; jobError?: string; skipped?: true }> {
   const stage = r.journey.currentStage
   const work = ownedWork(stage, id, text)
   const what = text.replace(/\.$/, '')
@@ -598,7 +598,11 @@ export async function startOwnedWork(ctx: Context, repo: string, r: Pick<Journey
     const now = loadJourney(db)
     const since = now ? stageSince(now) : 0
     if (o.auto && now?.decisions.some((d) => (d.kind === OWNED_STARTED || d.kind === OWNED_REFUSED) && d.ref === id && d.at >= since)) return { result: { ok: false }, changed: false }
-    const seen = now && facts ? mergeAgentFacts(now, facts) : now
+    const merged = now && facts ? mergeAgentFacts(now, facts) : now
+    // met as the gate reads it: a check whose run is not in the accepted design (or is out of date) does not count, so
+    // it does not stop the start the gate is waiting on (test-esp32-run3 S16: an agent's check cited a run a lost job
+    // never pushed; the start was skipped as "met" on every look while the gate read not met, and nothing ran)
+    const seen = merged && o.evidence ? withStaleEvidence(merged, o.evidence) : merged
     if (o.auto && seen?.criteria.find((c) => c.id === id)?.status === 'met') return { result: { ok: false }, changed: false }
     decide(db, {
       kind: OWNED_STARTED, stage, ref: id, by,
@@ -629,9 +633,9 @@ export async function startOwnedWork(ctx: Context, repo: string, r: Pick<Journey
 }
 
 /** journey.get's step for trace's criterion with nothing working on it (ownedDue): its work started now when due. */
-async function ownedNow(ctx: Context, repo: string, r: JourneyRecord, next: NextStep, due: OwnedDue, viewer: Viewer): Promise<{ step: NextStep; stopped: boolean; started?: string }> {
+async function ownedNow(ctx: Context, repo: string, r: JourneyRecord, next: NextStep, due: OwnedDue, viewer: Viewer, evidence: EvidenceCheck | null | undefined): Promise<{ step: NextStep; stopped: boolean; started?: string }> {
   if (due.state !== 'start') return ownedStep(next, due, viewer)
-  const s = await startOwnedWork(ctx, repo, r, due.criterion, due.text, { auto: true })
+  const s = await startOwnedWork(ctx, repo, r, due.criterion, due.text, { auto: true, evidence })
     .catch((e: unknown): Awaited<ReturnType<typeof startOwnedWork>> => ({ jobError: e instanceof Error ? e.message : String(e) }))
   if (s.skipped) return ownedStep(next, { ...due, state: 'starting' }, viewer)
   if (s.jobError || !s.started) return ownedStep(next, { ...due, state: 'stopped', why: `trace could not start its work: ${(s.jobError ?? 'it did not accept the job').replace(/\.$/, '')}.` }, viewer)
@@ -765,7 +769,7 @@ export const JOURNEY_ACTIONS = {
     // or when it cannot, the step says so with Start it (journey.start_work), never "trace is working" over nothing
     const due = waits.step !== reviewing || held || open.error ? null
       : ownedDue(waits.step, r, { gates: view.gates, rows: jobs.rows, working, queued: jobs.queue?.queued.length ?? 0, changes: open.list.length, at })
-    const owned = due ? await ownedNow(ctx, repo, r, waits.step, due, viewer) : null
+    const owned = due ? await ownedNow(ctx, repo, r, waits.step, due, viewer, staleRun) : null
     const next = owned?.step ?? waits.step
     const stages = waitsOnSteps(owned?.stopped || (lostNext !== drafted && lostNext.job_id) ? stoppedSteps(view.stages) : view.stages, waits.owner)
     return {
