@@ -145,7 +145,7 @@ function changesApi(gh: GitHubApi): Required<Pick<GitHubApi, 'pullStatus' | 'pul
 }
 
 /** What a project's settings and GitHub say about telling trace's pull requests apart, and its hold label. */
-export interface ProjectRule extends TraceRule { hold: string }
+export interface ProjectRule extends TraceRule { hold: string; requiredCheck?: string }
 
 /**
  * The project's rule (src/api/changes.ts TraceRule) and hold label, kept SETTINGS_TTL_MS: its default branch (GitHub),
@@ -159,6 +159,7 @@ export async function projectRule(ctx: Context, repo: string): Promise<ProjectRu
     const { branch } = await gh.defaultBranch(repo)
     let prefix = 'claude/'
     let hold = 'no-automerge'
+    let requiredCheck = 'tests pass'
     try {
       const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, branch))
       try {
@@ -166,6 +167,7 @@ export async function projectRule(ctx: Context, repo: string): Promise<ProjectRu
         // an empty prefix means "the agents' default" to the agents (src/agents/worker/prompt.ts), so here too
         prefix = cfg.worker.own_branch_prefix || 'claude/'
         hold = cfg.labels.hold
+        requiredCheck = cfg.build.required_check
       } finally {
         t.cleanup()
       }
@@ -173,7 +175,7 @@ export async function projectRule(ctx: Context, repo: string): Promise<ProjectRu
       // the defaults: what a project without settings has
     }
     const agentLogin = ctx.deps.agentLogin || (await gh.repoVariable?.(repo, 'TRACE_AGENT_LOGIN').catch(() => null)) || null
-    return { repo, defaultBranch: branch, prefix, agentLogin, hold }
+    return { repo, defaultBranch: branch, prefix, agentLogin, hold, requiredCheck }
   }, SETTINGS_TTL_MS)
 }
 
@@ -410,7 +412,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     // the requirements its own tests cover: the accepted design has no test for them yet, this change adds one
     // (test-esp32-run2 R47: 33 tests added and every requirement read "No test yet")
     ...(read?.record?.tested?.requirements.length ? { requirements_tested: [...read.record.tested.requirements] } : {}),
-    recommendation: withRequirementEdits(recommendationOf(facts, { passed, requirements, from: sum.from }), edits),
+    recommendation: withRequirementEdits(recommendationOf(facts, { passed, reported: checksList.map((c) => c.name), ...(rule.requiredCheck ? { required: rule.requiredCheck } : {}), requirements, from: sum.from }), edits),
     ...(edits ? { requirement_edits: edits } : {}),
     ...acceptance(facts, write),
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },

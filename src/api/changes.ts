@@ -613,7 +613,7 @@ const list = (xs: readonly string[]): string => (xs.length <= 1 ? xs.join('') : 
  * What trace recommends, and why, from the facts only. `passed`: the names of the checks that passed, when known (the
  * review page has them; a list only has counts). `requirements`: the ids the change names.
  */
-export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]; requirements?: readonly string[]; from?: string; at?: number } = {}): Recommendation {
+export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]; reported?: readonly string[]; required?: string; requirements?: readonly string[]; from?: string; at?: number } = {}): Recommendation {
   if (f.state === 'merged') return { verdict: 'none', why: 'It is already accepted into the design.' }
   if (f.state === 'closed') return { verdict: 'none', why: 'It was discarded.' }
   if (f.draft) return { verdict: 'wait', why: 'It is a draft: trace has not finished it yet.' }
@@ -651,6 +651,11 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   // which trace cannot give (GitHub refuses an approval from the account that opened it). A change just brought up to
   // date is "blocked" too, until its required checks report: none have run, so it is not that (test-esp32 #76: the
   // page said "Its checks passed, but …" beside "No checks have run on it yet")
+  // the check the repository requires never reported on it: GitHub did not start its build (test-esp32-run3 S17), not
+  // a review. Said only when the checks that ran are known and do not include it
+  if (f.mergeable === 'blocked' && (f.checks?.total ?? 0) > 0 && o.required && o.reported && !o.reported.includes(o.required)) {
+    return { verdict: 'wait', why: `The check this repository requires, "${o.required}", has not run on it: GitHub did not start its build. The checks that ran passed. Run its build again (GitHub Actions, build, Run workflow on its branch); trace recommends accepting once "${o.required}" passes.` }
+  }
   if (f.mergeable === 'blocked' && (f.checks?.total ?? 0) > 0) return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
   if (f.checks === null) return f.checks_denied ? { verdict: 'none', why: CHECKS_DENIED } : { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }

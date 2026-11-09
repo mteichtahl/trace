@@ -107,6 +107,11 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(verdictOf(facts({ mergeable: 'blocked' }))).toBe('blocked')
     expect(recommendationOf(facts({ mergeable: 'blocked' })).why).toMatch(/asks for a review trace cannot give.*admin can fix the rule from this page/)
     expect(recommendationOf(facts({ draft: true })).verdict).toBe('wait')
+    // test-esp32-run3 S17: the required check never ran on it (GitHub did not start its build): that, not a review
+    const notRun = recommendationOf(facts({ mergeable: 'blocked' }), { reported: ['open-pr', 'automerge', 'update-queue'], required: 'tests pass' })
+    expect(notRun).toMatchObject({ verdict: 'wait' })
+    expect(notRun.why).toMatch(/"tests pass", has not run on it: GitHub did not start its build/)
+    expect(recommendationOf(facts({ mergeable: 'blocked' }), { reported: ['check', 'tests pass', 'open-pr'], required: 'tests pass' }).why).toMatch(/asks for a review trace cannot give/)
     expect(acceptance(facts(), false)).toEqual({ may_accept: false, blockers: ['Only a contributor on this project can accept a change.'] })
     expect(acceptance(facts({ state: 'merged' }), true).blockers).toEqual(['It is already accepted into the design.'])
   })
