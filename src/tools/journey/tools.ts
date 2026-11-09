@@ -262,7 +262,7 @@ export const ask = defineTool({
     const s = journeyScope()
     checkEvidence(a.sources)
     const r = await record(s)
-    const { result: { id, repeat, askedBy, criteria } } = await s.facts.update((db) => {
+    const { result: { id, repeat, askedBy, criteria, answered } } = await s.facts.update((db) => {
       const out = askAgentQuestion(db, s.asker, { text: a.text, blocks: a.blocks, options: a.options, sources: a.sources, askedOfSub: a.sub ?? null, askedPart: a.ask }, r)
       return { result: out, changed: !out.repeat }
     })
@@ -274,6 +274,11 @@ export const ask = defineTool({
     const said = !repeat ? 'Asked.'
       : askedBy && askedBy !== s.asker.label ? `Not asked again: ${askedBy} already asks${about} in question ${id}, still open. Wait on its answer rather than asking the person a second time, and act on it when it comes.`
         : `Not asked again: question ${id} already asks this${about} and is still open.`
+    // answered a moment ago (the same agent, the same words): the answer, not a second question
+    if (answered) {
+      const answer = await readAnswer(s, id)
+      return { ...asked, already_answered: true, answered: answer, next: `Not asked again: you asked this in question ${id} and a person has answered it. Act on that answer and cite ${id}. If something has changed since, ask a new question that says what changed.` }
+    }
     if (!a.wait_minutes) return { ...asked, answered: null, next: `${said} Read the answer later with journey.status { question: "${id}" }, or ask again with wait_minutes.` }
     const out = await waitForAnswer(s, id, a.wait_minutes * 60_000, { events: eventsOf(process.env, s.repository) })
     return { ...asked, ...out }
