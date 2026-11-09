@@ -364,9 +364,12 @@ describe('merging the agents\' facts into the journey views', () => {
     // a change it waits on: out of date once that change is no longer open (known only to journey.get, which lists them)
     const docs = (await s.facts.update((db) => ({ result: addAgentQuestion(db, VERIFY, { text: 'The documents wait on the schematic: #6 is not merged. Write them from the branch, or wait?', blocks: 'the design document', options: opts }, r) }))).result
     const pin = (await s.facts.update((db) => ({ result: addAgentQuestion(db, VERIFY, { text: 'Pin #3 of J2 is open in the schematic: tie it to ground, or leave it?', blocks: 'the schematic', options: opts }, r) }))).result
+    // a pull request of trace's own is not one of the project's changes (test-esp32-run3 S20)
+    const theirs = (await s.facts.update((db) => ({ result: addAgentQuestion(db, VERIFY, { text: 'The drawing still hangs after the side view: retry it?', blocks: "the job \"trace now gives the case drawing 840 s (trace PR #482); acme/board PR #9 too\"", options: opts }, r) }))).result
     const rec = mergeAgentFacts(r, await s.read())
     const view = journeyView(r, CONTRIB, undefined, await s.read())
     const of = (x: ReturnType<typeof markOutOfDate>, q: string) => x.questions.find((y) => y.id === q)
+    expect(of(markOutOfDate(view, rec, []), theirs)).not.toHaveProperty('out_of_date')
     expect(of(markOutOfDate(view, rec, [6]), docs)).not.toHaveProperty('out_of_date')
     expect(of(markOutOfDate(view, rec, [7]), docs)?.out_of_date).toBe('Change #6 is no longer open (accepted or discarded since this was asked), so this may no longer need an answer.')
     // "pin #3" is not a change

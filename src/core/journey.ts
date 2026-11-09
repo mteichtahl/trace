@@ -1330,8 +1330,14 @@ export function criteriaOf(r: Pick<JourneyRecord, 'criteria'>, q: { text: string
  * merged or open ("#6 is not merged", "until #6 is accepted"). A bare "#3" (a pin, a step) is not one.
  */
 const CHANGE_NAMED = /\b(?:changes?|pull requests?|PRs?)\s+#(\d{1,6})\b|(?<![\w&])#(\d{1,6})\s+(?:is\s+|was\s+|has\s+|gets\s+)?(?:not\s+|still\s+|yet\s+|been\s+)*(?:merged|unmerged|open|accepted|in review)\b/gi
-const changesOf = (q: Pick<QuestionRow, 'text' | 'blocks'>): number[] =>
-  [...new Set([...`${q.text} ${q.blocks ?? ''}`.matchAll(CHANGE_NAMED)].map((m) => Number(m[1] ?? m[2])))]
+/** Words before a "PR #482" that put it in another repository: "trace PR #482", "trace's PR #482", "acme/board PR #3". */
+const ELSEWHERE = /(?:\btrace(?:['’]s)?|[\w.-]+\/[\w.-]+)\s+$/i
+const changesOf = (q: Pick<QuestionRow, 'text' | 'blocks'>): number[] => {
+  const text = `${q.text} ${q.blocks ?? ''}`
+  // a pull request of trace's own, or of another repository, is not one of this project's changes: "trace PR #482"
+  // marked a question out of date as "Change #482 is no longer open" (test-esp32-run3 S20)
+  return [...new Set([...text.matchAll(CHANGE_NAMED)].filter((m) => !ELSEWHERE.test(text.slice(Math.max(0, m.index - 60), m.index))).map((m) => Number(m[1] ?? m[2])))]
+}
 
 /**
  * Why an open question is out of date, or null (test-esp32 #108: "#6 is not merged" was still asked 40 minutes after #6
