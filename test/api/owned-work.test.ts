@@ -268,4 +268,19 @@ describe('a start decided from an older read (test-esp32-run2 R33)', () => {
     expect(started.length).toBe(before)
     expect(await decisions()).toEqual([])
   })
+
+  it('is made when the check that met it cites a run the accepted design does not hold (test-esp32-run3 S16)', async () => {
+    const r = (await journeyStore(ctx(ADMIN), REPO).read((d) => loadJourney(d)!)).result
+    await journeyStore(ctx(ADMIN), REPO).update((d) => {
+      d.prepare("DELETE FROM decisions WHERE kind LIKE 'work.%'").run()
+      setCriterion(d, 'signoff.coverage', 'met', [{ kind: 'run', ref: 'run-lost-job' }], 'seed')
+      return { result: null }
+    })
+    const before = started.length
+    const { startOwnedWork } = await import('../../src/api/actions-journey.js')
+    // the gate reads it not met: run-lost-job is on no accepted record
+    const s = await startOwnedWork(ctx(ADMIN), REPO, r, 'signoff.coverage', 'Every requirement is verified or waived.', { auto: true, evidence: { unaccepted: (id) => id === 'run-lost-job' } })
+    expect(s.skipped).toBeUndefined()
+    expect(started.length).toBe(before + 1)
+  })
 })
