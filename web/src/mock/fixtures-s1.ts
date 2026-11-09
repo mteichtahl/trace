@@ -709,8 +709,9 @@ QUESTIONS['acme/panel-controller'] = {
     { id: 'waive', label: 'Waive the Q1, R4, R5 findings', detail: 'The module glass covers the window; the fit engine does not model it.', waiver: 'Records a waiver in your name: 3 findings, rated cosmetic, this revision only. Risk: A part under the window could touch the display glass. Checked instead: Bring up, when the lid is fitted.' },
     { id: 'model', label: 'Model the module under the lid in case.py', detail: 'The fit is measured, not waived; about an hour more of agent time.' },
   ],
-  sources: [{ kind: 'run', id: 'run_fit7', label: 'run_fit7', summary: 'Case fit: 3 findings.', to: '/p/acme~panel-controller/runs/run_fit7' }],
-  searched: [{ kind: 'run', id: 'run_fit7', label: 'run_fit7', to: '/p/acme~panel-controller/runs/run_fit7' }],
+  // as the API sends them: a run by its id, no address (the page adds it, test-esp32-run3 S13)
+  sources: [{ kind: 'run', id: 'run_fit7', label: 'run_fit7', summary: 'Case fit: 3 findings.' }],
+  searched: [{ kind: 'run', id: 'run_fit7', label: 'run_fit7' }],
 }
 
 /**

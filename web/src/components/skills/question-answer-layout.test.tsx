@@ -1,3 +1,4 @@
+import type { EvidenceRef } from '@/lib/types'
 /**
  * Question answer's side panel keeps still while the answer is typed (test-esp32 #36): the "Does it last?" choices
  * were drawn under the answer as it is written, so typing moved them down and a click aimed at "Just this once" missed.
@@ -47,5 +48,14 @@ describe('Question answer, the runs it cites', () => {
     expect(questionRuns({ sources: [run('r1'), { kind: 'datasheet' as const, id: 'd', label: 'datasheet' }, run('r1'), run('r2')], searched: [run('r3'), run('r4')] }))
       .toEqual([{ repo: 'acme/board', id: 'r1' }, { repo: 'acme/board', id: 'r2' }, { repo: 'acme/board', id: 'r3' }])
     expect(questionRuns({})).toEqual([])
+  })
+
+  it('finds a cited run the view sends as its id only, as the question view does (test-esp32-run3 S13)', async () => {
+    const { questionRuns, withRunLinks } = await import('./conversation-skills')
+    const sources: EvidenceRef[] = [{ kind: 'run', id: '3831604cf5694c02', label: 'render.board top/bottom/iso' }, { kind: 'record', id: 'x', label: 'x' }]
+    const q = withRunLinks({ sources }, 'mteichtahl/test-esp32-run3')
+    expect(q!.sources![0]!.to).toBe('/p/mteichtahl~test-esp32-run3/runs/3831604cf5694c02')
+    expect(q!.sources![1]!.to).toBeUndefined()
+    expect(questionRuns(q!)).toEqual([{ repo: 'mteichtahl/test-esp32-run3', id: '3831604cf5694c02' }])
   })
 })

@@ -32,7 +32,7 @@ import { sharedReason, type QualityCheck } from '@/components/quality-bar'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { type ResultOf, call } from '@/lib/api'
+import { type ResultOf, call, projectId } from '@/lib/api'
 import { useCall } from '@/lib/queries'
 import type { CriterionStatus, EvidenceRef, Question } from '@/lib/types'
 import type { IntentDraft, IntentStatement, InterfaceField } from '@/lib/types-s1'
@@ -466,6 +466,17 @@ export function arrivingChoice(options: readonly { id: string }[], option: strin
 }
 
 /** The runs a question cites (its sources, then what it looked at), at most three, once each. Pure. */
+/**
+ * A question's cited runs with the address their chips and pictures need: the question view sends a run as its id
+ * only, so "approve the renders" showed no renders and its chip said "cited a run without saying what it shows"
+ * (test-esp32-run3 S13). Pure.
+ */
+export function withRunLinks<Q extends { sources?: readonly EvidenceRef[] | undefined; searched?: readonly EvidenceRef[] | undefined }>(q: Q | undefined, repo: string): Q | undefined {
+  if (!q) return q
+  const link = (e: EvidenceRef): EvidenceRef => (e.kind === 'run' && e.id && !e.to ? { ...e, to: `/p/${projectId(repo)}/runs/${e.id}` } : e)
+  return { ...q, ...(q.sources ? { sources: q.sources.map(link) } : {}), ...(q.searched ? { searched: q.searched.map(link) } : {}) }
+}
+
 export function questionRuns(q: { sources?: readonly EvidenceRef[] | undefined; searched?: readonly EvidenceRef[] | undefined }): { repo: string; id: string }[] {
   const seen = new Set<string>()
   return [...(q.sources ?? []), ...(q.searched ?? [])].flatMap((e) => {
@@ -508,7 +519,7 @@ export function answerChecks(d0: AnswerDraft, o: { recommended?: string; unit?: 
 export function QuestionAnswer({ repo, def, question, option }: { repo: string; def: SkillDef; question?: string | undefined; option?: string | undefined }) {
   const s = useSkill<AnswerDraft>(repo, def, { done: [], answer: '', value: '', source: '', lasts: '' }, { question })
   const v = s.view.data
-  const q = v?.question
+  const q = useMemo(() => withRunLinks(v?.question, repo), [v?.question, repo])
   const d = s.draft.data
   const set = (p: Partial<AnswerDraft>) => s.draft.setData((x) => ({ ...x, ...p }))
   const answer = useCall('question.answer', (a) => [['journey.get', a.repo], ['inbox']])
