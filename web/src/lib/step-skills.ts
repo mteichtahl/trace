@@ -40,7 +40,7 @@ const WORDS: [RegExp, string][] = [
   [/\bbring-?up\b.*\b(run|test)/i, 'bring-up-run'],
 ]
 
-const SKILL_NAMES: Record<string, string> = {
+export const SKILL_NAMES: Record<string, string> = {
   'requirements-review': 'Requirements review', 'architecture-choice': 'Architecture choice', 'schematic-finish': 'Schematic finish',
   'pin-plan-review': 'Pin plan review', 'placement-adjust': 'Placement adjust', 'board-setup': 'Board setup', 'release-review': 'Release review',
   'order-submit': 'Order submit', 'incoming-inspection': 'Incoming inspection', 'bench-setup': 'Bench setup', 'bring-up-run': 'Bring-up run',
