@@ -15,11 +15,12 @@ Lines only, no shading: they print sharply at any size and the PDF keeps them as
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 from pathlib import Path
 
-from build123d import Compound, Draft, ExportSVG, ExtensionLine, LineType, Location, Shape, Unit, import_step
+from build123d import Compound, Edge, ExportSVG, LineType, Location, Shape, Unit, import_step
 
 LINE = 0.35        # visible edges, mm on paper
 THIN = 0.18        # hidden edges and dimensions
@@ -39,6 +40,12 @@ def _said(what: str, since: float) -> None:
     print(f"drawing: {what} in {time.monotonic() - since:.1f} s", file=sys.stderr, flush=True)
 
 
+def _moved(edges, loc: Location) -> list[Edge]:
+    """`edges` moved by `loc`. build123d's Shape.moved copies each edge deeply, about 12 ms an edge: the views' few
+    hundred edges took 25 s here and longer on the cad function (test-esp32-run3 S19); OpenCascade's own move is instant."""
+    return [Edge(e.wrapped.Moved(loc.wrapped)) for e in edges]
+
+
 def _project(shape: Shape, eye: tuple[float, float, float], up: tuple[float, float, float]):
     """Visible and hidden edges of `shape` seen from direction `eye`, in the drawing's plane, its corner at (0, 0)."""
     c = shape.bounding_box().center()
@@ -48,12 +55,48 @@ def _project(shape: Shape, eye: tuple[float, float, float], up: tuple[float, flo
     edges = list(visible) + list(hidden)
     bb = Compound(children=edges).bounding_box() if edges else None
     shift = Location((-bb.min.X, -bb.min.Y, 0)) if bb else Location()
-    return ([e.moved(shift) for e in visible], [e.moved(shift) for e in hidden],
+    return (_moved(visible, shift), _moved(hidden, shift),
             (bb.size.X, bb.size.Y) if bb else (0.0, 0.0))
 
 
-def _dim(a: tuple[float, float], b: tuple[float, float], offset: float, draft: Draft) -> Compound:
-    return ExtensionLine(border=[(a[0], a[1], 0), (b[0], b[1], 0)], offset=offset, draft=draft)
+ARROW = 2.5        # dimension arrowheads, mm
+TEXT_MM = 3.5      # dimension text height, mm
+
+
+def _dim(a: tuple[float, float], b: tuple[float, float], normal: tuple[float, float], offset: float) -> tuple[list[Edge], tuple[float, float, float, bool]]:
+    """A dimension between `a` and `b`, set `offset` out along `normal`: its extension lines, line and arrowheads as plain
+    edges, and where its words go (x, y, value, upright). No build123d Draft: its text loads the system fonts through
+    OpenCascade, which hung the cad function's drawing until its 840 s limit (test-esp32-run3 S19). The words are written
+    into the SVG as text instead (_with_words)."""
+    (ax, ay), (bx, by), (nx, ny) = a, b, normal
+    length = math.hypot(bx - ax, by - ay)
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    pa, pb = (ax + nx * offset, ay + ny * offset), (bx + nx * offset, by + ny * offset)
+    line = lambda p, q: Edge.make_line((p[0], p[1], 0), (q[0], q[1], 0))  # noqa: E731
+    gap, over = 1.0, 1.5
+    edges = [line((ax + nx * gap, ay + ny * gap), (pa[0] + nx * over, pa[1] + ny * over)),
+             line((bx + nx * gap, by + ny * gap), (pb[0] + nx * over, pb[1] + ny * over)),
+             line(pa, pb)]
+    w = ARROW * 0.3
+    for tip, sx in ((pa, 1), (pb, -1)):
+        base = (tip[0] + ux * ARROW * sx, tip[1] + uy * ARROW * sx)
+        edges += [line(tip, (base[0] + nx * w, base[1] + ny * w)), line(tip, (base[0] - nx * w, base[1] - ny * w))]
+    mid = ((pa[0] + pb[0]) / 2 + nx * 1.2, (pa[1] + pb[1]) / 2 + ny * 1.2)
+    return edges, (mid[0], mid[1], length, abs(ux) >= abs(uy))
+
+
+def _with_words(svg_path: Path, words: list[tuple[float, float, float, bool]], color: str) -> None:
+    """Writes each dimension's value into the drawing as SVG text, at its model position (ExportSVG draws the model
+    flipped in y, so the text goes outside that group at (x, -y), reading upright)."""
+    text = svg_path.read_text()
+    parts = []
+    for x, y, value, upright in words:
+        turn = "" if upright else f' transform="rotate(-90 {x:.3f} {-y:.3f})"'
+        base = "hanging" if upright else "auto"
+        parts.append(f'<text x="{x:.3f}" y="{-y:.3f}"{turn} font-family="sans-serif" font-size="{TEXT_MM}" fill="{color}" '
+                     f'text-anchor="middle" dominant-baseline="{base}">{value:.1f}</text>')
+    at = text.rindex("</svg>")
+    svg_path.write_text(text[:at] + '  <g id="dims-text">' + "".join(parts) + "</g>\n" + text[at:])
 
 
 def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, object]:
@@ -66,7 +109,6 @@ def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, objec
         whole = Compound(children=[case, import_step(str(board))])
     bb = case.bounding_box()
     size = {"width_mm": round(bb.size.X, 2), "depth_mm": round(bb.size.Y, 2), "height_mm": round(bb.size.Z, 2)}
-    draft = Draft(font_size=3.5, decimal_precision=1, display_units=False, unit=Unit.MM, arrow_length=2.5, extension_gap=1)
 
     # third-angle: top above front, right side to the right of front
     t = time.monotonic()
@@ -78,6 +120,7 @@ def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, objec
     t = time.monotonic()
     side_v, side_h, (sw, sh) = _project(whole, (1, 0, 0), (0, 0, 1))
     _said("side view", t)
+    t = time.monotonic()
     at_top = Location((0, fh + GAP_MM, 0))
     at_side = Location((fw + GAP_MM, 0, 0))
     svg = ExportSVG(unit=Unit.MM, line_weight=LINE, margin=12)
@@ -88,14 +131,16 @@ def drawing(step: Path, out: Path, board: Path | None = None) -> dict[str, objec
                               (top_v, "visible", at_top), (top_h, "hidden", at_top),
                               (side_v, "visible", at_side), (side_h, "hidden", at_side)):
         if edges:
-            svg.add_shape([e.moved(loc) for e in edges], layer=layer)
-    # overall width under the front view, height left of it, depth right of the side view
+            svg.add_shape(_moved(edges, loc), layer=layer)
+    _said("views placed", t)
+    # overall width under the front view, height left of it, depth under the side view
     t = time.monotonic()
-    svg.add_shape(_dim((0, 0), (fw, 0), 8, draft), layer="dims")
-    svg.add_shape(_dim((0, fh), (0, 0), 8, draft), layer="dims")
-    svg.add_shape(_dim((fw + GAP_MM, 0), (fw + GAP_MM + sw, 0), 8, draft), layer="dims")
-    _said("dimensions (their text loads the system fonts)", t)
+    dims = [_dim((0, 0), (fw, 0), (0, -1), 8), _dim((0, 0), (0, fh), (-1, 0), 8),
+            _dim((fw + GAP_MM, 0), (fw + GAP_MM + sw, 0), (0, -1), 8)]
+    svg.add_shape([e for edges, _ in dims for e in edges], layer="dims")
+    _said("dimensions", t)
     svg.write(str(out / "drawing.svg"))
+    _with_words(out / "drawing.svg", [w for _, w in dims], "#0b5cad")
 
     # exploded three-quarter view: each part lifted by its order, the lowest first
     parts = sorted(_parts(case), key=lambda p: p[1].bounding_box().min.Z)
