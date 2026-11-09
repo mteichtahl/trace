@@ -199,7 +199,10 @@ export function sheetFileOf(where: string, files: readonly string[]): string | n
 /** Images runs made (SVG or PNG artifacts), newest first, as evidence paths files.url opens: runs/<id>/<name>. */
 export function runImages(db: DatabaseSync, kinds: readonly string[]): { path: string; run: string; kind: string; name: string; mime: string }[] {
   if (!kinds.length) return []
-  const q = `SELECT a.run_id, a.name, a.mime, r.kind FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.kind IN (${kinds.map(() => '?').join(',')}) AND (a.mime LIKE 'image/svg%' OR a.mime = 'image/png') ORDER BY r.started DESC, a.name LIMIT 200`
+  // a stored picture's type carries where it is kept ("image/png; trace-stored=<sha>:<bytes>"): an exact 'image/png'
+  // missed every render kept in the store, and the release review's board read "no drawing of it is recorded yet"
+  // over three renders (test-esp32-run3 S21)
+  const q = `SELECT a.run_id, a.name, a.mime, r.kind FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.kind IN (${kinds.map(() => '?').join(',')}) AND (a.mime LIKE 'image/svg%' OR a.mime = 'image/png' OR a.mime LIKE 'image/png;%') ORDER BY r.started DESC, a.name LIMIT 200`
   return rows(db, q, ...kinds).map((x) => ({ path: `runs/${String(x.run_id)}/${String(x.name)}`, run: String(x.run_id), kind: String(x.kind), name: String(x.name), mime: artifactMime(String(x.mime)) ?? '' }))
 }
 
