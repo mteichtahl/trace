@@ -248,7 +248,12 @@ export interface Asked {
   id: string; repeat: boolean
   /** folded: the agent that asked the open question (in words), and the criteria both questions are about */
   askedBy?: string | undefined; criteria?: string[] | undefined
+  /** the same agent asked this in the same words a moment ago and a person has answered it: that answer stands */
+  answered?: boolean | undefined
 }
+
+/** An answered question asked again in the same words by the same agent within this long gets its answer back. */
+export const ANSWERED_AGAIN_S = 60 * 60
 
 /**
  * Record an agent's question, or, when it asks again what an open question already asks, keep that one: a question that
@@ -265,6 +270,12 @@ export function askAgentQuestion(db: DatabaseSync, by: Asker, q: QuestionInput, 
   for (const t of options.flatMap((o) => o.waives?.targets ?? [])) {
     if (t.kind === 'criterion' && !record.criteria.some((c) => c.id === t.id)) throw new AgentFactError(`An option waives criterion ${t.id}, which this project does not have (journey.status lists them).`)
   }
+  // the same agent asking in the same words what a person answered a moment ago (test-esp32-run3 S14: a job that was
+  // started again asked its lost attempt's question seconds after the person answered it): that answer stands
+  const words = sameWords(text)
+  const recent = record.questions.find((x) => x.answeredAt !== null && now() - x.answeredAt < ANSWERED_AGAIN_S && sameWords(x.text) === words
+    && (db.prepare('SELECT agent FROM agent_questions WHERE id = ?').get(x.id) as { agent: string } | undefined)?.agent === by.agent)
+  if (recent) return { id: recent.id, repeat: true, answered: true }
   const repeat = openRepeat(db, record, text, q.blocks ?? null, options)
   if (repeat) return { id: repeat.id, repeat: true, ...(repeat.criteria.length ? { askedBy: repeat.askedBy, criteria: repeat.criteria } : {}) }
   const id = newId('aq')

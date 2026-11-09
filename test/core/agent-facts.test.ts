@@ -1,7 +1,7 @@
 /** The agents' facts beside the journey record: the store (conditional writes), the rules each fact must meet, and how the views merge them. */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  AgentFactError, AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, askAgentQuestion, loadAgentFacts, loadChecks, projectsFromEnv, resolveStuck,
+  ANSWERED_AGAIN_S, AgentFactError, AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, askAgentQuestion, loadAgentFacts, loadChecks, projectsFromEnv, resolveStuck,
 } from '../../src/core/agent-facts.js'
 import { S3Backend } from '../../src/core/central.js'
 import {
@@ -190,9 +190,26 @@ describe('merging the agents\' facts into the journey views', () => {
     expect((await ask('Is the coin cell the only source?')).result.repeat).toBe(false)
     const f = await s.read()
     await s.journey.update((db) => ({ result: answerQuestion(db, first.id, { hash: CONTRIB.hash, label: CONTRIB.label }, { option: 'a' }, { facts: f }) }))
-    const again = (await ask('What is the supply range?', await s.record())).result
+    // asked again in the same words by the same agent a moment after the answer: the answer stands (test-esp32-run3 S14)
+    expect((await ask('What is the supply range?', await s.record())).result).toEqual({ id: first.id, repeat: true, answered: true })
+    // by another agent, or in other words (what changed), it is a new question
+    const now = await s.record()
+    const other = (await s.facts.update((db) => ({ result: askAgentQuestion(db, { ...VERIFY, agent: 'impl', label: 'the Implementation specialist' }, { text: 'What is the supply range?', blocks: 'sizing the regulator', options: opts }, now) }))).result
+    expect(other.repeat).toBe(false)
+    const again = (await ask('The regulator changed: what is the supply range now?', await s.record())).result
     expect(again.repeat).toBe(false)
     expect(again.id).not.toBe(first.id)
+  })
+
+  it('an answered question asked again in the same words more than an hour later is a new question', async () => {
+    const s = await started()
+    const ask = (rec: Awaited<ReturnType<typeof s.record>>) => s.facts.update((db) => ({ result: askAgentQuestion(db, VERIFY, { text: 'What is the supply range?', options: opts }, rec) }))
+    const first = (await ask(await s.record())).result
+    const f = await s.read()
+    await s.journey.update((db) => ({ result: answerQuestion(db, first.id, { hash: CONTRIB.hash, label: CONTRIB.label }, { option: 'a' }, { facts: f }) }))
+    const rec = await s.record()
+    const old = { ...rec, questions: rec.questions.map((q) => (q.id === first.id ? { ...q, answeredAt: (q.answeredAt ?? 0) - ANSWERED_AGAIN_S - 1 } : q)) }
+    expect((await ask(old)).result.repeat).toBe(false)
   })
 
   // test-esp32 #158: the Verification and the EMC & Simulation specialists both asked to waive signoff.emc, in their own
