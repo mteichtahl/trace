@@ -2,6 +2,9 @@
  * The Case design skill's checks (src/api/skill-checks.ts, case-design/*) over the latest mech.build run, and the stale
  * check they share with mech.fit (src/tools/mech/stale.ts): met, not met, and not met when the build is stale.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { type CheckInput, checkSkill } from '../../src/api/skill-checks.js'
 import { type BuildInputs, ENGINE_VERSION, engineStamp, filesNow, sha256, staleReasons, staleSentence } from '../../src/tools/mech/stale.js'
@@ -101,5 +104,19 @@ describe('the stale check', () => {
     expect(e.ts).toBe(ENGINE_VERSION)
     expect(e.py_sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(engineStamp('/nonexistent')).toEqual({ ts: ENGINE_VERSION, py_version: null, py_sha256: null })
+  })
+
+  it('leaves the documents\' drawing out of the fingerprint: a change to it leaves the case current (test-esp32-run3 S24)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-engine-'))
+    const mech = join(dir, 'tracebridge', 'mech')
+    mkdirSync(mech, { recursive: true })
+    writeFileSync(join(mech, 'shell.py'), 'x = 1\n')
+    writeFileSync(join(mech, 'drawing.py'), 'y = 1\n')
+    const before = engineStamp(dir).py_sha256
+    writeFileSync(join(mech, 'drawing.py'), 'y = 2\n')
+    expect(engineStamp(dir).py_sha256).toBe(before)
+    writeFileSync(join(mech, 'shell.py'), 'x = 2\n')
+    expect(engineStamp(dir).py_sha256).not.toBe(before)
+    rmSync(dir, { recursive: true, force: true })
   })
 })

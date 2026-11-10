@@ -50,8 +50,15 @@ export interface BuildInputs {
 export const sha256 = (b: string | Uint8Array): string => createHash('sha256').update(b).digest('hex')
 
 /**
+ * The engine's modules that never shape the case or its fit: the line drawing for the documents reads the built case.
+ * A change to it made every case stale ("the enclosure engine's code changed") and the nightly check had the documents
+ * say the case must be built again (test-esp32-run3 S24).
+ */
+export const NOT_THE_CASE: ReadonlySet<string> = new Set(['drawing.py'])
+
+/**
  * The Python engine's stamp from its source folder (`<pyDir>/tracebridge/mech`): `__version__ = "…"` in __init__.py
- * when it states one, and a sha256 over its .py files (sorted by name, templates/ included). Nulls when the folder is
+ * when it states one, and a sha256 over its .py files (sorted by name, templates/ included, NOT_THE_CASE left out). Nulls when the folder is
  * not there.
  */
 export function engineStamp(pyDir: string | null): EngineStamp {
@@ -62,7 +69,7 @@ export function engineStamp(pyDir: string | null): EngineStamp {
     for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (e.name === '__pycache__' || e.name.startsWith('.')) continue
       if (e.isDirectory()) walk(join(d, e.name), `${rel}${e.name}/`)
-      else if (e.isFile() && e.name.endsWith('.py')) files.push(`${rel}${e.name}`)
+      else if (e.isFile() && e.name.endsWith('.py') && !NOT_THE_CASE.has(`${rel}${e.name}`)) files.push(`${rel}${e.name}`)
     }
   }
   walk(dir, '')
