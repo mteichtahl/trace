@@ -1660,5 +1660,17 @@ describe('a change says what it holds (test-esp32 log #144, #133)', () => {
     // each job's report is labelled with its job, oldest first (log #166)
     expect(summary.indexOf('**Earlier job:** drafted 12 intent statements from your answers')).toBeGreaterThan(-1)
     expect(summary.indexOf('**Earlier job:** drafted 12 intent statements from your answers')).toBeLessThan(summary.indexOf('**Latest job:** set the board size'))
+    // the specialist keeps its branch name: a job that ended before the branch's last accepted change was that change's,
+    // and is not said on this one (test-esp32-run3 S22). A change accepted after this one was opened does not count
+    const p = github.pulls.get(20)!
+    p.detail.created_at = new Date((now - 100) * 1000).toISOString()
+    github.mergedList.set(`${REPO}:${HANDOFF}`, { number: 19, mergedAt: new Date((now - 200) * 1000).toISOString() })
+    const next = (await run(USER, 'change.get', { repo: REPO, number: 20 })).summary as string[]
+    expect(next.join('\n')).not.toMatch(/drafted 12 intent statements/)
+    expect(next).toContain('set the board size')
+    github.mergedList.set(`${REPO}:${HANDOFF}`, { number: 21, mergedAt: new Date((now - 50) * 1000).toISOString() })
+    const later = (await run(USER, 'change.get', { repo: REPO, number: 20 })).summary as string[]
+    expect(later.join('\n')).toMatch(/drafted 12 intent statements/)
+    github.mergedList.delete(`${REPO}:${HANDOFF}`)
   })
 })

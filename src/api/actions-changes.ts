@@ -367,7 +367,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const infra = await infraFailures(ctx, gh, repo, runs)
   if (infra) facts.infra = infra
   // every job's report on its branch: plain bullets for What trace did, the reports themselves behind More (#24)
-  const earlier = earlierSummaries(found.rows, job, pull.head.ref)
+  const earlier = earlierSummaries(found.rows, job, pull.head.ref, await lastAcceptedOn(ctx, gh, repo, pull))
   const report = agentReport({ jobSummary: job.summary, earlier })
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
   const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body, request: jobRequest(job) })
@@ -461,11 +461,27 @@ async function failureText(ctx: Context, gh: GitHubApi, repo: string, id: string
  * The summaries of the other jobs that worked on `branch` before `job` (oldest first): a change two jobs made is said
  * by both (test-esp32 log #18). A delegated worker's job is its specialist's, so it is left out.
  */
-export function earlierSummaries(rows: readonly JobRow[], job: JobRow, branch: string): string[] {
+export function earlierSummaries(rows: readonly JobRow[], job: JobRow, branch: string, since?: number | null): string[] {
   const at = (j: JobRow): number => j.endedAt ?? j.updatedAt
-  return rows.filter((j) => j.branch === branch && j.id !== job.id && !j.parentJob && j.summary && at(j) <= at(job))
+  // a specialist keeps its branch name from change to change: a job that ended before the branch's last accepted change
+  // went in was that change's, not this one's (test-esp32-run3 S22: change 16 opened with change 14's "All 14 of their
+  // sections are still pending")
+  return rows.filter((j) => j.branch === branch && j.id !== job.id && !j.parentJob && j.summary && at(j) <= at(job) && (since == null || at(j) > since))
     .sort((a, b) => at(a) - at(b)).map((j) => j.summary as string)
 }
+
+/**
+ * When the change before this one on the same branch was accepted (seconds), or null: none, or GitHub will not say.
+ * Only one accepted before this change was opened counts: a later one is the next change on the branch.
+ */
+async function lastAcceptedOn(ctx: Context, gh: GitHubApi, repo: string, pull: { number: number; created_at: string; head: { ref: string } }): Promise<number | null> {
+  if (typeof gh.mergedPullFor !== 'function') return null
+  const merged = await cached(ctx.deps.githubCache, repo, `merged-on:${pull.head.ref}:${pull.number}`, () => gh.mergedPullFor!(repo, pull.head.ref), LAST_ACCEPTED_TTL_MS).catch(() => null)
+  if (!merged || merged.number === pull.number) return null
+  const at = Date.parse(merged.mergedAt) / 1000
+  return at <= Date.parse(pull.created_at) / 1000 ? at : null
+}
+const LAST_ACCEPTED_TTL_MS = 10 * 60_000
 
 /** How long a change's title in the list is kept: its head commit's contents never change. */
 const LIST_TITLE_TTL_MS = 10 * 60_000
