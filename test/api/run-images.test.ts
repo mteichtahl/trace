@@ -3,7 +3,7 @@
  * type that says where ("image/png; trace-stored=<sha>:<bytes>") and is a picture all the same (test-esp32-run3 S21:
  * the release review's board read "no drawing of it is recorded yet" over three renders).
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -15,7 +15,9 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('runImages', () => {
   it('finds stored renders, inline pictures and SVGs, and nothing else', () => {
+    // the project's database file is what makes `dir` a project: without it openProject used the per-user scratch database
     mkdirSync(join(dir, '.trace'), { recursive: true })
+    writeFileSync(join(dir, '.trace', 'project.db'), '')
     const db = openProject(dir)
     db.prepare("INSERT INTO runs (id, kind, started, status) VALUES ('r1', 'render.board', 2, 'pass'), ('x1', 'kicad.export', 1, 'pass'), ('d1', 'docs.check', 3, 'pass')").run()
     const add = db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)')

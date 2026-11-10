@@ -1708,7 +1708,7 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
     waivers: r.waivers.map((w) => waiverView(r, w, viewer, opened)),
     // said as the rest of the page says them: datasheets, findings and criteria in words, not codes (test-esp32-run2
     // R55: the log read "ea9a571f p2" and "five layout.fit findings" where the gate page said "the datasheet, page 2")
-    decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: plainCriterionRefs(plainCodeRefs(d.summary), r.criteria), by: d.by })),
+    decisions: oneEntryPerWaiverAnswer(r.decisions.slice(0, 200)).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: plainCriterionRefs(plainCodeRefs(d.summary), r.criteria), by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
   }
 }
@@ -1779,6 +1779,34 @@ export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer
     ? `Once you accept it, its work counts in the design. Meanwhile, trace goes on with: ${lowerFirst(along.text)}.`
     : afterWords(r, next, here.steps)
   return { ...view, stages, next: { ...next, step: stepPlace(here.steps), after } }
+}
+
+const WAIVER_TAKEN = /^A waiver was taken on ([\s\S]+?) \(rated (\w+)\): ([\s\S]*)$/
+
+/**
+ * The decisions log as a person reads it: the waivers one answer took, side by side with the same rating and reason,
+ * are one entry naming each thing waived. Six waivers from one answer were six entries each repeating the whole
+ * 700-character reason (test-esp32-run3 S15). Newest first, as given; the merged entry keeps the newest one's id.
+ */
+export function oneEntryPerWaiverAnswer<D extends { kind: string; by: string | null; summary: string }>(ds: readonly D[]): D[] {
+  const out: D[] = []
+  let run: { first: D; targets: string[]; rated: string; rest: string } | null = null
+  const flush = (): void => {
+    if (!run) return
+    const { first, targets, rated, rest } = run
+    const on = targets.length === 1 ? targets[0] : `${targets.slice(0, -1).join('; ')}; and ${targets.at(-1)}`
+    out.push(targets.length === 1 ? first : { ...first, summary: `${targets.length} waivers were taken on ${on} (rated ${rated}): ${rest}` })
+    run = null
+  }
+  for (const d of ds) {
+    const m = d.kind === 'waiver.added' ? WAIVER_TAKEN.exec(d.summary) : null
+    if (m && run && run.first.by === d.by && run.rated === m[2] && run.rest === m[3]) { run.targets.unshift(m[1] as string); continue }
+    flush()
+    if (m) run = { first: d, targets: [m[1] as string], rated: m[2] as string, rest: m[3] as string }
+    else out.push(d)
+  }
+  flush()
+  return out
 }
 
 // ------------------------------------------------------------------ writes
