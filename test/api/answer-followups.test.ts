@@ -77,6 +77,8 @@ describe('an answer whose job is lost', () => {
     const r = await run(USER, 'question.answer', { repo: REPO, question, option: 'a', lasts: 'rule' })
     expect(r).toMatchObject({ jobId: `${S('1')}.job-c1` })
     expect(started.at(-1)).toMatchObject({ kind: 'task', agent: 'docs', branch: BRANCH, request: expect.stringMatching(/is answered/) })
+    // its job reads as the answer it carries on with, never "You asked: …" (test-esp32-run3 S6, S15)
+    expect(started.at(-1)?.headline).toMatch(/^Carrying on with the answer: Reopen the setup access point after 60 s/)
     expect(await followups()).toEqual([expect.objectContaining({ question, branch: BRANCH, agent: 'docs', job: 'job-c1', attempts: 1, state: 'pending', bySub: USER.sub })])
   })
 
@@ -92,7 +94,7 @@ describe('an answer whose job is lost', () => {
     const before = started.length
     const j = await run(USER, 'journey.get', { repo: REPO })
     expect(started.length).toBe(before + 1)
-    expect(started.at(-1)).toMatchObject({ agent: 'docs', branch: BRANCH, attempt: 2, requestedBySub: USER.sub, request: expect.stringMatching(/Reopen the setup access point after 60 s[\s\S]*An earlier job started to apply this answer stopped before it did \(job job-c1 was stopped \(the runtime is shutting down\)\)/) })
+    expect(started.at(-1)).toMatchObject({ agent: 'docs', branch: BRANCH, attempt: 2, headline: expect.stringMatching(/^Carrying on with the answer: /), requestedBySub: USER.sub, request: expect.stringMatching(/Reopen the setup access point after 60 s[\s\S]*An earlier job started to apply this answer stopped before it did \(job job-c1 was stopped \(the runtime is shutting down\)\)/) })
     expect(j.answers_restarted).toEqual([expect.stringMatching(/Documentation specialist again/)])
     expect(await followups()).toEqual([expect.objectContaining({ job: 'job-c2', attempts: 2, state: 'pending' })])
     // a second look at once starts nothing more: the new job is starting

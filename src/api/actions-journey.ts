@@ -173,6 +173,15 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
 /** What a person said their answer lasts as (Question answer's last step): a one-off, a rule, or a requirement change. */
 export type Lasts = 'once' | 'rule' | 'requirement'
 
+/**
+ * The headline of the job that carries on with an answer: the answer, never the request's first sentence ("You asked:
+ * Against the USD 100…" read as if the person had asked, test-esp32-run3 S6; a title from the middle of the question,
+ * S15).
+ */
+export function answeredHeadline(answer: string): string {
+  return `Carrying on with the answer: ${answer.replace(/\s+/g, ' ').trim()}`
+}
+
 /** The request of the task that carries an ended job on once its question is answered. */
 export function answeredRequest(a: {
   id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null; lasts?: Lasts | undefined; again?: string | undefined
@@ -270,7 +279,7 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
   // never say the agent carries on when nothing will: the answer waits for whichever job asks next
   if (!row || !agent || !branch) return { summary: `Answered. The job that asked has ended and could not be started again${!row ? ' (it is not in the project\'s job list)' : !agent ? ` (${row.agent ?? 'no'} agent is not a specialist)` : ' (it has no branch)'}: the answer is kept for its next job.` }
   const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: answered.answer, reason: answered.reason, by: answered.by, lasts, ...(stacked ? { stacked: { owner: stacked.owner } } : {}) })
-  const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, ...(stacked ? { stackOn: branch } : { branch }), requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+  const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, headline: answeredHeadline(answered.answer), agent, ...(stacked ? { stackOn: branch } : { branch }), requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
   // a start that was not accepted is kept too, with no job: trace starts it again (keepAnswers)
   await keep(r.accepted ? workerJobId(r.jobId) : null, 1)
   const who = `the ${SPECIALIST_WORDS[agent]} specialist`
@@ -330,7 +339,7 @@ export async function keepAnswers(ctx: Context, repo: string, followups: readonl
       ...(f.stackOn ? { stacked: { owner: place && 'owner' in place ? place.owner : null } } : {}),
     })
     const r = await (await ctx.deps.jobs()).startJob({
-      kind: 'task', repository: repo, request, agent, ...(f.stackOn ? { stackOn: f.stackOn } : { branch: f.branch }), requestedBy: f.by ?? label(ctx.principal), ...(f.bySub ? { requestedBySub: f.bySub } : {}), attempt: f.attempts + 1,
+      kind: 'task', repository: repo, request, headline: answeredHeadline(f.answer), agent, ...(f.stackOn ? { stackOn: f.stackOn } : { branch: f.branch }), requestedBy: f.by ?? label(ctx.principal), ...(f.bySub ? { requestedBySub: f.bySub } : {}), attempt: f.attempts + 1,
     }).catch((e: unknown) => ({ accepted: false, jobId: '', reason: e instanceof Error ? e.message : String(e) }))
     if (r.accepted) {
       await writeJourney(ctx, repo, (db) => { updateFollowup(db, f.question, { job: workerJobId(r.jobId) }, Date.now() / 1000); return { result: {} } }).catch(() => undefined)
