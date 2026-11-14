@@ -7,6 +7,8 @@
 import type { CapabilityUpdates } from '../mech/capabilities.js'
 
 export const UPDATES: CapabilityUpdates = {
-  checked: null,
-  figures: {},
+  checked: "2026-11-14",
+  figures: {
+    "track_mm.multilayer": { text: "0.10 / 0.10 mm", read: "2026-11-14" },
+  },
 }
