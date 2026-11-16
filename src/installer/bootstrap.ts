@@ -279,7 +279,7 @@ export async function resolveSelfBuild(a: Answers, token: string, d: SelfReposit
 /** The stack's settings from the answers (and, for the legacy memory's way out and the layout, what is deployed already).
  * `runners`: what apply chose; without it (the plan), the answers' connection, if any, and the stack's default. */
 export function infraInput(a: Answers, existing?: Existing | null, deploy?: LayoutDeploy, runners?: RunnersChoice): InfraInput {
-  const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null || p.generation > 0)
+  const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null || p.generation > 0 || p.forge === 'gitlab')
   const d: LayoutDeploy = deploy ?? layoutDeploys(a, existing).at(-1) ?? { layout: 'nested', why: '' }
   return {
     prefix: a.agents.prefix,
@@ -330,6 +330,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     ...(own.length ? {
       projectSettings: Object.fromEntries(own.map((p) => [p.repo, {
         ...(p.memoryEventExpiryDays !== null ? { memoryEventExpiryDays: p.memoryEventExpiryDays } : {}), ...(p.generation > 0 ? { generation: p.generation } : {}),
+        ...(p.forge === 'gitlab' ? { forge: 'gitlab' as const } : {}),
       }])),
     } : {}),
     adminEmail: a.adminEmail,
@@ -871,7 +872,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       try { pending = parsePending(await pendingIo.list(creds, a.aws.region, pendingBucket), (l) => log('check', l)) } catch (e) { log('check', `the projects created in the web app could not be read (${redact(e instanceof Error ? e.message : String(e), s)}); run the installer again to add them`) }
     }
     if (pending.length) {
-      const taken = absorb(a.projects, pending, (repo, branch) => ({ repo, branch, onboard: false, applySettings: false, memoryEventExpiryDays: null, generation: 0, create: null }))
+      const taken = absorb(a.projects, pending, (repo, branch) => ({ repo, branch, onboard: false, applySettings: false, memoryEventExpiryDays: null, generation: 0, forge: 'github' as const, create: null }))
       a = { ...a, projects: taken.projects }
       if (taken.absorbed.length) {
         const line = `Adding the project${taken.absorbed.length === 1 ? '' : 's'} created in the web app: ${taken.absorbed.join(', ')}.`

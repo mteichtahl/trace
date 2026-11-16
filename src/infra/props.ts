@@ -84,6 +84,10 @@ export const ProjectSettingsSchema = z.object({
    * is added again while a removed one's retained memory, delivery or secret (in its recovery window) still holds the
    * names; the old memory stays in the account, orphaned, and the new one starts empty. Never lower it. */
   generation: z.number().int().min(0).max(99).optional(),
+  /** Where its repository lives (docs/gitlab-projects.md): GitHub (unset), or trace's own GitLab, at
+   * `<prefix>/<name>` (src/core/gitlab-path.ts), which needs gitlab.enabled. A project moves by changing this; trace's
+   * mover does the rest. */
+  forge: z.enum(['github', 'gitlab']).optional(),
 }).strict()
 
 /**
@@ -437,6 +441,16 @@ export const InfraPropsSchema = z.object({
     if (listed.has(slug)) ctx.addIssue({ code: 'custom', path: ['ciRepositories', i], message: `${r} is one of the repositories already (a project has its own build runner): list it once` })
     else if (hashes.has(projectHash(slug))) ctx.addIssue({ code: 'custom', path: ['ciRepositories', i], message: `${r} and ${hashes.get(projectHash(slug))} have the same short hash ${projectHash(slug)}: rename one` })
   })
+  // a project on trace's GitLab needs the GitLab, and its name is its path there: two may not share one
+  const onGitlab = Object.entries(p.projectSettings).filter(([, v]) => v.forge === 'gitlab').map(([k]) => k)
+  if (onGitlab.length && !p.gitlab.enabled) ctx.addIssue({ code: 'custom', path: ['projectSettings', onGitlab[0] ?? '', 'forge'], message: 'a project on trace\'s GitLab needs gitlab.enabled' })
+  const names = new Map<string, string>()
+  for (const k of onGitlab) {
+    const name = (k.split('/').at(-1) ?? '').toLowerCase()
+    const had = names.get(name)
+    if (had) ctx.addIssue({ code: 'custom', path: ['projectSettings', k, 'forge'], message: `${k} and ${had} would both be ${p.prefix}/${name} on trace's GitLab: rename one` })
+    names.set(name, k)
+  }
   const seen = new Set<string>()
   for (const k of Object.keys(p.projectSettings)) {
     const slug = k.toLowerCase()
@@ -552,10 +566,10 @@ export function projectRefs(repositories: readonly string[]): ProjectRef[] {
 }
 
 /** One project's settings (projectSettings, keyed case-insensitively), with the installation's defaults filled in. */
-export function projectSettings(cfg: Pick<InfraProps, 'projectSettings' | 'memory'>, repository: string): { memoryEventExpiryDays: number; generation: number } {
+export function projectSettings(cfg: Pick<InfraProps, 'projectSettings' | 'memory'>, repository: string): { memoryEventExpiryDays: number; generation: number; forge: 'github' | 'gitlab' } {
   const slug = projectSlug(repository)
   const own = Object.entries(cfg.projectSettings).find(([k]) => k.toLowerCase() === slug)?.[1] ?? {}
-  return { memoryEventExpiryDays: own.memoryEventExpiryDays ?? cfg.memory.eventExpiryDays, generation: own.generation ?? 0 }
+  return { memoryEventExpiryDays: own.memoryEventExpiryDays ?? cfg.memory.eventExpiryDays, generation: own.generation ?? 0, forge: own.forge ?? 'github' }
 }
 
 /** What each project's GPU job definition asks for (src/infra/gpu.ts). src/gpu/batch.ts caps a job's `vcpus` hint at

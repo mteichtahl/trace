@@ -184,6 +184,8 @@ export const ProjectAnswer = z.object({
   /** Its names' generation (props.ts projectSettings.generation): 0 normally. The installer raises it, and saves it
    * here, when the project is added again while a removed copy's retained memory, delivery or secret holds its names. */
   generation: z.number().int().min(0).max(99).default(0),
+  /** Where its repository lives (docs/gitlab-projects.md): GitHub, or trace's own GitLab (needs agents.gitlabEnabled). */
+  forge: z.enum(['github', 'gitlab']).default('github'),
   /** A new repository: created (and scaffolded from this template) by the installer instead of onboarded with a PR.
    * null: it exists already. */
   create: z.object({
@@ -252,6 +254,7 @@ export const AnswersSchema = z.object({
   })
   if (Boolean(a.agents.webDomain) !== Boolean(a.agents.webCertificateArn)) ctx.addIssue({ code: 'custom', path: ['agents', a.agents.webDomain ? 'webCertificateArn' : 'webDomain'], message: 'the web app\'s custom domain needs its certificate (ACM, us-east-1), and the certificate its domain' })
   if (Boolean(a.agents.gitlabDomain) !== Boolean(a.agents.gitlabCertificateArn)) ctx.addIssue({ code: 'custom', path: ['agents', a.agents.gitlabDomain ? 'gitlabCertificateArn' : 'gitlabDomain'], message: 'GitLab\'s own domain needs its certificate (ACM, us-east-1), and the certificate its domain' })
+  a.projects.forEach((p, i) => { if (p.forge === 'gitlab' && !a.agents.gitlabEnabled) ctx.addIssue({ code: 'custom', path: ['projects', i, 'forge'], message: `${p.repo} is on trace's GitLab, which is not turned on (agents.gitlabEnabled)` }) })
   if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>

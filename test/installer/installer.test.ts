@@ -207,6 +207,9 @@ describe('answers', () => {
     expect(plan(own).find((s) => s.id === 'gitlab')?.detail).toContain('https://git.example.com')
     expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true, gitlabDomain: 'git.example.com' } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse(infraInput(own)).success).toBe(true)
+    const lab = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true }, projects: ANSWERS.projects.map((p, i) => (i === 0 ? { ...p, forge: 'gitlab' } : p)) })
+    expect(infraInput(lab).projectSettings).toEqual({ [ANSWERS.projects[0]!.repo]: { forge: 'gitlab' } })
+    expect(AnswersSchema.safeParse({ ...ANSWERS, projects: ANSWERS.projects.map((p) => ({ ...p, forge: 'gitlab' })) }).success).toBe(false)
   })
 
   it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {

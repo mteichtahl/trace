@@ -183,3 +183,13 @@ describe('GitLab in GitHub\'s words', () => {
     expect(gitlabRateLimitWords(429, new Headers({ 'retry-after': '30' }), 0)).toMatch(/try again in a minute/)
   })
 })
+
+describe('a project kept by trace\'s name, at its GitLab path', () => {
+  it('asks GitLab for <prefix>/<name> and names it as trace does in what comes back', async () => {
+    const { fetch, asked } = fakeFetch({ [`GET /projects/tr%2Fboard/merge_requests?state=opened&per_page=100&page=1`]: [200, [mr({ project_id: 9, source_project_id: 9 })]] })
+    const gl = new HttpGitLab('t', { base: BASE, fetch, pathOf: (r) => `tr/${r.split('/')[1]}` })
+    const [pull] = await gl.openPulls('mteichtahl/board')
+    expect(asked[0]?.path).toBe('/projects/tr%2Fboard/merge_requests?state=opened&per_page=100&page=1')
+    expect(pull?.headRepo).toBe('mteichtahl/board')
+  })
+})

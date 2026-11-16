@@ -142,4 +142,26 @@ describe('the installation with trace\'s GitLab', () => {
     expect(JSON.stringify(s.parent.findResources('AWS::BedrockAgentCore::Runtime'))).not.toContain('TRACE_GITLAB')
     expect(s.parent.findOutputs('GitlabUrl')).toEqual({})
   }, 300_000)
+
+  it('refuses a GitLab project without trace\'s GitLab, or two that would share a path there', () => {
+    expect(InfraPropsSchema.safeParse({ ...base, projectSettings: { 'mteichtahl/board': { forge: 'gitlab' } } }).success).toBe(false)
+    const two = InfraPropsSchema.safeParse({
+      ...base, repositories: ['mteichtahl/board', 'acme/board'], gitlab: { enabled: true },
+      projectSettings: { 'mteichtahl/board': { forge: 'gitlab' }, 'acme/board': { forge: 'gitlab' } },
+    })
+    expect(two.success).toBe(false)
+    expect(JSON.stringify(two.error?.issues)).toContain('would both be trace/board')
+  })
+
+  it('gives a project on trace\'s GitLab a role its default branch\'s pipelines assume with GitLab\'s ID token, and its own agents\' token', () => {
+    const cfg = InfraPropsSchema.parse({ ...base, repositories: ['mteichtahl/board', 'mteichtahl/other'], gitlab: { enabled: true }, projectSettings: { 'mteichtahl/board': { forge: 'gitlab' } } })
+    const s = synth(cfg, 'GitlabProject')
+    const all = JSON.stringify(s.all.toJSON())
+    expect(all).toContain('project_path:trace/board:ref_type:branch:ref:main')
+    expect(all).toContain('secret:trace/gitlab/agents/board-??????')
+    expect(all).not.toContain('trace/gitlab/agents/other')
+    const env = JSON.stringify(s.parent.findResources('AWS::BedrockAgentCore::Runtime'))
+    expect(env).toMatch(/TRACE_GITLAB_REPOS":"mteichtahl\/board"/)
+  }, 300_000)
 })
+

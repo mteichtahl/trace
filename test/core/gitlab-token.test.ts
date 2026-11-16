@@ -79,3 +79,11 @@ describe('the rotation function', () => {
     expect(JSON.stringify(logged)).not.toContain('glpat')
   })
 })
+
+describe('GitLab paths', () => {
+  it('a project is <prefix>/<name> on trace\'s GitLab, its token secret beside it', async () => {
+    const { gitlabProjectPath, gitlabAgentSecret } = await import('../../src/core/gitlab-path.js')
+    expect(gitlabProjectPath('trace', 'mteichtahl/Test-ESP32')).toBe('trace/test-esp32')
+    expect(gitlabAgentSecret('trace', 'mteichtahl/Test-ESP32')).toBe(agentTokenSecretName('trace', 'test-esp32'))
+  })
+})

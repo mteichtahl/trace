@@ -85,7 +85,7 @@
  * straight in the parent, as installations before nested stacks were made. The construct and its resources are the
  * same either way, with the same names, IAM and removal policies.
  */
-import { CfnOutput, Duration, NestedStack, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
+import { CfnJson, CfnOutput, Duration, Fn, NestedStack, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
 import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import type * as ecr from 'aws-cdk-lib/aws-ecr'
 import * as events from 'aws-cdk-lib/aws-events'
@@ -117,6 +117,7 @@ import {
 } from './props.js'
 import { projectRoleNames } from '../core/github-app.js'
 import { brokerInvokeStatements } from './github-app.js'
+import { gitlabAgentSecret, gitlabProjectPath } from '../core/gitlab-path.js'
 
 /** A project's job-events topic, and its EventBridge rule: `<prefix>-<hash>-batch-events` (src/gpu/batch.ts reads the
  * prefix and hash back from the topic's name to name its wait queues). */
@@ -222,6 +223,22 @@ export interface ProjectProps {
    * account's CodeBuild GitHub source credential (runners.auth 'token'); null while the connection is not authorized
    * yet (runners.connectionReady false), when the project gets no runner */
   runnerSource: { connectionArn: string | null; webhooks: string | null } | null
+  /** trace's own GitLab (src/infra/gitlab.ts): its address and the IAM OIDC provider for its pipeline ID tokens; null
+   * without one. Used only when the project lives there (projectSettings forge 'gitlab') */
+  gitlab?: { url: string; oidcProviderArn: string } | null
+}
+
+/**
+ * The principal for a GitLab project's pipelines: GitLab's ID token for this audience, from `project_path:<path>:…`
+ * matching `ref` (`ref_type:branch:ref:main`, or `*`). GitLab's address is CloudFront's, known only at deploy, so the
+ * condition keys (`<host>:aud`, `<host>:sub`) are made at deploy too (CfnJson).
+ */
+export function gitlabPrincipal(scope: Construct, id: string, o: { url: string; oidcProviderArn: string; path: string; ref: string }): iam.WebIdentityPrincipal {
+  const host = Fn.select(2, Fn.split('/', o.url))
+  // each operator's keys are made at deploy (an operator's value may be resolved late; the operators themselves not)
+  const equals = new CfnJson(scope, `${id}Aud`, { value: { [`${host}:aud`]: 'sts.amazonaws.com' } })
+  const like = new CfnJson(scope, `${id}Sub`, { value: { [`${host}:sub`]: `project_path:${o.path}:${o.ref}` } })
+  return new iam.WebIdentityPrincipal(o.oidcProviderArn, { StringEquals: equals, StringLike: like })
 }
 
 export class ProjectStack extends Construct {
@@ -596,19 +613,35 @@ export class ProjectStack extends Construct {
     })
     this.runtime.node.addDependency(role)
 
-    // ------------------------------------------------------------------ the repository's GitHub OIDC role
+    // ------------------------------------------------------------------ the repository's OIDC role: GitHub's, or trace's GitLab's
     const issuer = 'token.actions.githubusercontent.com'
+    const forge = projectSettings(cfg, repository).forge
+    const onGitlab = forge === 'gitlab' && p.gitlab
     this.actionsRole = new iam.Role(this, 'ActionsRole', {
       roleName: `${cfg.prefix}-gh-${hash}-${region}`,
       maxSessionDuration: Duration.hours(2),
-      description: `Assumed by ${slug}'s trace workflows on its default branch (GitHub OIDC)`,
-      assumedBy: new iam.WebIdentityPrincipal(p.oidcProviderArn, {
-        StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
-        // Only runs on the repository's default branch: workflow_run, issues, schedule and pushes to it. A branch or a
-        // pull request can't assume this role, so it can't reach the agent or the central store with its own code.
-        StringLike: { [`${issuer}:sub`]: githubSubjects(repository, cfg.githubSubjects, `:ref:refs/heads/${project.branch}`) },
-      }),
+      description: onGitlab
+        ? `Assumed by ${slug}'s trace pipelines on its default branch (trace's GitLab, OIDC)`
+        : `Assumed by ${slug}'s trace workflows on its default branch (GitHub OIDC)`,
+      // Only runs on the repository's default branch: a branch or a change can't assume this role, so it can't reach the
+      // agent or the central store with its own code. On GitLab, the project's path and its default branch alone.
+      assumedBy: onGitlab
+        ? gitlabPrincipal(this, 'GitlabTrust', { url: onGitlab.url, oidcProviderArn: onGitlab.oidcProviderArn, path: gitlabProjectPath(cfg.prefix, repository), ref: `ref_type:branch:ref:${project.branch}` })
+        : new iam.WebIdentityPrincipal(p.oidcProviderArn, {
+          StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
+          StringLike: { [`${issuer}:sub`]: githubSubjects(repository, cfg.githubSubjects, `:ref:refs/heads/${project.branch}`) },
+        }),
     })
+    // on trace's GitLab, the agents' token is the project's own secret (src/core/gitlab-token.ts): its worker and its
+    // pipelines read it, nothing else does
+    if (onGitlab) {
+      const agentToken = new iam.PolicyStatement({
+        sid: 'GitlabAgentToken', actions: ['secretsmanager:GetSecretValue'],
+        resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${gitlabAgentSecret(cfg.prefix, repository)}-??????`],
+      })
+      this.role.addToPolicy(agentToken.copy())
+      this.actionsRole.addToPolicy(agentToken.copy())
+    }
     this.actionsRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:InvokeAgentRuntime'],
       resources: [this.runtime.attrAgentRuntimeArn, `${this.runtime.attrAgentRuntimeArn}/*`],
@@ -634,7 +667,8 @@ export class ProjectStack extends Construct {
     // role is assumed from ANY of the repository's runs (open-pr runs on pushed branches, automerge on pull requests,
     // where the OIDC role above is refused) and may do nothing but ask the broker: a branch's run gets a token of the
     // app for its own repository, as it could use TRACE_TOKEN, and none of the agent, the central store or the models.
-    if (githubAppEnabled(cfg)) {
+    // (a project on trace's GitLab has its own token instead, above)
+    if (githubAppEnabled(cfg) && !onGitlab) {
       const ask = brokerInvokeStatements(partition, region, account, cfg.prefix)
       for (const st of ask) { this.role.addToPolicy(st.copy()); this.actionsRole.addToPolicy(st.copy()) }
       this.tokenRole = new iam.Role(this, 'TokenRole', {
@@ -654,7 +688,8 @@ export class ProjectStack extends Construct {
     // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job
     // assumes the OIDC role above for that, as before). With a connection, only once it is authorized (connectionReady)
     const { computeType, image, privileged } = cfg.runners
-    this.runner = p.runnerSource
+    // (a project on trace's GitLab gets its GitLab runner with its pipelines: docs/gitlab-projects.md, build step 5)
+    this.runner = p.runnerSource && !onGitlab
       ? new RunnerProject(this, 'Runner', {
           name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.runnerSource.connectionArn, webhooks: p.runnerSource.webhooks,
           computeType, image, privileged, runLogs: { prefix: cfg.prefix }, ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),

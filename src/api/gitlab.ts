@@ -101,10 +101,17 @@ export class HttpGitLab implements GitHubApi {
   private readonly base: string
   private readonly fetch: typeof fetch
 
-  /** `base`: the GitLab address, such as https://d123.cloudfront.net (its /api/v4 is added). */
-  constructor(private readonly token: string, o: { base: string; fetch?: typeof fetch }) {
+  private readonly pathOf: (repo: string) => string
+
+  /**
+   * `base`: the GitLab address, such as https://d123.cloudfront.net (its /api/v4 is added). `pathOf`: a project's path
+   * on GitLab from trace's name for it (src/core/gitlab-path.ts gitlabProjectPath); absent, the name is the path. What
+   * comes back names the project as trace does (a pull request's headRepo), whatever its path.
+   */
+  constructor(private readonly token: string, o: { base: string; fetch?: typeof fetch; pathOf?: (repo: string) => string }) {
     this.base = `${o.base.replace(/\/+$/, '').replace(/\/api\/v4$/, '')}/api/v4`
     this.fetch = o.fetch ?? fetch
+    this.pathOf = o.pathOf ?? ((r) => r)
   }
 
   private async req(method: string, path: string, body?: unknown): Promise<Response> {
@@ -146,7 +153,7 @@ export class HttpGitLab implements GitHubApi {
   }
 
   private p(repo: string): string {
-    return `/projects/${encodeURIComponent(repo)}`
+    return `/projects/${encodeURIComponent(this.pathOf(repo))}`
   }
 
   private f(path: string): string {

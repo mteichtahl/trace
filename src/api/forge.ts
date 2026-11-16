@@ -12,6 +12,7 @@
 import { z } from 'zod'
 import { GitHubError, type GitHubApi, HttpGitHub } from './github.js'
 import { HttpGitLab } from './gitlab.js'
+import { gitlabProjectPath } from '../core/gitlab-path.js'
 
 /** Every GitHubApi call that names a repository first. Typed as a record so a call added to GitHubApi must be listed. */
 const REPOSITORY_CALLS: Record<Exclude<keyof GitHubApi, 'request' | 'requestText'>, true> = {
@@ -89,7 +90,10 @@ export function forgeFromEnv(env: Record<string, string | undefined>, githubToke
   const repos = gitlabRepos(env.TRACE_GITLAB_REPOS)
   return forgeRouter({
     github: async () => new HttpGitHub(await githubToken()),
-    gitlab: url && arn ? async () => new HttpGitLab(env.TRACE_GITLAB_TOKEN?.trim() || await secretText(arn), { base: url }) : null,
+    // a project keeps trace's name for it wherever it lives; on GitLab it is at <prefix>/<name> (src/core/gitlab-path.ts)
+    gitlab: url && arn ? async () => new HttpGitLab(env.TRACE_GITLAB_TOKEN?.trim() || await secretText(arn), {
+      base: url, ...(env.TRACE_PREFIX ? { pathOf: (r: string) => gitlabProjectPath(env.TRACE_PREFIX as string, r) } : {}),
+    }) : null,
     onGitlab: (repo) => repos.has(repo.toLowerCase()),
   })
 }

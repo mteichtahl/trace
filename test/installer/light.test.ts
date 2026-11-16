@@ -293,7 +293,7 @@ describe('the plan', () => {
   })
 
   it('names the runners, integrations and new repositories, and on a re-run only what changed', () => {
-    const steps = plan({ ...a, projects: [...a.projects, { repo: 'marc/new-board', branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'kicad', private: true } }] })
+    const steps = plan({ ...a, projects: [...a.projects, { repo: 'marc/new-board', branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, forge: 'github' as const, create: { template: 'kicad', private: true } }] })
     expect(steps.find((s) => s.id === 'github')?.detail).toMatch(/import the agents' token as CodeBuild's GitHub source credential.*; create marc\/new-board first, as its runner needs the repository/)
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs/)
     expect(steps.find((s) => s.id === 'onboard')?.detail).toMatch(/open \(or refresh\) the onboarding PR in marc\/board; create marc\/new-board \(kicad\)/)

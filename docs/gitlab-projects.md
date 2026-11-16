@@ -71,7 +71,11 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
 - **Stacked changes keep working.** A dependent change's merge request targets its parent's branch, as now. GitLab
   retargets dependent merge requests on its own when the one below merges; the restack job still merges `main` up and
   reports conflicts, and trace's conflict resolver handles them as today.
-- **All projects live in one GitLab group**, `trace`, named per installation; a project's path is its slug.
+- **All projects live in one GitLab group**, the installation's prefix; a project's path there is its repository's
+  name (`<prefix>/<name>`, src/core/gitlab-path.ts). A project keeps its identity (`owner/name`, the key every name
+  and record of it is made from) wherever it lives; only its address changes, and two GitLab projects of one
+  installation may not share a name. Which forge a project is on is its `projectSettings` entry's `forge` (the
+  installer's project answer `forge`).
 - **Projects move both ways, as often as needed** (Marc, 16 November 2026: "allow users to move back and forth from
   GitHub and GitLab"). Each project lives on one forge at a time, chosen per project, and can move from GitHub to
   trace's GitLab and back again. So GitHub stays fully supported for projects: both forges are kept behind the `Forge`
@@ -148,7 +152,8 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
    with its health check.
 4. Identity: the group and projects, their settings and labels, protected branches and the agents' project tokens
    (src/installer/gitlab-setup.ts); then their rotation and the IAM OIDC provider for GitLab's pipeline ID tokens;
-   then each project's roles trusting it (with the project's forge in its record).
+   then each project's forge in its settings, its roles trusting GitLab's ID tokens, its own token secret, and the API
+   routing its calls there.
 5. CI: the generated `.gitlab-ci.yml`, the harness as a script, the per-project CodeBuild GitLab runner project.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
