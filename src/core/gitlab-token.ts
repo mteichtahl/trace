@@ -2,7 +2,8 @@
  * Keeping the agents' GitLab tokens alive (docs/gitlab-projects.md "Two identities"). Each project on trace's GitLab
  * has one `trace-agents` project access token (Developer role, its own bot user: src/installer/gitlab-setup.ts). GitLab
  * tokens expire; this rotates each one before it does and keeps its current value in Secrets Manager, at
- * `<prefix>/gitlab/agents/<slug>`, where only that project's roles may read it (granted with the project's roles).
+ * `<prefix>/gitlab/agents/<slug>`, where only that project's roles may read it (granted with the project's roles), and
+ * as the project's masked CI/CD variable TRACE_GITLAB_TOKEN, which its pipeline jobs act with.
  *
  * Rotation, not a new token: GitLab's rotate keeps the same bot user, so the project's TRACE_AGENT_LOGIN (how trace
  * tells its agents' changes from people's) never changes. Rotating revokes the old value at once, so callers read the
@@ -80,6 +81,10 @@ export async function rotateAgentTokens(d: RotationDeps): Promise<RotationReport
       const rotated = T.extend({ token: z.string() }).parse(await call('POST', `/projects/${p.id}/access_tokens/${t.id}/rotate`, { expires_at: expiresAt }))
       const login = z.object({ username: z.string() }).loose().parse(await call('GET', `/users/${rotated.user_id}`)).username
       await d.write(p.path, { token: rotated.token, expiresAt, login, project: p.path_with_namespace })
+      // and the project's pipelines get it as TRACE_GITLAB_TOKEN (masked, hidden from the job log): the harness's
+      // jobs act as the agents with it (src/harness/gitlab.ts)
+      const variable = { key: 'TRACE_GITLAB_TOKEN', value: rotated.token, masked: true, protected: false, raw: true }
+      try { await call('PUT', `/projects/${p.id}/variables/TRACE_GITLAB_TOKEN`, variable) } catch { await call('POST', `/projects/${p.id}/variables`, variable) }
       out.push({ project: p.path_with_namespace, outcome: 'rotated', detail: `until ${expiresAt}` })
     } catch (e) {
       out.push({ project: p.path_with_namespace, outcome: 'failed', detail: e instanceof Error ? e.message : String(e) })

@@ -3,9 +3,10 @@
 // there is no install step. CI fails if it is stale (`npm run build` then `git diff --exit-code harness/dist`).
 import { build } from 'esbuild'
 
-await build({
-  entryPoints: ['src/harness/index.ts'],
-  outfile: 'harness/dist/index.cjs',
+// the GitHub action's bundle, and the GitLab pipeline job's (src/harness/gitlab.ts: the same tasks, GitLab answering)
+for (const [entry, outfile] of [['src/harness/index.ts', 'harness/dist/index.cjs'], ['src/harness/gitlab-main.ts', 'harness/dist/gitlab.cjs']]) await build({
+  entryPoints: [entry],
+  outfile,
   bundle: true,
   platform: 'node',
   format: 'cjs',
