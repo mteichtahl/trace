@@ -14,6 +14,8 @@
  *   tracectl remote prompts list|get|set|reset|revert|history|diff|preview …  (src/login/prompts.ts)
  *   tracectl remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P] | sync OWNER/REPO [--force]
  *                                                       (src/login/kb.ts)
+ *   tracectl remote move OWNER/REPO --to gitlab|github [--now] [--watch] | move status|cancel OWNER/REPO
+ *                                                       (src/login/move.ts)
  *   tracectl users list | invite EMAIL [--class user|guest|admin] | class EMAIL CLASS
  *              | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]
  *
@@ -28,6 +30,7 @@ import { parseCliValue } from '../core/config.js'
 import { ApiError, invokeApi } from './invoke.js'
 import { remoteKb } from './kb.js'
 import { remoteMemory } from './memory.js'
+import { remoteMove } from './move.js'
 import { remotePrompts } from './prompts.js'
 import { LoginError, NO_INSTALLATION, login, logout } from './oauth.js'
 
@@ -118,7 +121,7 @@ export async function cmdWhoami(_argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ remote
 
-const REMOTE_USAGE = 'usage: tracectl remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] [--stack-on claude/BRANCH] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
+const REMOTE_USAGE = 'usage: tracectl remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] [--stack-on claude/BRANCH] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO … | move OWNER/REPO --to gitlab|github [--now] [--watch] | move status|cancel OWNER/REPO'
 
 export async function cmdRemote(argv: string[]): Promise<number> {
   return guarded(async () => {
@@ -181,6 +184,7 @@ export async function cmdRemote(argv: string[]): Promise<number> {
       case 'memory': return remoteMemory(rest)
       case 'prompts': return remotePrompts(rest)
       case 'kb': return remoteKb(rest)
+      case 'move': return remoteMove(rest)
       case 'job': {
         if (!rest[0]) break
         show(await invokeApi('job', { id: rest[0] }))
