@@ -34,6 +34,13 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import * as cr from 'aws-cdk-lib/custom-resources'
 import type { Construct } from 'constructs'
+import { join } from 'node:path'
+import * as events from 'aws-cdk-lib/aws-events'
+import * as targets from 'aws-cdk-lib/aws-events-targets'
+import * as lambda from 'aws-cdk-lib/aws-lambda'
+import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs'
+import * as logs from 'aws-cdk-lib/aws-logs'
+import { bundlingRoot } from './lockfile.js'
 
 export const GITLAB_URL_OUTPUT = 'GitlabUrl'
 export const GITLAB_ADMIN_TOKEN_OUTPUT = 'GitlabAdminTokenSecretArn'
@@ -42,6 +49,8 @@ export const gitlabAdminTokenSecretName = (prefix: string): string => `${prefix}
 export const gitlabUrlParameter = (prefix: string): string => `/${prefix}/gitlab/external-url`
 /** Where GitLab's own nightly backups go in the central bucket. */
 export const GITLAB_BACKUP_PREFIX = 'gitlab-backups/'
+export const GITLAB_OIDC_OUTPUT = 'GitlabOidcProviderArn'
+export const gitlabRotateName = (prefix: string): string => `${prefix}-gitlab-token-rotate`
 
 export interface GitlabProps extends NestedStackProps {
   prefix: string
@@ -52,6 +61,8 @@ export interface GitlabProps extends NestedStackProps {
   volumeGb: number
   /** the installation's own address for GitLab, with its certificate in ACM (us-east-1); absent: CloudFront's */
   domain?: { name: string; certificateArn: string } | undefined
+  /** the repository's root, for bundling the token rotation function */
+  root: string
 }
 
 /** The script the instance runs at first boot: install GitLab, keep its address in step, back it up, make the token. */
@@ -179,6 +190,8 @@ export class GitlabServer extends NestedStack {
   readonly url: string
   readonly adminTokenSecret: secrets.ISecret
   readonly distribution: cloudfront.Distribution
+  /** the IAM OIDC provider for GitLab's pipeline ID tokens (audience sts.amazonaws.com): the projects' roles trust it */
+  readonly oidc: iam.OidcProviderNative
 
   constructor(scope: Construct, id: string, p: GitlabProps) {
     super(scope, id, p)
@@ -287,6 +300,41 @@ export class GitlabServer extends NestedStack {
     })
     this.url = p.domain ? `https://${p.domain.name}` : `https://${this.distribution.distributionDomainName}`
     new ssm.StringParameter(this, 'Address', { parameterName: urlParam, stringValue: this.url, description: 'trace: GitLab\'s address (its external_url)' })
+
+    // ---- the agents' tokens, rotated twice a day (src/infra/lambda/gitlab-token-rotate.ts, src/core/gitlab-token.ts)
+    const agentSecrets = `arn:${partition}:secretsmanager:${region}:${account}:secret:${p.prefix}/gitlab/agents/*`
+    const rotateLogs = new logs.LogGroup(this, 'RotateLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+    const rotateRole = new iam.Role(this, 'RotateRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'trace: rotates the agents\' GitLab tokens; reads the admin token, writes the agents\' secrets',
+    })
+    rotateLogs.grantWrite(rotateRole)
+    this.adminTokenSecret.grantRead(rotateRole)
+    rotateRole.addToPolicy(new iam.PolicyStatement({ sid: 'AgentTokens', actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret'], resources: [agentSecrets] }))
+    rotateRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'NewAgentTokens', actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'], resources: [agentSecrets],
+      conditions: { StringEquals: { 'aws:RequestTag/trace:installation': p.prefix } },
+    }))
+    const rotate = new NodejsFunction(this, 'Rotate', {
+      functionName: gitlabRotateName(p.prefix),
+      entry: join(p.root, 'src', 'infra', 'lambda', 'gitlab-token-rotate.ts'),
+      ...bundlingRoot(p.root),
+      handler: 'handler', runtime: lambda.Runtime.NODEJS_22_X, architecture: lambda.Architecture.ARM_64,
+      memorySize: 256, timeout: Duration.minutes(5), role: rotateRole, logGroup: rotateLogs,
+      bundling: { format: OutputFormat.CJS, target: 'node22', externalModules: ['@aws-sdk/*'] },
+      environment: { TRACE_PREFIX: p.prefix, TRACE_GITLAB_URL: this.url, TRACE_GITLAB_ADMIN_SECRET: this.adminTokenSecret.secretArn },
+      description: 'trace: rotates the agents\' GitLab project tokens and keeps their values in Secrets Manager',
+    })
+    new events.Rule(this, 'RotateSchedule', {
+      description: 'trace: rotate the agents\' GitLab tokens twice a day',
+      schedule: events.Schedule.rate(Duration.hours(12)),
+      targets: [new targets.LambdaFunction(rotate, { retryAttempts: 2 })],
+    })
+
+    // ---- GitLab's pipeline ID tokens as AWS sign-in (each project's roles trust it, with their own project path)
+    // the native resource (no custom resource, no thumbprint: IAM checks the address's certificate itself)
+    this.oidc = new iam.OidcProviderNative(this, 'Oidc', { url: this.url, clientIds: ['sts.amazonaws.com'] })
+    new CfnOutput(this, 'OidcProviderArn', { value: this.oidc.oidcProviderArn })
 
     new CfnOutput(this, 'Url', { value: this.url })
     new CfnOutput(this, 'DistributionDomain', { value: this.distribution.distributionDomainName })

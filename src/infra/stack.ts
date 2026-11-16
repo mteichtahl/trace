@@ -92,7 +92,7 @@ import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
 import { GithubAppBroker } from './github-app.js'
-import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_URL_OUTPUT, GitlabServer } from './gitlab.js'
+import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_OIDC_OUTPUT, GITLAB_URL_OUTPUT, GitlabServer } from './gitlab.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { apiVocabularyStatement } from './voice.js'
 import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
@@ -417,11 +417,12 @@ export class TraceStack extends Stack {
     if (githubAppEnabled(cfg)) new GithubAppBroker(this, 'GithubAppBroker', { prefix: cfg.prefix, repositories: refs.map((r) => r.repository), root: REPO_ROOT })
     // ------------------------------------------------------------------ trace's own GitLab (src/infra/gitlab.ts)
     const gitlab = cfg.gitlab.enabled
-      ? new GitlabServer(this, 'Gitlab', { prefix: cfg.prefix, central, instanceType: cfg.gitlab.instanceType, volumeGb: cfg.gitlab.volumeGb, domain: cfg.gitlab.domain })
+      ? new GitlabServer(this, 'Gitlab', { prefix: cfg.prefix, central, instanceType: cfg.gitlab.instanceType, volumeGb: cfg.gitlab.volumeGb, domain: cfg.gitlab.domain, root: REPO_ROOT })
       : null
     if (gitlab) {
       new CfnOutput(this, GITLAB_URL_OUTPUT, { value: gitlab.url })
       new CfnOutput(this, GITLAB_ADMIN_TOKEN_OUTPUT, { value: gitlab.adminTokenSecret.secretArn })
+      new CfnOutput(this, GITLAB_OIDC_OUTPUT, { value: gitlab.oidc.oidcProviderArn })
     }
     // ------------------------------------------------------------------ run logs (src/infra/run-logs.ts)
     // what every job, tool call and check says while it runs, one stream per run (docs/progress-and-logs.md): written by

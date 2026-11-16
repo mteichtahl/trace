@@ -16,7 +16,7 @@ const ENV = { account: '123456789012', region: 'ap-southeast-2' }
 function gitlabTemplate(domain?: { name: string; certificateArn: string }): Template {
   const stack = new Stack(new App(), 'Parent', { env: ENV })
   const central = new s3.Bucket(stack, 'Central')
-  return Template.fromStack(new GitlabServer(stack, 'Gitlab', { prefix: 'tr', central, instanceType: 'm7g.large', volumeGb: 100, domain }))
+  return Template.fromStack(new GitlabServer(stack, 'Gitlab', { prefix: 'tr', central, instanceType: 'm7g.large', volumeGb: 100, domain, root: process.cwd() }))
 }
 
 describe('GitlabServer', () => {
@@ -61,6 +61,19 @@ describe('GitlabServer', () => {
   it('makes its two secrets, kept when the stack goes, the token a placeholder until the instance writes it', () => {
     t.hasResource('AWS::SecretsManager::Secret', { Properties: { Name: 'tr/gitlab/root', GenerateSecretString: Match.anyValue() }, DeletionPolicy: 'Retain' })
     t.hasResource('AWS::SecretsManager::Secret', { Properties: { Name: 'tr/gitlab/admin-token', SecretString: 'pending' }, DeletionPolicy: 'Retain' })
+  })
+
+  it('rotates the agents\' tokens twice a day, with a role that may only touch the agents\' secrets', () => {
+    t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'tr-gitlab-token-rotate' })
+    t.hasResourceProperties('AWS::Events::Rule', { ScheduleExpression: 'rate(12 hours)' })
+    const policies = JSON.stringify(t.findResources('AWS::IAM::Policy'))
+    expect(policies).toContain('secret:tr/gitlab/agents/*')
+    expect(policies).toContain('aws:RequestTag/trace:installation')
+  })
+
+  it('makes an IAM OIDC provider for GitLab\'s pipeline ID tokens, audience STS', () => {
+    t.resourceCountIs('AWS::IAM::OIDCProvider', 1)
+    t.hasResourceProperties('AWS::IAM::OIDCProvider', { ClientIdList: ['sts.amazonaws.com'] })
   })
 
   it('writes its address where the instance reads it: the distribution\'s, or the installation\'s own domain', () => {
@@ -121,6 +134,7 @@ describe('the installation with trace\'s GitLab', () => {
     expect(env).toContain('TRACE_GITLAB_SECRET_ARN')
     expect(Object.keys(s.parent.findOutputs('GitlabUrl'))).toEqual(['GitlabUrl'])
     expect(Object.keys(s.parent.findOutputs('GitlabAdminTokenSecretArn'))).toEqual(['GitlabAdminTokenSecretArn'])
+    expect(Object.keys(s.parent.findOutputs('GitlabOidcProviderArn'))).toEqual(['GitlabOidcProviderArn'])
   }, 300_000)
 
   it('without it, the API has no GitLab at all', () => {
