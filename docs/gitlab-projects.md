@@ -23,12 +23,16 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   stay on GitHub. An installation that reads `mteichtahl/trace` anonymously needs no GitHub token at all; the
   installer then asks for AWS credentials only.
 - **The installer deploys GitLab Community Edition** (free) in the installation's account, from the same CDK app:
-  - one EC2 instance running the official GitLab Omnibus package (8 GB memory class; GitLab's minimum is 4 GB, and
-    trace runs CI on CodeBuild, not on the instance, so it never needs more for build load),
+  - one EC2 instance (Graviton, `m7g.large` by default) running the official GitLab Omnibus package on Amazon Linux
+    2023 (8 GB memory; GitLab's minimum is 4 GB, and trace runs CI on CodeBuild, not on the instance, so it never needs
+    more for build load), in a private subnet with no SSH and no public address (admins reach the machine with Session
+    Manager),
   - its data on an encrypted EBS volume with daily snapshots kept 14 days (Data Lifecycle Manager) and GitLab's own
     backup to the central bucket nightly,
-  - in a private subnet, reached over HTTPS through CloudFront (the installation's own `*.cloudfront.net` address,
-    nothing to buy or set up), git over HTTPS only, no SSH,
+  - reached over HTTPS through CloudFront, with the instance as a VPC origin, so only CloudFront's origin-facing
+    addresses can reach it (the installation's own `*.cloudfront.net` address, nothing to buy or set up), git over
+    HTTPS only, no SSH; it learns its address from `/<prefix>/gitlab/external-url` in SSM and follows it when it
+    changes,
   - its root password and an admin token in Secrets Manager (`<prefix>/gitlab/root`, `<prefix>/gitlab/admin-token`),
     created by the installer on first start, never shown,
   - upgraded by the installer on GitLab's supported upgrade path, one required stop at a time, after a snapshot.
@@ -72,8 +76,9 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
 
 ## Rough running cost
 
-The GitLab instance is always on: roughly US$75 to 95 a month for the instance and its storage, depending on region,
-plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
+The GitLab instance is always on: roughly US$70 to 85 a month for a Graviton instance (`m7g.large`) and 100 GB of
+storage, depending on region, plus about US$35 for the NAT gateway its way out needs (packages, GitLab's webhooks to
+trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 
 ## Build order (a stack, each layer building and passing CI on its own)
 

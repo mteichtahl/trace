@@ -212,6 +212,21 @@ export const InfraPropsSchema = z.object({
   githubApp: z.object({
     enabled: z.boolean().default(false),
   }).strict().prefault({}),
+  /** trace's own GitLab, where project repositories live (docs/gitlab-projects.md, src/infra/gitlab.ts): Community
+   * Edition on one instance behind CloudFront, in a nested stack of its own. Off until the installer turns it on. */
+  gitlab: z.object({
+    enabled: z.boolean().default(false),
+    /** Graviton: GitLab's packages are built for arm64; 8 GB memory (GitLab's minimum is 4) */
+    instanceType: z.string().regex(/^[a-z0-9]+\.[a-z0-9]+$/).default('m7g.large'),
+    /** its data volume (GB): repositories, merge requests, uploads, and GitLab's local backup copies */
+    volumeGb: z.number().int().min(50).max(16_384).default(100),
+    /** the installation's own address for GitLab (e.g. git.trace-eda.com) and its certificate in ACM, us-east-1, as
+     * CloudFront needs; absent, GitLab answers on the distribution's own address */
+    domain: z.object({
+      name: z.string().regex(/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/, 'a host name such as git.example.com'),
+      certificateArn: z.string().regex(/^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]+$/, 'an ACM certificate in us-east-1 (CloudFront only takes those)'),
+    }).strict().optional(),
+  }).strict().prefault({}),
   /** The agents' memory: one AgentCore Memory per project (short-term events, long-term facts, session summaries,
    * preferences; src/infra/memory.ts). */
   memory: z.object({
