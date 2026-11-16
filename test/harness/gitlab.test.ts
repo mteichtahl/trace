@@ -1,0 +1,118 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+import { gitlabOctokit, ForgeRefusal } from '../../src/harness/gitlab-octokit.js'
+import { eventName, gitlabContext } from '../../src/harness/gitlab.js'
+import { gitlabCiTemplate, renderGitlabCi } from '../../src/core/gitlab-ci.js'
+
+const URL0 = 'https://git.example'
+const P = '/api/v4/projects/tr%2Fboard'
+
+function fake(routes: Record<string, [number, unknown]>) {
+  const asked: { method: string; path: string; body?: unknown }[] = []
+  const fetch = (async (u: string, init: RequestInit) => {
+    const url = new URL(u)
+    const path = url.pathname + url.search
+    const method = init.method ?? 'GET'
+    asked.push({ method, path, ...(init.body ? { body: JSON.parse(String(init.body)) } : {}) })
+    const hit = routes[`${method} ${path}`]
+    if (!hit) return new Response('{"message":"404"}', { status: 404 })
+    return new Response(JSON.stringify(hit[1]), { status: hit[0] })
+  }) as unknown as typeof globalThis.fetch
+  return { fetch, asked }
+}
+const mr = (o: Record<string, unknown> = {}) => ({
+  iid: 7, title: 'Regulator', description: 'b', state: 'opened', web_url: 'w', created_at: 'c', updated_at: 'u', source_branch: 'trace/power',
+  target_branch: 'main', sha: 'h1', labels: ['trace'], author: { username: 'project_9_bot_x', bot: true }, project_id: 9, source_project_id: 9,
+  detailed_merge_status: 'mergeable', ...o,
+})
+const client = (f: typeof globalThis.fetch, mergeRequests: number[] = []) => gitlabOctokit({ url: URL0, token: 't', project: 'tr/board', repository: 'mteichtahl/board', mergeRequests, fetch: f })
+
+describe('the harness\'s client on GitLab', () => {
+  it('lists merge requests as pull requests, named as trace names the project', async () => {
+    const { fetch } = fake({ [`GET ${P}/merge_requests?state=opened&target_branch=main&per_page=30&page=1`]: [200, [mr()]] })
+    const { data } = await client(fetch).rest.pulls.list({ owner: 'mteichtahl', repo: 'board', state: 'open', base: 'main' }) as { data: Record<string, unknown>[] }
+    expect(data[0]).toMatchObject({ number: 7, state: 'open', mergeable_state: 'clean', head: { ref: 'trace/power', sha: 'h1', repo: { full_name: 'mteichtahl/board' } }, base: { ref: 'main' }, labels: [{ name: 'trace' }], user: { login: 'project_9_bot_x', type: 'Bot' } })
+  })
+
+  it('comments on a merge request it has met, and on an issue otherwise', async () => {
+    const { fetch, asked } = fake({ [`POST ${P}/merge_requests/7/notes`]: [201, { id: 1 }], [`POST ${P}/issues/3/notes`]: [201, { id: 2 }] })
+    const gl = client(fetch, [7])
+    await gl.rest.issues.createComment({ issue_number: 7, body: 'on the change' })
+    await gl.rest.issues.createComment({ issue_number: 3, body: 'on the issue' })
+    expect(asked.map((a) => a.path)).toEqual([`${P}/merge_requests/7/notes`, `${P}/issues/3/notes`])
+  })
+
+  it('compares two refs both ways for ahead and behind', async () => {
+    const { fetch } = fake({
+      [`GET ${P}/repository/compare?from=main&to=trace%2Fpower&straight=false`]: [200, { commits: [{ id: 'a' }, { id: 'b' }], diffs: [{ new_path: 'x' }] }],
+      [`GET ${P}/repository/compare?from=trace%2Fpower&to=main&straight=false`]: [200, { commits: [{ id: 'c' }], diffs: [] }],
+    })
+    const { data } = await client(fetch).rest.repos.compareCommits({ base: 'main', head: 'mteichtahl:trace/power' })
+    expect(data).toMatchObject({ status: 'diverged', ahead_by: 2, behind_by: 1, files: [{ filename: 'x' }] })
+  })
+
+  it('starts a named pipeline for a workflow dispatch, its inputs as variables', async () => {
+    const { fetch, asked } = fake({ [`POST ${P}/pipeline`]: [201, { id: 4 }] })
+    await client(fetch).rest.actions.createWorkflowDispatch({ workflow_id: 'trace-deploy.yml', ref: 'main', inputs: { approval: 'a1' } })
+    expect(asked[0]?.body).toEqual({ ref: 'main', variables: [{ key: 'TRACE_WORKFLOW', value: 'trace-deploy' }, { key: 'TRACE_INPUT_APPROVAL', value: 'a1' }] })
+  })
+
+  it('refuses what GitLab\'s API cannot do, with a status the harness reads', async () => {
+    const { fetch } = fake({})
+    const e = await client(fetch).rest.repos.merge({ base: 'main', head: 'x' }).catch((x: unknown) => x)
+    expect(e).toBeInstanceOf(ForgeRefusal)
+    expect(e).toMatchObject({ status: 501 })
+  })
+
+  it('paginates like Octokit, flattening each page', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ iid: i + 1, title: 't', state: 'opened', web_url: 'w', created_at: 'c', updated_at: 'u' }))
+    const { fetch } = fake({
+      [`GET ${P}/issues?state=opened&per_page=100&page=1`]: [200, page1],
+      [`GET ${P}/issues?state=opened&per_page=100&page=2`]: [200, [{ iid: 101, title: 't', state: 'opened', web_url: 'w', created_at: 'c', updated_at: 'u' }]],
+    })
+    const gl = client(fetch)
+    const all = await gl.paginate(gl.rest.issues.listForRepo, { state: 'open' })
+    expect(all).toHaveLength(101)
+  })
+})
+
+describe('a GitLab job as the harness\'s event', () => {
+  it('maps GitLab\'s sources to GitHub\'s event names', () => {
+    expect(eventName('merge_request_event')).toBe('pull_request')
+    expect(eventName('push')).toBe('push')
+    expect(eventName('schedule')).toBe('schedule')
+    expect(eventName('api')).toBe('workflow_dispatch')
+  })
+
+  it('reads a merge request pipeline\'s change, keyed by trace\'s name for the project', () => {
+    const c = gitlabContext({
+      TRACE_REPOSITORY: 'mteichtahl/board', CI_PROJECT_PATH: 'tr/board', CI_SERVER_URL: URL0, CI_PIPELINE_ID: '55', CI_PIPELINE_SOURCE: 'merge_request_event',
+      CI_COMMIT_SHA: 'h1', CI_MERGE_REQUEST_IID: '7', CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: 'trace/power', CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main',
+      CI_MERGE_REQUEST_LABELS: 'trace,hold', GITLAB_USER_LOGIN: 'project_9_bot_x',
+    })
+    expect(c).toMatchObject({ repo: { owner: 'mteichtahl', repo: 'board' }, eventName: 'pull_request', runId: 55, ref: 'refs/heads/trace/power', sha: 'h1' })
+    expect(c.payload.pull_request).toMatchObject({ number: 7, head: { ref: 'trace/power' }, base: { ref: 'main' }, labels: [{ name: 'trace' }, { name: 'hold' }] })
+    expect(c.payload.sender).toEqual({ login: 'project_9_bot_x', type: 'Bot' })
+  })
+})
+
+describe('a project\'s .gitlab-ci.yml', () => {
+  const values = { source: 'mteichtahl/trace', ref: 'main', branch: 'main', repository: 'mteichtahl/board', runner: 'trace-ci-ab12cd34', hold: 'hold' }
+
+  it('fills every value, runs each job on its CodeBuild runner, and the queue one at a time', () => {
+    const y = renderGitlabCi(gitlabCiTemplate(process.cwd()), values)
+    expect(y).not.toMatch(/__TR_/)
+    expect(y).toContain('codebuild-trace-ci-ab12cd34-$CI_PROJECT_ID-$CI_PIPELINE_IID-$CI_JOB_NAME')
+    expect(y).toContain('resource_group: trace-update-queue')
+    expect(y).toContain('/harness/dist/gitlab.cjs')
+    expect(y).not.toContain('TRACE_TOKEN')
+  })
+
+  it('refuses a value that could break the file', () => {
+    expect(() => renderGitlabCi(gitlabCiTemplate(process.cwd()), { ...values, branch: 'main"\nevil: x' })).toThrow(/branch must be/)
+  })
+
+  it('the GitLab harness bundle is committed beside the GitHub one', () => {
+    expect(readFileSync('harness/dist/gitlab.cjs', 'utf8').slice(0, 80)).toMatch(/Generated by scripts\/bundle-harness\.mjs/)
+  })
+})

@@ -21,6 +21,10 @@ function gitlab(tokens: Record<number, { id: number; name: string; active: boole
       if (!m[2]) return ok(tokens[id] ?? [])
       return ok({ id: Number(m[2]), name: 'trace-agents', active: true, user_id: 900 + id, token: `glpat-new-${id}` })
     }
+    if (/^\/projects\/\d+\/variables/.test(path)) {
+      if (method === 'PUT') return new Response('{}', { status: 404 })
+      return ok({ key: 'TRACE_GITLAB_TOKEN' })
+    }
     const u2 = /^\/users\/(\d+)$/.exec(path)
     if (u2) return ok({ username: `project_${Number(u2[1]) - 900}_bot_x` })
     return new Response('{}', { status: 404 })
@@ -46,6 +50,8 @@ describe('rotateAgentTokens', () => {
     expect(kept.get('case')).toEqual({ token: 'glpat-new-2', expiresAt: day(3), login: 'project_2_bot_x', project: 'tr/case' })
     expect(gl.asked.find((a) => a.path.endsWith('/rotate'))).toMatchObject({ method: 'POST', path: '/projects/2/access_tokens/21/rotate', body: { expires_at: day(3) } })
     expect(gl.asked.some((a) => a.path.startsWith('/projects/3'))).toBe(false)
+    // the pipelines get it too, masked
+    expect(gl.asked.find((a) => a.method === 'POST' && a.path === '/projects/2/variables')?.body).toMatchObject({ key: 'TRACE_GITLAB_TOKEN', value: 'glpat-new-2', masked: true })
   })
 
   it('rotates a fresh token that has no stored value, so its value is kept', async () => {
