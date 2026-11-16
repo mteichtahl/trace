@@ -7,9 +7,13 @@
  * and its viewport pans and zooms from the Canvas frame's toolbar. Selecting a block (click, tap, or Tab then Enter)
  * lights it, every block it connects to in either direction, and the connections between them with what flows along
  * each; everything else fades. Clicking the empty canvas or pressing Escape clears it.
+ *
+ * No two blocks overlap: the drawn layout is spread apart (`separate`) before it is shown, and the person can drag a
+ * block anywhere in the frame; blocks in its way step aside as it moves, and where it is let go it stays (switching
+ * options keeps it there, as the layout is held still between options).
  */
 import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position } from '@xyflow/react'
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import type { CanvasFrameProps } from '@/components/canvas/canvas-frame'
 import { FlowCanvas, FlowView, HANDLE, type Lit, litClass, litOf, useFlowSelection } from '@/components/canvas/flow'
 import { StatusBadge } from '@/components/status-badge'
@@ -24,6 +28,57 @@ const BH = 92
 // words cannot be read (test-esp32-run2 R31: Architecture choice opened it at 65 %), so it opens at 0.8 from its top
 // left corner and the person drags it; Fit still shows the whole drawing
 export const FIT = { bounds: { x: -16, y: -16, width: W + 32, height: H + 32 }, readable: 0.8 }
+
+/** the least space between two blocks */
+export const GAP = 24
+/** how finely a free place is looked for */
+const STEP = 4
+
+type Point = { x: number; y: number }
+
+const clamp = (p: Point): Point => ({ x: Math.min(W - BW, Math.max(0, p.x)), y: Math.min(H - BH, Math.max(0, p.y)) })
+
+/**
+ * The same blocks with none overlapping (at least GAP apart), all inside the frame. Blocks are settled one at a time,
+ * the `pinned` one (the block the person is dragging, or has just let go) first, then in drawing order: a block whose
+ * place is free keeps it, one whose place is taken moves to the nearest free place. So blocks already apart do not
+ * move, and the dragged block stays under the pointer while the blocks in its way step aside. Pure.
+ */
+export function separate(at: ReadonlyMap<string, Point>, pinned?: string | null): Map<string, Point> {
+  const order = [...at.keys()].sort((a, b) => (a === pinned ? -1 : b === pinned ? 1 : 0))
+  const settled: Point[] = []
+  const free = (p: Point) => settled.every((q) => Math.abs(q.x - p.x) >= BW + GAP || Math.abs(q.y - p.y) >= BH + GAP)
+  const out = new Map<string, Point>()
+  for (const id of order) {
+    const want = clamp(at.get(id)!)
+    let best = want
+    if (!free(want)) {
+      let d = Infinity
+      for (let x = 0; x <= W - BW; x += STEP) {
+        for (let y = 0; y <= H - BH; y += STEP) {
+          const e = (x - want.x) ** 2 + (y - want.y) ** 2
+          if (e < d && free({ x, y })) { d = e; best = { x, y } }
+        }
+      }
+      // a frame too full for another block: leave it where it was asked for rather than lose it
+    }
+    settled.push(best)
+    out.set(id, best)
+  }
+  // in drawing order, as given
+  return new Map([...at.keys()].map((k) => [k, out.get(k)!]))
+}
+
+/** Whether any two blocks overlap. Pure. */
+export function overlapping(at: ReadonlyMap<string, Point>): boolean {
+  const ps = [...at.values()]
+  return ps.some((a, i) => ps.slice(i + 1).some((b) => Math.abs(b.x - a.x) < BW && Math.abs(b.y - a.y) < BH))
+}
+
+/** Where each block is drawn: its place in the record, or where the person moved it, spread so none overlap. Pure. */
+export function layout(blocks: readonly Pick<Block, 'id' | 'x' | 'y'>[], moved: ReadonlyMap<string, Point> = new Map(), pinned?: string | null): Map<string, Point> {
+  return separate(new Map(blocks.map((b) => [b.id, moved.get(b.id) ?? { x: b.x * (W - BW), y: b.y * (H - BH) }])), pinned)
+}
 
 type Side = 'left' | 'right' | 'top' | 'bottom'
 const SIDES: { side: Side; position: Position }[] = [
@@ -85,8 +140,7 @@ const BlockBox = memo(function BlockBox({ data }: NodeProps<BlockNode>) {
 const nodeTypes = { block: BlockBox }
 
 /** The blocks and connections for React Flow, lit for the selected block. Pure apart from the JSX in each block. */
-export function blockElements(blocks: readonly Block[], connections: readonly BlockConnection[], selected: string | null): { nodes: BlockNode[]; edges: Edge[] } {
-  const at = new Map(blocks.map((b) => [b.id, { x: b.x * (W - BW), y: b.y * (H - BH) }]))
+export function blockElements(blocks: readonly Block[], connections: readonly BlockConnection[], selected: string | null, at: ReadonlyMap<string, Point> = layout(blocks)): { nodes: BlockNode[]; edges: Edge[] } {
   const near = selected && at.has(selected) ? linkedTo(connections, selected) : null
   const lit = (id: string): Lit => litOf(near && { nodes: near.blocks }, selected, id)
   const nodes: BlockNode[] = blocks.map((b) => ({
@@ -139,11 +193,23 @@ export function BlockDiagram({ blocks, connections, selected: controlled, onSele
   const byId = useMemo(() => new Map(blocks.map((b) => [b.id, b])), [blocks])
   const toBlock = useCallback((id: string) => byId.get(id) ?? null, [byId])
   const [selected, choose] = useFlowSelection(controlled, onSelect, toBlock)
-  const { nodes, edges } = useMemo(() => blockElements(blocks, connections, selected ?? null), [blocks, connections, selected])
+  // where the person has put blocks (by block id, so a block shared by options stays put), and the one being dragged
+  const [moved, setMoved] = useState<ReadonlyMap<string, Point>>(new Map())
+  const [dragging, setDragging] = useState<string | null>(null)
+  const at = useMemo(() => layout(blocks, moved, dragging), [blocks, moved, dragging])
+  const onMove = useCallback((id: string, p: Point, done: boolean) => {
+    setMoved((m) => {
+      const next = new Map(m).set(id, clamp(p))
+      // let go: keep where everything ended up, so the blocks that stepped aside stay aside
+      return done ? new Map([...next, ...layout(blocks, next, id)]) : next
+    })
+    setDragging(done ? null : id)
+  }, [blocks])
+  const { nodes, edges } = useMemo(() => blockElements(blocks, connections, selected ?? null, at), [blocks, connections, selected, at])
   return (
     <FlowView
-      nodes={nodes} edges={edges} nodeTypes={nodeTypes} selected={selected} onChoose={choose} fit={FIT}
-      label="Block diagram. Select a block to light what it connects to."
+      nodes={nodes} edges={edges} nodeTypes={nodeTypes} selected={selected} onChoose={choose} fit={FIT} onMove={onMove}
+      label="Block diagram. Select a block to light what it connects to; drag a block to move it."
     />
   )
 }

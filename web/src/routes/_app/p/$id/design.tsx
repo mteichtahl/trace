@@ -141,7 +141,7 @@ function Design() {
                 selected={lit}
                 onSelect={(b) => { setLit(b?.id ?? null); setBlock(b) }}
               />
-              <p className="text-xs text-muted-foreground">Select a block to light what it connects to and what flows between them; click the background to clear.</p>
+              <p className="text-xs text-muted-foreground">Select a block to light what it connects to and what flows between them; click the background to clear. Drag a block to move it.</p>
               <div className="flex flex-wrap items-center gap-3">
                 <OptionSwitch a={data.architecture} value={option} onChange={(o) => { setOption(o); setBlock(null); setLit(null) }} />
                 <Button asChild size="sm" variant={data.architecture.chosen ? 'outline' : 'default'}><Link to="/p/$id/do/$skill" params={{ id, skill: 'architecture-choice' }}>{data.architecture.chosen ? 'Review the choice' : 'Choose an architecture'}</Link></Button>
