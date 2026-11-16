@@ -1237,7 +1237,7 @@ describe('the sample project', () => {
     expect(AnswersSchema.parse(ANSWERS).sample).toEqual({ enabled: false, repo: '', private: true, tour: true })
     const only = AnswersSchema.parse({ ...ANSWERS, projects: [], people: [], github: { login: 'trace-agent' }, sample: { enabled: true, private: false } })
     expect(sampleRepo(only)).toBe(SAMPLE)
-    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: false } }])
+    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, forge: 'github', create: { template: 'sample', private: false } }])
     expect(sampleRepo(AnswersSchema.parse({ ...ANSWERS, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
     // the login may still be to derive: the answers are valid, and the name waits for it
     expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true } }).success).toBe(true)
