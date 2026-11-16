@@ -40,6 +40,7 @@ import { observeInvocation } from '../agents/runtime/observe.js'
 import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, projectKbsFromEnv } from './actions.js'
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { GitHubError, HttpGitHub } from './github.js'
+import { forgeFromEnv } from './forge.js'
 import { GitHubBudget, GitHubCache } from './github-cache.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
 import { backendPrincipal, peekClient } from './backend-auth.js'
@@ -290,6 +291,8 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID, prefix: process.env.TRACE_PREFIX?.trim() || 'trace' }))
   const scratch = defaultScratch()
   const token = (): Promise<string> => githubToken(env.TRACE_GITHUB_SECRET_ARN)
+  // GitHub, or trace's own GitLab for the projects that live there (src/api/forge.ts)
+  const forge = forgeFromEnv(process.env, token)
   // a project created in the web app has no worker runtime until the installation update adds it: work asked for until
   // then is queued in its journey folder and started once it has (src/api/agent-queue.ts)
   const jobs = withAgentQueue(
@@ -297,7 +300,7 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
     () => (deps.store ?? bucketStore)(PROJECTS_PREFIX),
   )
   const deps: ActionDeps = {
-    github: async () => new HttpGitHub(await token()),
+    github: async () => forge,
     cognito: cog,
     jobs: async () => jobs,
     tools: () => allTools(),
