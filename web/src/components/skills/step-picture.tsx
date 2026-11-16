@@ -48,7 +48,7 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
   if (kind === 'pin-map') {
     const pins = d?.pins ?? []
     return pins.length ? (
-      <PinMapCanvas title="Pin map" subtitle={`peripheral → pin → net · ${pins.length} pins`} height={Math.max(height, pinMapHeight(pins.length, 480))} onAsk={() => openPanel(true)} pins={pins} />
+      <PinMapCanvas title="Pin map" subtitle={`peripheral → pin → net · ${pins.length} pins`} height={Math.max(height, pinMapHeight(pins.length, 480))} onAsk={() => openPanel(true)} pins={pins} findings={d?.pin_plan?.findings} />
     ) : (
       <CanvasFrame title="Pin map" height={height} zoomable={false}>
         <Empty kind={kind} loading={design.isLoading} />

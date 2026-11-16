@@ -8,7 +8,7 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
 import { chainOf } from '@/components/canvas/flow'
 import type { PinView } from '@/lib/types-s1'
-import { PinMap, layoutPins, peripheralOf, pinElements } from './pin-map'
+import { PinMap, type PinPlanFinding, clashPath, layoutPins, peripheralOf, pinConflicts, pinElements } from './pin-map'
 
 const pin = (p: string, net: string, fn: string, status: PinView['status'] = 'ok', extra: Partial<PinView> = {}): PinView => ({ pin: p, net, fn, status, ...extra })
 const pins: PinView[] = [
@@ -90,5 +90,57 @@ describe('the drawing', () => {
     expect(screen.getByTestId('rf__node-per:USART2')).toHaveAttribute('aria-label', 'Peripheral USART2, 2 pins')
     expect(screen.getByTestId('rf__node-pin:.PB6')).toHaveTextContent('Conflict')
     expect(screen.getByTestId('rf__node-net:UART_TX')).toHaveTextContent('2 pins')
+  })
+})
+
+describe('a conflict lights every pin it involves', () => {
+  // USART2 claimed twice (debug console on PA2/PA3, the GPS on PA9): the check flags the peripheral, and the plan's
+  // own status marks only PA9; the map reds all three, and selecting any one lights the whole clash
+  const plan: PinView[] = [
+    pin('PA0', 'SENSE_EXC', 'TIM2_CH1', 'ok', { part: 'U1' }),
+    pin('PA2', 'UART_TX', 'USART2_TX', 'ok', { part: 'U1' }),
+    pin('PA3', 'UART_RX', 'USART2_RX', 'ok', { part: 'U1' }),
+    pin('PA9', 'GPS_RX', 'USART2_TX', 'conflict', { part: 'U1', peripheral: 'USART2' }),
+    pin('PB8', 'TP_SPARE1', 'Spare', 'spare', { part: 'U1' }),
+  ]
+  const findings: PinPlanFinding[] = [
+    { id: 'peripheral:U1:USART2:claimed_twice', target: 'peripheral:U1.USART2', kind: 'claimed_twice', severity: 'blocks', text: "U1's USART2 is claimed by 2 uses." },
+    { id: 'function:U1:USART2_TX:twice', target: 'peripheral:U1.USART2_TX', kind: 'function_twice', severity: 'blocks', text: 'USART2_TX is planned on 2 pins of U1: PA2, PA9.' },
+    { id: 'pin:U1.PA0:unknown_alternates', target: 'pin:U1.PA0', kind: 'unknown_alternates', severity: 'fix', text: 'not a conflict' },
+    { id: 'pin:U1.PB8:waived', target: 'pin:U1.PB8', kind: 'reserved', severity: 'waived', text: 'waived' },
+  ]
+  const cl = layoutPins(plan, findings)
+
+  it('reads each blocking finding to the pins it names, by peripheral or by function', () => {
+    const c = pinConflicts(plan, findings)
+    expect(c.map((x) => [x.id, x.pins])).toEqual([
+      ['peripheral:U1:USART2:claimed_twice', ['pin:U1.PA2', 'pin:U1.PA3', 'pin:U1.PA9']],
+      ['function:U1:USART2_TX:twice', ['pin:U1.PA2', 'pin:U1.PA9']],
+    ])
+  })
+  it('a pin marked conflict with no finding in the list still stands as one', () => {
+    expect(pinConflicts(plan).map((x) => x.pins)).toEqual([['pin:U1.PA9']])
+  })
+  it('reds every pin of the clash, its peripheral and its nets, and nothing else', () => {
+    expect(cl.pins.filter((r) => r.bad).map((r) => r.pin.pin)).toEqual(['PA2', 'PA3', 'PA9'])
+    expect(cl.nets.filter((n) => n.bad).map((n) => n.name).sort()).toEqual(['GPS_RX', 'UART_RX', 'UART_TX'])
+    expect(cl.pers.filter((p) => p.bad).map((p) => p.name)).toEqual(['USART2'])
+  })
+  it('selecting one side of a clash lights the other side too', () => {
+    const c = clashPath(cl, 'pin:U1.PA9')
+    expect(sorted(c.nodes)).toEqual(['net:GPS_RX', 'net:UART_RX', 'net:UART_TX', 'per:USART2', 'pin:U1.PA2', 'pin:U1.PA3', 'pin:U1.PA9'])
+    expect(clashPath(cl, 'net:GPS_RX').nodes.has('pin:U1.PA2')).toBe(true)
+    expect(clashPath(cl, 'pin:U1.PA0').nodes.has('pin:U1.PA9')).toBe(false)
+  })
+  it('an agreed pin in the clash says so in its box', () => {
+    render(
+      <ReactFlowProvider>
+        <div style={{ width: 800, height: 400 }}><PinMap pins={plan} findings={findings} /></div>
+      </ReactFlowProvider>,
+    )
+    expect(screen.getByTestId('rf__node-pin:U1.PA2')).toHaveTextContent('In conflict')
+    expect(screen.getByTestId('rf__node-pin:U1.PA9')).toHaveTextContent('Conflict')
+    expect(screen.getByTestId('rf__node-pin:U1.PA0')).not.toHaveTextContent('onflict')
+    expect(screen.getByRole('group', { name: /2 conflicts, drawn red/ })).toBeTruthy()
   })
 })

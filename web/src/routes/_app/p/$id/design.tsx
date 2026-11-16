@@ -31,7 +31,7 @@ import { DataTable, useUrlView } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagramCanvas } from '@/components/project/block-diagram'
-import { PIN_STATUS, PinMapCanvas, type PinMapNode, pinMapHeight } from '@/components/project/pin-map'
+import { PIN_STATUS, PinMapCanvas, type PinConflict, type PinMapNode, pinConflicts, pinMapHeight } from '@/components/project/pin-map'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
 import { DesignFiles } from '@/components/project/handin'
 import { useCommands } from '@/components/shell/command-menu'
@@ -204,9 +204,11 @@ function Design() {
                 height={pinMapHeight(data.pins.length)}
                 onAsk={() => openPanel(true)}
                 pins={data.pins}
+                findings={data.pin_plan?.findings}
                 selected={pinSel ? (pinSel.kind === 'peripheral' ? `per:${pinSel.id}` : `${pinSel.kind}:${pinSel.id}`) : null}
                 onSelect={setPinSel}
               />
+              <PinConflicts conflicts={pinConflicts(data.pins, data.pin_plan?.findings)} pins={data.pins} sel={pinSel} onShow={setPinSel} />
               <PinSelection sel={pinSel} pins={data.pins} />
               <DataTable id="pins" url={pinUrl} data={data.pins} columns={pinColumns} getRowId={(p) => `${p.part ?? ''}.${p.pin}`} noun="pins" />
               {(data.pin_plan?.findings ?? []).filter((f) => f.kind === 'missing_pin').length > 0 && (
@@ -373,6 +375,38 @@ function LiveKiCad({ repo, path, board = false, title, subtitle, findings, onSel
       )}
       {findings.length > pinned.length && <p className="border-t px-4 py-2 text-xs text-muted-foreground">{findings.length - pinned.length} finding{findings.length - pinned.length === 1 ? ' has' : 's have'} no position on the drawing; see the list below.</p>}
     </section>
+  )
+}
+
+/**
+ * The pin plan's open conflicts under the map, each with a button that selects it there: its pins and every path
+ * through them light together (the map draws them red whatever is selected). Nothing when there is none.
+ */
+function PinConflicts({ conflicts, pins, sel, onShow }: { conflicts: PinConflict[]; pins: Pin[]; sel: PinMapNode | null; onShow: (n: PinMapNode) => void }) {
+  if (!conflicts.length) return null
+  const byKey = new Map(pins.map((p) => [`pin:${p.part ?? ''}.${p.pin}`, p]))
+  return (
+    <div role="region" aria-label="Pin conflicts" className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
+      <p className="font-medium text-destructive">{conflicts.length} pin {conflicts.length === 1 ? 'conflict' : 'conflicts'}, drawn red in the map</p>
+      <ul className="mt-1 space-y-1">
+        {conflicts.map((c) => {
+          const first = c.pins.map((k) => byKey.get(k)).find((p) => p?.status === 'conflict') ?? byKey.get(c.pins[0]!)
+          const on = sel?.kind === 'pin' && c.pins.includes(`pin:${sel.id}`)
+          return (
+            <li key={c.id} className="flex flex-wrap items-center gap-2">
+              <StatusBadge plain status="failing" label="Conflict" />
+              <span>{c.text}</span>
+              <span className="font-mono text-xs text-muted-foreground">{c.pins.map((k) => k.slice(k.indexOf('.') + 1)).join(', ')}</span>
+              {first && (
+                <Button size="sm" variant={on ? 'secondary' : 'outline'} className="ml-auto h-7" aria-pressed={on} onClick={() => onShow({ kind: 'pin', id: `${first.part ?? ''}.${first.pin}`, pin: first })}>
+                  Show in map
+                </Button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
