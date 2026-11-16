@@ -232,7 +232,7 @@ describe('external access: on', () => {
     expect(all.filter((a) => a.startsWith('cognito-idp:'))).toEqual([])
     for (const a of ['lambda:InvokeFunction', 'secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DeleteSecret', 'transcribe:GetVocabulary', 's3:DeleteObject']) expect(all, a).not.toContain(a)
     const text = JSON.stringify(sts)
-    for (const x of ['order-watch', 'integrations', '/central/*', '/prompts/*', '/chats/*', 'pending-projects', 'actuals']) expect(text, x).not.toContain(x)
+    for (const x of ['order-watch', 'integrations', '/central/*', '/prompts/*', '/chats/*', 'pending-projects', 'pending-moves', 'actuals']) expect(text, x).not.toContain(x)
     // what the systems' actions need: the GitHub token, invoking the workers, memory records, knowledge bases, the stores
     expect(all).toEqual(expect.arrayContaining(['secretsmanager:GetSecretValue', 'bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:RetrieveMemoryRecords', 's3:GetObject', 'dynamodb:UpdateItem']))
     // writes: the journey record (conditional), when each system was last seen, and the rate-limit table; nothing else

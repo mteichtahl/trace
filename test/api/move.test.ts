@@ -108,6 +108,11 @@ describe('moving a project', () => {
     const done = { ...MoveRecordSchema.parse(JSON.parse(new TextDecoder().decode(got!.body))), status: 'moved', step: null }
     await s.put(moveKey(R), new TextEncoder().encode(JSON.stringify(done)), { ifMatch: got!.etag })
     expect((await lifecycleOf(R)).paused).not.toBeNull()
+    // anyone's app listing their projects resumes it, without the move's page open
+    const listed = (await run(USER, 'projects') as { repo: string; paused?: unknown }[]).find((p) => p.repo === R)
+    expect(listed?.paused).toBeUndefined()
+    expect((await lifecycleOf(R)).paused).toBeNull()
+    await changeLifecycle(R, 'paused', 'marc', "moving to trace's GitLab")
     const v = await run(USER, 'project.move_status', { repo: R })
     expect(v).toMatchObject({ resumed: true, move: { status: 'moved' } })
     expect((await lifecycleOf(R)).paused).toBeNull()

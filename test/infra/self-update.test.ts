@@ -129,7 +129,7 @@ describe('the self-update role', () => {
     expect(text(bySid.SharedAgentToken?.Resource)).toMatch(/^\{"Ref":"GithubToken[0-9A-F]+"\}$/)
   })
 
-  it('leaves installation/* to it alone: no other role may read, write or list it (but the API, pending-projects/ only)', () => {
+  it('leaves installation/* to it alone: no other role may read, write or list it (but the API, pending-projects/ and pending-moves/ only)', () => {
     const { id } = roleOf(on.parent, 'trace-self-update')
     const api = Object.entries(on.parent.findResources('AWS::IAM::Role') as Record<string, Res>).find(([k]) => k.startsWith('ApiRuntimeRole'))?.[0] ?? ''
     expect(api).not.toBe('')
@@ -138,7 +138,8 @@ describe('the self-update role', () => {
       let r = JSON.stringify(s.Resource ?? '') + JSON.stringify(s.Condition ?? '')
       // projects.create (src/api/actions-projects.ts) records requests under installation/pending-projects/, with
       // conditional writes, for the update to pick up; the settings (installation/props.json) stay the update's alone
-      if (roles.includes(`"${api}"`)) r = r.replaceAll('installation/pending-projects/*', '')
+      // and project.move its moves under installation/pending-moves/ (one pattern, installation/pending-*/*)
+      if (roles.includes(`"${api}"`)) r = r.replaceAll('installation/pending-*/*', '')
       // the cost ledger's actuals (read by the API, written by the cost read alone) and the order watch's rows (the API
       // starts a watch, the order watch checks it): their own prefixes only (src/infra/cost.ts, src/infra/order-watch.ts)
       if (roles.includes(`"${api}"`) || /CostReadRole/.test(roles)) r = r.replaceAll('installation/cost/*', '')

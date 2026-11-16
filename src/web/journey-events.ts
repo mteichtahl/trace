@@ -36,6 +36,11 @@
  *             project, so the setup notice looks again at once instead of at its next poll (test-esp32 log #5: the
  *             notice still said "queued" half an hour after the update finished). Nothing in the record is read
  *
+ *   move      a move between GitHub and trace's GitLab (installation/pending-moves/<owner>/<repo>.json,
+ *             src/core/forge-move-record.ts), written by the API when it is asked for or cancelled and by the update at
+ *             each step: `record.changed { repo, what: 'move' }` to everyone on the project, so the progress view and the
+ *             pause follow it at once (and looking resumes the project once it has moved). Nothing in it is read
+ *
  *   run logs  the runs log group's subscription (src/infra/web.ts) sends each batch of a run's lines here:
  *             `log.appended { repo, kind, id, lines }` to everyone on the project, at most once a second per stream,
  *             never the lines themselves (onRunLogs)
@@ -53,6 +58,7 @@ import { BucketDb, JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
 import { BENCH_DB } from '../core/bench.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER, JobIndexStore, changedSince } from '../core/job-index.js'
 import { PENDING_PROJECTS_PREFIX, PROJECTS_PREFIX } from '../core/project.js'
+import { MOVES_PREFIX } from '../core/forge-move-record.js'
 import { parseStream } from '../core/run-logs.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
 import { DynamoLedger, type PushDeps, type PushOutcome, pushForProject } from './push-sender.js'
@@ -89,6 +95,15 @@ const PENDING_KEY = new RegExp(`^${PENDING_PROJECTS_PREFIX}([A-Za-z0-9-]+/[A-Za-
 /** The project whose agent request the key is, or null for any other key. */
 export function projectOfPendingKey(key: string): string | null {
   const m = PENDING_KEY.exec(key)
+  if (!m?.[1] || m[1].includes('..')) return null
+  return m[1].toLowerCase()
+}
+
+const MOVE_KEY = new RegExp(`^${MOVES_PREFIX}([A-Za-z0-9-]+/[A-Za-z0-9._-]+)\\.json$`)
+
+/** The project whose move between GitHub and GitLab the key is (src/core/forge-move-record.ts), or null. */
+export function projectOfMoveKey(key: string): string | null {
+  const m = MOVE_KEY.exec(key)
   if (!m?.[1] || m[1].includes('..')) return null
   return m[1].toLowerCase()
 }
@@ -193,15 +208,15 @@ async function onJobIndex(repo: string, e: S3ObjectEvent, d: JourneyEventsDeps):
   return { repo, changed: everyone.length, notified: 0, jobs: events.length }
 }
 
-/** A write of a new project's agent request: `record.changed { what: 'agent' }` to everyone on the project. */
-async function onAgentRequest(repo: string, d: JourneyEventsDeps): Promise<{ repo: string; changed: number; notified: number }> {
+/** A write of a new project's agent request, or of its move: `record.changed { what }` to everyone on the project. */
+async function onAgentRequest(repo: string, d: JourneyEventsDeps, what: 'agent' | 'move' = 'agent'): Promise<{ repo: string; changed: number; notified: number }> {
   const access = new Central({ home: `s3://${d.bucket}/access`, ...(d.s3 ? { s3: d.s3 } : {}) })
   const audience = await access.query((db) => audienceOf(db, repo))
   const everyone = [...new Set([...audience.admins, ...audience.contributors, ...audience.reviewers])]
-  const ev: LiveEvent = { type: 'record.changed', repo, what: 'agent', at: new Date(d.now()).toISOString() }
+  const ev: LiveEvent = { type: 'record.changed', repo, what, at: new Date(d.now()).toISOString() }
   const results = await Promise.allSettled(everyone.map((sub) => d.publisher.publish(userChannel(sub), [ev])))
   const failed = results.filter((r) => r.status === 'rejected').length
-  if (failed) d.log({ warning: 'journey-events: some agent events were not delivered', repo, failed, of: everyone.length })
+  if (failed) d.log({ warning: `journey-events: some ${what} events were not delivered`, repo, failed, of: everyone.length })
   return { repo, changed: everyone.length - failed, notified: 0 }
 }
 
@@ -213,6 +228,8 @@ export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): P
   if (indexed) return onJobIndex(indexed, e, d)
   const pending = ours ? projectOfPendingKey(key) : null
   if (pending) return onAgentRequest(pending, d)
+  const moving = ours ? projectOfMoveKey(key) : null
+  if (moving) return onAgentRequest(moving, d, 'move')
   // a person's write of the journey record: its live events are the web backend's; here, push only
   const journal = ours ? projectOfJourneyKey(key) : null
   if (journal) {

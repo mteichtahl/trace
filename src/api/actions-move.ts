@@ -18,7 +18,7 @@
  */
 import { z } from 'zod'
 import { Conflict } from '../core/central.js'
-import { type ForgeName, FORGES, type MoveRecord, MoveRecordSchema, forgeLabel, inFlight, moveKey, movePauseReason } from '../core/forge-move-record.js'
+import { type ForgeName, FORGES, type MoveRecord, MoveRecordSchema, forgeLabel, inFlight, isMovePause, moveKey, movePauseReason } from '../core/forge-move-record.js'
 import { listJobs } from './actions-jobs.js'
 import { LifecycleError, changeLifecycle, lifecycleOf } from '../core/lifecycle.js'
 import { ActionError, type Context, Repo, def, label, storeAt } from './action-kit.js'
@@ -62,6 +62,25 @@ async function resumeAfter(ctx: Context, r: MoveRecord, by: string): Promise<boo
   await changeLifecycle(r.repo, 'resumed', by)
   await recordLifecycle(ctx, r.repo, 'resumed', by, null)
   return true
+}
+
+/**
+ * The projects a person lists, with any held only by a move that is done resumed first: a move ends in the installation's
+ * update, which cannot change the project's lifecycle, so the project is resumed the next time anyone's app lists its
+ * projects or looks at the move (project.move_status), not only when the page that asked for it is open. Only projects
+ * paused for a move are read; anything that cannot be read is left as it is.
+ */
+export async function settleMoves<P extends { repo: string; paused?: { reason: string | null } | null | undefined }>(ctx: Context, projects: P[]): Promise<P[]> {
+  const held = projects.filter((p) => isMovePause(p.paused?.reason))
+  if (!held.length) return projects
+  const resumed = new Set<string>()
+  for (const p of held) {
+    try {
+      const had = await readMove(ctx, p.repo)
+      if (had?.record.status === 'moved' && await resumeAfter(ctx, had.record, 'trace')) resumed.add(p.repo)
+    } catch { /* looked at again next time */ }
+  }
+  return resumed.size ? projects.map((p) => (resumed.has(p.repo) ? (({ paused: _p, ...rest }) => rest as P)(p) : p)) : projects
 }
 
 const Move = Repo.extend({ to: z.enum(FORGES), when: z.enum(['idle', 'now']).default('idle') })

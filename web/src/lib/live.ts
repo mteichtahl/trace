@@ -61,6 +61,9 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
         // a new project's agent request changed (src/web/journey-events.ts): the installation update added it, or could
         // not. The setup notice looks again now instead of at its next poll, and the project's next step with it
         agent: [['project.agent', r], ['journey.get', r]],
+        // a move between GitHub and GitLab asked for, cancelled, or a step of it written by the installation's update
+        // (src/web/journey-events.ts): its progress, and the pause it puts on the project
+        move: [['project.move_status', r], ['project.lifecycle', r], ['projects'], ['journey.get', r], ['inbox']],
         // a project paused, resumed, retired or restored: the lists, its banner and lifecycle, and what needs people
         projects: [['projects'], ['project.lifecycle', r], ['projects.retired'], ['journey.get', r], ['inbox'], ['activity.list']],
         // a task asked for or a job paused, resumed, moved up or cancelled (src/web/events.ts: task, job.control): the

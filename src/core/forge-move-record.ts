@@ -71,6 +71,8 @@ export const inFlight = (r: Pick<MoveRecord, 'status'> | null): boolean => r !==
 
 /** The reason the project is paused while it moves (project.pause's reason; a person reads it on the project). */
 export const movePauseReason = (to: ForgeName): string => `moving to ${forgeLabel(to)}`
+/** Whether a pause is a move's (its reason is movePauseReason's). */
+export const isMovePause = (reason: string | null | undefined): boolean => Boolean(reason?.startsWith('moving to '))
 
 /**
  * Where the project lives as far as this record says: its new home once it has moved (or the move got as far as
