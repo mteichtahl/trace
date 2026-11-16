@@ -177,7 +177,10 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
    the project's own variables.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
-8. Moving a project in both directions: the mover, the pause, the change-number map; then its screens in the web app
+8. Moving a project in both directions: the mover (src/core/forge-move.ts, with its two homes in
+   src/core/forge-move-sides.ts: on GitHub with trace's GitHub app's token, which the default branch's ruleset lets
+   through; on GitLab with the admin token, before the set-up protects the default branch), the pause, the
+   change-number map; then its screens in the web app
    (Settings, the confirm sheet, progress, done and failed; renders first) and `tracectl`.
 9. The GitHub token step only when a project is on GitHub; docs.
 
