@@ -290,6 +290,13 @@ export function withoutQuotedRequest(body: string | null | undefined): string {
   return out.join('\n')
 }
 
+/**
+ * A sentence without what it quotes: words in quotation marks or code spans are someone else's, reported. "The
+ * `no-automerge` label is on because the request says "Do not merge"." read as the specialist saying its release
+ * package was not finished (test-esp32-run3 S26).
+ */
+const unquoted = (x: string): string => x.replace(/"[^"]*"|“[^”]*”|`[^`]*`/g, ' ')
+
 /** Text as compared for quoting: lower case, single spaces, no closing punctuation. */
 const plain = (x: string): string => x.toLowerCase().replace(/\s+/g, ' ').replace(/[\s.!?;:,]+$/, '').trim()
 
@@ -307,7 +314,7 @@ export function unfinishedWords(o: { title: string; summary?: string | null | un
   if (said.length) return said.join(', ').slice(0, 160)
   const asked = o.request ? plain(o.request) : ''
   for (const text of [o.summary, withoutQuotedRequest(o.body)]) {
-    const hit = (text ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.replace(/^[-*#>\s]+/, '').trim()).find((x) => UNFINISHED_STRONG.test(x) && !(asked && asked.includes(plain(x))))
+    const hit = (text ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.replace(/^[-*#>\s]+/, '').trim()).find((x) => UNFINISHED_STRONG.test(unquoted(x)) && !(asked && asked.includes(plain(x))))
     if (hit) return hit.slice(0, 160)
   }
   return null
