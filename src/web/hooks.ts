@@ -1,6 +1,10 @@
 /**
  * POST /api/hooks/github: GitHub tells trace that a change moved (docs/guided-flow.md "Live updates"), so the screens
- * of the people on that project look again at once instead of at their next poll.
+ * of the people on that project look again at once instead of at their next poll. POST /api/hooks/gitlab: the same
+ * from trace's own GitLab (docs/gitlab-projects.md): GitLab sends the hook's secret token (X-Gitlab-Token, the same
+ * webhook secret, compared in constant time) instead of a signature, names the project by its GitLab path, so the
+ * hook's address carries trace's name for it (`?repo=owner/name`, src/core/gitlab-path.ts gitlabHookUrl), and its
+ * delivery id is X-Gitlab-Event-UUID; from there on a delivery is taken exactly as GitHub's (readGitlabDelivery).
  *
  *   origin   first, before the body, a secret or anything else is read: the request must carry ORIGIN_HEADER with
  *            the value CloudFront adds to every request it sends this function (a random value the stack makes,
@@ -60,7 +64,7 @@ import { callApi } from './call.js'
 import type { WebConfig } from './config.js'
 import type { WebDeps } from './deps.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, publishToEach } from './events.js'
-import { type Reply, type WebRequest, route } from './http.js'
+import { type Answer, type Reply, type WebRequest, route } from './http.js'
 
 /** The events the installer subscribes each project's hook to (src/installer/hooks.ts registers exactly these). */
 export const HOOK_EVENTS = ['pull_request', 'check_run', 'check_suite', 'status', 'push'] as const
@@ -147,6 +151,51 @@ export function readDelivery(event: string | undefined, body: string): HookEvent
   // a change opened already in conflict (its branch cut before the last accept): no push follows to find it (log #213)
   if (event === 'pull_request' && (v.action === 'opened' || v.action === 'reopened')) return { repo: v.repository.full_name.toLowerCase(), number, event, opened: true }
   return { repo: v.repository.full_name.toLowerCase(), number, event }
+}
+
+// ------------------------------------------------------------------ trace's GitLab (docs/gitlab-projects.md)
+
+/** The GitLab events trace takes (X-Gitlab-Event), as the installer subscribes each project's hook
+ * (src/installer/gitlab-setup.ts ensureHook): merge requests, pipelines, jobs, comments, pushes, deployments. */
+export const GITLAB_HOOK_EVENTS = ['Merge Request Hook', 'Pipeline Hook', 'Job Hook', 'Note Hook', 'Push Hook', 'Deployment Hook', 'Issue Hook'] as const
+
+const GitlabDelivery = z.object({
+  object_kind: z.string().optional(),
+  ref: z.string().optional(),
+  after: z.string().optional(),
+  project: z.object({ path_with_namespace: z.string(), default_branch: z.string().nullable().optional() }).loose(),
+  object_attributes: z.object({ iid: z.number().optional(), action: z.string().optional(), noteable_type: z.string().optional() }).loose().optional(),
+  merge_request: z.object({ iid: z.number() }).loose().nullable().optional(),
+}).loose()
+
+/**
+ * What a GitLab delivery is about, or why it is dropped, in the same terms as GitHub's (readDelivery). `repo` is trace's
+ * name for the project, which the hook's own address carries (`?repo=owner/name`: the installer registers it so), since
+ * GitLab names the project by its path there. Pure: the token is checked before.
+ */
+export function readGitlabDelivery(event: string | undefined, body: string, repo: string | null): HookEvent | { drop: string } {
+  if (!event || !(GITLAB_HOOK_EVENTS as readonly string[]).includes(event)) return { drop: `not an event trace takes (${event ? event.slice(0, 40) : 'none'})` }
+  if (!repo || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.][A-Za-z0-9._-]{0,99}$/.test(repo)) return { drop: 'no project named in the hook\'s address' }
+  let json: unknown
+  try { json = JSON.parse(body) } catch { return { drop: 'not JSON' } }
+  const d = GitlabDelivery.safeParse(json)
+  if (!d.success) return { drop: 'no project in it' }
+  const v = d.data
+  const name = repo.toLowerCase()
+  if (event === 'Push Hook') {
+    const base = v.project.default_branch
+    if (!base || v.ref !== `refs/heads/${base}` || /^0+$/.test(v.after ?? '')) return { drop: 'a push to a branch other than the default' }
+    return { repo: name, number: null, event: 'push', base: true }
+  }
+  if (event === 'Merge Request Hook') {
+    const number = v.object_attributes?.iid ?? null
+    const opened = v.object_attributes?.action === 'open' || v.object_attributes?.action === 'reopen'
+    return { repo: name, number, event: 'pull_request', ...(opened ? { opened: true } : {}) }
+  }
+  // a pipeline names its merge request when it ran for one; a comment names what it is on; a job, a deployment and an
+  // issue name no change: "something on this project moved"
+  const number = v.merge_request?.iid ?? null
+  return { repo: name, number, event: event === 'Pipeline Hook' || event === 'Job Hook' ? 'check_suite' : event === 'Note Hook' ? 'issue_comment' : event === 'Deployment Hook' ? 'deployment' : 'issues' }
 }
 
 // ------------------------------------------------------------------ the debounce, shared between containers
@@ -312,7 +361,7 @@ function hooksCore(deps: WebDeps, o: HooksOptions) {
 
   /** A delivery trace does not act on: 204, and one line saying why (never its body). */
   const drop = (why: string, req: WebRequest, more: Record<string, unknown> = {}): Reply => {
-    deps.log({ hook: 'dropped', why, event: req.headers['x-github-event']?.slice(0, 40) ?? null, delivery: req.headers['x-github-delivery']?.slice(0, 64) ?? null, ...more })
+    deps.log({ hook: 'dropped', why, event: (req.headers['x-github-event'] ?? req.headers['x-gitlab-event'])?.slice(0, 40) ?? null, delivery: (req.headers['x-github-delivery'] ?? req.headers['x-gitlab-event-uuid'])?.slice(0, 64) ?? null, ...more })
     return { status: 204, body: null }
   }
 
@@ -478,6 +527,45 @@ function hooksCore(deps: WebDeps, o: HooksOptions) {
     return { checked: listed.data.result.projects.length, started: started.sort(), failed: failed.sort() }
   }
 
+  /** A verified delivery, from GitHub or trace's GitLab: replay check, who is on the project, then the debounce,
+   * conflicts and documents, after answering. */
+  async function take(req: WebRequest, cfg: WebConfig, d: HookEvent, id: string | undefined): Promise<Answer> {
+      // a delivery seen in the last day is a replay (a signed body stays valid forever): dropped. Remembered only once
+    // it is signed, so forged ones cannot fill the table; a store that cannot be reached lets it through (fail open:
+    // one more refetch at most)
+    if (!id) return drop('no delivery id', req)
+    const store = deps.hookStore?.(cfg) ?? null
+    try {
+      if (!(await (store ?? memoryStore()).firstDelivery?.(id, deps.now()) ?? true)) return drop('a delivery seen already', req)
+    } catch (e) {
+      deps.log({ warning: 'hooks: the delivery id could not be checked: taking it', delivery: id, error: e instanceof Error ? e.message.slice(0, 200) : String(e) })
+    }
+    // a repository that is not a project is dropped before answering, when the API says so in time
+    const asked = whoIsOn(cfg, d.repo, MEMBERS_WAIT_MS)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const known = await Promise.race([asked.then((m) => m, () => null), new Promise<'late'>((ok) => { timer = setTimeout(() => ok('late'), MEMBERS_WAIT_MS) })])
+    clearTimeout(timer)
+    if (known !== 'late' && known && !known.project) return drop('not a trace project', req, { repo: d.repo })
+    return {
+      stream: async (sink) => {
+        // GitHub (or GitLab) has its answer now; the rest runs on in this invocation
+        sink.open(202, { 'cache-control': 'no-store' })
+        sink.end()
+        try {
+          const m = await asked
+          if (!m.project) { deps.log({ hook: 'dropped', why: 'not a trace project', repo: d.repo, event: d.event }); return }
+          debounce ??= new Debounce(deps.hookStore?.(cfg) ?? memoryStore(), { now: deps.now, log: deps.log })
+          // a push to the default branch: the conflicts it made are found beside the debounce, not after it (the
+          // function's time is bounded, and a holder may keep its window for MAX_ROUNDS)
+          const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base || d.opened ? conflicts(cfg, d.repo) : undefined, d.base ? documents(cfg, d.repo) : undefined])
+          if (how === 'joined') deps.log({ hook: 'debounced', repo: d.repo, event: d.event, number: d.number })
+        } catch (e) {
+          deps.log({ warning: 'hooks: not published', repo: d.repo, event: d.event, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
+        }
+      },
+    }
+  }
+
   const routes = [
     route('POST', '/api/hooks/github', async (req) => {
       // before anything else (the body, the settings, a secret): only CloudFront's hooks path carries this
@@ -506,41 +594,33 @@ function hooksCore(deps: WebDeps, o: HooksOptions) {
       if (!ok) return drop('bad signature', req)
       const d = readDelivery(event, raw.toString('utf8'))
       if ('drop' in d) return drop(d.drop, req)
-      // a delivery seen in the last day is a replay (a signed body stays valid forever): dropped. Remembered only once
-      // it is signed, so forged ones cannot fill the table; a store that cannot be reached lets it through (fail open:
-      // one more refetch at most)
-      const id = req.headers['x-github-delivery']?.slice(0, 64)
-      if (!id) return drop('no delivery id', req)
-      const store = deps.hookStore?.(cfg) ?? null
+      return take(req, cfg, d, req.headers['x-github-delivery']?.slice(0, 64))
+    }),
+    route('POST', '/api/hooks/gitlab', async (req) => {
+      // as GitHub's: only CloudFront's hooks path carries the origin header
+      if (!sameSecret(o.origin ?? '', req.headers[ORIGIN_HEADER])) return drop('not through CloudFront', req)
+      const cfg = await deps.config()
+      if (!cfg.hooks) return drop('live updates are off', req)
+      const raw = req.raw ?? Buffer.from(req.body, 'utf8')
+      if (raw.length > MAX_BODY) return drop('too large', req, { bytes: raw.length })
+      // GitLab signs nothing: it sends the hook's secret token as it was registered (X-Gitlab-Token), compared in
+      // constant time with the same webhook secret GitHub's hooks are signed with
+      const given = req.headers['x-gitlab-token']
+      if (!given) return drop('no token', req)
+      const event = req.headers['x-gitlab-event']
+      if (!event || !(GITLAB_HOOK_EVENTS as readonly string[]).includes(event)) return drop(`not an event trace takes (${event ? event.slice(0, 40) : 'none'})`, req)
+      let ok: boolean
       try {
-        if (!(await (store ?? memoryStore()).firstDelivery?.(id, deps.now()) ?? true)) return drop('a delivery seen already', req)
+        const s = await hooksSecret(cfg)
+        ok = sameSecret(s.value.webhookSecret, given)
+        if (!ok && !s.read) ok = sameSecret((await hooksSecret(cfg, true)).value.webhookSecret, given)
       } catch (e) {
-        deps.log({ warning: 'hooks: the delivery id could not be checked: taking it', delivery: id, error: e instanceof Error ? e.message.slice(0, 200) : String(e) })
+        return drop('the webhook secret cannot be read', req, { error: e instanceof Error ? e.name : 'error' })
       }
-      // a repository that is not a project is dropped before answering, when the API says so in time
-      const asked = whoIsOn(cfg, d.repo, MEMBERS_WAIT_MS)
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const known = await Promise.race([asked.then((m) => m, () => null), new Promise<'late'>((ok) => { timer = setTimeout(() => ok('late'), MEMBERS_WAIT_MS) })])
-      clearTimeout(timer)
-      if (known !== 'late' && known && !known.project) return drop('not a trace project', req, { repo: d.repo })
-      return {
-        stream: async (sink) => {
-          // GitHub has its answer now; the rest runs on in this invocation
-          sink.open(202, { 'cache-control': 'no-store' })
-          sink.end()
-          try {
-            const m = await asked
-            if (!m.project) { deps.log({ hook: 'dropped', why: 'not a trace project', repo: d.repo, event: d.event }); return }
-            debounce ??= new Debounce(deps.hookStore?.(cfg) ?? memoryStore(), { now: deps.now, log: deps.log })
-            // a push to the default branch: the conflicts it made are found beside the debounce, not after it (the
-            // function's time is bounded, and a holder may keep its window for MAX_ROUNDS)
-            const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base || d.opened ? conflicts(cfg, d.repo) : undefined, d.base ? documents(cfg, d.repo) : undefined])
-            if (how === 'joined') deps.log({ hook: 'debounced', repo: d.repo, event: d.event, number: d.number })
-          } catch (e) {
-            deps.log({ warning: 'hooks: not published', repo: d.repo, event: d.event, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
-          }
-        },
-      }
+      if (!ok) return drop('bad token', req)
+      const d = readGitlabDelivery(event, raw.toString('utf8'), req.query.get('repo'))
+      if ('drop' in d) return drop(d.drop, req)
+      return take(req, cfg, d, (req.headers['x-gitlab-event-uuid'] ?? req.headers['idempotency-key'])?.slice(0, 64))
     }),
   ]
   return { routes, drift }

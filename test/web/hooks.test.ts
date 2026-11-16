@@ -535,3 +535,49 @@ describe('the shared store in DynamoDB', () => {
     await expect(s.claim('acme/board', 1, 0)).rejects.toThrow(/ResourceNotFoundException/)
   })
 })
+
+describe('deliveries from trace\'s GitLab', () => {
+  const mrHook = (iid: number, action = 'update'): string => JSON.stringify({ object_kind: 'merge_request', project: { path_with_namespace: 'tr/board', default_branch: 'main' }, object_attributes: { iid, action } })
+  const pushHook = (ref: string): string => JSON.stringify({ object_kind: 'push', ref, after: 'b'.repeat(40), project: { path_with_namespace: 'tr/board', default_branch: 'main' } })
+  const gitlab = async (w: ReturnType<typeof hooksWorld>, event: string, body: string, o: { token?: string; repo?: string; id?: string } = {}) => {
+    const sink = new RecordingSink()
+    const query = new URLSearchParams(o.repo === undefined ? { repo: 'acme/board' } : o.repo ? { repo: o.repo } : {})
+    await w.handle({ method: 'POST', path: '/api/hooks/gitlab', query, cookies: {}, body, headers: { 'x-gitlab-event': event, 'x-gitlab-token': o.token ?? SECRET, 'x-gitlab-event-uuid': o.id ?? `g-${Math.random()}`, [ORIGIN_HEADER]: ORIGIN } }, sink)
+    return sink.r
+  }
+
+  it('takes a merge request event with the hook\'s secret token, for the project its address names, and tells the people on it', async () => {
+    const w = hooksWorld()
+    const r = await gitlab(w, 'Merge Request Hook', mrHook(4))
+    expect(r.status).toBe(202)
+    await new Promise((ok) => setTimeout(ok, 20))
+    expect(w.publisher.sent.map((s) => s.channel)).toEqual(['/trace/users/sub-ada', '/trace/users/sub-bob'])
+  })
+
+  it('drops a wrong token, an event it does not take, a delivery naming no project, and a push to another branch', async () => {
+    const w = hooksWorld()
+    expect((await gitlab(w, 'Merge Request Hook', mrHook(4), { token: 'guess' })).status).toBe(204)
+    expect((await gitlab(w, 'Wiki Page Hook', '{}')).status).toBe(204)
+    expect((await gitlab(w, 'Merge Request Hook', mrHook(4), { repo: '' })).status).toBe(204)
+    expect((await gitlab(w, 'Push Hook', pushHook('refs/heads/trace/power'))).status).toBe(204)
+    expect(dropped(w.logs)).toEqual(['bad token', 'not an event trace takes (Wiki Page Hook)', 'no project named in the hook\'s address', 'a push to a branch other than the default'])
+    expect(w.publisher.sent).toEqual([])
+  })
+
+  it('drops a replayed delivery', async () => {
+    const w = hooksWorld()
+    expect((await gitlab(w, 'Merge Request Hook', mrHook(4), { id: 'same' })).status).toBe(202)
+    expect((await gitlab(w, 'Merge Request Hook', mrHook(4), { id: 'same' })).status).toBe(204)
+  })
+})
+
+describe('readGitlabDelivery', () => {
+  it('reads GitLab\'s events in GitHub\'s terms', async () => {
+    const { readGitlabDelivery } = await import('../../src/web/hooks.js')
+    const project = { path_with_namespace: 'tr/board', default_branch: 'main' }
+    expect(readGitlabDelivery('Merge Request Hook', JSON.stringify({ project, object_attributes: { iid: 3, action: 'open' } }), 'Acme/Board')).toEqual({ repo: 'acme/board', number: 3, event: 'pull_request', opened: true })
+    expect(readGitlabDelivery('Push Hook', JSON.stringify({ project, ref: 'refs/heads/main', after: 'b'.repeat(40) }), 'acme/board')).toEqual({ repo: 'acme/board', number: null, event: 'push', base: true })
+    expect(readGitlabDelivery('Pipeline Hook', JSON.stringify({ project, merge_request: { iid: 9 } }), 'acme/board')).toEqual({ repo: 'acme/board', number: 9, event: 'check_suite' })
+    expect(readGitlabDelivery('Push Hook', JSON.stringify({ project, ref: 'refs/heads/main', after: '0'.repeat(40) }), 'acme/board')).toEqual({ drop: 'a push to a branch other than the default' })
+  })
+})

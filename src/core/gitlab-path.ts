@@ -14,3 +14,8 @@ export const gitlabProjectPath = (prefix: string, repository: string): string =>
 
 /** The secret holding its agents' current GitLab token (src/core/gitlab-token.ts agentTokenSecretName). */
 export const gitlabAgentSecret = (prefix: string, repository: string): string => `${prefix}/gitlab/agents/${repositoryName(repository)}`
+
+/** The address trace's GitLab hook for a project calls: the hooks endpoint, with trace's name for the project (GitLab
+ * names it by its path; src/web/hooks.ts readGitlabDelivery reads the name from here). */
+export const gitlabHookUrl = (appUrl: string, repository: string): string =>
+  `${appUrl.replace(/\/+$/, '')}/api/hooks/gitlab?repo=${encodeURIComponent(projectSlug(repository))}`
