@@ -19,15 +19,18 @@ export interface GitlabCiValues {
   runner: string
   /** the label that holds a change (config `hold`) */
   hold: string
+  /** where it deploys (config deploy.environment) */
+  environment?: string
 }
 
 const SAFE = /^[A-Za-z0-9._\/-]+$/
 
-export function renderGitlabCi(template: string, v: GitlabCiValues): string {
+export function renderGitlabCi(template: string, given: GitlabCiValues): string {
+  const v = { ...given, environment: given.environment ?? 'production' }
   for (const [k, x] of Object.entries(v)) if (!SAFE.test(x)) throw new Error(`${k} must be letters, digits, '.', '_', '-' or '/': ${JSON.stringify(x)}`)
   const out = template
     .replaceAll('__TR_SOURCE__', v.source).replaceAll('__TR_REF__', v.ref).replaceAll('__TR_BRANCH__', v.branch)
-    .replaceAll('__TR_REPOSITORY__', v.repository).replaceAll('__TR_RUNNER__', v.runner).replaceAll('__TR_HOLD__', v.hold)
+    .replaceAll('__TR_REPOSITORY__', v.repository).replaceAll('__TR_RUNNER__', v.runner).replaceAll('__TR_HOLD__', v.hold).replaceAll('__TR_ENVIRONMENT__', v.environment)
   const left = /__TR_[A-Z]+__/.exec(out)
   if (left) throw new Error(`the GitLab pipeline template has a value not filled in: ${left[0]}`)
   return out

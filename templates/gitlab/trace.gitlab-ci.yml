@@ -13,6 +13,10 @@
 #   worker        the work waiting for the agents picked and handed to the project's AgentCore runtime, one item after
 #                 another, as the project's own AWS role (GitLab's ID token, its default branch only); on a push to
 #                 __TR_BRANCH__, on the schedule, and when trace asks (kill switch: TRACE_WORKER = 'false')
+#   deploy        a push to __TR_BRANCH__ whose build passed asks for a deploy to __TR_ENVIRONMENT__ (automatic, or
+#                 approved by a person in trace); an approval or roll back given in trace runs it; the commands get the
+#                 deploy role (TRACE_DEPLOY_AWS_ROLE) and the project's variables, never trace's credentials
+#                 (src/harness/gitlab-deploy.ts; kill switch: TRACE_DEPLOY = 'false')
 #
 # The project's own build lives in .gitlab/build.yml, included when it is there (its jobs run before ci-doctor).
 #
@@ -124,3 +128,35 @@ worker:
       .then(t=>require('fs').writeFileSync('/tmp/trace-harness.cjs',t))"
     - node /tmp/trace-harness.cjs
 
+
+deploy:
+  extends: .trace
+  stage: deploy
+  variables: { TRACE_TASK: deploy, TRACE_DEPLOY_ENVIRONMENT: "__TR_ENVIRONMENT__" }
+  timeout: 2 hours
+  resource_group: trace-deploy-__TR_ENVIRONMENT__
+  environment: { name: "__TR_ENVIRONMENT__" }
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: sts.amazonaws.com
+  rules:
+    - if: $TRACE_DEPLOY == "false"
+      when: never
+    - if: $TRACE_WORKFLOW == "trace-deploy" && $TRACE_INPUT_APPROVAL
+    - if: $TRACE_WORKFLOW
+      when: never
+    # the build passed on the default branch (its jobs are earlier stages): a deploy is requested
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "__TR_BRANCH__"
+  script:
+    # the project's own trace role (reading an approval given in trace); the commands never get it
+    - >-
+      export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s"
+      $(aws sts assume-role-with-web-identity --role-arn "$TRACE_AWS_ROLE" --role-session-name "trace-deploy-$CI_PIPELINE_ID"
+      --web-identity-token "$AWS_ID_TOKEN" --duration-seconds 3600 --region "$TRACE_AWS_REGION"
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text))
+    - export AWS_REGION="$TRACE_AWS_REGION"
+    - >-
+      node -e "fetch('https://raw.githubusercontent.com/'+process.env.TRACE_SOURCE+'/'+process.env.TRACE_REF+'/harness/dist/gitlab.cjs')
+      .then(r=>{if(!r.ok)throw new Error('the harness: '+r.status);return r.text()})
+      .then(t=>require('fs').writeFileSync('/tmp/trace-harness.cjs',t))"
+    - node /tmp/trace-harness.cjs

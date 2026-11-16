@@ -108,6 +108,12 @@ describe('a project\'s .gitlab-ci.yml', () => {
     expect(y).toContain('exists: [.gitlab/build.yml]')
   })
 
+  it('deploys in the deploy stage, after the build, to the environment it names', () => {
+    const y = renderGitlabCi(gitlabCiTemplate(process.cwd()), { ...values, environment: 'staging' })
+    expect(y).toMatch(/deploy:[\s\S]*stage: deploy[\s\S]*resource_group: trace-deploy-staging[\s\S]*environment: \{ name: "staging" \}/)
+    expect(renderGitlabCi(gitlabCiTemplate(process.cwd()), values)).toContain('trace-deploy-production')
+  })
+
   it('refuses a value that could break the file', () => {
     expect(() => renderGitlabCi(gitlabCiTemplate(process.cwd()), { ...values, branch: 'main"\nevil: x' })).toThrow(/branch must be/)
   })

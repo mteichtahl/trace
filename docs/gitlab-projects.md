@@ -171,7 +171,10 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
    no matrix from another job's output), as the project's own AWS role through GitLab's ID token; the project's own
    build is `.gitlab/build.yml`, included when present, made by the installer from its kind (templates/gitlab/build:
    empty, kicad, python, rust, as GitHub's templates/build) when missing and never overwritten after; the installer sets the pipelines' variables as it sets a
-   GitHub project's. The deploy pipeline follows.
+   GitHub project's. Deploys run in one `deploy` job (src/harness/gitlab-deploy.ts): requested after a passing build
+   on the default branch (automatic, or approved in trace), or run from an approval or roll back given in trace; the
+   same harness tasks in GitHub's order, and the commands never see trace's token or role, only the deploy role and
+   the project's own variables.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
 8. Moving a project in both directions: the mover, the pause, the change-number map; then its screens in the web app
