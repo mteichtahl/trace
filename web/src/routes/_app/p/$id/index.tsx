@@ -28,6 +28,7 @@ import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
 import { HeldNextCard, useLifecycle } from '@/components/project/lifecycle'
+import { MoveNextCard, going, useMove } from '@/components/project/move'
 import { RunLine, askingOf, runControls, splitRuns } from '@/components/run-line'
 import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
@@ -89,6 +90,9 @@ function Overview() {
   // paused or retired: the next step is to resume it, so its card stands in for the usual one
   const life = useLifecycle(repo)
   const held = !!(life.data?.paused || life.data?.retired)
+  // a project paused for a move between GitHub and GitLab: the Next card shows the move
+  const moveState = useMove(repo)
+  const moving = going(moveState.data?.move) || moveState.data?.move?.status === 'failed'
   void navigate
 
   if (!j.data)
@@ -230,7 +234,7 @@ function Overview() {
   const resign = d.resign ? <ResignGates resign={d.resign} id={id} className="mt-4" /> : null
   // Accept now: kept while an accept is on its way, so the card shows its progress even if a refresh meanwhile says otherwise
   const onAccept = changeNo && (canAccept || acceptNow.busy) ? () => acceptNow.run({ number: changeNo, title: change.data?.title ?? `Change ${changeNo}`, step: place }) : undefined
-  const nextCard = held ? <HeldNextCard repo={repo} part={part} /> : (
+  const nextCard = held ? (moving ? <MoveNextCard repo={repo} /> : <HeldNextCard repo={repo} part={part} />) : (
     <NextStepCard
       step={d.next}
       part={part}

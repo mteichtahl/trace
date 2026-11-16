@@ -97,6 +97,10 @@ export interface Actions {
   'project.retire': { args: Repo & { reason?: string }; result: import('./types').Lifecycle & { summary: string } }
   'project.restore': { args: Repo; result: import('./types').Lifecycle & { summary: string } }
   'projects.retired': { args: Record<string, never>; result: { projects: import('./types').RetiredProject[] } }
+  // moving a project between GitHub and trace's GitLab (src/api/actions-move.ts)
+  'project.move_status': { args: Repo; result: import('./types').MoveStatus }
+  'project.move': { args: Repo & { to: import('./types').Forge; when?: 'idle' | 'now' }; result: { move: import('./types').ForgeMove; started: boolean; summary: string } }
+  'project.move_cancel': { args: Repo; result: { move: import('./types').ForgeMove; summary: string } }
   'journey.get': { args: Repo; result: Journey }
   'journey.criterion.open': { args: Repo & { gate?: string; criterion?: string; waiver?: string }; result: { repo: string; opened: string; at: string; version: number } }
   'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[]; time_zone?: string }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }

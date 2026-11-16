@@ -89,6 +89,28 @@ export interface Lifecycle {
   summary?: string
 }
 
+/** A move between GitHub and trace's GitLab (src/core/forge-move-record.ts), as project.move_status answers it. */
+export type Forge = 'github' | 'gitlab'
+export type MoveStep = 'deploy' | 'copy' | 'changes' | 'issues' | 'archive' | 'setup'
+export interface ForgeMove {
+  repo: string
+  from: Forge
+  to: Forge
+  when: 'idle' | 'now'
+  requested_by: string
+  requested_at: string
+  status: 'waiting' | 'moving' | 'moved' | 'failed' | 'cancelled'
+  step: MoveStep | null
+  lines: string[]
+  changes: Record<string, number>
+  issues: Record<string, number>
+  error?: string
+  idle_at?: string
+  todo: string[]
+  finished_at?: string
+}
+export interface MoveStatus { move: ForgeMove | null; forge: Forge; gitlab: boolean; resumed?: boolean }
+
 /** projects.retired: a retired project as admins see it. */
 export interface RetiredProject { repo: string; name: string | null; icon: string | null; description: string | null; retired: LifecycleMark; paused: LifecycleMark | null }
 

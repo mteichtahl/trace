@@ -76,6 +76,8 @@ const BY_ACTION: Partial<Record<ActionName, (r: string, a: Args) => QueryKey[]>>
   'project.resume': lifecycle,
   'project.retire': lifecycle,
   'project.restore': lifecycle,
+  'project.move': (r) => [...lifecycle(r), ['project.move_status', r]],
+  'project.move_cancel': (r) => [...lifecycle(r), ['project.move_status', r]],
 }
 
 /** The query-key prefixes an act makes stale, or null for an action that changes nothing on screen here. Pure. */

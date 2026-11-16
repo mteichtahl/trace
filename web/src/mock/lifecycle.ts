@@ -37,6 +37,11 @@ function repoCheck(repo: string) {
 
 const of = (repo: string) => state.get(repo) ?? { paused: null, retired: null }
 
+/** A move's pause and its end (src/mock/move.ts): the move holds the project as project.move does. */
+export function setMovePause(repo: string, reason: string | null, by: string = ME.email): void {
+  state.set(repo, { ...of(repo), paused: reason ? { at: now(), by, reason } : null })
+}
+
 export function withLifecycle(projects: ProjectRef[]): ProjectRef[] {
   return projects.filter((p) => !of(p.repo).retired).map((p) => (of(p.repo).paused ? { ...p, paused: of(p.repo).paused } : p))
 }

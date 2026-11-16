@@ -39,6 +39,9 @@ export function markWords(verb: 'Paused' | 'Retired', m: LifecycleMark, now: num
   return `${verb} by ${m.by} ${ago(m.at * 1000, now).replace(/^Today /, 'today at ')}${m.reason ? `: ${m.reason}` : ''}.`
 }
 
+/** Whether a pause is a move's (project.move pauses with "moving to …"): only the move resumes it. Pure. */
+export const movePause = (m: LifecycleMark | null | undefined): boolean => !!m?.reason?.startsWith('moving to ')
+
 /** The banner's words for a lifecycle, or null when the project is active. Pure. */
 export function bannerWords(l: Pick<Lifecycle, 'paused' | 'retired'> | undefined, now: number = Date.now()): { title: string; line: string; body: string; retired: boolean } | null {
   if (!l) return null
@@ -46,6 +49,12 @@ export function bannerWords(l: Pick<Lifecycle, 'paused' | 'retired'> | undefined
     return {
       title: 'This project is retired', retired: true, line: markWords('Retired', l.retired, now),
       body: 'It is hidden from everyone and does no work. Nothing has been deleted: restoring it brings it back as it was.',
+    }
+  }
+  if (l.paused && movePause(l.paused)) {
+    return {
+      title: 'This project is moving', retired: false, line: markWords('Paused', l.paused, now),
+      body: 'Nothing new starts while it moves, so no work lands in the old home. It resumes by itself once the move is done; Settings › Where this project lives shows each step.',
     }
   }
   if (l.paused) {
@@ -69,7 +78,7 @@ export function PausedBanner({ repo, part, className }: { repo: string; part?: s
   const Icon = w.retired ? Archive : PauseCircle
   const act = w.retired
     ? admin && { label: 'Restore project', busy: restore.isPending, go: () => restore.mutate({ repo }, { onSuccess: (r) => toast(r.summary), onError: (e) => toast.error(`Could not restore: ${e.message}`) }) }
-    : mayPause({ admin, part }) && { label: 'Resume project', busy: resume.isPending, go: () => resume.mutate({ repo }, { onSuccess: (r) => toast(r.summary), onError: (e) => toast.error(`Could not resume: ${e.message}`) }) }
+    : !movePause(l.data?.paused) && mayPause({ admin, part }) && { label: 'Resume project', busy: resume.isPending, go: () => resume.mutate({ repo }, { onSuccess: (r) => toast(r.summary), onError: (e) => toast.error(`Could not resume: ${e.message}`) }) }
   return (
     <section role="status" aria-label={w.title} className={cn('flex flex-wrap items-start gap-x-4 gap-y-3 rounded-xl border px-4 py-3 text-sm', w.retired ? 'border-destructive/30 bg-destructive/5' : 'border-warning/40 bg-warning/5', className)}>
       <div className="min-w-0 flex-1 basis-72">
