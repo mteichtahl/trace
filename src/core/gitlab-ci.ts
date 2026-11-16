@@ -35,3 +35,16 @@ export function renderGitlabCi(template: string, v: GitlabCiValues): string {
 
 /** The template as shipped (templates/gitlab/trace.gitlab-ci.yml under trace's root). */
 export const gitlabCiTemplate = (root: string): string => readFileSync(join(root, 'templates', 'gitlab', 'trace.gitlab-ci.yml'), 'utf8')
+
+/** The kinds of project build trace makes (templates/gitlab/build/<kind>.yml), as on GitHub (templates/build). */
+export const GITLAB_BUILDS = ['empty', 'kicad', 'python', 'rust'] as const
+export type GitlabBuild = (typeof GITLAB_BUILDS)[number]
+
+/** A project's `.gitlab/build.yml`: its kind's template with its runner and default branch put in. */
+export function renderGitlabBuild(root: string, kind: GitlabBuild, v: { runner: string; branch: string }): string {
+  for (const [k, x] of Object.entries(v)) if (!SAFE.test(x)) throw new Error(`${k} must be letters, digits, '.', '_', '-' or '/': ${JSON.stringify(x)}`)
+  const out = readFileSync(join(root, 'templates', 'gitlab', 'build', `${kind}.yml`), 'utf8').replaceAll('__TR_RUNNER__', v.runner).replaceAll('__TR_BRANCH__', v.branch)
+  const left = /__TR_[A-Z]+__/.exec(out)
+  if (left) throw new Error(`the GitLab build template has a value not filled in: ${left[0]}`)
+  return out
+}

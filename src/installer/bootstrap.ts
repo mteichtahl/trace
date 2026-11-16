@@ -75,7 +75,7 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_CONNECTION_OUTPUT, GITLAB_HOST_OUTPUT, GITLAB_URL_OUTPUT, gitlabAdminTokenSecretName, gitlabRootSecretName } from '../infra/gitlab.js'
 import { adminToken as gitlabAdminTokenOf, gitlabConnectionReady, gitlabConnectionTodo, waitForGitlab, waitForGitlabConnection } from './gitlab.js'
 import { GitlabAdmin, setUpGitlabProject } from './gitlab-setup.js'
-import { gitlabCiTemplate, renderGitlabCi } from '../core/gitlab-ci.js'
+import { gitlabCiTemplate, renderGitlabBuild, renderGitlabCi } from '../core/gitlab-ci.js'
 import { gitlabHookUrl, repositoryName } from '../core/gitlab-path.js'
 import { GetConnectionCommand, GetHostCommand } from '@aws-sdk/client-codeconnections'
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
@@ -1450,8 +1450,11 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
                 source: a.runners.traceRepository || SOURCE, ref: a.runners.traceBranch || 'main', branch: p.branch, repository: p.repo,
                 runner: runnerProjectName(props.prefix, p.repo), hold: 'hold',
               })
+              // its own build: the kind it was made from (a sample is a KiCad project), else none to add
+              const kind = p.create ? (p.create.template === 'sample' ? 'kicad' : p.create.template) : null
+              const build = kind ? renderGitlabBuild(REPO_ROOT, kind, { runner: runnerProjectName(props.prefix, p.repo), branch: p.branch }) : undefined
               const r2 = await setUpGitlabProject(admin, {
-                group: props.prefix, slug: repositoryName(p.repo), branch: p.branch, ci,
+                group: props.prefix, slug: repositoryName(p.repo), branch: p.branch, ci, ...(build ? { build } : {}),
                 ...(hookSecret && hookBase ? { hook: { url: gitlabHookUrl(hookBase, p.repo), secret: hookSecret } } : {}),
               })
               for (const l of r2.lines) log('gitlab', `${p.repo}: ${l}`)
