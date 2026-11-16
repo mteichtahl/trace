@@ -161,30 +161,34 @@ export class GitlabAdmin {
   }
 
   /**
-   * The project's `.gitlab-ci.yml` (src/core/gitlab-ci.ts): committed straight to `branch` while the project is empty
-   * (its first commit makes the branch, before it is protected); on a project with history, left as it is when it
-   * matches, else proposed as a merge request trace's API merges once its pipeline passes (no one pushes to a
-   * protected default branch, the admin included).
+   * trace's files in the project: `.gitlab-ci.yml` (src/core/gitlab-ci.ts) kept current, and the project's own build
+   * (`.gitlab/build.yml`, `keep`: made when missing, never overwritten, as it is the project's to change). Committed
+   * straight to `branch` while the project is empty (its first commit makes the branch, before it is protected); on a
+   * project with history, nothing when every file is as it should be, else proposed as one merge request trace's API
+   * merges once its pipeline passes (no one pushes to a protected default branch, the admin included).
    */
-  async ensureCiFile(projectId: number, branch: string, content: string): Promise<'committed' | 'unchanged' | 'proposed'> {
-    const file = '.gitlab-ci.yml'
+  async ensureFiles(projectId: number, branch: string, files: readonly { path: string; content: string; keep?: boolean }[]): Promise<'committed' | 'unchanged' | 'proposed'> {
     const head = await this.call('GET', `/projects/${projectId}/repository/branches/${encodeURIComponent(branch)}`)
-    const actions = (action: 'create' | 'update') => [{ action, file_path: file, content }]
     if (head.status === 404) {
-      await this.ok('POST', `/projects/${projectId}/repository/commits`, { branch, commit_message: 'trace: pipelines', actions: actions('create') })
+      await this.ok('POST', `/projects/${projectId}/repository/commits`, { branch, commit_message: 'trace: pipelines', actions: files.map((f) => ({ action: 'create', file_path: f.path, content: f.content })) })
       return 'committed'
     }
-    const had = await this.call('GET', `/projects/${projectId}/repository/files/${encodeURIComponent(file)}?ref=${encodeURIComponent(branch)}`)
-    const now = had.status === 200 ? Buffer.from(z.object({ content: z.string() }).loose().parse(had.json).content, 'base64').toString('utf8') : null
-    if (now === content) return 'unchanged'
+    const actions: { action: 'create' | 'update'; file_path: string; content: string }[] = []
+    for (const f of files) {
+      const had = await this.call('GET', `/projects/${projectId}/repository/files/${encodeURIComponent(f.path)}?ref=${encodeURIComponent(branch)}`)
+      const now = had.status === 200 ? Buffer.from(z.object({ content: z.string() }).loose().parse(had.json).content, 'base64').toString('utf8') : null
+      if (now === null) actions.push({ action: 'create', file_path: f.path, content: f.content })
+      else if (!f.keep && now !== f.content) actions.push({ action: 'update', file_path: f.path, content: f.content })
+    }
+    if (!actions.length) return 'unchanged'
     const work = 'trace/pipelines'
     await this.call('DELETE', `/projects/${projectId}/repository/branches/${encodeURIComponent(work)}`)
-    await this.ok('POST', `/projects/${projectId}/repository/commits`, { branch: work, start_branch: branch, commit_message: 'trace: pipelines', actions: actions(now === null ? 'create' : 'update') })
+    await this.ok('POST', `/projects/${projectId}/repository/commits`, { branch: work, start_branch: branch, commit_message: 'trace: pipelines', actions })
     const open = z.array(z.object({ iid: z.number() }).loose()).parse(await this.ok('GET', `/projects/${projectId}/merge_requests?state=opened&source_branch=${encodeURIComponent(work)}`))
     if (!open.length) {
       await this.ok('POST', `/projects/${projectId}/merge_requests`, {
         source_branch: work, target_branch: branch, title: 'trace: pipelines', labels: 'trace', remove_source_branch: true,
-        description: 'trace\'s pipelines for this project (templates/gitlab/trace.gitlab-ci.yml). trace merges this once its pipeline passes.',
+        description: 'trace\'s pipelines for this project (templates/gitlab). trace merges this once its pipeline passes.',
       })
     }
     return 'proposed'
@@ -219,7 +223,7 @@ export class GitlabAdmin {
  * One project, set up from end to end: group, project, settings, protected branch, labels, the agents' token and its
  * login as TRACE_AGENT_LOGIN, and (when trace's hooks endpoint is known) its webhook.
  */
-export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string; slug: string; branch: string; hook?: { url: string; secret: string } | undefined; ci?: string | undefined }): Promise<ProjectSetup> {
+export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string; slug: string; branch: string; hook?: { url: string; secret: string } | undefined; ci?: string | undefined; build?: string | undefined }): Promise<ProjectSetup> {
   const lines: string[] = []
   const g = await admin.ensureGroup(o.group)
   if (g.made) lines.push(`made the group ${o.group}`)
@@ -228,8 +232,9 @@ export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string;
   await admin.applySettings(p.id)
   // its pipelines first: an empty project's first commit makes its default branch, which is then protected
   if (o.ci) {
-    const c = await admin.ensureCiFile(p.id, p.defaultBranch, o.ci)
-    lines.push(c === 'committed' ? '.gitlab-ci.yml committed' : c === 'unchanged' ? '.gitlab-ci.yml is current' : '.gitlab-ci.yml proposed (trace/pipelines): trace merges it once its pipeline passes')
+    const files = [{ path: '.gitlab-ci.yml', content: o.ci }, ...(o.build ? [{ path: '.gitlab/build.yml', content: o.build, keep: true }] : [])]
+    const c = await admin.ensureFiles(p.id, p.defaultBranch, files)
+    lines.push(c === 'committed' ? 'its pipelines committed' : c === 'unchanged' ? 'its pipelines are current' : 'its pipelines proposed (trace/pipelines): trace merges them once their pipeline passes')
   }
   await admin.protectDefaultBranch(p.id, p.defaultBranch)
   lines.push(`${p.defaultBranch} protected: no one pushes, trace's API merges`)

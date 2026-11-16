@@ -185,3 +185,16 @@ describe('the GitLab job\'s worker and ci-doctor', () => {
   })
 })
 
+
+describe('a GitLab project\'s own build', () => {
+  it('each kind renders with its runner and branch, its checks gating merge requests and the default branch', async () => {
+    const { GITLAB_BUILDS, renderGitlabBuild } = await import('../../src/core/gitlab-ci.js')
+    for (const kind of GITLAB_BUILDS) {
+      const y = renderGitlabBuild(process.cwd(), kind, { runner: 'trace-ci-ab12cd34', branch: 'main' })
+      expect(y).not.toMatch(/__TR_/)
+      expect(y).toContain('codebuild-trace-ci-ab12cd34-$CI_PROJECT_ID')
+      expect(y).toContain('$CI_PIPELINE_SOURCE == "merge_request_event"')
+    }
+    expect(renderGitlabBuild(process.cwd(), 'kicad', { runner: 'r', branch: 'main' })).toContain('tracectl check')
+  })
+})
