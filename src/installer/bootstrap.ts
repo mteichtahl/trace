@@ -1199,7 +1199,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       if (adminLogin.toLowerCase() === agentLogin.toLowerCase()) {
         summary.push(`The agents' token belongs to ${agentLogin}, so /approve from ${agentLogin} is refused on deploys (an agent must never approve its own). Give the agents a machine account's token, or approve from another account.`)
       }
-      await mapLimit(a.projects, 4, async (p) => {
+      // (a project on trace's GitLab gets its variables there, in the GitLab step)
+      await mapLimit(a.projects.filter((p) => p.forge !== 'gitlab'), 4, async (p) => {
         const o = projectOutputs(p.repo)
         const login = own.logins.get(p.repo.toLowerCase()) ?? agentLogin
         if (login.toLowerCase() === adminLogin.toLowerCase() && login !== agentLogin) {
@@ -1454,6 +1455,15 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
                 ...(hookSecret && hookBase ? { hook: { url: gitlabHookUrl(hookBase, p.repo), secret: hookSecret } } : {}),
               })
               for (const l of r2.lines) log('gitlab', `${p.repo}: ${l}`)
+              // its pipelines' variables, as a GitHub project's repository variables (step 9): its own role, runtime,
+              // the central store and its knowledge base; TRACE_GITLAB_TOKEN is the rotation's
+              const o = projectOutputs(p.repo)
+              const vars: Record<string, string> = {
+                TRACE_AWS_ROLE: out[o.roleArn] ?? '', TRACE_AWS_REGION: a.aws.region, TRACE_HOME: out.TraceHome ?? '', TRACE_AGENT_RUNTIME_ARN: out[o.runtimeArn] ?? '',
+                TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '',
+              }
+              for (const [k, v] of Object.entries(vars)) if (v) await admin.setVariable(r2.id, k, v)
+              log('gitlab', `${p.repo}: its pipelines' variables set`)
             } catch (e) {
               const m = redact(e instanceof Error ? e.message : String(e), s)
               summary.push(`${p.repo} could not be set up on trace's GitLab: ${m}. Run the installer again to carry on.`)

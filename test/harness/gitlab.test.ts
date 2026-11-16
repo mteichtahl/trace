@@ -101,6 +101,13 @@ describe('a project\'s .gitlab-ci.yml', () => {
     expect(y).not.toContain('TRACE_TOKEN')
   })
 
+  it('ends the build with ci-doctor, and runs the worker as the project\'s own role with GitLab\'s ID token', () => {
+    const y = renderGitlabCi(gitlabCiTemplate(process.cwd()), values)
+    expect(y).toMatch(/ci-doctor:[\s\S]*stage: \.post[\s\S]*when: always/)
+    expect(y).toMatch(/worker:[\s\S]*aud: sts\.amazonaws\.com[\s\S]*assume-role-with-web-identity/)
+    expect(y).toContain('exists: [.gitlab/build.yml]')
+  })
+
   it('refuses a value that could break the file', () => {
     expect(() => renderGitlabCi(gitlabCiTemplate(process.cwd()), { ...values, branch: 'main"\nevil: x' })).toThrow(/branch must be/)
   })
@@ -157,6 +164,24 @@ describe('the merges GitLab\'s API cannot make, done with git as the agents', ()
     const gl = gitlabOctokit({ url: URL0, token: 't', project: 'tr/board', repository: 'mteichtahl/board', fetch })
     const e = await gl.rest.pulls.updateBranch({ pull_number: 7, expected_head_sha: 'other' }).catch((x: unknown) => x)
     expect(e).toMatchObject({ status: 422 })
+  })
+})
+
+describe('the GitLab job\'s worker and ci-doctor', () => {
+  it('ci-doctor\'s run is this pipeline: failed when another job failed', async () => {
+    const { pipelineAsRun } = await import('../../src/harness/gitlab.js')
+    const { fetch } = fake({ [`GET ${P}/pipelines/55/jobs?include_retried=false&per_page=100`]: [200, [{ id: 1, name: 'check', status: 'failed' }, { id: 2, name: 'ci-doctor', status: 'running' }]] })
+    const run = await pipelineAsRun(client(fetch), { CI_PIPELINE_ID: '55', CI_JOB_ID: '2', CI_COMMIT_BRANCH: 'trace/power', CI_COMMIT_SHA: 'h1', CI_PIPELINE_SOURCE: 'push', TRACE_REPOSITORY: 'mteichtahl/board' })
+    expect(run).toMatchObject({ id: 55, conclusion: 'failure', head_branch: 'trace/power', head_sha: 'h1', event: 'push' })
+    const { fetch: ok } = fake({ [`GET ${P}/pipelines/55/jobs?include_retried=false&per_page=100`]: [200, [{ id: 1, name: 'check', status: 'success' }, { id: 2, name: 'ci-doctor', status: 'running' }]] })
+    expect((await pipelineAsRun(client(ok), { CI_PIPELINE_ID: '55', CI_JOB_ID: '2' })).conclusion).toBe('success')
+  })
+
+  it('a capturing core keeps what a task outputs', async () => {
+    const { capturingCore } = await import('../../src/harness/gitlab.js')
+    const c = capturingCore()
+    c.setOutput('items', '[{"number":3}]')
+    expect(c.outputs.items).toBe('[{"number":3}]')
   })
 })
 
