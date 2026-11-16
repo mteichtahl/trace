@@ -69,6 +69,7 @@ describe('moving a project', () => {
     expect(r.move).toMatchObject({ repo: P, from: 'github', to: 'gitlab', when: 'idle', status: 'waiting', paused_for_move: true })
     expect(r.summary).toMatch(/^Moving to trace's GitLab\. The project is paused meanwhile\./)
     expect((await lifecycleOf(P)).paused?.reason).toBe("moving to trace's GitLab")
+    await expect(run(USER, 'project.resume', { repo: P })).rejects.toThrow(/resumes by itself once the move is done, or when an admin cancels the move/)
     expect(await stored(P)).toMatchObject({ status: 'waiting', requested_by: expect.any(String) })
     await expect(run(ADMIN, 'project.move', { repo: P, to: 'gitlab' })).rejects.toThrow(/waiting already/)
     expect((await run(USER, 'project.move_status', { repo: P })).move).toMatchObject({ status: 'waiting' })

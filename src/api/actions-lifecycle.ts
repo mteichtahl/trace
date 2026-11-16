@@ -19,6 +19,8 @@ import { type Lifecycle, type LifecycleChange, LifecycleError, changeLifecycle, 
 import { ActionError, type Context, NO_ACCESS, type Need, Repo, def, label, toolNeed, withJourneyDb, writeJourney } from './action-kit.js'
 import { listJobs } from './actions-jobs.js'
 import { heldWords } from './held.js'
+import { MoveRecordSchema, forgeLabel, inFlight, moveKey } from '../core/forge-move-record.js'
+import { storeAt } from './action-kit.js'
 
 export { assertNotHeld, heldWords } from './held.js'
 
@@ -128,6 +130,11 @@ export const LIFECYCLE_ACTIONS_DEFS = {
   }),
 
   'project.resume': def('write', Repo, async ({ repo }, ctx) => {
+    // a project moving between GitHub and GitLab is resumed by the move (project.move_status), not by hand: work started
+    // halfway through would land in the old home
+    const move = await storeAt(ctx, 'installation').get(moveKey(repo)).catch(() => null)
+    const m = move ? MoveRecordSchema.safeParse(JSON.parse(new TextDecoder().decode(move.body)) as unknown) : null
+    if (m?.success && inFlight(m.data)) throw new ActionError(`It is moving to ${forgeLabel(m.data.to)}: it resumes by itself once the move is done${m.data.status === 'waiting' ? ', or when an admin cancels the move' : ''}.`)
     const by = label(ctx.principal)
     const l = await plain(() => changeLifecycle(repo, 'resumed', by))
     await recordLifecycle(ctx, repo, 'resumed', by, null)

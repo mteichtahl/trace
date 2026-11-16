@@ -14,6 +14,7 @@ import { s1Action } from './s1'
 import { designAction } from './design'
 import { smallAction } from './small'
 import { lifecycleAction, withLifecycle } from './lifecycle'
+import { moveAction } from './move'
 import { templatesAction } from './templates'
 import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
@@ -56,6 +57,7 @@ function action(name: string, a: Record<string, unknown>): Response {
   const s1 = s1Action(name, a); if (s1) return s1
   const small = smallAction(name, a); if (small) return small
   const life = lifecycleAction(name, a); if (life) return life
+  const mv = moveAction(name, a); if (mv) return mv
   const tpl = templatesAction(name, a); if (tpl) return tpl
   switch (name) {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })

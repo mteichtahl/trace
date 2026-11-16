@@ -4,7 +4,8 @@
  * build quantity, the build budget (the order's), the cloud-work allowance (trace's own spend) and the later stages, and the logo on the project's documents (project-logo.tsx), are editable by admins: each change is written to the journey
  * record with project.update (they are what the project is, not repository settings) or, for people, assign — and
  * says "Saved" when it lands. Everyone else reads. The project's rules (project-rules.tsx) list the answers made rules and
- * where each stands. Agent instructions for this project are one link away.
+ * where each stands. Where this project lives (GitHub or trace's GitLab) and moving it (move.tsx). Agent instructions for
+ * this project are one link away.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
@@ -21,6 +22,7 @@ import { useTraceContext } from '@/components/chat/context'
 import { IconPicker, ProjectIconView } from '@/components/project/project-icon'
 import { ProjectLogo } from '@/components/project/project-logo'
 import { ProjectRules } from '@/components/project/project-rules'
+import { MoveCard } from '@/components/project/move'
 import { TabSkeleton } from '@/components/project/shared'
 import { Section } from '@/components/shell/app-shell'
 import { StatusBadge } from '@/components/status-badge'
@@ -93,6 +95,10 @@ function Settings() {
 
       <Section label="Project rules">
         <ProjectRules repo={repo} canWrite={user?.class !== 'guest'} />
+      </Section>
+
+      <Section label="Where this project lives">
+        <MoveCard repo={repo} name={j.data.name} admin={admin} />
       </Section>
 
       <Section label="Fixed when the project was made">
