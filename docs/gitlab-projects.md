@@ -1,6 +1,6 @@
 # Project repositories on trace's own GitLab
 
-Status: design, November 2026; open questions settled 16 November 2026. Decided 16 November 2026 (Marc): project repositories move from GitHub to a GitLab
+Status: design, November 2026; open questions settled 16 November 2026; projects move both ways (16 November 2026). Decided 16 November 2026 (Marc): project repositories move from GitHub to a GitLab
 that trace's installer deploys in the installation's own AWS account. trace's own development stays on GitHub
 (`mteichtahl/trace`), as does the installation's self-update from trace's `main`.
 
@@ -19,9 +19,9 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
 
 ## Decisions
 
-- **Only project repositories move.** trace's own repository, its pull requests, CI and the installation's self-update
-  stay on GitHub. An installation that reads `mteichtahl/trace` anonymously needs no GitHub token at all; the
-  installer then asks for AWS credentials only.
+- **Only project repositories can live on GitLab.** trace's own repository, its pull requests, CI and the installation's self-update
+  stay on GitHub. An installation that reads `mteichtahl/trace` anonymously and keeps every project on
+  its GitLab needs no GitHub token at all; the installer then asks for AWS credentials only.
 - **The installer deploys GitLab Community Edition** (free) in the installation's account, from the same CDK app:
   - one EC2 instance (Graviton, `m7g.large` by default) running the official GitLab Omnibus package on Amazon Linux
     2023 (8 GB memory; GitLab's minimum is 4 GB, and trace runs CI on CodeBuild, not on the instance, so it never needs
@@ -49,7 +49,7 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   - **Each default branch is protected**: push allowed to no one, merge allowed to Maintainers. A Developer may push
     branches and open merge requests but cannot merge, so the guard GitHub needed a ruleset bypass and a live proof for
     is GitLab's ordinary role model. `.gitlab-ci.yml` and `trace/**` changes are held the same way as today's protected
-    paths: by the API's merge rule, plus a push rule rejecting the bot's commits to `.gitlab-ci.yml`.
+    paths: by the API's merge rule (GitLab's push rules are a Premium feature, so trace does not rely on them).
 - **CI moves to `.gitlab-ci.yml`.** The four project workflows (`trace-ci`, `trace-deploy`, `trace-prs`,
   `trace-worker`) become jobs in one generated `.gitlab-ci.yml`, tagged for that project's CodeBuild runner. The harness
   is the same bundled code, run as a Node script in a job instead of a GitHub Action, against a `Forge` client (below).
@@ -67,12 +67,67 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   retargets dependent merge requests on its own when the one below merges; the restack job still merges `main` up and
   reports conflicts, and trace's conflict resolver handles them as today.
 - **All projects live in one GitLab group**, `trace`, named per installation; a project's path is its slug.
-- **Existing GitHub projects move, with their history.** The installer (and an admin's "Move projects to GitLab" in the
-  web app's Installation screen) imports each project repository with GitLab's GitHub importer (repository, branches,
-  open pull requests as merge requests, labels, comments), points the project's record at GitLab, and archives the
-  GitHub repository rather than deleting it. Open work carries on from the imported merge requests.
-- **GitHub support for projects is removed** once every project of every installation has moved, not before: the
-  `Forge` interface keeps the GitHub implementation until then, so nothing breaks mid-move.
+- **Projects move both ways, as often as needed** (Marc, 16 November 2026: "allow users to move back and forth from
+  GitHub and GitLab"). Each project lives on one forge at a time, chosen per project, and can move from GitHub to
+  trace's GitLab and back again. So GitHub stays fully supported for projects: both forges are kept behind the `Forge`
+  interface for good, and nothing that works on one may be missing on the other. See "Moving a project" below.
+- **A new project's forge** is chosen when it is made: trace's GitLab by default on an installation that has one,
+  GitHub otherwise. The installer asks for a GitHub token only when some project is on GitHub (or will be).
+
+## Moving a project
+
+**Who and where.** In the web app (Marc, 16 November 2026: "allow users to move projects via the UI"): an admin of
+the project moves it from the project's Settings, never in GitHub or GitLab. `tracectl project move <slug> --to
+gitlab|github` does the same for scripts. The other forge must be set up for the installation: GitLab installed, or a
+GitHub token that can make repositories in the chosen owner; when it is not, the button says why and what to set up.
+
+**The screens** (renders proposed before building, as for every UI change; approved by Marc, 16 November 2026):
+
+- **Settings → "Where this project lives"**: the forge it is on now and its repository, and one button, "Move to
+  trace's GitLab" or "Move to GitHub". On GitHub, the destination owner is asked for (the installation's default
+  owner filled in).
+- **Before it starts, a confirm sheet** with a summary first and detail one tap away: what moves (history, open
+  changes, issues, its builds), what stays as it is (journey, chats, memory, costs, renders, orders), that the project
+  is paused while it moves (about how long, from its size), and the old home archived, not deleted. trace's
+  recommendation and why: move when nothing is running, and the sheet says so when something is, offering "Move when
+  idle" (recommended, starts as soon as the running work finishes) or "Move now" (waits for running work at once).
+- **While it moves, a progress view** in Settings and on the Overview's Next card ("Moving to trace's GitLab"): each
+  step with its state (pause, copy history, recreate changes, set up builds, first checks, unpause), the step running
+  now, how long it has taken and when it is next checked, and its log one tap away, as the "trace is working" indicator
+  shows other work. Every project member sees it; only admins can start or cancel.
+- **When it is done**, a push notification and a Next item; the Settings card shows the new home, and "Move back" is
+  there at once. **When it fails**, the project is back where it was and unpaused, and the card says why in plain
+  words and what to do, with "Try again".
+- **On a phone**, the same, the progress view first.
+
+**What moves.** trace does the move itself, the same code in both directions (GitHub's own importer from GitLab was
+retired, and one path keeps both directions alike):
+
+- the whole git history: every branch and tag, pushed as a mirror;
+- every open change: recreated as a pull request or merge request with its title, description, labels, base branch
+  (so stacks keep their shape) and author named in the description, plus one comment that carries its discussion so
+  far; closed and merged changes are not recreated (their commits are in the history);
+- open issues and labels;
+- the project's CI: the other forge's pipeline file (`.gitlab-ci.yml` or `.github/workflows/trace-*.yml`) committed
+  in one change, its CodeBuild runner, its webhook, its roles' trust (OIDC subject) and its repository settings
+  (protected branch, labels), as onboarding does today.
+
+**What stays where it is.** Everything trace keeps outside the repository: the journey record (stages, gates,
+signatures, decisions), chats, agent memory, knowledge base, costs, renders, orders. They belong to the project, not to
+the forge, so they come along by not moving. trace records the move in the journey, with who asked and when, and keeps
+a map of each change's old number to its new one, so old links in the journey and chats still open the right change.
+
+**While it moves.** The project is paused (as a person can pause it: no changes, no harness runs) from the moment the
+move starts until the new home passes its first checks, and the Overview's Next card says "Moving to GitLab" with the
+step it is on. Running jobs are let finish first; nothing is cut off mid-change. A move that fails is undone: the
+project goes back to its old home, unpaused, and the reason is shown.
+
+**The old home.** Archived (read-only), never deleted. Moving back later reuses it: the archived repository is
+un-archived and brought up to date, rather than a new one being made, so its old links keep working.
+
+**After the move.** The project's record points at the new forge (the router, src/api/forge.ts, reads it from there
+instead of TRACE_GITLAB_REPOS), its agents' tokens come from the new forge's broker, and its checks run on the new
+forge's pipeline on the same CodeBuild runners. People see no difference apart from the "More" menu's link.
 
 ## Rough running cost
 
@@ -91,8 +146,9 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 5. CI: the generated `.gitlab-ci.yml`, the harness as a script, the per-project CodeBuild GitLab runner project.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
-8. Moving existing projects (installer and Installation screen).
-9. Removing GitHub project code paths and the GitHub token step for projects; docs.
+8. Moving a project in both directions: the mover, the pause, the change-number map; then its screens in the web app
+   (Settings, the confirm sheet, progress, done and failed; renders first) and `tracectl`.
+9. The GitHub token step only when a project is on GitHub; docs.
 
 ## Settled 16 November 2026 (Marc)
 
