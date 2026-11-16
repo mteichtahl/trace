@@ -176,7 +176,7 @@ describe('automerge', () => {
   it('enables, holds with the label, and merges a clean PR directly', async () => {
     let f = fakeGithub()
     await prs.automerge(deps(f, fakeCore(), cfgOf(), context({ payload: { action: 'opened', pull_request: pr() } }), { OWN_TOKEN: 't' }))
-    expect(f.called('graphql')[0]!.args.method).toBe('MERGE')
+    expect(f.called('graphql')[0]!.args.mergeMethod).toBe('MERGE')
     f = fakeGithub()
     await prs.automerge(deps(f, fakeCore(), cfgOf(), context({ payload: { action: 'labeled', pull_request: pr({ labels: [{ name: 'no-automerge' }] }) } }), { OWN_TOKEN: 't' }))
     expect(String(f.called('graphql')[0]!.args.query)).toMatch(/disablePullRequestAutoMerge/)

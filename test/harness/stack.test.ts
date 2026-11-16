@@ -99,10 +99,10 @@ describe('automerge with stacks', () => {
     const payload = { pull_request: { number: 1, node_id: 'N1', draft: false, base: { ref: 'main' }, head: { sha: SHA('1'), ref: 'claude/a' }, labels: [] } }
     const f = fakeGithub({ 'pulls.listFiles': [], 'pulls.list': (a: Record<string, unknown>) => (a.base === 'claude/a' ? [pr(2, 'claude/b', 'claude/a')] : []) })
     await prs.automerge(deps(f, fakeCore(), cfgOf({ prs: { merge_method: 'squash' } }), context({ eventName: 'pull_request', payload }), { OWN_TOKEN: 't' }))
-    expect(f.called('graphql')[0]!.args.method).toBe('MERGE')
+    expect(f.called('graphql')[0]!.args.mergeMethod).toBe('MERGE')
     const g = fakeGithub({ 'pulls.listFiles': [], 'pulls.list': [] })
     await prs.automerge(deps(g, fakeCore(), cfgOf({ prs: { merge_method: 'squash' } }), context({ eventName: 'pull_request', payload }), { OWN_TOKEN: 't' }))
-    expect(g.called('graphql')[0]!.args.method).toBe('SQUASH')
+    expect(g.called('graphql')[0]!.args.mergeMethod).toBe('SQUASH')
   })
 })
 

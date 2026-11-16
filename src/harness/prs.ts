@@ -123,7 +123,7 @@ async function retitle(github: GitHub, o: { owner: string; repo: string; pr: { n
   return say(`${already} It holds more than a specialist's record now: retitled "${title}".`)
 }
 
-const ENABLE = 'mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }'
+const ENABLE = 'mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $mergeMethod}) { clientMutationId } }'
 const DISABLE = 'mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }'
 
 export async function automerge({ github, jobApi, context, core, cfg, env }: Deps): Promise<void> {
@@ -178,7 +178,7 @@ export async function automerge({ github, jobApi, context, core, cfg, env }: Dep
   const method = above ? 'merge' : cfg.prs.merge_method
   if (above) await say(`#${pr.number} has changes stacked on it: it merges with a merge commit, not by ${cfg.prs.merge_method}.`)
   try {
-    await attempt((gh) => gh.graphql(ENABLE, { id: pr.node_id, method: method.toUpperCase() }))
+    await attempt((gh) => gh.graphql(ENABLE, { id: pr.node_id, mergeMethod: method.toUpperCase() }))
     return say(`Auto-merge is on for #${pr.number}: it merges when the required checks pass.`)
   } catch (e) {
     // GitHub refuses auto-merge on a PR that can merge right now ("clean status"): merge it directly.

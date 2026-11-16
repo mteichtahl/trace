@@ -34,7 +34,11 @@ export function fakeGithub(handlers: Record<string, Handler> = {}): Fake {
       const o = d as Record<string, unknown>
       return (o.items ?? o.workflow_runs ?? o.check_runs ?? []) as unknown[]
     },
-    graphql: async (query: string, vars: Record<string, unknown>) => answer('graphql', { query, ...vars }).data,
+    graphql: async (query: string, vars: Record<string, unknown>) => {
+      // @octokit/graphql refuses these as variable names; fail here as it does live.
+      for (const k of ['query', 'method', 'url']) if (k in (vars ?? {})) throw new Error(`[@octokit/graphql] "${k}" cannot be used as variable name`)
+      return answer('graphql', { query, ...vars }).data
+    },
     request: async (route: string, args: Record<string, unknown>) => answer(`request ${route}`, args),
   }
   return { gh: gh as unknown as GitHub, calls, called: (key) => calls.filter((c) => c.key === key) }
