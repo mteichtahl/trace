@@ -664,6 +664,14 @@ describe('a specialist that says its work is not finished', () => {
     expect(unfinishedWords({ title: 'trace: requirements R1 to R4', summary: 'All done; every criterion measurable.' })).toBeNull()
   })
 
+  it('does not take words it quotes for its verdict (test-esp32-run3 S26)', () => {
+    const body = 'This PR commits the revision A JLCPCB release package.\n\nThe `no-automerge` label is on because the request says "Do not merge". This PR is for a person to review and merge.'
+    expect(unfinishedWords({ title: 'Release package rev A (JLCPCB)', body })).toBeNull()
+    expect(unfinishedWords({ title: 'x', body: 'The brief said \u201cnot ready for review\u201d about the old draft; this one is.' })).toBeNull()
+    // its own words, outside the quotes, still count
+    expect(unfinishedWords({ title: 'x', body: 'Do not merge: the "drill map" is missing.' })).toBe('Do not merge: the "drill map" is missing.')
+  })
+
   it('does not take the instructions it was given for its verdict (test-2, change 3)', () => {
     // the description quotes what the specialist asked its worker; the work itself was done
     const body = [
