@@ -152,7 +152,9 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 3. The GitLab stack in CDK (instance, storage, backups, CloudFront, secrets) and the installer step "Set up GitLab",
    with its health check.
 4. Identity: the group and projects, their settings and labels, protected branches and the agents' project tokens
-   (src/installer/gitlab-setup.ts); then their rotation and the IAM OIDC provider for GitLab's pipeline ID tokens;
+   (src/installer/gitlab-setup.ts, run by the installer for each project whose `forge` is gitlab, with its pipelines
+   (committed to an empty project before its branch is protected, else proposed as a change), the update queue's
+   schedule, and its webhook at gitlabHookUrl); then their rotation and the IAM OIDC provider for GitLab's pipeline ID tokens;
    then each project's forge in its settings, its roles trusting GitLab's ID tokens, its own token secret, and the API
    routing its calls there.
 5. CI: the per-project CodeBuild GitLab runner project, through an AWS CodeConnections host and connection for

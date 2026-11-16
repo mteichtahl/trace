@@ -160,6 +160,47 @@ export class GitlabAdmin {
     return { made: true }
   }
 
+  /**
+   * The project's `.gitlab-ci.yml` (src/core/gitlab-ci.ts): committed straight to `branch` while the project is empty
+   * (its first commit makes the branch, before it is protected); on a project with history, left as it is when it
+   * matches, else proposed as a merge request trace's API merges once its pipeline passes (no one pushes to a
+   * protected default branch, the admin included).
+   */
+  async ensureCiFile(projectId: number, branch: string, content: string): Promise<'committed' | 'unchanged' | 'proposed'> {
+    const file = '.gitlab-ci.yml'
+    const head = await this.call('GET', `/projects/${projectId}/repository/branches/${encodeURIComponent(branch)}`)
+    const actions = (action: 'create' | 'update') => [{ action, file_path: file, content }]
+    if (head.status === 404) {
+      await this.ok('POST', `/projects/${projectId}/repository/commits`, { branch, commit_message: 'trace: pipelines', actions: actions('create') })
+      return 'committed'
+    }
+    const had = await this.call('GET', `/projects/${projectId}/repository/files/${encodeURIComponent(file)}?ref=${encodeURIComponent(branch)}`)
+    const now = had.status === 200 ? Buffer.from(z.object({ content: z.string() }).loose().parse(had.json).content, 'base64').toString('utf8') : null
+    if (now === content) return 'unchanged'
+    const work = 'trace/pipelines'
+    await this.call('DELETE', `/projects/${projectId}/repository/branches/${encodeURIComponent(work)}`)
+    await this.ok('POST', `/projects/${projectId}/repository/commits`, { branch: work, start_branch: branch, commit_message: 'trace: pipelines', actions: actions(now === null ? 'create' : 'update') })
+    const open = z.array(z.object({ iid: z.number() }).loose()).parse(await this.ok('GET', `/projects/${projectId}/merge_requests?state=opened&source_branch=${encodeURIComponent(work)}`))
+    if (!open.length) {
+      await this.ok('POST', `/projects/${projectId}/merge_requests`, {
+        source_branch: work, target_branch: branch, title: 'trace: pipelines', labels: 'trace', remove_source_branch: true,
+        description: 'trace\'s pipelines for this project (templates/gitlab/trace.gitlab-ci.yml). trace merges this once its pipeline passes.',
+      })
+    }
+    return 'proposed'
+  }
+
+  /** The update queue's safety net: a schedule twice an hour on the default branch (as GitHub's trace-prs has). */
+  async ensureSchedule(projectId: number, branch: string): Promise<{ made: boolean }> {
+    const S = z.object({ id: z.number(), description: z.string() }).loose()
+    const description = 'trace update-queue (safety net)'
+    const had = z.array(S).parse(await this.ok('GET', `/projects/${projectId}/pipeline_schedules?per_page=100`)).find((x) => x.description === description)
+    const body = { description, ref: branch, cron: '17,47 * * * *', cron_timezone: 'UTC', active: true }
+    if (had) { await this.ok('PUT', `/projects/${projectId}/pipeline_schedules/${had.id}`, body); return { made: false } }
+    await this.ok('POST', `/projects/${projectId}/pipeline_schedules`, body)
+    return { made: true }
+  }
+
   /** trace's labels on the project, made when missing. */
   async ensureLabels(projectId: number): Promise<string[]> {
     const L = z.object({ name: z.string() }).loose()
@@ -178,13 +219,18 @@ export class GitlabAdmin {
  * One project, set up from end to end: group, project, settings, protected branch, labels, the agents' token and its
  * login as TRACE_AGENT_LOGIN, and (when trace's hooks endpoint is known) its webhook.
  */
-export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string; slug: string; branch: string; hook?: { url: string; secret: string } | undefined }): Promise<ProjectSetup> {
+export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string; slug: string; branch: string; hook?: { url: string; secret: string } | undefined; ci?: string | undefined }): Promise<ProjectSetup> {
   const lines: string[] = []
   const g = await admin.ensureGroup(o.group)
   if (g.made) lines.push(`made the group ${o.group}`)
   const p = await admin.ensureProject(g.id, o.group, o.slug, o.branch)
   lines.push(p.made ? `made ${p.path}` : `${p.path} is there`)
   await admin.applySettings(p.id)
+  // its pipelines first: an empty project's first commit makes its default branch, which is then protected
+  if (o.ci) {
+    const c = await admin.ensureCiFile(p.id, p.defaultBranch, o.ci)
+    lines.push(c === 'committed' ? '.gitlab-ci.yml committed' : c === 'unchanged' ? '.gitlab-ci.yml is current' : '.gitlab-ci.yml proposed (trace/pipelines): trace merges it once its pipeline passes')
+  }
   await admin.protectDefaultBranch(p.id, p.defaultBranch)
   lines.push(`${p.defaultBranch} protected: no one pushes, trace's API merges`)
   const labels = await admin.ensureLabels(p.id)
@@ -195,6 +241,10 @@ export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string;
   if (o.hook) {
     const h = await admin.ensureHook(p.id, o.hook.url, o.hook.secret)
     lines.push(h.made ? 'trace\'s webhook added' : 'trace\'s webhook updated')
+  }
+  if (o.ci) {
+    const sch = await admin.ensureSchedule(p.id, p.defaultBranch)
+    if (sch.made) lines.push('the update queue\'s schedule made (twice an hour)')
   }
   return { path: p.path, id: p.id, defaultBranch: p.defaultBranch, agentToken: t.token, agentLogin: t.login, lines }
 }
