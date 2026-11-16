@@ -211,7 +211,10 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       return later(ok({
         // projects.create takes `repo` (owner/name); an older draft of the mock read `repository`
         repo: typeof a.repo === 'string' ? a.repo : `${(a.repository as { owner: string }).owner}/${(a.repository as { name: string }).name}`,
-        done: ['Created the repository', 'Opened the onboarding pull request', ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [] : ["Set up the project's agent, knowledge base and build runner"]), 'Sent the invitations'],
+        done: ['Created the repository', 'Opened the onboarding pull request',
+          // starting from fabrication files (docs/fab-import.md): the files as a change, the journey entered at its stage
+          ...(a.import ? [`Its change "Import the fabrication files" is on the project's Changes: trace applies it once its checks pass. The project starts at ${(a.import as { entry?: string }).entry === 'bringup' ? 'Bring up' : 'Fabricate'}, with 6 earlier gates signed on the import evidence. 2 warnings from the check are carried into the project.`] : []),
+          ...(import.meta.env.VITE_MOCK_AGENT === 'setting_up' ? [] : ["Set up the project's agent, knowledge base and build runner"]), 'Sent the invitations'],
         waits: [
           { id: 'w-pr', what: "Waiting for the onboarding pull request's checks", text: 'Checks run on the new repository', lastCheckedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 60_000).toISOString() },
           // VITE_MOCK_AGENT=setting_up: the project's agent arrives with the installation update (project.agent, mock/small.ts)

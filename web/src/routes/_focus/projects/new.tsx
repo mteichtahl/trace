@@ -2,12 +2,14 @@
  * New project (/projects/new, Focus mode, admins): six steps, each with defaults, so a project can be made by typing
  * a name and pressing Continue five times (docs/ui-design.md, "Creating a project"):
  *
- *   About (name, description, icon from 8 glyphs and 8 colours or an upload) · How it starts (an idea or a KiCad
- *   design, and the template trace recommends) · Repository (new or existing, branch; Advanced folded) · People (parts:
- *   Contributor or Reviewer; Guests locked to Reviewer; admins locked, on every project) · Build and budget · Review
+ *   About (name, description, icon from 8 glyphs and 8 colours or an upload) · How it starts (an idea, a KiCad design
+ *   or fabrication files, and the template trace recommends) · Fabrication files (only when it starts from them,
+ *   docs/fab-import.md) · Repository (new or existing, branch; Advanced folded) · People (parts: Contributor or
+ *   Reviewer; Guests locked to Reviewer; admins locked, on every project) · Build and budget · Review
  *
  * Create calls projects.create and shows the work as Run lines, anything that waits as a Wait line, then Open project
- * goes to the first task (Intent builder or Design import). The draft is kept with the person's preferences.
+ * goes to the first task (Intent builder or Design import), or the project's Overview for one started from fabrication
+ * files. The draft is kept with the person's preferences.
  */
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
@@ -26,7 +28,9 @@ import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { useTraceContext } from '@/components/chat/context'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { FlatNote } from '@/components/installation/layout'
-import { buildWords, checks as allChecks, partsFor, recommendTemplate, repoOf, slug, STEPS, type StepId } from '@/components/new-project/rules'
+import { buildWords, checks as allChecks, FAB_TEMPLATES, partsFor, recommendTemplate, repoOf, slug, stepsFor, type StepId } from '@/components/new-project/rules'
+import { ENTRY_WORDS, signedBefore } from '@/components/new-project/fab-import'
+import { FabFilesStep, useFabCheck } from '@/components/new-project/fab-files-step'
 import { RepoNote } from '@/components/new-project/repo-note'
 import { IconPicker, ProjectIconView, recommendGlyph } from '@/components/project/project-icon'
 import { RunLine } from '@/components/run-line'
@@ -67,7 +71,8 @@ export function createArgs(d: NewProjectDraft) {
   const later = (Object.entries(d.build.later) as [keyof NewProjectDraft['build']['later'], boolean][]).filter(([, on]) => on).map(([k]) => k)
   return {
     repo: `${d.repository.owner}/${d.repository.name}`, name: d.name.trim(), description: d.description.trim() || undefined, template: d.template,
-    start: d.start === 'design' ? 'import' as const : 'idea' as const,
+    start: d.start === 'idea' ? 'idea' as const : 'import' as const,
+    ...(d.start === 'files' && d.fab ? { import: { upload: d.fab.upload, overview: d.fab.overview.trim(), entry: d.fab.built ? 'bringup' as const : 'fabricate' as const } } : {}),
     // the icon is kept as its JSON: glyph and colour (an uploaded image is too large for the record)
     icon: JSON.stringify({ glyph: d.icon.glyph, colour: d.icon.colour }),
     ...(d.repository.mode === 'new' ? { new: { private: true } } : {}),
@@ -84,16 +89,20 @@ function NewProject() {
   const projects = useProjects()
   const users = useQuery({ ...q('users.list', {}), enabled: user?.class === 'admin' })
   const owner = projects.data?.[0]?.repo.split('/')[0] ?? 'acme'
-  const draft = useSkillDraft<NewProjectDraft & { done: string[] }>('new/project', 'new-project', { name: 'New project', steps: STEPS.length }, { ...blank(owner), done: [] })
+  const draft = useSkillDraft<NewProjectDraft & { done: string[] }>('new/project', 'new-project', { name: 'New project', steps: 7 }, { ...blank(owner), done: [] })
   const d = draft.data
   const set = (p: Partial<NewProjectDraft>) => draft.setData((x) => ({ ...x, ...p }))
-  const step = STEPS[draft.step]!.id
+  // the steps for how it starts: Fabrication files only when it starts from them
+  const STEPS = stepsFor(d.start)
+  const step = (STEPS[draft.step] ?? STEPS[0]!).id
   const taken = (projects.data ?? []).map((p) => projectName(p.repo))
   const reached = new Set(STEPS.slice(0, draft.step + 1).map((s) => s.id))
   // whether GitHub (or a retired project) has the repository already, asked once typing stops (test-esp32 log #78)
   const wanted = useSettled(repoOf(d), 400)
   const repoCheck = useQuery({ ...q('projects.repo_check', { repo: wanted }), enabled: user?.class === 'admin' && reached.has('repository') && /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(wanted), staleTime: 30_000, retry: false })
-  const all = allChecks(d, { taken, repo: repoCheck.data })
+  // the fabrication files' check, asked again as they change (docs/fab-import.md)
+  const fabCheck = useFabCheck(d, user?.class === 'admin' && d.start === 'files' && reached.has('files'))
+  const all = allChecks(d, { taken, repo: repoCheck.data, fab: fabCheck.data })
   const bar = all.filter((c) => reached.has(c.step)).map((c) => ({ id: c.id, text: c.text, status: c.ok ? 'met' as const : 'not_met' as const, onJump: () => draft.setStep(STEPS.findIndex((s) => s.id === c.step)) }))
   const create = useCall('projects.create', () => [['projects'], ['journey.get']])
   const [created, setCreated] = useState<Created | null>(null)
@@ -143,7 +152,7 @@ function NewProject() {
     </div>
   )
 
-  if (created) return <CreatedView created={created} draft={d} onOpen={() => void navigate({ to: '/p/$id/do/$skill', params: { id: projectId(created.repo), skill: d.start === 'idea' ? 'intent-builder' : 'design-import' } })} onClose={close} />
+  if (created) return <CreatedView created={created} draft={d} onOpen={() => void (d.start === 'files' ? navigate({ to: '/p/$id', params: { id: projectId(created.repo) } }) : navigate({ to: '/p/$id/do/$skill', params: { id: projectId(created.repo), skill: d.start === 'idea' ? 'intent-builder' : 'design-import' } }))} onClose={close} />
 
   return (
     <FocusLayout
@@ -183,14 +192,15 @@ function NewProject() {
       {step === 'start' && (
         <div className="max-w-[720px] space-y-6">
           <h1 className="text-2xl font-semibold tracking-tight">How does it start?</h1>
-          <RadioGroup value={d.start} onValueChange={(v) => set({ start: v as NewProjectDraft['start'], template: recommendTemplate(`${d.name} ${d.description}`, v as NewProjectDraft['start']).template })} className="grid gap-3 sm:grid-cols-2">
+          <RadioGroup value={d.start} onValueChange={(v) => set({ start: v as NewProjectDraft['start'], template: recommendTemplate(`${d.name} ${d.description}`, v as NewProjectDraft['start']).template })} className="grid gap-3 lg:grid-cols-3">
             <Choice value="idea" title="From an idea" detail="Opens the Intent builder: trace asks one topic at a time and drafts the requirements." />
             <Choice value="design" title="From an existing KiCad design" detail="Opens Design import: trace infers the intent and places the project at its entry stage." />
+            <Choice value="files" title="From fabrication files" detail="Gerbers, a bill of materials and a pick and place file, with an overview: trace checks them and starts the project at Fabricate." />
           </RadioGroup>
           <fieldset>
             <legend className="mb-2 text-sm font-medium">Template</legend>
             <RadioGroup value={d.template} onValueChange={(v) => set({ template: v as Template })} className="grid gap-2 sm:grid-cols-2">
-              {TEMPLATES.map((t) => <Choice key={t.id} value={t.id} title={t.label} detail={t.detail} badge={t.id === rec.template ? 'trace recommends' : undefined} />)}
+              {TEMPLATES.map((t) => <Choice key={t.id} value={t.id} title={t.label} detail={d.start === 'files' && !FAB_TEMPLATES.includes(t.id) ? 'Has no Fabricate stage, so it cannot start from fabrication files' : t.detail} badge={t.id === rec.template ? 'trace recommends' : undefined} disabled={d.start === 'files' && !FAB_TEMPLATES.includes(t.id)} />)}
             </RadioGroup>
             <p className="mt-2 text-sm text-muted-foreground"><Lightbulb className="mr-1 inline size-4" />{rec.why}: {TEMPLATES.find((t) => t.id === rec.template)?.label}. {d.template !== rec.template && 'You chose another; that is fine.'}</p>
             <p className="mt-1 text-xs text-muted-foreground">The template is fixed once the project exists: its stages and gates follow from it.</p>
@@ -198,12 +208,14 @@ function NewProject() {
         </div>
       )}
 
+      {step === 'files' && <FabFilesStep d={d} set={set} check={fabCheck.data} checking={fabCheck.isFetching} />}
+
       {step === 'repository' && (
         <div className="max-w-[640px] space-y-6">
           <h1 className="text-2xl font-semibold tracking-tight">Where its files live</h1>
           <RadioGroup value={d.repository.mode} onValueChange={(v) => set({ repository: { ...d.repository, mode: v as 'new' | 'existing' } })} className="grid gap-3 sm:grid-cols-2">
             <Choice value="new" title="A new repository" detail="Private, created for this project" badge="trace recommends" />
-            <Choice value="existing" title="An existing repository" detail={d.start === 'design' ? 'The one that holds the KiCad design' : 'One you already have'} />
+            <Choice value="existing" title="An existing repository" detail={d.start === 'design' ? 'The one that holds the KiCad design' : d.start === 'files' ? 'One you already have: the files are added to it as a change' : 'One you already have'} />
           </RadioGroup>
           <div className="grid gap-3 sm:grid-cols-[1fr_auto_1.4fr]">
             <div className="space-y-1.5"><Label htmlFor="np-owner">Owner</Label><Input id="np-owner" value={d.repository.owner} onChange={(e) => set({ repository: { ...d.repository, owner: e.target.value.trim() } })} className="font-mono" /></div>
@@ -257,7 +269,8 @@ function NewProject() {
         <div className="max-w-[720px] space-y-5">
           <h1 className="text-2xl font-semibold tracking-tight">Review</h1>
           <ul className="space-y-2 text-sm">
-            <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : 'from an existing KiCad design'}.</li>
+            <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : d.start === 'files' ? `from fabrication files, at ${ENTRY_WORDS[d.fab?.built ? 'bringup' : 'fabricate'].title}` : 'from an existing KiCad design'}.</li>
+            {d.start === 'files' && d.fab && <li>{Object.values(d.fab.files).map((f) => f!.name).join(', ')}, and an overview of {d.fab.overview.trim().length.toLocaleString('en')} characters{fabCheck.data ? `: ${fabCheck.data.findings.filter((f) => f.severity === 'warning').length} warnings carried into the project` : ''}.</li>}
             <li>{d.repository.mode === 'new' ? 'A new private repository' : 'The existing repository'} <span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> on <span className="font-mono">{d.repository.branch}</span>{d.advanced.onboardingPr ? ', with an onboarding change' : ''}.</li>
             <li>{d.people.length ? `${d.people.length} ${d.people.length === 1 ? 'person' : 'people'} added` : 'Nobody added yet'}{d.people.some((p) => p.class === 'new') ? `, ${d.people.filter((p) => p.class === 'new').length} to invite by email` : ''}; admins reach it without being added.</li>
             <li>{buildWords(d.build)}</li>
@@ -266,9 +279,11 @@ function NewProject() {
             <p className="font-medium">What happens when you press Create</p>
             <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
               <li>{d.repository.mode === 'new' ? 'Create' : 'Connect'} the repository{d.advanced.onboardingPr ? ' and open the onboarding change' : ''}</li>
+              {d.start === 'files' && <li>Add the fabrication files and the overview to it as one change, applied once its checks pass</li>}
+              {d.start === 'files' && <li>Start the project at {ENTRY_WORDS[d.fab?.built ? 'bringup' : 'fabricate'].title}, signing {signedBefore(d.fab?.built ? 'bringup' : 'fabricate').join(', ')} on the import evidence, as you</li>}
               <li>Set up the project's agent, knowledge base and build runner</li>
               <li>Invite the people you added</li>
-              <li>Open {d.start === 'idea' ? 'the Intent builder' : 'Design import'}</li>
+              <li>{d.start === 'files' ? (d.fab?.built ? 'Ask trace to draft the requirements from your overview' : 'Ask trace to record the package, check stock again today and draft the requirements from your overview') : `Open ${d.start === 'idea' ? 'the Intent builder' : 'Design import'}`}</li>
             </ol>
             <p className="mt-2 text-xs text-muted-foreground">Most of it takes under a minute; the onboarding change's checks may take a few more, shown as they run.</p>
           </div>
@@ -295,7 +310,7 @@ function Summary({ d, onEdit }: { d: NewProjectDraft; onEdit: () => void }) {
     <div className="mb-6 flex items-start gap-4 rounded-xl border p-4">
       <ProjectIconView icon={d.icon} size={48} />
       <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{d.name || 'Untitled'}</span><span className="rounded border px-1.5 text-xs">{TEMPLATES.find((t) => t.id === d.template)?.label} template</span><span className="rounded border px-1.5 text-xs">{d.start === 'idea' ? 'Start from an idea' : 'Start from a design'}</span></p>
+        <p className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{d.name || 'Untitled'}</span><span className="rounded border px-1.5 text-xs">{TEMPLATES.find((t) => t.id === d.template)?.label} template</span><span className="rounded border px-1.5 text-xs">{d.start === 'idea' ? 'Start from an idea' : d.start === 'files' ? 'Start from fabrication files' : 'Start from a design'}</span></p>
         {d.description && <p className="mt-1 text-sm">{d.description}</p>}
         <p className="mt-1 text-xs text-muted-foreground"><span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> · {d.build.quantity} boards per run · {d.build.fab} · {d.build.budget !== undefined ? `build budget ${money(d.build.budget)}` : 'no build budget set'}{d.build.unitCost !== undefined ? ` · target ${money(d.build.unitCost)} a board` : ''}</p>
       </div>
@@ -304,10 +319,10 @@ function Summary({ d, onEdit }: { d: NewProjectDraft; onEdit: () => void }) {
   )
 }
 
-function Choice({ value, title, detail, badge }: { value: string; title: string; detail: string; badge?: string }) {
+function Choice({ value, title, detail, badge, disabled }: { value: string; title: string; detail: string; badge?: string; disabled?: boolean }) {
   return (
-    <Label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4 font-normal has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5">
-      <RadioGroupItem value={value} className="mt-0.5" />
+    <Label className={cn('flex cursor-pointer items-start gap-3 rounded-xl border p-4 font-normal has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5', disabled && 'cursor-not-allowed opacity-60')}>
+      <RadioGroupItem value={value} className="mt-0.5" disabled={disabled} />
       <span className="space-y-0.5"><span className="flex flex-wrap items-center gap-2 font-medium">{title}{badge && <span className="rounded-sm bg-primary/10 px-1.5 text-xs font-normal text-primary">{badge}</span>}</span><span className="block text-sm text-muted-foreground">{detail}</span></span>
     </Label>
   )
@@ -394,7 +409,8 @@ function PeopleStep({ d, set, users, me }: { d: NewProjectDraft; set: (p: Partia
 function TraceTip({ step, d }: { step: StepId; d: NewProjectDraft }) {
   const tips: Record<StepId, string> = {
     about: '',
-    start: d.start === 'design' ? 'Design import reads the KiCad project and proposes where it enters the journey.' : 'The Intent builder takes about 20 minutes; you can stop and come back.',
+    start: d.start === 'design' ? 'Design import reads the KiCad project and proposes where it enters the journey.' : d.start === 'files' ? 'Fabrication files suit a board designed elsewhere that you want to order and bring up with trace. Next you give the files and an overview.' : 'The Intent builder takes about 20 minutes; you can stop and come back.',
+    files: 'Export the Gerbers, BOM and pick and place for JLCPCB from your design tool (KiCad: Fabrication outputs), from the same origin. The overview is the project\'s intent: the more of the six topics it covers, the better trace\'s requirements will be.',
     repository: 'A new private repository named from the project is the simplest start. The template and repository cannot change later: the record depends on them.',
     people: 'Give the project a second person who can answer questions while you are away. Inviting someone sends one email; they sign in with a passkey and land on this project.',
     build: '10 boards is JLCPCB\'s usual minimum. The build budget is the order\'s (boards, parts, case); the cloud-work allowance is trace\'s own spend, and trace warns before a stage uses its share.',
@@ -427,7 +443,9 @@ function CreatedView({ created, draft: d, onOpen, onClose }: { created: Created;
         </div>
         {waitsForAgent && <AgentSetupNotice repo={created.repo} className="mt-4" />}
         <p className="mt-3 text-sm text-muted-foreground">{settingUp
-          ? 'You can start now: open the project and write its intent in the Intent builder. Work you submit or ask trace for while the agent is being set up is queued, and starts by itself once it is ready.'
+          ? d.start === 'files'
+            ? 'You can open the project now. trace\'s work on the order and the requirements is queued, and starts by itself once the project\'s agent is ready.'
+            : 'You can start now: open the project and write its intent in the Intent builder. Work you submit or ask trace for while the agent is being set up is queued, and starts by itself once it is ready.'
           : 'You can start now; anything still waiting finishes on its own and says so here and on the project.'}</p>
         <Button size="lg" className="mt-6" onClick={() => { toast(`${d.name} created.`); onOpen() }}>{openLabel(settingUp)}</Button>
       </div>

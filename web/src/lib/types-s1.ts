@@ -812,11 +812,23 @@ export interface ProjectIcon {
   image?: string
 }
 
+/** Starting from fabrication files (docs/fab-import.md): what the draft keeps. The files themselves are uploaded
+ * (projects.import_upload) and kept a day under `upload`; the draft keeps their names and sizes only. */
+export interface FabDraft {
+  upload: string
+  overview: string
+  /** the boards are built already: the project enters at Bring up */
+  built: boolean
+  files: Partial<Record<'gerbers' | 'bom' | 'cpl', { name: string; bytes: number }>>
+}
+
 export interface NewProjectDraft {
   name: string
   description: string
   icon: ProjectIcon
-  start: 'idea' | 'design'
+  /** idea: the Intent builder; design: a KiCad design (Design import); files: fabrication files (docs/fab-import.md) */
+  start: 'idea' | 'design' | 'files'
+  fab?: FabDraft
   template: Template
   repository: { mode: 'new' | 'existing'; owner: string; name: string; branch: string }
   advanced: { ownToken: boolean; memoryDays: number; onboardingPr: boolean; applySettings: boolean }
