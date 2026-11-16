@@ -43,6 +43,19 @@ export function useTraceContext(entry: Omit<ContextEntry, 'id'> | null, key?: st
 export const removeContext = (id: string) => contextStore.set((s) => ({ ...s, removed: new Set([...s.removed, id]) }))
 export const restoreContext = () => contextStore.set((s) => ({ ...s, removed: new Set() }))
 
+/** The most characters one entry's value may have: the server refuses a run with a longer one (CONTEXT_VALUE_MAX in
+ * src/web/agui.ts; keep the two equal). */
+export const CONTEXT_VALUE_MAX = 100_000
+
+/** An entry's value as the agent is given it: JSON for objects, cut short (and saying so) past CONTEXT_VALUE_MAX so the
+ * chat still runs when a screen's context grows large. */
+export function contextValue(value: ContextEntry['value'], max = CONTEXT_VALUE_MAX): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  if (text.length <= max) return text
+  const note = `… [cut short: ${text.length - max} more characters not shown]`
+  return text.slice(0, max - note.length) + note
+}
+
 /** Keeps CopilotKit's context in step with the chips. Mount once inside the CopilotKit provider. */
 export function ContextBridge() {
   const { copilotkit } = useCopilotKit()
@@ -50,7 +63,7 @@ export function ContextBridge() {
   useEffect(() => {
     const ids = entries
       .filter((e) => !removed.has(e.id))
-      .map((e) => copilotkit.addContext({ description: e.description, value: typeof e.value === 'string' ? e.value : JSON.stringify(e.value) }))
+      .map((e) => copilotkit.addContext({ description: e.description, value: contextValue(e.value) }))
     return () => ids.forEach((i) => copilotkit.removeContext(i))
   }, [copilotkit, entries, removed])
   return null
