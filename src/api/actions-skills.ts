@@ -55,7 +55,7 @@ import { type RequirementWords, architectureView, decidedFields, editedOf, inten
 import { type PendingDecision, type StatedInput, Decision, Stated, changesStage, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
 import { jobTitles } from './actions-jobs.js'
-import { artifactText, checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
+import { artifactText, checkFindings, designOf, hasTable, latestNetlist, latestPackage, latestRun, requirementEvidence, runResult, stockLines, struckRequirements } from './record-read.js'
 import { keyPartsView } from '../tools/design/key-parts.js'
 import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuantity, loadIds, loadReadings, unionIds, unionReadings } from '../core/bench.js'
 import { loadBoards } from '../core/boards.js'
@@ -192,7 +192,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     // the one the draft was written for, else the oldest; one asked for that is not open for this person falls through
     const want = o.question ?? (typeof draft?.question === 'string' ? draft.question : undefined)
     const question = (want ? open.find((q) => q.id === want) : undefined) ?? open.find((q) => q.kind !== 'stuck') ?? open[0] ?? null
-    const fab = latestRun(db, 'kicad.fab')
+    const fab = latestPackage(db)
     const fabResult = fab ? runResult(db, fab.id) : null
     const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
     // Release review: what its steps show (release-review.ts)
@@ -225,7 +225,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       return {
         parts: runRow(parts),
         signedParts: before ? runRow({ id: String(before.id), status: String(before.status), summary: before.summary === null ? null : String(before.summary), started: Number(before.started) }) : null,
-        fab: fab ? { ...runRow(fab)!, result: fabResult, outDir: typeof args.out_dir === 'string' ? args.out_dir : null, bomCsv: artifactText(db, fab.id, 'bom.csv') } : null,
+        fab: fab ? { ...runRow(fab)!, result: fabResult, outDir: typeof args.out_dir === 'string' ? args.out_dir : typeof args.dir === 'string' ? args.dir : null, bomCsv: artifactText(db, fab.id, 'bom.csv') } : null,
         board: boardRun ? { id: boardRun.id, result: runResult(db, boardRun.id) } : null,
         // the case, ordered apart from the boards (order-submit.ts caseOrderOf)
         caseBuild: caseRun ? { id: caseRun.id, started: caseStarted, result: runResult(db, caseRun.id) } : null,

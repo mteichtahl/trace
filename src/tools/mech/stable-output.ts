@@ -29,8 +29,9 @@ export function modelWithoutStamps(xml: string): string {
 }
 
 /** A zip's entries by name, uncompressed (zip64 too: lib3mf writes it); null when this reader cannot read it
- * (encryption, a compression other than stored or deflate, a damaged file). */
-export function unzip(buf: Buffer): Map<string, Buffer> | null {
+ * (encryption, a compression other than stored or deflate, a damaged file), or when its entries would unpack to more
+ * than `limit` bytes together. An entry never inflates past the size it declares. */
+export function unzip(buf: Buffer, limit: number = Number.MAX_SAFE_INTEGER): Map<string, Buffer> | null {
   const MAX = 0xffffffff
   try {
     // the end of the central directory: its signature, searched back over a comment of at most 64 KiB
@@ -48,6 +49,7 @@ export function unzip(buf: Buffer): Map<string, Buffer> | null {
       at = Number(buf.readBigUInt64LE(z + 48))
     }
     const out = new Map<string, Buffer>()
+    let total = 0
     for (let n = 0; n < count; n++) {
       if (buf.readUInt32LE(at) !== 0x02014b50) return null
       const flags = buf.readUInt16LE(at + 8)
@@ -73,9 +75,11 @@ export function unzip(buf: Buffer): Map<string, Buffer> | null {
         e += 4 + len
       }
       if (flags & 1 || buf.readUInt32LE(local) !== 0x04034b50) return null
+      total += size
+      if (total > limit) return null
       const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28)
       const data = buf.subarray(start, start + packed)
-      const raw = method === 0 ? Buffer.from(data) : method === 8 ? inflateRawSync(data) : null
+      const raw = method === 0 ? Buffer.from(data) : method === 8 ? inflateRawSync(data, { maxOutputLength: Math.max(1, size) }) : null
       if (!raw || raw.length !== size) return null
       out.set(name, raw)
       at += 46 + nameLen + extraLen + commentLen

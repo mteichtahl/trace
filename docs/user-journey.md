@@ -115,6 +115,8 @@ A project can start from an existing KiCad design instead of an intent. The Desi
 
 An imported board that is already built enters at Bring up as revision A, so its bench results become the first evidence.
 
+A design with no KiCad source to hand starts from its fabrication files instead: the Gerbers, the bill of materials, the pick and place and a written overview, checked and put into the repository, with the project entering at Fabricate (or Bring up for boards already built). See docs/fab-import.md.
+
 ### The firmware track
 
 Firmware runs as a track beside the hardware stages, with its work tied to each stage's gate, so a board arrives with firmware ready to flash and tests ready to run. Its gate criteria are added to the hardware gates; it has no gates of its own.

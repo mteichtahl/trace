@@ -9,6 +9,7 @@
  * beside the agents' rows. A requirement a person struck in Requirements review is struck here, whatever the
  * repository's row says, and one they accepted is accepted.
  */
+import { PACKAGE_KINDS } from '../tools/fab/inspect.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { JourneyRecord } from '../core/journey.js'
 import { artifactMime, unpackArtifact } from '../core/store.js'
@@ -122,6 +123,15 @@ export function latestRun(db: DatabaseSync, kind: string, subject?: string): Che
   const r = (subject
     ? db.prepare('SELECT id, kind, subject, status, summary, started, finished FROM runs WHERE kind=? AND subject=? ORDER BY started DESC LIMIT 1').get(kind, subject)
     : db.prepare('SELECT id, kind, subject, status, summary, started, finished FROM runs WHERE kind=? ORDER BY started DESC LIMIT 1').get(kind)) as Record<string, unknown> | undefined
+  return r ? { id: String(r.id), kind: String(r.kind), subject: r.subject === null ? null : String(r.subject), status: String(r.status), summary: r.summary === null ? null : String(r.summary), started: Number(r.started), finished: r.finished === null ? null : Number(r.finished) } : null
+}
+
+/**
+ * The newest release package run: built (kicad.fab) or imported (import.fab, docs/fab-import.md), or null. Its kind
+ * says which.
+ */
+export function latestPackage(db: DatabaseSync): CheckRun | null {
+  const r = db.prepare(`SELECT id, kind, subject, status, summary, started, finished FROM runs WHERE kind IN (${PACKAGE_KINDS.map(() => '?').join(',')}) ORDER BY started DESC LIMIT 1`).get(...PACKAGE_KINDS) as Record<string, unknown> | undefined
   return r ? { id: String(r.id), kind: String(r.kind), subject: r.subject === null ? null : String(r.subject), status: String(r.status), summary: r.summary === null ? null : String(r.summary), started: Number(r.started), finished: r.finished === null ? null : Number(r.finished) } : null
 }
 

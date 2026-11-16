@@ -44,7 +44,7 @@ import { PROJECTS_PREFIX } from '../core/project.js'
 import { type JourneyRecord, type OrderRow, type Signer, type StageId, loadJourney, loadOrders, recordOrder } from '../core/journey.js'
 import { CHECKABLE, SHIPPING_PREFIX, type Watch, WatchStore, endWatch, orderWait, watchOrder, watches } from '../core/shipping.js'
 import { ActionError, type Context, Repo, agentFactsStore, def, hashOf, hashesOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
-import { hasTable, latestRun, runResult } from './record-read.js'
+import { hasTable, latestPackage, latestRun, runResult } from './record-read.js'
 import { readRenders } from './actions-renders.js'
 import { orderOptionsOf } from '../tools/kicad/order-options.js'
 import { orderEstimateFrom } from '../core/order-estimate.js'
@@ -175,7 +175,7 @@ export function hardwareOf(fabResult: Record<string, unknown> | null, db: Parame
     return h && typeof h === 'object' && Array.isArray((h as { lines?: unknown }).lines) ? h as Record<string, unknown> : null
   }
   let h = pick(fabResult)
-  let run: string | null = h ? (latestRun(db, 'kicad.fab')?.id ?? null) : null
+  let run: string | null = h ? (latestPackage(db)?.id ?? null) : null
   if (!h) {
     const bom = latestRun(db, 'kicad.bom')
     h = bom ? pick(runResult(db, bom.id)) : null
@@ -229,8 +229,9 @@ const day = (t: number): string => new Date(t * 1000).toISOString().slice(0, 10)
  */
 export function orderSheet(db: DatabaseSync, o: { quantity: number; unitCost: number | null; currency: string; revision: string; fabricateStarted: number | null; now: number }) {
   const missing: string[] = []
-  // the release package: the newest kicad.fab run, built once the project reached Fabricate
-  const fab = latestRun(db, 'kicad.fab')
+  // the release package: the newest kicad.fab run, built once the project reached Fabricate, or the imported one
+  // (import.fab, docs/fab-import.md)
+  const fab = latestPackage(db)
   const res = fab ? runResult(db, fab.id) : null
   const current = fab !== null && (o.fabricateStarted === null || fab.started >= o.fabricateStarted)
   const files = current && Array.isArray(res?.files) ? (res.files as unknown[]).map((f) => (typeof f === 'string' ? f : (f as { path?: string }).path ?? '')).filter(Boolean).map((p) => p.split('/').pop() ?? p) : []
@@ -309,7 +310,7 @@ export const BUILD_ACTIONS = {
       const orders: ReturnType<typeof orderView>[] = all.map((o) => orderView(o, tracking, ws.find((w) => w.orderId === o.id) ?? null, key, now, mine))
       const atFab = r.stages.some((s) => s.id === 'fabricate') && stageOrd(r, r.journey.currentStage) >= stageOrd(r, 'fabricate')
       if (atFab && !orders.some((o) => o.release === r.journey.revision && !o.cancelled)) {
-        const fab = latestRun(db, 'kicad.fab')
+        const fab = latestPackage(db)
         const res = fab ? runResult(db, fab.id) : null
         const sheet = orderSheet(db, { quantity: b.quantity, unitCost: b.unit_cost, currency: b.currency, revision: r.journey.revision, fabricateStarted: r.stages.find((s) => s.id === 'fabricate')?.started ?? null, now })
         // the panel and mounting hardware list, kept apart from the parts: only when the build plan asks for it

@@ -155,7 +155,7 @@ export function quoteDefaults(db: DatabaseSync): QuoteDefaults | null {
 export function quoteRuns(db: DatabaseSync): Pick<QuoteDefaults, 'options' | 'optionsFrom' | 'partsRun' | 'partsTotal'> {
   const out: Pick<QuoteDefaults, 'options' | 'optionsFrom' | 'partsRun' | 'partsTotal'> = { options: [], optionsFrom: null, partsRun: null, partsTotal: null }
   if (!has(db, 'runs')) return out
-  const fab = db.prepare("SELECT id, result FROM runs WHERE kind='kicad.fab' ORDER BY started DESC LIMIT 1").get() as { id: string; result: unknown } | undefined
+  const fab = db.prepare("SELECT id, result FROM runs WHERE kind IN ('kicad.fab','import.fab') ORDER BY started DESC LIMIT 1").get() as { id: string; result: unknown } | undefined
   if (fab) {
     let res: unknown = null
     try { res = JSON.parse(String(fab.result ?? 'null')) } catch { res = null }
