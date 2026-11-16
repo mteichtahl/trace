@@ -79,13 +79,18 @@ const Msg = z.object({
   error: z.string().optional(),
 }).loose()
 
+/** The most characters one context entry's value may have (the app trims to this; keep the two equal). */
+export const CONTEXT_VALUE_MAX = 100_000
+
 export const RunInput = z.object({
   threadId: z.string().min(1).max(200),
   runId: z.string().min(1).max(200),
   parentRunId: z.string().optional(),
   messages: z.array(Msg).max(2000),
   tools: z.array(z.object({ name: z.string().min(1).max(64), description: z.string().max(4000).default(''), parameters: z.unknown().optional() }).loose()).default([]),
-  context: z.array(z.object({ description: z.string().max(2000), value: z.string().max(20_000) })).default([]),
+  // a screen's context entry can be large (the Intent builder's draft lists every statement): the app trims each to
+  // CONTEXT_VALUE_MAX (web/src/components/chat/context.ts) so a run is never refused for it
+  context: z.array(z.object({ description: z.string().max(2000), value: z.string().max(CONTEXT_VALUE_MAX) })).max(100).default([]),
   state: z.unknown().optional(),
   forwardedProps: z.unknown().optional(),
 }).loose()
