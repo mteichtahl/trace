@@ -767,7 +767,7 @@ The skill sits between the schematic and the firmware, so a pin that works on th
 Steps:
 
 1. **See the map:** every MCU pin with its net, the function the firmware expects, and the alternate functions the part allows.
-2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else, an off-board module whose pin order differs from its connector's; trace proposes a fix for each and says why.
+2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else, an off-board module whose pin order differs from its connector's; trace proposes a fix for each and says why. A module on more than one connector (a compute module on two board-to-board connectors) is checked connector by connector; a signal of the module the board leaves unconnected is no conflict, a supply pin left out is. A finding is closed by a fix in the plan or the schematic, or by a waiver: the step offers Waive, not a tick of its own, so the list and the checks never disagree.
 3. **Keep room:** spare pins brought to test points or a header where the person wants them.
 4. **Agree:** the schematic and the firmware pin configuration are generated from or checked against the same plan.
 

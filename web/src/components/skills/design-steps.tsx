@@ -66,6 +66,10 @@ export function withLeftOut(d: DesignDraft, statement: string, reason: string | 
  * with a reason, on whichever step shows it). A bare Resolve on them marked them resolved without a reason while the
  * check still said they were not (test-esp32 #29).
  */
+/** An open item the record's own check decides (a pin plan finding): closed by a fix in the record or a waiver, so it
+ *  gets Waive…, never a Resolve tick the check would not count (poo: "Resolved" beside a check still not met). */
+export const closedByRecord = (item: { finding?: string | undefined; status: string }): boolean => Boolean(item.finding) && item.status === 'open'
+
 export const decidedByReview = (skill: string, item: { id: string }): boolean =>
   skill === 'requirements-review' && (item.id.startsWith('requirement:') || item.id.startsWith('intent:'))
 

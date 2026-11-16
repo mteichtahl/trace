@@ -22,7 +22,7 @@
  */
 import { limitsOf } from '../verify/extract.js'
 import { type DesignDecision, fingerprint, standing } from './decisions.js'
-import { type ArchBlockRow, type BlockPart, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_KINDS, INTENT_TOPICS, type IntentTopic, type PinRow, STAGES, TOPIC_NAMES } from './db.js'
+import { type ArchBlockRow, type BlockPart, type PartMate, type DesignRows, type IntentInterface, type IntentStatementRow, INTENT_KINDS, INTENT_TOPICS, type IntentTopic, type PinRow, STAGES, TOPIC_NAMES } from './db.js'
 
 // ------------------------------------------------------------------ intent
 
@@ -539,13 +539,20 @@ export interface PinFinding {
 
 // ------------------------------------------------------------------ off-board parts and their connectors
 
-/** An off-board part of the architecture going ahead, with what it plugs into when recorded. */
-export interface MatedPart { mpn: string; block: string; mates: BlockPart['mates'] | null }
+/** An off-board part of the architecture going ahead, with what it plugs into when recorded: one entry per connector
+ * (a compute module sits on two). */
+export interface MatedPart { mpn: string; block: string; mates: PartMate[] | null }
+
+/** A part's mates as a list, whichever way they were recorded (one, or one per connector), without the incomplete ones. */
+export function matesOf(p: Pick<BlockPart, 'mates'>): PartMate[] {
+  const all = Array.isArray(p.mates) ? p.mates : p.mates ? [p.mates] : []
+  return all.filter((m) => Boolean(m?.connector) && Array.isArray(m.pins) && m.pins.length > 0)
+}
 
 /** The off-board parts of the option the diagram draws (chosen, else recommended): what mateCheck checks. */
 export function matedParts(a: Pick<ArchitectureView, 'options' | 'current'> | null | undefined): MatedPart[] {
   const o = a?.options.find((x) => x.id === a.current)
-  return (o?.blocks ?? []).flatMap((b) => b.parts.filter((p) => p.off_board).map((p) => ({ mpn: p.mpn, block: b.name, mates: p.mates?.connector && p.mates.pins?.length ? p.mates : null })))
+  return (o?.blocks ?? []).flatMap((b) => b.parts.filter((p) => p.off_board).map((p) => { const m = matesOf(p); return { mpn: p.mpn, block: b.name, mates: m.length ? m : null } }))
 }
 
 const GROUND_PIN = /^(A|D|P|S)?GND\d*$|^(VSS|VSSA|0V|GROUND|COM|V-)$/
@@ -579,37 +586,47 @@ export function mateCheck(parts: readonly MatedPart[], pins: readonly PinRow[]):
   const live = pins.filter((p) => p.status !== 'withdrawn')
   for (const p of parts) {
     const key = p.mpn.replace(/[^\w.-]+/g, '-')
-    if (!p.mates) {
-      out.push({ id: `mate:${key}:unknown`, target: `part:${p.mpn}`, kind: 'mate_unknown', severity: 'fix', text: `${p.mpn} (${p.block}) sits off the board, but the connector it plugs into and its pin order from its datasheet are not recorded (design.architecture set_blocks, the part's mates), so a reversed supply on its cable cannot be caught.` })
+    if (!p.mates?.length) {
+      out.push({ id: `mate:${key}:unknown`, target: `part:${p.mpn}`, kind: 'mate_unknown', severity: 'fix', text: `${p.mpn} (${p.block}) sits off the board, but the connector it plugs into and its pin order from its datasheet are not recorded (design.architecture set_blocks, the part's mates: one entry per connector when it sits on more than one), so a reversed supply on its cable cannot be caught.` })
       continue
     }
-    const { connector, pins: order, source } = p.mates
-    const rows = live.filter((r) => r.part === connector)
-    const theirs = `${order.map((n, i) => `${i + 1} ${n}`).join(', ')}${source ? ` (its datasheet ${source})` : ''}`
-    if (!rows.length) {
-      out.push({ id: `mate:${connector}:${key}:unknown`, target: `pin:${connector}`, kind: 'mate_unknown', severity: 'fix', text: `${p.mpn} plugs into ${connector}, but ${connector} has no pins in the pin plan, so its order cannot be checked against the part's: ${theirs}.` })
-      continue
+    for (const mate of p.mates) {
+      const { connector, pins: order, source } = mate
+      const first = mate.first ?? 1
+      // the part's own number of the pin at a connector position, said only when the two differ (a second connector)
+      const own = (n: number): string => (first === 1 ? '' : ` (its pin ${first + n - 1})`)
+      const rows = live.filter((r) => r.part === connector)
+      const listed = order.length > 12 ? `${order.slice(0, 12).map((n, i) => `${i + 1} ${n}`).join(', ')} and ${order.length - 12} more` : order.map((n, i) => `${i + 1} ${n}`).join(', ')
+      const theirs = `${listed}${source ? ` (its datasheet ${source})` : ''}`
+      if (!rows.length) {
+        out.push({ id: `mate:${connector}:${key}:unknown`, target: `pin:${connector}`, kind: 'mate_unknown', severity: 'fix', text: `${p.mpn} plugs into ${connector}, but ${connector} has no pins in the pin plan, so its order cannot be checked against the part's: ${theirs}. Add ${connector}'s pins to the pin plan (design.pins set), each with its net.` })
+        continue
+      }
+      const at = (n: number): PinRow | undefined => rows.find((r) => r.pin === String(n))
+      const label = (r: PinRow): string => r.name ?? r.function ?? r.net ?? r.kind
+      const count = Math.max(order.length, ...rows.map((r) => Number(r.pin)).filter(Number.isFinite))
+      const wrong: { n: number; ours: string; theirs: string; supply: boolean }[] = []
+      for (let n = 1; n <= count; n++) {
+        const c = at(n)
+        const m = order[n - 1]
+        if (!c && !m) continue
+        if (c && m && samePin(c, m)) continue
+        // a signal of the part that the board leaves unconnected crosses nothing; a supply pin left out still counts
+        if (!c && m && !SUPPLY.has(pinRole(m))) continue
+        const ours = c ? label(c) : 'no pin'
+        const supply = [ours, ...(c ? [c.net ?? '', c.function ?? ''] : []), m ?? ''].some((x) => SUPPLY.has(pinRole(x)))
+        wrong.push({ n, ours, theirs: m ? `${m}${own(n)}` : 'no pin', supply })
+      }
+      if (!wrong.length) continue
+      const sorted = [...rows].sort((a, b) => Number(a.pin) - Number(b.pin) || a.pin.localeCompare(b.pin))
+      const ours = sorted.length > 12 ? `${sorted.slice(0, 12).map((r) => `${r.pin} ${label(r)}`).join(', ')} and ${sorted.length - 12} more` : sorted.map((r) => `${r.pin} ${label(r)}`).join(', ')
+      const supply = wrong.some((w) => w.supply)
+      const shown = wrong.slice(0, 8).map((w) => `Pin ${w.n}: ${connector}'s ${w.ours} meets the part's ${w.theirs}`).join('; ')
+      out.push({
+        id: `mate:${connector}:${key}:order`, target: `pin:${connector}.${wrong[0]?.n}`, kind: 'mate_order', severity: supply ? 'blocks' : 'fix',
+        text: `${connector}'s pins are ${ours}; ${p.mpn}, which plugs into it, has ${theirs}. ${shown}${wrong.length > 8 ? `; and ${wrong.length - 8} more` : ''}. On a straight cable ${supply ? 'its supply is on the wrong pins' : 'these signals cross'}: change ${connector}'s order, choose a part whose order matches, or waive it naming the cable that crosses them.`,
+      })
     }
-    const at = (n: number): PinRow | undefined => rows.find((r) => r.pin === String(n))
-    const label = (r: PinRow): string => r.name ?? r.function ?? r.net ?? r.kind
-    const count = Math.max(order.length, ...rows.map((r) => Number(r.pin)).filter(Number.isFinite))
-    const wrong: { n: number; ours: string; theirs: string; supply: boolean }[] = []
-    for (let n = 1; n <= count; n++) {
-      const c = at(n)
-      const m = order[n - 1]
-      if (!c && !m) continue
-      if (c && m && samePin(c, m)) continue
-      const ours = c ? label(c) : 'no pin'
-      const supply = [ours, ...(c ? [c.net ?? '', c.function ?? ''] : []), m ?? ''].some((x) => SUPPLY.has(pinRole(x)))
-      wrong.push({ n, ours, theirs: m ?? 'no pin', supply })
-    }
-    if (!wrong.length) continue
-    const ours = [...rows].sort((a, b) => Number(a.pin) - Number(b.pin) || a.pin.localeCompare(b.pin)).map((r) => `${r.pin} ${label(r)}`).join(', ')
-    const supply = wrong.some((w) => w.supply)
-    out.push({
-      id: `mate:${connector}:${key}:order`, target: `pin:${connector}.${wrong[0]?.n}`, kind: 'mate_order', severity: supply ? 'blocks' : 'fix',
-      text: `${connector}'s pins are ${ours}; ${p.mpn}, which plugs into it, has ${theirs}. ${wrong.map((w) => `Pin ${w.n}: ${connector}'s ${w.ours} meets the part's ${w.theirs}`).join('; ')}. On a straight cable ${supply ? 'its supply is on the wrong pins' : 'these signals cross'}: change ${connector}'s order, choose a part whose order matches, or waive it naming the cable that crosses them.`,
-    })
   }
   return out
 }

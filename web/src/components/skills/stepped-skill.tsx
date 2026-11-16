@@ -18,7 +18,7 @@ import { projectId } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
-import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, RequirementLine, decidedByReview } from './design-steps'
+import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft, RequirementLine, closedByRecord, decidedByReview } from './design-steps'
 import { RequirementsChat, criterionCheck, withRequirementEdit } from './requirement-edit'
 import { ReleaseStep, type ReleaseDraft, releaseChecks } from './release-steps'
 import { OrderStep, type OrderDraft, orderChecks } from './order-steps'
@@ -129,6 +129,17 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
                     <span className="min-w-0 flex-1 text-sm">{it.title}{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
                     <Button size="sm" variant="outline" asChild>
                       <Link to="/p/$id/do/$skill" params={{ id: projectId(repo), skill: 'question-answer' }} search={{ question: it.question }}>Answer it <ArrowRight /></Link>
+                    </Button>
+                  </li>
+                )
+              }
+              if (closedByRecord(it)) {
+                return (
+                  <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <StatusBadge status="yours" label={it.label ?? 'Open'} />
+                    <span className="min-w-0 flex-1 text-sm">{it.title}<span className="block text-xs text-muted-foreground">It stays open until trace fixes it in the plan or the schematic (ask in the chat), or you waive it.</span></span>
+                    <Button size="sm" variant="outline" asChild>
+                      <Link to="/p/$id/do/$skill" params={{ id: projectId(repo), skill: 'waiver' }} search={{ about: it.id } as never}>Waive…</Link>
                     </Button>
                   </li>
                 )

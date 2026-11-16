@@ -231,7 +231,7 @@ const SKILLS: Record<string, (draft?: ReviewDraft) => Partial<SkillView>> = {
   'pin-plan-review': () => ({
     summary: 'The pin plan matches the schematic except one conflict: USART2 is planned for both the debug console and the GPS.',
     pending_errors: [`Answer the open question first: the Firmware specialist asks "${PIN_QUESTION}" Its answer may change what Pin plan review agrees.`],
-    items: [{ id: 'question:q-pins', title: `Open question about U1: ${PIN_QUESTION}`, detail: 'the Firmware specialist asks. Answer it before agreeing the plan; it holds back the I2C rows of the pin plan (capture.pins).', status: 'open', label: 'Unanswered', question: 'q-pins' }, { id: 'finding:peripheral:U1:USART2:claimed_twice', title: "U1's USART2 is claimed by 2 uses: debug console, gps.", detail: 'Fix it in the plan or the schematic, or waive it.', status: 'open' }],
+    items: [{ id: 'question:q-pins', title: `Open question about U1: ${PIN_QUESTION}`, detail: 'the Firmware specialist asks. Answer it before agreeing the plan; it holds back the I2C rows of the pin plan (capture.pins).', status: 'open', label: 'Unanswered', question: 'q-pins' }, { id: 'finding:peripheral:U1:USART2:claimed_twice', title: "U1's USART2 is claimed by 2 uses: debug console, gps.", detail: 'Fix it in the plan or the schematic, or waive it.', status: 'open', finding: 'peripheral:U1:USART2:claimed_twice' }],
     checks: [{ id: 'functions', status: 'met' }, { id: 'instances', status: 'not_met', detail: "U1's USART2 is claimed by 2 uses: debug console, gps." }, { id: 'boot', status: 'waived', detail: '1 finding waived.' }, { id: 'match', status: 'met' }],
   }),
 }

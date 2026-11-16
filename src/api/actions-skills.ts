@@ -587,8 +587,10 @@ function extras(skill: string, i: CheckInput & { reviewBefore?: ReviewBefore | n
         }
       })
       // a finding in words (its datasheet's hash as "the datasheet, page 2"), and a waived one says so rather than
-      // asking to be fixed or waived again (test-esp32-run2 R44)
-      return { items: [...asked, ...pinCheck(design.pins, i.nets ?? null, matedParts(architectureView(design, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: plainCodeRefs(f.text), detail: waived.has(f.id) ? 'Waived: nothing to do here.' : f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const }))] }
+      // asking to be fixed or waived again (test-esp32-run2 R44). `finding`: the record decides when it is closed (a
+      // fix in the plan or the schematic, or a waiver), so the screen offers Waive, never a tick of its own (poo: the
+      // CM5's finding read "Resolved" while its check stayed not met)
+      return { items: [...asked, ...pinCheck(design.pins, i.nets ?? null, matedParts(architectureView(design, i.design.decisions))).map((f) => ({ id: `finding:${f.id}`, title: plainCodeRefs(f.text), detail: waived.has(f.id) ? 'Waived: nothing to do here.' : f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const, finding: f.id }))] }
     }
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }

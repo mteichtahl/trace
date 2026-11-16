@@ -94,6 +94,9 @@ export interface SkillItem {
   label?: string
   /** an open question it is: answered with Answer it, never resolved here (Pin plan review, test-esp32 #106) */
   question?: string
+  /** a finding of the record's own check it is (Pin plan review): closed only by a fix in the record or a waiver, so
+   *  it is waived with Waive…, never ticked as resolved here: the check would still read not met */
+  finding?: string
   evidence?: EvidenceRef
   /** Requirements review: the requirement's acceptance criterion */
   criterion?: string | null
