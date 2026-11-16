@@ -11,7 +11,9 @@
  *   TRACE_REPOSITORY      trace's name for the project (owner/name), which the harness keys everything by
  *   CI_*                  GitLab's own: the server, the project path, the pipeline, the commit, the merge request
  */
+import { execFileSync, spawnSync } from 'node:child_process'
 import { z } from 'zod'
+import { gitlabDeploy } from './gitlab-deploy.js'
 import type { GitHub, Context, Core } from './types.js'
 import { gitlabOctokit } from './gitlab-octokit.js'
 import { run } from './index.js'
@@ -127,6 +129,43 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
       }
     }
     if (failed) throw new Error(`${failed} of ${items.length} items could not be dispatched`)
+    return
+  }
+
+  // deploy: request or approval, the commands, the report and any roll back in one job (src/harness/gitlab-deploy.ts)
+  if (task === 'deploy') {
+    const INPUTS = ['APPROVAL', 'SHA', 'ISSUE', 'BY', 'VIA', 'STATUS', 'GUARD', 'HELD', 'ROLLBACK', 'REASONS', 'TRIGGERING_ACTOR']
+    await gitlabDeploy({
+      env,
+      log: (l) => consoleCore.info(l),
+      step: async (name, inputs) => {
+        for (const k of INPUTS) delete process.env[k]
+        Object.assign(process.env, inputs, { TRACE_TASK: name })
+        const c = capturingCore()
+        await run({ github: client(token), context, core: c, getOctokit: client })
+        if (process.exitCode === 1) { process.exitCode = 0; throw new Error(`${name} failed`) }
+        return c.outputs
+      },
+      sh: (cmd, e) => {
+        const r = spawnSync('bash', ['-euo', 'pipefail', '-c', cmd], { env: e, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 })
+        const output = `${r.stdout ?? ''}${r.stderr ?? ''}`
+        process.stdout.write(output)
+        return { ok: r.status === 0, output }
+      },
+      checkout: (sha) => {
+        execFileSync('git', ['fetch', '-q', '--depth=50', 'origin', sha], { stdio: 'inherit' })
+        execFileSync('git', ['checkout', '-q', '--detach', sha], { stdio: 'inherit' })
+      },
+      deployCredentials: (): Record<string, string> => {
+        const role = env.TRACE_DEPLOY_AWS_ROLE ?? ''
+        if (!role || !env.AWS_ID_TOKEN) return {}
+        const region = env.TRACE_DEPLOY_AWS_REGION || env.TRACE_AWS_REGION || 'us-east-1'
+        const out = execFileSync('aws', ['sts', 'assume-role-with-web-identity', '--role-arn', role, '--role-session-name', `deploy-${env.CI_PIPELINE_ID ?? ''}`,
+          '--web-identity-token', env.AWS_ID_TOKEN, '--duration-seconds', '7200', '--region', region, '--output', 'json'], { encoding: 'utf8' })
+        const c = z.object({ Credentials: z.object({ AccessKeyId: z.string(), SecretAccessKey: z.string(), SessionToken: z.string() }) }).parse(JSON.parse(out)).Credentials
+        return { AWS_ACCESS_KEY_ID: c.AccessKeyId, AWS_SECRET_ACCESS_KEY: c.SecretAccessKey, AWS_SESSION_TOKEN: c.SessionToken, AWS_REGION: region, AWS_DEFAULT_REGION: region }
+      },
+    })
     return
   }
 
