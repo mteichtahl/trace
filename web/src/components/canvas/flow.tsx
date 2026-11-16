@@ -5,7 +5,8 @@
  * Tab then Enter selects a box; clicking the empty canvas or Escape clears it. The drawing lights the selected box's
  * path itself (each module decides what the path is); `chainOf` is the usual rule.
  *
- * Boxes cannot be dragged or joined; a page scrolls past the drawing, and Ctrl/⌘ + scroll or a pinch zooms it.
+ * Boxes cannot be joined, and cannot be dragged unless the drawing passes `onMove` (the block diagram does: the person
+ * arranges its blocks); a page scrolls past the drawing, and Ctrl/⌘ + scroll or a pinch zooms it.
  */
 import '@xyflow/react/dist/base.css'
 import { Background, type Edge, type Node, type NodeChange, type NodeTypes, ReactFlow, ReactFlowProvider, useReactFlow, useStore, useStoreApi } from '@xyflow/react'
@@ -92,10 +93,12 @@ export interface FlowViewProps {
   fit: FlowFit
   /** fit again when this changes (a filter showing other boxes); unset, the drawing fits once */
   refitKey?: string
+  /** boxes can be dragged: called as a box moves (`done` false) and when it is let go (`done` true) */
+  onMove?: (key: string, position: { x: number; y: number }, done: boolean) => void
 }
 
 /** Needs a ReactFlowProvider above it (FlowCanvas gives one). */
-export function FlowView({ nodes, edges, nodeTypes, selected, onChoose, label, fit, refitKey }: FlowViewProps) {
+export function FlowView({ nodes, edges, nodeTypes, selected, onChoose, label, fit, refitKey, onMove }: FlowViewProps) {
   const flow = useReactFlow()
   const pickable = useMemo(() => new Set(nodes.filter((n) => n.selectable !== false).map((n) => n.id)), [nodes])
   const store = useStoreApi()
@@ -114,13 +117,19 @@ export function FlowView({ nodes, edges, nodeTypes, selected, onChoose, label, f
 
   // keyboard: Tab to a box and Enter selects it; Escape clears (React Flow reports both as select changes)
   const onNodesChange = useCallback((changes: NodeChange[]) => {
+    // a drag: React Flow reports each step (dragging) and the drop (dragging false, no position)
+    for (const c of changes) {
+      if (c.type !== 'position' || !onMove) continue
+      const n = c.position ?? nodes.find((x) => x.id === c.id)?.position
+      if (n) onMove(c.id, n, !c.dragging)
+    }
     const on = changes.find((c) => c.type === 'select' && c.selected)
     if (on && 'id' in on) {
       if (on.id !== selected && pickable.has(on.id)) onChoose(on.id)
       return
     }
     if (selected && changes.some((c) => c.type === 'select' && !c.selected && c.id === selected)) onChoose(null)
-  }, [selected, pickable, onChoose])
+  }, [selected, pickable, onChoose, onMove, nodes])
 
   return (
     <div className="h-full w-full" role="group" aria-label={label}>
@@ -131,7 +140,9 @@ export function FlowView({ nodes, edges, nodeTypes, selected, onChoose, label, f
         onNodesChange={onNodesChange}
         onNodeClick={(_, n) => { if (pickable.has(n.id)) onChoose(n.id) }}
         onPaneClick={() => selected && onChoose(null)}
-        nodesDraggable={false}
+        nodesDraggable={!!onMove}
+        selectNodesOnDrag={false}
+        nodeDragThreshold={4}
         nodesConnectable={false}
         edgesFocusable={false}
         elementsSelectable
