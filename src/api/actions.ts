@@ -197,6 +197,7 @@ import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
 import { LIFECYCLE_ACTIONS_DEFS, lifecycleGate } from './actions-lifecycle.js'
+import { MOVE_ACTIONS } from './actions-move.js'
 import { assertNotHeld } from './held.js'
 import { PROMPT_ACTIONS } from './actions-prompts.js'
 import { TEMPLATE_ACTIONS } from './actions-templates.js'
@@ -916,6 +917,7 @@ export const ACTIONS = {
 
   ...PROJECT_ACTIONS,
   ...LIFECYCLE_ACTIONS_DEFS,
+  ...MOVE_ACTIONS,
   ...JOURNEY_ACTIONS,
   ...TEMPLATE_ACTIONS,
   ...ONTOLOGY_ACTIONS,
