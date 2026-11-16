@@ -76,9 +76,29 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
 
 ## Moving a project
 
-**Who and where.** An admin of the project, from the project's Settings ("Where this project lives": GitHub or
-trace's GitLab, with a Move button), or `tracectl project move <slug> --to gitlab|github`. The other forge must be set
-up for the installation: GitLab installed, or a GitHub token that can make repositories in the chosen owner.
+**Who and where.** In the web app (Marc, 16 November 2026: "allow users to move projects via the UI"): an admin of
+the project moves it from the project's Settings, never in GitHub or GitLab. `tracectl project move <slug> --to
+gitlab|github` does the same for scripts. The other forge must be set up for the installation: GitLab installed, or a
+GitHub token that can make repositories in the chosen owner; when it is not, the button says why and what to set up.
+
+**The screens** (renders proposed before building, as for every UI change):
+
+- **Settings → "Where this project lives"**: the forge it is on now and its repository, and one button, "Move to
+  trace's GitLab" or "Move to GitHub". On GitHub, the destination owner is asked for (the installation's default
+  owner filled in).
+- **Before it starts, a confirm sheet** with a summary first and detail one tap away: what moves (history, open
+  changes, issues, its builds), what stays as it is (journey, chats, memory, costs, renders, orders), that the project
+  is paused while it moves (about how long, from its size), and the old home archived, not deleted. trace's
+  recommendation and why: move when nothing is running, and the sheet says so when something is, offering "Move when
+  idle" (recommended, starts as soon as the running work finishes) or "Move now" (waits for running work at once).
+- **While it moves, a progress view** in Settings and on the Overview's Next card ("Moving to trace's GitLab"): each
+  step with its state (pause, copy history, recreate changes, set up builds, first checks, unpause), the step running
+  now, how long it has taken and when it is next checked, and its log one tap away, as the "trace is working" indicator
+  shows other work. Every project member sees it; only admins can start or cancel.
+- **When it is done**, a push notification and a Next item; the Settings card shows the new home, and "Move back" is
+  there at once. **When it fails**, the project is back where it was and unpaused, and the card says why in plain
+  words and what to do, with "Try again".
+- **On a phone**, the same, the progress view first.
 
 **What moves.** trace does the move itself, the same code in both directions (GitHub's own importer from GitLab was
 retired, and one path keeps both directions alike):
@@ -126,7 +146,8 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 5. CI: the generated `.gitlab-ci.yml`, the harness as a script, the per-project CodeBuild GitLab runner project.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
-8. Moving a project in both directions: the mover, the pause, the change-number map, Settings and `tracectl`.
+8. Moving a project in both directions: the mover, the pause, the change-number map; then its screens in the web app
+   (Settings, the confirm sheet, progress, done and failed; renders first) and `tracectl`.
 9. The GitHub token step only when a project is on GitHub; docs.
 
 ## Settled 16 November 2026 (Marc)
