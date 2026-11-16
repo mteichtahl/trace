@@ -44,9 +44,13 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   - **trace's API** holds the admin token and is the only thing that merges.
   - **The agents** act as their project's own bot. Each project gets a **project access token with the Developer role**
     (`trace-agents`; GitLab gives each such token its own bot user, whose username is the project's TRACE_AGENT_LOGIN,
-    so one project's agents can never reach another's), made by the installer (src/installer/gitlab-setup.ts), rotated by the existing token broker (`<prefix>-github-app-token` becomes `<prefix>-forge-token`): it
-    decides the project from the caller's IAM role, never from the request, exactly as today. Tokens last one day (the
-    shortest GitLab allows) and the broker rotates them every twelve hours.
+    so one project's agents can never reach another's), made by the installer (src/installer/gitlab-setup.ts). A
+    function, `<prefix>-gitlab-token-rotate` (src/core/gitlab-token.ts), checks each one twice a day and rotates it about once
+    a day in practice (tokens live three days and are rotated with fewer than two left), and keeps its current value at
+    `<prefix>/gitlab/agents/<slug>`, which only that project's own roles may read: so a project's agents reach their
+    own project and no other, as the GitHub broker gives. GitLab's rotate keeps the token's bot user, so
+    TRACE_AGENT_LOGIN never changes; it revokes the old value at once, so a caller reads the secret again and retries
+    once on a 401.
   - **Each default branch is protected**: push allowed to no one, merge allowed to Maintainers. A Developer may push
     branches and open merge requests but cannot merge, so the guard GitHub needed a ruleset bypass and a live proof for
     is GitLab's ordinary role model. `.gitlab-ci.yml` and `trace/**` changes are held the same way as today's protected
@@ -143,8 +147,8 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 3. The GitLab stack in CDK (instance, storage, backups, CloudFront, secrets) and the installer step "Set up GitLab",
    with its health check.
 4. Identity: the group and projects, their settings and labels, protected branches and the agents' project tokens
-   (src/installer/gitlab-setup.ts); then the broker rotating those tokens, the IAM OIDC provider
-   and role trust.
+   (src/installer/gitlab-setup.ts); then their rotation and the IAM OIDC provider for GitLab's pipeline ID tokens;
+   then each project's roles trusting it (with the project's forge in its record).
 5. CI: the generated `.gitlab-ci.yml`, the harness as a script, the per-project CodeBuild GitLab runner project.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
