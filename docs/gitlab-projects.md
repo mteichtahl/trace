@@ -166,7 +166,11 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
    equivalent (merging one branch into another outside a merge request, the restack's, and updating a change by
    merge, the update queue's): the client does them with git in the job, as the agents, into their own branches only,
    with a merge commit (src/harness/gitlab-git.ts), so stacks restack on GitLab as on GitHub. The jobs act with TRACE_GITLAB_TOKEN, the agents'
-   token the rotation also keeps as a masked project variable; the deploy and worker pipelines follow.
+   token the rotation also keeps as a masked project variable. ci-doctor is the build's last stage (`.post`, its
+   run the pipeline itself); the worker picks and dispatches to the project's AgentCore runtime in one job (GitLab has
+   no matrix from another job's output), as the project's own AWS role through GitLab's ID token; the project's own
+   build is `.gitlab/build.yml`, included when present; the installer sets the pipelines' variables as it sets a
+   GitHub project's. The deploy pipeline follows.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
 8. Moving a project in both directions: the mover, the pause, the change-number map; then its screens in the web app

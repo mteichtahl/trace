@@ -8,12 +8,24 @@
 #                 pass; only trace's API merges (the agents' token is a Developer's: the branch is protected)
 #   update-queue  stacks kept in order, trace's own changes brought up to date; one at a time (resource_group), on a
 #                 push to __TR_BRANCH__ and, as a safety net, on the project's schedule
+#   ci-doctor     the build's last stage: a failure re-run once if it was flaky, else the change labelled red or an
+#                 agent-fix issue opened; a pass clears both (kill switch: TRACE_CI = 'false')
+#   worker        the work waiting for the agents picked and handed to the project's AgentCore runtime, one item after
+#                 another, as the project's own AWS role (GitLab's ID token, its default branch only); on a push to
+#                 __TR_BRANCH__, on the schedule, and when trace asks (kill switch: TRACE_WORKER = 'false')
+#
+# The project's own build lives in .gitlab/build.yml, included when it is there (its jobs run before ci-doctor).
 #
 # Who it acts as: the project's agents (TRACE_GITLAB_TOKEN, the project's own `trace-agents` token, kept current by
 # trace's rotation). Kill switch: the project variable TRACE_PRS = 'false'.
 #
 # Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitLab runner in the installation's AWS account), named
 # by its tag; a job waits until the installer has set the runner up.
+
+include:
+  - local: .gitlab/build.yml
+    rules:
+      - exists: [.gitlab/build.yml]
 
 variables:
   TRACE_SOURCE: "__TR_SOURCE__"
@@ -69,3 +81,46 @@ update-queue:
       when: never
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "__TR_BRANCH__"
     - if: $CI_PIPELINE_SOURCE == "schedule"
+
+ci-doctor:
+  extends: .trace
+  stage: .post
+  variables: { TRACE_TASK: ci-doctor }
+  rules:
+    - if: $TRACE_CI == "false"
+      when: never
+    - if: $TRACE_WORKFLOW
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH
+      when: always
+
+worker:
+  extends: .trace
+  variables: { TRACE_TASK: worker }
+  timeout: 30 minutes
+  resource_group: trace-worker
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: sts.amazonaws.com
+  rules:
+    - if: $TRACE_WORKER == "false"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "__TR_BRANCH__"
+    - if: $TRACE_WORKFLOW == "trace-worker"
+  script:
+    # the project's own AWS role, with GitLab's ID token (its trust names this project's path and default branch)
+    - >-
+      export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s"
+      $(aws sts assume-role-with-web-identity --role-arn "$TRACE_AWS_ROLE" --role-session-name "trace-worker-$CI_PIPELINE_ID"
+      --web-identity-token "$AWS_ID_TOKEN" --duration-seconds 3600 --region "$TRACE_AWS_REGION"
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text))
+    - export AWS_REGION="$TRACE_AWS_REGION"
+    - >-
+      node -e "fetch('https://raw.githubusercontent.com/'+process.env.TRACE_SOURCE+'/'+process.env.TRACE_REF+'/harness/dist/gitlab.cjs')
+      .then(r=>{if(!r.ok)throw new Error('the harness: '+r.status);return r.text()})
+      .then(t=>require('fs').writeFileSync('/tmp/trace-harness.cjs',t))"
+    - node /tmp/trace-harness.cjs
+
