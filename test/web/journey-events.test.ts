@@ -14,7 +14,7 @@ import { Central, S3Backend } from '../../src/core/central.js'
 import { loadJourney, startJourney } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
 import type { LiveEvent, Publisher } from '../../src/web/events.js'
-import { LOG_EVENT_EVERY_MS, MAX_JOB_EVENTS, NEW_WITHIN_S, decodeLogs, onObjectCreated, onRunLogs, projectOfIndexKey, projectOfJourneyKey, projectOfKey, projectOfPendingKey } from '../../src/web/journey-events.js'
+import { LOG_EVENT_EVERY_MS, MAX_JOB_EVENTS, NEW_WITHIN_S, decodeLogs, onObjectCreated, onRunLogs, projectOfIndexKey, projectOfJourneyKey, projectOfKey, projectOfMoveKey, projectOfPendingKey } from '../../src/web/journey-events.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { PENDING_PROJECTS_PREFIX, projectHash } from '../../src/core/project.js'
 import { FakeS3 } from '../core/fake-s3.js'
@@ -209,6 +209,19 @@ describe('live updates when a new project\'s agent is added (log #5)', () => {
     r.pub.sent = []
     expect(await r.run(r.event(PENDING, 'other-bucket'))).toEqual({ repo: null, changed: 0, notified: 0 })
     expect(r.pub.sent).toEqual([])
+  })
+})
+
+describe('live updates as a project moves between GitHub and GitLab', () => {
+  const MOVE = 'installation/pending-moves/acme/board.json'
+
+  it('tells everyone on the project that the move changed, without reading it', async () => {
+    expect(projectOfMoveKey(MOVE)).toBe('acme/board')
+    expect(projectOfMoveKey('installation/pending-moves/acme/../board.json')).toBeNull()
+    expect(projectOfPendingKey(MOVE)).toBeNull()
+    const r = await rig()
+    expect(await r.run(r.event(MOVE))).toEqual({ repo: 'acme/board', changed: 4, notified: 0 })
+    for (const x of r.pub.sent) expect(x.events).toEqual([{ type: 'record.changed', repo: 'acme/board', what: 'move', at: expect.any(String) }])
   })
 })
 

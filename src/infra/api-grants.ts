@@ -47,7 +47,9 @@ import { runLogsReadStatements } from './run-logs.js'
 
 const CHATS: (typeof PEOPLE_RECORDS)[number] = 'chats'
 const JOURNEY: (typeof PEOPLE_RECORDS)[number] = 'journey'
-const PENDING = 'installation/pending-projects'
+/** installation/pending-projects (projects.create) and installation/pending-moves (project.move, src/api/actions-move.ts),
+ * in one pattern: the API role's policy is near IAM's size limit */
+const PENDING = 'installation/pending-*'
 
 export interface ApiGrantsProps {
   /** where the CDK constructs of the people's cost policy go (the stack) */
@@ -105,7 +107,8 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
     // read and conditional writes under projects/<slug>/memory-state/ only, nothing else of projects/
     grantPrefixes(role, p.central, { conditional: [`${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
     // each project's chats (chats.*, docs/web-build.md: not in the repository) and the projects created from the app
-    // waiting for the next stack update (projects.create): read, and write only with conditional puts
+    // waiting for the next stack update (projects.create), and the moves between GitHub and GitLab asked for there
+    // (project.move): read, and write only with conditional puts
     // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
     grantPrefixes(role, p.central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS}`, `${PROJECTS_PREFIX}/*/${JOURNEY}`, PENDING] })
     // fabrication files uploaded to start a project from (projects.import_upload, docs/fab-import.md): an admin's own,

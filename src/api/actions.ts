@@ -197,7 +197,7 @@ import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
 import { LIFECYCLE_ACTIONS_DEFS, lifecycleGate } from './actions-lifecycle.js'
-import { MOVE_ACTIONS } from './actions-move.js'
+import { MOVE_ACTIONS, settleMoves } from './actions-move.js'
 import { assertNotHeld } from './held.js'
 import { PROMPT_ACTIONS } from './actions-prompts.js'
 import { TEMPLATE_ACTIONS } from './actions-templates.js'
@@ -507,7 +507,8 @@ export const ACTIONS = {
     sub: p.sub, email: p.email, groups: p.groups, class: classOf(p), ...(isService(p) ? { kind: 'service', name: p.name ?? null, scopes: p.scopes ?? [] } : {}),
   })),
 
-  projects: def('signed-in', z.object({}), async (_a, { principal }) => projectsFor(principal)),
+  // (a project held only by a move that is done is resumed on the way: src/api/actions-move.ts settleMoves)
+  projects: def('signed-in', z.object({}), async (_a, ctx) => settleMoves(ctx, await projectsFor(ctx.principal))),
 
   status: def('read', Repo, async ({ repo }, ctx) => {
     const gh = await ctx.deps.github()
