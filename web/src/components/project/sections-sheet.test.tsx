@@ -1,6 +1,6 @@
 /** Which project tabs show: Evidence from Capture on (from Prove where a project has no Capture), and the later line. */
 import { describe, expect, it } from 'vitest'
-import { visibleTabs } from '@/routes/_app/p/$id'
+import { inSection, tabGroups, visibleTabs } from '@/routes/_app/p/$id'
 import type { Journey, Stage } from '@/lib/types'
 import { laterLine } from './sections-sheet'
 
@@ -52,5 +52,31 @@ describe('the Documents tab', () => {
     expect(docs(journey(BOARD, 'Define'))).toBe(false)
     expect(docs(journey(BOARD, 'Architect'))).toBe(true)
     expect(docs(journey(FIRMWARE, 'Prove'))).toBe(true)
+  })
+})
+
+describe('the five tabs', () => {
+  it('groups every section a project has reached under Overview, Design, Proof, Changes and More', () => {
+    const j = { ...journey(BOARD, 'Release'), gates: [{ state: 'signed' }], hasMemory: true } as unknown as Journey
+    const groups = tabGroups(visibleTabs(j, { admin: true }))
+    expect(groups.map((g) => g.label)).toEqual(['Overview', 'Design', 'Proof', 'Changes', 'More'])
+    expect(groups.map((g) => g.sections.map((s) => s.id))).toEqual([
+      ['overview'], ['requirements', 'design', 'build', 'renders'], ['evidence', 'decisions', 'docs'], ['changes'], ['files', 'cost', 'memory', 'settings'],
+    ])
+  })
+
+  it('a tab opens on its first section, and one with nothing reached yet is left out', () => {
+    const groups = tabGroups(visibleTabs(journey(BOARD, 'Define'), { admin: false }))
+    expect(groups.map((g) => [g.label, g.to])).toEqual([['Overview', ''], ['Design', '/requirements'], ['Changes', '/changes'], ['More', '/files']])
+  })
+
+  it('a run belongs to Evidence, and a change to Changes', () => {
+    const tabs = visibleTabs(journey(BOARD, 'Prove'), { admin: false })
+    const of = (rest: string) => tabs.find((t) => inSection(t, rest))?.id
+    expect(of('')).toBe('overview')
+    expect(of('/runs/run_51c0')).toBe('evidence')
+    expect(of('/changes/12')).toBe('changes')
+    expect(of('/settings/prompts')).toBe('settings')
+    expect(of('/requirements/R-001')).toBe('requirements')
   })
 })

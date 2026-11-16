@@ -16,7 +16,7 @@ All eight recommendations, built as a stack of pull requests in this order.
 | --- | --- | --- |
 | 1 | One queue: Next is Home and the only list of what needs a person | `claude/ui-one-queue` |
 | 2 | The project Overview uses the phone's structure on every screen size | `claude/ui-overview` |
-| 3 | Five project tabs instead of thirteen | `claude/ui-five-tabs` |
+| 3 | Five project tabs (Overview, Design, Proof, Changes, More) instead of thirteen | `claude/ui-five-tabs` |
 | 4 | One exception card | `claude/ui-overview` |
 | 5 | Changes: yours first, three states, a stack accepted in one tap | `claude/ui-changes` |
 | 6 | One gate checklist | `claude/ui-overview` |
@@ -57,17 +57,19 @@ in Capture" instead of sitting open above the card.
 
 ## 3. Five tabs
 
-| Tab | Holds | Old tabs |
+| Tab | Sections | Shown from |
 | --- | --- | --- |
-| Overview | where it is, the next step | Overview |
-| Design | requirements, block diagram, sheets, pin plan, board, case, renders | Requirements, Design, Renders |
-| Proof | evidence, gates and decisions, documents | Evidence, Decisions, Documents |
-| Activity | changes, runs, history | Changes |
-| More | files, build, cost and time, memory, settings | Files, Build, Cost and time, Memory, Settings |
+| Overview | where it is, the next step | always |
+| Design | Requirements, Design (block diagram, sheets, pin plan, board, case), Build, Renders | Define, Architect, Release, Release |
+| Proof | Evidence, Decisions, Documents | Capture (or Prove), the first signed gate, Architect |
+| Changes | changes from trace, with the counts for you and being checked | always |
+| More | Files, Cost and time (admins), Memory, Settings | always |
 
-Each tab opens on its first section and shows the others as a short row of sections under the tab row. Every old
-address keeps working: the routes do not move, only the tab each belongs to. A section a project has not reached yet
-is not shown, as before.
+A tab opens on its first section and, when it has more than one, lists them as a short row under the tab row
+(`tabGroups`, `inSection` in web/src/routes/_app/p/$id.tsx). Every old address keeps working: the routes do not move,
+only the tab each belongs to (a run's page belongs to Evidence, a change's to Changes). A section a project has not
+reached yet is not shown, as before, and a tab with no section yet is left out. On a phone the Sections sheet lists
+the same sections under the tab names.
 
 ## 4. One exception card
 
