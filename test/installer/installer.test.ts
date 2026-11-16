@@ -207,6 +207,9 @@ describe('answers', () => {
     expect(plan(own).find((s) => s.id === 'gitlab')?.detail).toContain('https://git.example.com')
     expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true, gitlabDomain: 'git.example.com' } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse(infraInput(own)).success).toBe(true)
+    const lab = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true }, projects: ANSWERS.projects.map((p, i) => (i === 0 ? { ...p, forge: 'gitlab' } : p)) })
+    expect(infraInput(lab).projectSettings).toEqual({ [ANSWERS.projects[0]!.repo]: { forge: 'gitlab' } })
+    expect(AnswersSchema.safeParse({ ...ANSWERS, projects: ANSWERS.projects.map((p) => ({ ...p, forge: 'gitlab' })) }).success).toBe(false)
   })
 
   it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {
@@ -1234,7 +1237,7 @@ describe('the sample project', () => {
     expect(AnswersSchema.parse(ANSWERS).sample).toEqual({ enabled: false, repo: '', private: true, tour: true })
     const only = AnswersSchema.parse({ ...ANSWERS, projects: [], people: [], github: { login: 'trace-agent' }, sample: { enabled: true, private: false } })
     expect(sampleRepo(only)).toBe(SAMPLE)
-    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: false } }])
+    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, forge: 'github', create: { template: 'sample', private: false } }])
     expect(sampleRepo(AnswersSchema.parse({ ...ANSWERS, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
     // the login may still be to derive: the answers are valid, and the name waits for it
     expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true } }).success).toBe(true)

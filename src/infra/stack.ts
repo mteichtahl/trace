@@ -351,11 +351,22 @@ export class TraceStack extends Stack {
         new CfnOutput(this, ciRunnerOutput(repository), { value: runner.runner, description: `${repository}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT), build only; none while GitHub refuses its webhook` })
       }
     }
+    // ------------------------------------------------------------------ trace's own GitLab (src/infra/gitlab.ts)
+    const gitlab = cfg.gitlab.enabled
+      ? new GitlabServer(this, 'Gitlab', { prefix: cfg.prefix, central, instanceType: cfg.gitlab.instanceType, volumeGb: cfg.gitlab.volumeGb, domain: cfg.gitlab.domain, root: REPO_ROOT })
+      : null
+    if (gitlab) {
+      new CfnOutput(this, GITLAB_URL_OUTPUT, { value: gitlab.url })
+      new CfnOutput(this, GITLAB_ADMIN_TOKEN_OUTPUT, { value: gitlab.adminTokenSecret.secretArn })
+      new CfnOutput(this, GITLAB_OIDC_OUTPUT, { value: gitlab.oidc.oidcProviderArn })
+    }
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
       tools: tools ? { images: tools.images, tag: tools.tag } : null,
       runnerSource,
+      // a project on trace's GitLab: its pipelines sign in with GitLab's ID tokens (src/infra/project.ts)
+      gitlab: gitlab ? { url: gitlab.url, oidcProviderArn: gitlab.oidc.oidcProviderArn } : null,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
         // the build of the image it runs, which its jobs name (src/agents/runtime/job-index.ts whereWords)
@@ -415,15 +426,6 @@ export class TraceStack extends Stack {
     const orderWatch = new OrderWatch(this, 'OrderWatch', { prefix: cfg.prefix, central, root: REPO_ROOT })
     // ------------------------------------------------------------------ trace's GitHub app's token broker (src/infra/github-app.ts)
     if (githubAppEnabled(cfg)) new GithubAppBroker(this, 'GithubAppBroker', { prefix: cfg.prefix, repositories: refs.map((r) => r.repository), root: REPO_ROOT })
-    // ------------------------------------------------------------------ trace's own GitLab (src/infra/gitlab.ts)
-    const gitlab = cfg.gitlab.enabled
-      ? new GitlabServer(this, 'Gitlab', { prefix: cfg.prefix, central, instanceType: cfg.gitlab.instanceType, volumeGb: cfg.gitlab.volumeGb, domain: cfg.gitlab.domain, root: REPO_ROOT })
-      : null
-    if (gitlab) {
-      new CfnOutput(this, GITLAB_URL_OUTPUT, { value: gitlab.url })
-      new CfnOutput(this, GITLAB_ADMIN_TOKEN_OUTPUT, { value: gitlab.adminTokenSecret.secretArn })
-      new CfnOutput(this, GITLAB_OIDC_OUTPUT, { value: gitlab.oidc.oidcProviderArn })
-    }
     // ------------------------------------------------------------------ run logs (src/infra/run-logs.ts)
     // what every job, tool call and check says while it runs, one stream per run (docs/progress-and-logs.md): written by
     // the workers and the runners, read by the API, followed live by the web app's JourneyEvents. Kept a month and
@@ -542,8 +544,8 @@ export class TraceStack extends Stack {
       AWS_REGION: cfg.region,
       TRACE_HOME: traceHome,
       TRACE_GITHUB_SECRET_ARN: githubToken.secretArn,
-      // trace's GitLab (src/api/forge.ts): its address and admin token; which projects live there comes with them later
-      ...(gitlab ? { TRACE_GITLAB_URL: gitlab.url, TRACE_GITLAB_SECRET_ARN: gitlab.adminTokenSecret.secretArn } : {}),
+      // trace's GitLab (src/api/forge.ts): its address, admin token, and which projects live there
+      ...(gitlab ? { TRACE_GITLAB_URL: gitlab.url, TRACE_GITLAB_SECRET_ARN: gitlab.adminTokenSecret.secretArn, TRACE_GITLAB_REPOS: refs.filter((r) => projectSettings(cfg, r.repository).forge === 'gitlab').map((r) => r.repository).join(' ') } : {}),
       TRACE_WORKSPACE: '/mnt/workspace',
       TRACE_AGENT_MODE: 'api',
       TRACE_COGNITO_POOL_ID: users.userPoolId,

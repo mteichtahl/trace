@@ -44,7 +44,7 @@ export function withSample(a: Answers): Answers {
   if (!a.sample.enabled) return a
   const repo = sampleRepo(a)
   if (a.projects.some((p) => p.repo.toLowerCase() === repo.toLowerCase())) return a
-  return { ...a, projects: [...a.projects, { repo, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: a.sample.private } }] }
+  return { ...a, projects: [...a.projects, { repo, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, forge: 'github' as const, create: { template: 'sample', private: a.sample.private } }] }
 }
 
 /**

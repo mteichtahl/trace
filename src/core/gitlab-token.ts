@@ -17,7 +17,8 @@ import { z } from 'zod'
 export const TOKEN_NAME = 'trace-agents'
 export const TOKEN_DAYS = 3
 export const ROTATE_BEFORE_DAYS = 2
-export const agentTokenSecretName = (prefix: string, slug: string): string => `${prefix}/gitlab/agents/${slug}`
+/** keyed by the project's path within the group (its repository's name: src/core/gitlab-path.ts gitlabAgentSecret) */
+export const agentTokenSecretName = (prefix: string, name: string): string => `${prefix}/gitlab/agents/${name}`
 
 /** What the secret holds. */
 export const StoredToken = z.object({ token: z.string().min(1), expiresAt: z.string(), login: z.string(), project: z.string() })
