@@ -13,11 +13,12 @@
  * two. A number this client has met as a merge request (in the event, or from pulls.*) is taken as one; any other as
  * an issue. The harness only comments on, labels or closes changes it has just read, so this is always the right one.
  *
- * Not available on GitLab, and refused with a 501 the harness reports: merging one branch into another outside a merge
- * request (repos.merge) and bringing a change up to date by merge (pulls.updateBranch). trace's restack does those with
- * git itself on GitLab.
+ * GitLab's API cannot merge one branch into another outside a merge request (repos.merge) or bring a change up to date
+ * by merge (pulls.updateBranch): those two are done with git in the job, as the agents (src/harness/gitlab-git.ts),
+ * answering as GitHub does (201 merged, 204 nothing to merge, 409 or 422 on a conflict).
  */
 import { z } from 'zod'
+import { type Exec, gitMerge } from './gitlab-git.js'
 
 export class ForgeRefusal extends Error {
   override name = 'HttpError'
@@ -88,6 +89,8 @@ export interface GitlabOctokitOptions {
   /** numbers already known to be merge requests (the event's) */
   mergeRequests?: Iterable<number>
   fetch?: typeof fetch
+  /** git, for the merges GitLab's API cannot make (src/harness/gitlab-git.ts); absent, the real one */
+  git?: Exec
 }
 
 export function gitlabOctokit(o: GitlabOctokitOptions) {
@@ -244,7 +247,14 @@ export function gitlabOctokit(o: GitlabOctokitOptions) {
         // GitLab lists newest first; GitHub oldest first
         return ok(list.reverse().map((c) => ({ sha: c.id, commit: { message: c.message, author: { name: c.author_name ?? '', date: c.authored_date ?? '' } }, parents: c.parent_ids.map((sha) => ({ sha })) })))
       },
-      updateBranch: async (_p?: Params): Answer => { throw new ForgeRefusal(501, 'GitLab cannot bring a merge request up to date by merge through its API: trace\'s restack merges the base in with git') },
+      // GitLab's API has no "update branch" by merge: its target merged into its source with git, as the agents
+      updateBranch: async (p: Params): Answer => {
+        const m = Mr.parse(await get(`${P}/merge_requests/${Number(p.pull_number)}`))
+        if (typeof p.expected_head_sha === 'string' && m.sha && m.sha !== p.expected_head_sha) throw new ForgeRefusal(422, 'expected head sha didn\'t match current head ref')
+        const r = await gitMerge({ url: o.url, token: o.token, project: o.project, into: m.source_branch, from: m.target_branch, message: `Merge ${m.target_branch} into ${m.source_branch}`, ...(o.git ? { exec: o.git } : {}) })
+        if (r.status === 409) throw new ForgeRefusal(422, 'merge conflict between base and head')
+        return ok({ message: 'Updating pull request branch.' }, 202)
+      },
     },
     repos: {
       get: async (_p?: Params): Answer => {
@@ -273,7 +283,14 @@ export function gitlabOctokit(o: GitlabOctokitOptions) {
         const status = a && b ? 'diverged' : a ? 'ahead' : b ? 'behind' : 'identical'
         return ok({ status, ahead_by: a, behind_by: b, total_commits: a, commits: ahead.commits.map((c) => ({ sha: c.id, commit: { message: c.message ?? '' } })), files: ahead.diffs.map((d) => ({ filename: d.new_path })) })
       },
-      merge: async (_p?: Params): Answer => { throw new ForgeRefusal(501, 'GitLab cannot merge one branch into another outside a merge request through its API: trace merges with git on GitLab') },
+      // GitLab's API cannot merge one branch into another outside a merge request: done with git, as the agents
+      merge: async (p: Params = {}): Answer => {
+        const into = String(p.base)
+        const from = String(p.head).split(':').at(-1) ?? ''
+        const r = await gitMerge({ url: o.url, token: o.token, project: o.project, into, from, message: typeof p.commit_message === 'string' ? p.commit_message : `Merge ${from} into ${into}`, ...(o.git ? { exec: o.git } : {}) })
+        if (r.status === 409) throw new ForgeRefusal(409, 'Merge conflict')
+        return ok(r.sha ? { sha: r.sha } : null, r.status)
+      },
       getContent: async (p: Params): Answer => {
         const ref = typeof p.ref === 'string' ? `?ref=${q(p.ref)}` : ''
         const F = z.object({ file_name: z.string(), file_path: z.string(), size: z.number(), encoding: z.string(), content: z.string(), blob_id: z.string() }).loose()
