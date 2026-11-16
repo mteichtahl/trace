@@ -1,7 +1,7 @@
 /**
- * "You are here", under the stage rail (docs/guided-flow.md, Screens): the current stage opens into two panels. Left:
- * "Stage 3 of 9 · Capture", what the stage is for, and its steps, each naming who does it (yours highlighted).
- * Right: what the gate needs, with a meter and its criteria, and "What happens in Capture" (the stage sheet).
+ * "You are here" (docs/guided-flow.md, Screens; docs/ui-simplify.md): the gate's checklist (what the gate needs, with
+ * a meter and its criteria: one folded row on the Overview), and the stage sheet, opened from the rail or "What
+ * happens in Capture", which holds what the stage is for and its steps, each naming who does it (yours highlighted).
  * On a phone the stage is a segmented bar with "step 3 of 5". The stage sheet answers what a stage is for, who does
  * what, what you get, how long it takes and what comes next, with its steps and their guided skills.
  */
@@ -14,7 +14,7 @@ import { SKILLS } from '@/components/skills/definitions'
 import { CriterionFindings } from '@/components/criterion-findings'
 import { currentStage, gateMeter, gateOf, ownerWord, stageSteps, stepLabel, stepPlace } from '@/lib/guided'
 import { stepLink } from '@/lib/step-skills'
-import type { Gate, Journey, RunSummary, Stage, StageStep } from '@/lib/types'
+import type { Journey, RunSummary, Stage, StageStep } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 /** The icon for a step's state; trace's step that runs after you is a dashed ring. */
@@ -74,31 +74,23 @@ export function StepList({ steps, links, held = false, className }: { steps: Sta
 }
 
 /** The overview's guide: two panels on desktop. */
-export function StageGuidePanel({ j, admin, held, onWhat, className }: { j: Journey; admin?: boolean; held?: boolean; onWhat: (s: Stage) => void; className?: string }) {
+/**
+ * The gate's checklist, the one list of what the current stage's gate needs (docs/ui-simplify.md, "One gate
+ * checklist"): the meter, each criterion with what its check found, and the way on: Review and sign once every line
+ * is met (for an admin), else Open the gate, which shows the same lines with their evidence.
+ */
+export function GateChecklist({ j, admin, held, className }: { j: Journey; admin?: boolean; held?: boolean; className?: string }) {
   const c = currentStage(j)
   if (!c) return null
   const gate = gateOf(j.gates, c.stage)
-  const steps = stageSteps(c.stage, gate, { admin })
   const meter = gateMeter(gate, c.stage)
+  const id = j.repo.replace('/', '~')
+  const ready = gate?.state === 'ready'
   return (
-    <div className={cn('grid border-t md:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]', className)} aria-label={`Where ${j.name} is`}>
-      <div className="p-5 md:border-r">
-        <p className="section-label">Stage {c.index + 1} of {c.total} · {c.stage.name}</p>
-        {c.stage.guide && <p className="mt-1.5 text-sm">{c.stage.guide.purpose}</p>}
-        {steps.length > 0 ? <StepList steps={steps} held={held} className="mt-3" /> : <p className="mt-3 text-sm text-muted-foreground">trace has not set out this stage's steps yet.</p>}
-      </div>
-      <GatePanel repo={j.repo} gate={gate} stage={c.stage} meter={meter} held={held} onWhat={() => onWhat(c.stage)} />
-    </div>
-  )
-}
-
-function GatePanel({ repo, gate, stage, meter, held, onWhat }: { repo: string; gate?: Gate; stage: Stage; meter: ReturnType<typeof gateMeter>; held?: boolean; onWhat: () => void }) {
-  return (
-    <div className="border-t p-5 md:border-t-0">
-      <p className="section-label">To pass the gate</p>
-      <p className="mt-1.5 text-sm">
+    <div className={className} aria-label={`What the ${c.stage.name} gate needs`}>
+      <p className="text-sm">
         {meter.total ? `${meter.met} of ${meter.total} criteria met` : 'No criteria yet'}
-        {gate?.state === 'ready' && <span className="ml-2 text-primary">· ready to sign</span>}
+        {ready && <span className="ml-2 text-primary">· ready to sign</span>}
       </p>
       <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted" role="meter" aria-valuemin={0} aria-valuemax={meter.total} aria-valuenow={meter.met} aria-label={`${meter.met} of ${meter.total} criteria met`}>
         <div className="h-full rounded-full bg-primary transition-[width] duration-200" style={{ width: `${Math.round(meter.frac * 100)}%` }} />
@@ -113,7 +105,7 @@ function GatePanel({ repo, gate, stage, meter, held, onWhat }: { repo: string; g
                 <span className="min-w-0">
                   <span className={cn(!met && 'text-foreground')}>{c.text}{c.status === 'waived' && <span className="text-muted-foreground"> (waived)</span>}</span>
                   {/* what its shape found, each waivable here: the gate page may be closed for review while work is pending */}
-                  {!met && !held && c.findings?.length ? <CriterionFindings repo={repo} findings={c.findings} className="mt-1" /> : null}
+                  {!met && !held && c.findings?.length ? <CriterionFindings repo={j.repo} findings={c.findings} className="mt-1" /> : null}
                 </span>
                 <span className="sr-only">{met ? 'met' : 'not met yet'}</span>
               </li>
@@ -121,11 +113,23 @@ function GatePanel({ repo, gate, stage, meter, held, onWhat }: { repo: string; g
           })}
         </ul>
       )}
-      <button type="button" onClick={onWhat} className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline">
-        What happens in {stage.name} <ArrowRight className="size-3.5" aria-hidden />
-      </button>
+      {gate && !held && (
+        <Button asChild size="sm" variant={ready && admin ? 'default' : 'outline'} className="mt-4">
+          <Link to="/p/$id/gates/$gate" params={{ id, gate: gate.id }}>{ready && admin ? 'Review and sign' : 'Open the gate and its evidence'}</Link>
+        </Button>
+      )}
     </div>
   )
+}
+
+/** "4 of 7 met", or "ready to sign", for the checklist's folded row. */
+export function gateRowCount(j: Journey): { count: string; ready: boolean } | null {
+  const c = currentStage(j)
+  if (!c) return null
+  const gate = gateOf(j.gates, c.stage)
+  const meter = gateMeter(gate, c.stage)
+  const ready = gate?.state === 'ready'
+  return { count: ready ? 'ready to sign' : meter.total ? `${meter.met} of ${meter.total} met` : 'no criteria yet', ready }
 }
 
 /** The phone's stage: one segment per stage (done dark, current accent) and "step 3 of 5". */

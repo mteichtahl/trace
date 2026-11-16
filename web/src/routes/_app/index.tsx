@@ -25,7 +25,7 @@ import type { Journey, LifecycleMark } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/')({
-  staticData: { crumb: 'Home' },
+  staticData: { crumb: 'Next' },
   // a tapped notification opens its item at the front (src/web/push-sender.ts messageFor, by way of /next)
   validateSearch: (s: Record<string, unknown>): { item?: string } => (typeof s.item === 'string' && s.item.length < 200 ? { item: s.item } : {}),
   component: Home,

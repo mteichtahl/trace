@@ -49,10 +49,11 @@ The project's Next step card stays: it is the same item, on the project it belon
 **Before:** on a wide screen the Overview stacked fourteen blocks, about five screens tall, and said "step 3 of 5"
 three times before the first scroll.
 
-**Now:** one column, the phone's structure: the stage rail, the Next step card, at most one exception card
-(section 4), then folded rows under "Around this project": Changes from trace, Waiting on people, trace is working,
-Recently, Requirements and cost. A row shows its count and opens in place. The stage guide (purpose, steps, what the
-gate needs) opens from the rail ("What happens in Capture") instead of sitting open above the card.
+**Now:** one column, the phone's structure (web/src/routes/_app/p/$id/index.tsx): the stage rail, the Next step card,
+the exception card (section 4), then folded rows under "Around this project": the gate's checklist (section 6),
+Changes from trace, Waiting on people, trace is working, Recently, Requirements and cost. A row shows its count and
+opens in place (in a drawer on a phone). The stage guide (purpose, steps) opens from the rail and from "What happens
+in Capture" instead of sitting open above the card.
 
 ## 3. Five tabs
 
@@ -73,9 +74,13 @@ is not shown, as before.
 **Before:** a failing build, fixes asked for, a lost job, evidence out of date, gates to sign again, a spend warning
 and a stuck agent each had their own card and position.
 
-**Now:** one card shape, under the Next step card: what happened, what it sent back (the stage, when it reopened
-one), and the one thing to do. When there are several, the most blocking shows and the rest fold under "N more".
-A reopened stage is marked on the stage rail, so going back shows in one place whatever caused it.
+**Now:** one card shape (web/src/components/exception-card.tsx), under the Next step card: what happened, what it
+sent back (the stage, when it reopened one), the one thing to do, and the detail folded behind it. The failing build,
+gates to sign again, checks out of date and the cloud-work allowance warning all draw through it. When there are
+several, the most blocking shows and the rest fold under "N more things to know". A reopened stage is marked on the
+stage rail in amber with a turn-back arrow, so going back shows in one place whatever caused it. Fixes asked for and
+"Ask trace to fix something" moved into the "trace is working" row; a job that ended without finishing is listed
+there too, and is the Next step card itself when it is what holds the project.
 
 ## 5. Changes
 
@@ -90,9 +95,11 @@ A reopened stage is marked on the stage rail, so going back shows in one place w
 
 ## 6. One gate checklist
 
-The stage guide's "To pass the gate" list and the gate page are one list: each line opens its evidence, and Review
-and sign is offered from the same list once every line is met. Evidence coverage (Proof) stays the per-requirement
-view.
+The stage guide's "To pass the gate" list is no longer a panel that is always open beside the steps. It is one row
+on the Overview ("To pass the Capture gate · 4 of 7 met", `GateChecklist` in web/src/components/stage-guide.tsx): the
+meter, each criterion with what its check found (waivable there), and one way on. That is Review and sign once every
+line is met, for an admin; otherwise Open the gate and its evidence, which is the same list with each line's evidence
+behind it. Evidence coverage (Proof) stays the per-requirement view. The stage's steps live in the stage sheet.
 
 ## 7. Running work, and System
 

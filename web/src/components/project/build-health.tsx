@@ -13,6 +13,7 @@
  *
  * GitHub's own pages only in the admins' "More" menu (decision C).
  */
+import { ExceptionCard } from '@/components/exception-card'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Loader2, Wrench } from 'lucide-react'
@@ -134,56 +135,71 @@ export interface BuildHealthProps {
   className?: string
 }
 
-/** The card (when the build is failing), then the open requests and Ask trace to fix something. */
-export function BuildHealth({ repo, jobs, write, className }: BuildHealthProps) {
+/** The failing build as an exception card (docs/ui-simplify.md, "One exception card"): what failed, what trace is doing about it, and the log behind it. Null while the build is fine. */
+export function BuildFailing({ repo, jobs, open = true, className }: { repo: string; jobs: readonly RunSummary[]; /** the log's end shown from the start */ open?: boolean; className?: string }) {
   const h = useQuery({ ...q('health.get', { repo }), staleTime: 30_000, refetchInterval: 60_000 })
   const [log, setLog] = useState<{ job_id: number; name: string } | null>(null)
   const data = h.data
-  const failing = showsHealth(data)
-  const asks = data?.asks ?? []
-  if (!data || (!failing && !asks.length && !write)) return null
+  if (!data || !showsHealth(data)) return null
   const b = data.build
   const fix = b.fixing?.job_id ? jobs.find((j) => j.id === b.fixing!.job_id) : undefined
   const first = b.failing[0]
   return (
-    <div className={cn('mt-6 space-y-4', className)}>
-      {failing && (
-        <section aria-label="The build" className="rounded-xl border border-destructive/50 bg-destructive/5 p-5" data-testid="build-health">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="font-semibold">The build</h2>
-            <StatusBadge status={b.state === 'running' ? 'running' : 'failing'} label={b.state === 'running' ? 'Checking the fix' : 'Failing'} />
-            {b.at && <span className="text-xs text-muted-foreground">{ago(b.at)}</span>}
-            <MoreForAdmins className="ml-auto" links={[{ label: 'The build on GitHub', href: `https://github.com/${repo}/actions` }]} />
-          </div>
-          <p className="mt-3 text-[15px] leading-relaxed">{b.why ?? 'The build failed.'}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{fixingWords(b, fix)}</p>
-          {first?.tail && (
-            <figure className="mt-4">
-              <figcaption className="mb-1.5 text-xs text-muted-foreground">
-                The end of {first.step ? `"${first.step}"` : `"${first.name}"`}
-              </figcaption>
-              <pre className="max-h-64 overflow-auto rounded-md border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre" data-testid="log-extract">{first.tail}</pre>
-            </figure>
-          )}
-          <div className="mt-4 flex flex-wrap gap-2">
-            {b.failing.map((f) => (
-              <Button key={f.job_id} variant="outline" size="sm" onClick={() => setLog(f)}>
-                {b.failing.length > 1 ? `Read the whole "${f.name}" log` : 'Read the whole log'}
-              </Button>
-            ))}
-            {b.fixing?.job_id && (fix?.agent ? (
-              <Button size="sm" asChild>
-                <Link to="/agents/$agent" params={{ agent: fix.agent }}>Watch trace fix it</Link>
-              </Button>
-            ) : (
-              <Button size="sm" asChild>
-                <a href="#s-trace-is-doing">Watch trace fix it</a>
-              </Button>
-            ))}
-          </div>
-          <LogSheet repo={repo} job={log} open={!!log} onOpenChange={(o) => !o && setLog(null)} />
-        </section>
-      )}
+    <ExceptionCard
+      tone="blocking"
+      label="The build"
+      testId="build-health"
+      title={<h2 className="font-semibold">The build</h2>}
+      badge={<>
+        <StatusBadge status={b.state === 'running' ? 'running' : 'failing'} label={b.state === 'running' ? 'Checking the fix' : 'Failing'} />
+        {b.at && <span className="text-xs font-normal text-muted-foreground">{ago(b.at)}</span>}
+        <MoreForAdmins className="ml-auto" links={[{ label: 'The build on GitHub', href: `https://github.com/${repo}/actions` }]} />
+      </>}
+      body={<>
+        <p>{b.why ?? 'The build failed.'}</p>
+        <p className="mt-1 text-muted-foreground">{fixingWords(b, fix)}</p>
+      </>}
+      action={b.fixing?.job_id ? (fix?.agent ? (
+        <Button size="sm" asChild>
+          <Link to="/agents/$agent" params={{ agent: fix.agent }}>Watch trace fix it</Link>
+        </Button>
+      ) : (
+        <Button size="sm" asChild>
+          <a href="#s-trace-is-doing">Watch trace fix it</a>
+        </Button>
+      )) : undefined}
+      detailLabel="Show the end of the log"
+      open={open}
+      className={className}
+      detail={<>
+        {first?.tail && (
+          <figure>
+            <figcaption className="mb-1.5 text-xs text-muted-foreground">
+              The end of {first.step ? `"${first.step}"` : `"${first.name}"`}
+            </figcaption>
+            <pre className="max-h-64 overflow-auto rounded-md border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre" data-testid="log-extract">{first.tail}</pre>
+          </figure>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {b.failing.map((f) => (
+            <Button key={f.job_id} variant="outline" size="sm" onClick={() => setLog(f)}>
+              {b.failing.length > 1 ? `Read the whole "${f.name}" log` : 'Read the whole log'}
+            </Button>
+          ))}
+        </div>
+        <LogSheet repo={repo} job={log} open={!!log} onOpenChange={(o) => !o && setLog(null)} />
+      </>}
+    />
+  )
+}
+
+/** The fixes people asked trace for, and Ask trace to fix something: part of what trace is working on. */
+export function FixRequests({ repo, jobs, write, className }: BuildHealthProps) {
+  const h = useQuery({ ...q('health.get', { repo }), staleTime: 30_000, refetchInterval: 60_000 })
+  const asks = h.data?.asks ?? []
+  if (!h.data || (!asks.length && !write)) return null
+  return (
+    <div className={cn('space-y-4', className)}>
       {asks.length > 0 && (
         <section aria-label="Fixes you asked for">
           <h2 className="section-label mb-2">Fixes asked for ({asks.length})</h2>
@@ -199,6 +215,18 @@ export function BuildHealth({ repo, jobs, write, className }: BuildHealthProps) 
         </section>
       )}
       {write && <AskForFix repo={repo} jobs={jobs} />}
+    </div>
+  )
+}
+
+/** Both together: the card (when the build is failing), then the open requests and Ask trace to fix something. */
+export function BuildHealth({ repo, jobs, write, className }: BuildHealthProps) {
+  const h = useQuery({ ...q('health.get', { repo }), staleTime: 30_000, refetchInterval: 60_000 })
+  if (!h.data || (!showsHealth(h.data) && !h.data.asks?.length && !write)) return null
+  return (
+    <div className={cn('mt-6 space-y-4', className)}>
+      <BuildFailing repo={repo} jobs={jobs} />
+      <FixRequests repo={repo} jobs={jobs} write={write} />
     </div>
   )
 }

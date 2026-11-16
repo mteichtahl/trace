@@ -1,11 +1,12 @@
 /**
- * The phone's folded sections (the phone redesign, "next step first"): one 48 px row per section — its name, a short
+ * The folded sections of a project's Overview, on every screen size (docs/ui-simplify.md). First built as
+ * the phone's folded sections (the phone redesign, "next step first"): one 48 px row per section — its name, a short
  * count on the right, and a chevron — that opens the section in a bottom drawer, or goes to its page (`to`). A group of
  * rows sits in one bordered box (FoldRows), so the next step stays the only large thing on the screen.
  */
 import { Link } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { cn } from '@/lib/utils'
 
@@ -39,8 +40,28 @@ export function FoldLink({ label, count, accent, to, params }: { label: string; 
   )
 }
 
-/** A row that opens its section in a drawer. */
-export function FoldRow({ label, count, accent, description, children }: { label: string; count?: ReactNode; accent?: boolean; description?: string; children: ReactNode }) {
+/**
+ * A row that opens its section: in a drawer on a phone, in place under the row on a wider screen (`inline`:
+ * docs/ui-simplify.md, "The Overview, on every screen size").
+ */
+export function FoldRow({ label, count, accent, description, inline, open: startOpen = false, children }: { label: string; count?: ReactNode; accent?: boolean; description?: string; inline?: boolean; open?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(startOpen)
+  if (inline)
+    return (
+      <div>
+        <button type="button" className={row} aria-expanded={open} onClick={() => setOpen(!open)}>
+          <span className="min-w-0 flex-1">{label}</span>
+          <Count count={count} accent={accent} />
+          <ChevronRight className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} aria-hidden />
+        </button>
+        {open && (
+          <div className="border-t bg-background px-4 py-4">
+            {description && <p className="mb-3 text-sm text-muted-foreground">{description}</p>}
+            {children}
+          </div>
+        )}
+      </div>
+    )
   return (
     <Drawer>
       <DrawerTrigger asChild>

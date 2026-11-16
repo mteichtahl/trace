@@ -2,7 +2,7 @@ import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, crea
 import { act, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
-import { StageGuidePanel } from './stage-guide'
+import { GateChecklist } from './stage-guide'
 import type { Journey } from '@/lib/types'
 
 async function inRouter(ui: ReactNode): Promise<void> {
@@ -30,7 +30,7 @@ const journey = (held = false) => ({
 // test-esp32 #142: the gate page was closed for review while work was pending, so the finding could be waived nowhere
 describe('the stage guide\'s gate panel', () => {
   it('lists what a criterion\'s shape found, each with "Waive this one…" to the Waiver skill about that finding', async () => {
-    await inRouter(<StageGuidePanel j={journey()} onWhat={() => undefined} />)
+    await inRouter(<GateChecklist j={journey()} />)
     expect(screen.getByText('Nothing covers Q1 from above.')).toBeInTheDocument()
     const link = screen.getByRole('link', { name: 'Waive this one…' })
     const href = new URL(link.getAttribute('href')!, 'http://x')
@@ -39,7 +39,7 @@ describe('the stage guide\'s gate panel', () => {
   })
 
   it('offers nothing to waive while the project is paused', async () => {
-    await inRouter(<StageGuidePanel j={journey()} held onWhat={() => undefined} />)
+    await inRouter(<GateChecklist j={journey()} held />)
     expect(screen.queryByRole('link', { name: 'Waive this one…' })).toBeNull()
   })
 })
