@@ -1,8 +1,8 @@
-import { Activity, Bot, FolderClosed, House, Library, Shield } from 'lucide-react'
+import { Activity, ArrowRight, Bot, FolderClosed, Library, Shield } from 'lucide-react'
 
 /** The left rail's areas. Admin shows for admins only. */
 export const AREAS = [
-  { to: '/', label: 'Home', icon: House, exact: true },
+  { to: '/', label: 'Next', icon: ArrowRight, exact: true, count: true },
   { to: '/projects', label: 'Projects', icon: FolderClosed, also: ['/p/'] },
   { to: '/knowledge', label: 'Knowledge', icon: Library },
   { to: '/agents', label: 'Agents', icon: Bot },

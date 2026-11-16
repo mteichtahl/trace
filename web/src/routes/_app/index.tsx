@@ -1,82 +1,55 @@
 /**
- * Home: what needs you. One column: the greeting line (the whole page in one sentence), Needs you, Your projects with
- * their stage rails, and In progress (runs and waits across projects). Reference screen: see web/README.md.
+ * Home is Next (docs/ui-simplify.md, "One queue"): the greeting line (the whole page in one sentence), the one queue of
+ * what needs this person (components/next-queue.tsx: acted on in place, one at a time), and Your projects with their
+ * stage rails. Nothing else lists what needs a person: the bell and the phone's Next tab open this page. What trace
+ * is working on is in the top bar's "trace is working" (components/activity.tsx), not listed here.
  *
- * Data: inbox · projects · journey.get per project · tools.waits per project. All refetch from live events.
+ * Data: inbox · projects · journey.get per project. All refetch from live events.
  */
 import { useQueries } from '@tanstack/react-query'
-import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ChevronRight, PauseCircle } from 'lucide-react'
-import { toast } from 'sonner'
+import { Link, createFileRoute } from '@tanstack/react-router'
+import { PauseCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { Skeleton } from '@/components/ui/skeleton'
-import { NeedsYouCard } from '@/components/needs-you-card'
-import { offerPush } from '@/components/push-prompt'
-import { useAcceptFromInbox } from '@/components/changes/use-change-actions'
-import { useDismissStuck } from '@/components/dismiss-stuck'
-import { RunLine, runControls } from '@/components/run-line'
+import { NextQueue, inboxItems } from '@/components/next-queue'
 import { Column, Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { EmptyState, Loading, QueryError, SkeletonRows } from '@/components/states'
-import { WaitLine } from '@/components/wait-line'
 import { useTraceContext } from '@/components/chat/context'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { call, projectId, projectName } from '@/lib/api'
+import { projectId, projectName } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { firstName, greeting, plural } from '@/lib/format'
-import { q, useCall, useInbox, useProjects } from '@/lib/queries'
-import type { InboxItem, Journey, LifecycleMark, RunSummary, Wait } from '@/lib/types'
+import { q, useInbox, useProjects } from '@/lib/queries'
+import type { Journey, LifecycleMark } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/')({
   staticData: { crumb: 'Home' },
+  // a tapped notification opens its item at the front (src/web/push-sender.ts messageFor, by way of /next)
+  validateSearch: (s: Record<string, unknown>): { item?: string } => (typeof s.item === 'string' && s.item.length < 200 ? { item: s.item } : {}),
   component: Home,
 })
 
-/** "2 things need you. 3 are in progress." */
+/** "2 things need you. trace is working on 3." */
 export function greetingLine(needs: number, running: number): string {
   const a = needs === 0 ? 'Nothing needs you.' : `${plural(needs, 'thing')} ${needs === 1 ? 'needs' : 'need'} you.`
-  const b = running === 0 ? '' : ` ${running} ${running === 1 ? 'is' : 'are'} in progress.`
+  const b = running === 0 ? '' : ` trace is working on ${running}.`
   return a + b
 }
 
 function Home() {
   const { user } = useAuth()
-  const navigate = useNavigate()
+  const { item } = Route.useSearch()
   const inbox = useInbox()
   const projects = useProjects()
   const repos = (projects.data ?? []).map((p) => p.repo)
   const journeys = useQueries({ queries: repos.map((repo) => q('journey.get', { repo })) })
-  const waits = useQueries({ queries: repos.map((repo) => q('tools.waits', { repo })) })
   const phone = useMediaQuery('(max-width: 767px)')
-  const answer = useCall('question.answer', (a) => [['inbox'], ['journey.get', a.repo]])
-  const dismiss = useDismissStuck()
-  const accept = useAcceptFromInbox()
+  const needs = inboxItems(inbox.data).length
+  const running = journeys.reduce((n, j) => n + (j.data?.jobs ?? []).filter((r) => r.state === 'running').length, 0)
 
-  useTraceContext({ label: 'Home', description: 'The screen the person is on', value: 'Home: what needs them across their projects' }, 'screen')
-
-  // running and paused work, each with the controls the person has on its project (a reviewer: none)
-  const writeOn = new Set((projects.data ?? []).filter((p) => (p.part ?? 'contributor') !== 'reviewer').map((p) => p.repo))
-  const running: { run: RunSummary; project: string; write: boolean }[] = journeys.flatMap((j, i) => (j.data?.jobs ?? []).filter((r) => r.state === 'running' || r.state === 'paused')
-    .map((run) => ({ run, project: j.data!.name, write: writeOn.has(repos[i] ?? '') })))
-  const waiting: (Wait & { project: string })[] = waits.flatMap((w, i) => (w.data?.waits ?? []).map((x) => ({ ...x, project: projectName(repos[i] ?? '') })))
-  const inProgress = running.length + waiting.length
-  const items = inbox.data ?? []
-
-  const onAnswer = (item: InboxItem) => {
-    if (!item.questionId || !item.recommended) return
-    answer.mutate(
-      { repo: item.repo, question: item.questionId, option: item.recommended.id },
-      {
-        onSuccess: (r) => {
-          toast(`Answered: ${item.recommended!.label}`, { description: `${item.project}: ${r.summary?.replace(/^Answered\. /, '') ?? 'the agent carries on.'}` })
-          void offerPush()
-        },
-        onError: (e) => toast.error('Could not send the answer', { description: `${e.message} Nothing was lost; try again.` }),
-      },
-    )
-  }
+  useTraceContext({ label: 'Home', description: 'The screen the person is on', value: 'Home: what needs them next, one at a time, and their projects' }, 'screen')
 
   return (
     <Column>
@@ -84,26 +57,12 @@ function Home() {
         {greeting()}, {user ? firstName(user.name ?? user.email) : ''}.
       </h1>
       <p className="mt-2 text-base text-muted-foreground" aria-live="polite">
-        {inbox.isLoading ? ' ' : greetingLine(items.length, inProgress)}
+        {inbox.isLoading ? ' ' : greetingLine(needs, running)}
       </p>
 
-      <Section label="Needs you" className="mt-12">
-        {inbox.isError ? (
-          <QueryError error={inbox.error} what="what needs you" onRetry={() => void inbox.refetch()} />
-        ) : inbox.isLoading ? (
-          <Loading>
-            <SkeletonRows rows={2} />
-          </Loading>
-        ) : items.length === 0 ? (
-          <EmptyState>Nothing needs you. trace will tell you when something does.</EmptyState>
-        ) : (
-          <div className="space-y-3">
-            {items.map((i) => (
-              <NeedsYouCard key={i.id} item={i} compact={phone} onAnswer={onAnswer} onDismiss={dismiss} onAccept={accept.run} accepting={accept.busy === i.id} answering={answer.isPending && answer.variables?.question === i.questionId} onOther={(it) => it.action.to && void navigate({ to: it.action.to })} />
-            ))}
-          </div>
-        )}
-      </Section>
+      <div className="mt-10">
+        <NextQueue opened={item} />
+      </div>
 
       <Section label="Your projects" action={<Link to="/projects" className="text-primary hover:underline">See all</Link>}>
         {projects.isError ? (
@@ -124,47 +83,7 @@ function Home() {
           </ul>
         )}
       </Section>
-
-      {inProgress > 0 && (
-        <Section label="In progress">
-          {phone ? (
-            <Drawer>
-              <DrawerTrigger asChild>
-                <button type="button" className="flex w-full items-center justify-between rounded-xl border px-5 py-4 text-left text-sm">
-                  {inProgress} running <ChevronRight className="size-4 text-muted-foreground" />
-                </button>
-              </DrawerTrigger>
-              <DrawerContent>
-                <DrawerHeader>
-                  <DrawerTitle>In progress</DrawerTitle>
-                </DrawerHeader>
-                <InProgress running={running} waiting={waiting} />
-              </DrawerContent>
-            </Drawer>
-          ) : (
-            <InProgress running={running} waiting={waiting} />
-          )}
-        </Section>
-      )}
     </Column>
-  )
-}
-
-function InProgress({ running, waiting }: { running: { run: RunSummary; project: string; write: boolean }[]; waiting: (Wait & { project: string })[] }) {
-  return (
-    <div className="divide-y overflow-hidden rounded-xl border">
-      {running.map(({ run, project, write }) => (
-        <RunLine key={run.id} run={run} project={project} {...runControls(write)} />
-      ))}
-      {waiting.map((w) => (
-        <WaitLine
-          key={w.id}
-          wait={{ ...w, what: w.what.replace(new RegExp(`^${w.project}:\\s*`), '') }}
-          project={w.what.includes(':') ? w.what.split(':')[0] : w.project}
-          onCheckNow={(x) => call('tools.check_now', { repo: x.repo ?? '', waitId: x.id })}
-        />
-      ))}
-    </div>
   )
 }
 

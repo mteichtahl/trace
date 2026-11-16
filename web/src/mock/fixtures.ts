@@ -204,8 +204,8 @@ export const INBOX: InboxItem[] = [
   },
   {
     id: 'n3', kind: 'gate', repo: 'acme/motor-driver', project: 'Motor driver', revision: 'Rev A', stage: 'Architect', createdAt: ago(3 * HOUR),
-    summary: 'The architecture gate has 3 of 5 criteria met. trace will tell you when it is ready to sign.',
-    action: { label: 'See the gate', to: '/p/acme~motor-driver/gates/architecture' },
+    summary: 'The architecture gate is ready. All 5 criteria met. **trace recommends signing.**',
+    action: { label: 'Review and sign', to: '/p/acme~motor-driver/gates/architecture' },
   },
   {
     id: 'renders:B', kind: 'renders', repo: 'acme/soil-sensor', project: 'Soil sensor', revision: 'Rev B', stage: 'Release', createdAt: ago(22 * MIN),

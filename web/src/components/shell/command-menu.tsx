@@ -87,13 +87,10 @@ export function CommandMenu() {
         <CommandSeparator />
         <CommandGroup heading="Go to">
           {AREAS.filter((a) => !('admin' in a && a.admin) || user?.class === 'admin').map((a) => (
-            <CommandItem key={a.to} value={`go ${a.label}`} onSelect={() => go(() => void navigate({ to: a.to }))}>
+            <CommandItem key={a.to} value={`go ${a.label}${a.to === '/' ? ' home inbox notifications needs you' : ''}`} onSelect={() => go(() => void navigate({ to: a.to }))}>
               <a.icon /> {a.label}
             </CommandItem>
           ))}
-          <CommandItem value="go next inbox notifications needs you" onSelect={() => go(() => void navigate({ to: '/next' }))}>
-            <ArrowRight /> Next
-          </CommandItem>
           <CommandItem value="go preferences settings me" onSelect={() => go(() => void navigate({ to: '/me' }))}>
             <ArrowRight /> Preferences
           </CommandItem>
