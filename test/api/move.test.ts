@@ -95,4 +95,20 @@ describe('moving a project', () => {
     expect((await run(ADMIN, 'project.move_cancel', { repo: Q })).summary).toBe('The move was cancelled: the project stays on GitHub.')
     expect((await lifecycleOf(Q)).paused?.reason).toBe('waiting for parts')
   })
+
+  it('looking at a move marks it idle once nothing runs, and resumes the project once it has moved', async () => {
+    const R = 'move/third'
+    await register(R, null); await assign(ADMIN, USER, R, { class: 'user' })
+    const r = await run(ADMIN, 'project.move', { repo: R, to: 'gitlab' })
+    // nothing of it runs: idle from the start
+    expect(r.move.idle_at).toEqual(expect.any(String))
+    const s = storeAt(ctx(ADMIN), 'installation')
+    const got = await s.get(moveKey(R))
+    const done = { ...MoveRecordSchema.parse(JSON.parse(new TextDecoder().decode(got!.body))), status: 'moved', step: null }
+    await s.put(moveKey(R), new TextEncoder().encode(JSON.stringify(done)), { ifMatch: got!.etag })
+    expect((await lifecycleOf(R)).paused).not.toBeNull()
+    const v = await run(USER, 'project.move_status', { repo: R })
+    expect(v).toMatchObject({ resumed: true, move: { status: 'moved' } })
+    expect((await lifecycleOf(R)).paused).toBeNull()
+  })
 })

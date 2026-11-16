@@ -90,17 +90,19 @@ describe('the self-update role', () => {
   it('may only assume the CDK bootstrap roles, read installation/*, read the stack, check the connection and CodeBuild\'s credential, read the shared token, mark pending projects and write projects\' token secrets', () => {
     const { statements } = roleOf(on.parent, 'trace-self-update')
     const bySid = Object.fromEntries(statements.map((s) => [s.Sid ?? '', s]))
-    expect(Object.keys(bySid).sort()).toEqual(['CdkBootstrapRoles', 'CodeBuildSourceCredential', 'GithubConnection', 'GithubConnections', 'InstallationSettings', 'PendingProjectsList', 'PendingProjectsMark', 'ProjectTokenSecrets', 'SharedAgentToken', 'StackOutputs', 'WebHooksSecret'])
+    expect(Object.keys(bySid).sort()).toEqual(['CdkBootstrapRoles', 'CodeBuildSourceCredential', 'GithubConnection', 'GithubConnections', 'InstallationSettings', 'PendingMovesList', 'PendingMovesMark', 'PendingProjectsList', 'PendingProjectsMark', 'ProjectTokenSecrets', 'SharedAgentToken', 'StackOutputs', 'WebHooksSecret'])
     for (const s of statements) {
       expect(s.Effect).toBe('Allow')
       for (const a of list(s.Action)) expect(a, `${s.Sid}`).not.toContain('*')
-      if (s.Sid !== 'PendingProjectsList') expect(s.Condition).toBeUndefined()
+      if (s.Sid !== 'PendingProjectsList' && s.Sid !== 'PendingMovesList') expect(s.Condition).toBeUndefined()
     }
     // the projects created in the web app: listed and marked under installation/pending-projects/ only
     expect(bySid.PendingProjectsList?.Action).toBe('s3:ListBucket')
     expect(bySid.PendingProjectsList?.Condition).toEqual({ StringLike: { 's3:prefix': ['installation/pending-projects/*'] } })
     expect(bySid.PendingProjectsMark?.Action).toBe('s3:PutObject')
     expect(JSON.stringify(bySid.PendingProjectsMark?.Resource)).toMatch(/"\/installation\/pending-projects\/\*"\]\]\}$/)
+    expect(bySid.PendingMovesList?.Condition).toEqual({ StringLike: { 's3:prefix': ['installation/pending-moves/*'] } })
+    expect(JSON.stringify(bySid.PendingMovesMark?.Resource)).toMatch(/"\/installation\/pending-moves\/\*"\]\]\}$/)
     // a project it adds gets a copy of the shared token in its own secret; never a value read but the shared one
     expect(bySid.ProjectTokenSecrets?.Action).toBe('secretsmanager:PutSecretValue')
     // live updates from GitHub: a project it adds gets its webhook with the installer's secret, read only

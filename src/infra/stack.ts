@@ -172,6 +172,8 @@ export const SOURCE_EXCLUDE = [
 export const CHATS_PREFIX: (typeof PEOPLE_RECORDS)[number] = 'chats'
 export const JOURNEY_PREFIX: (typeof PEOPLE_RECORDS)[number] = 'journey'
 export const PENDING_PROJECTS = 'installation/pending-projects'
+/** Where the web app's moves between GitHub and trace's GitLab wait for the update (src/core/forge-move-record.ts). */
+export const PENDING_MOVES = 'installation/pending-moves'
 
 export class TraceStack extends Stack {
   constructor(scope: Construct, id: string, cfg: InfraProps, props: StackProps = {}) {
@@ -677,6 +679,9 @@ export class TraceStack extends Stack {
     //              gets a copy of the shared token, as the installer gives it)
     //   pending    list installation/pending-projects/* and put (mark) its records: the projects created in the web app
     //   hooks      (web.hooks) GetSecretValue on `<prefix>/web/github-hooks`: a project it adds gets its webhook
+    //   moves      list installation/pending-moves/* and put its records (a move's progress), and (gitlab.enabled)
+    //              GetSecretValue on trace's GitLab's admin token, which a move between GitHub and GitLab works with
+    //              (src/installer/moves.ts)
     //   smoke      (selfUpdate.smoke) GetSecretValue on `<prefix>/smoke/sign-in`: the smoke test user's sign-in, for the
     //              live smoke test after the update (docs/smoke-test.md). That user is an admin of the web app; the role
     //              can deploy the installation again anyway, so reading it gives it nothing it could not do already
@@ -729,6 +734,13 @@ export class TraceStack extends Stack {
         sid: 'PendingProjectsList', actions: ['s3:ListBucket'], resources: [central.bucketArn], conditions: { StringLike: { 's3:prefix': [`${PENDING_PROJECTS}/*`] } },
       }))
       updater.addToPolicy(new iam.PolicyStatement({ sid: 'PendingProjectsMark', actions: ['s3:PutObject'], resources: [central.arnForObjects(`${PENDING_PROJECTS}/*`)] }))
+      // moves between GitHub and trace's GitLab asked for in the web app (src/installer/moves.ts): their records, and
+      // the GitLab admin token they work with
+      updater.addToPolicy(new iam.PolicyStatement({
+        sid: 'PendingMovesList', actions: ['s3:ListBucket'], resources: [central.bucketArn], conditions: { StringLike: { 's3:prefix': [`${PENDING_MOVES}/*`] } },
+      }))
+      updater.addToPolicy(new iam.PolicyStatement({ sid: 'PendingMovesMark', actions: ['s3:PutObject'], resources: [central.arnForObjects(`${PENDING_MOVES}/*`)] }))
+      if (gitlab) updater.addToPolicy(new iam.PolicyStatement({ sid: 'GitlabAdminToken', actions: ['secretsmanager:GetSecretValue'], resources: [gitlab.adminTokenSecret.secretArn] }))
       // a project it adds gets its token secret written as the installer writes it (a copy of the shared token): only
       // the projects' secrets (<prefix>/github-token/<owner>/<repo>…), never their values read
       updater.addToPolicy(new iam.PolicyStatement({

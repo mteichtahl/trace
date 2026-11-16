@@ -180,7 +180,13 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 8. Moving a project in both directions: the mover (src/core/forge-move.ts, with its two homes in
    src/core/forge-move-sides.ts: on GitHub with trace's GitHub app's token, which the default branch's ruleset lets
    through; on GitLab with the admin token, before the set-up protects the default branch), the pause, the
-   change-number map; then its screens in the web app
+   change-number map; then its screens in the web app. Asking (src/api/actions-move.ts project.move, an admin's) pauses
+   the project and records the move at installation/pending-moves/; the installation's update applies it
+   (src/installer/moves.ts): the project's home set in the settings, a deploy for its new home's roles and runner,
+   the mover, then the new home set up (on GitLab as the installer sets a GitLab project up; on GitHub with the
+   variables a new project gets, and a line to run the installer when the repository is new there). The API marks a
+   `when: idle` move ready once nothing of the project runs, and resumes the project once the record says moved. The
+   records keep each project's home until the installer runs again and takes them into its answers
    (Settings, the confirm sheet, progress, done and failed; renders first) and `tracectl`.
 9. The GitHub token step only when a project is on GitHub; docs.
 
