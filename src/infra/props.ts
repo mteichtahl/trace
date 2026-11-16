@@ -226,6 +226,10 @@ export const InfraPropsSchema = z.object({
     volumeGb: z.number().int().min(50).max(16_384).default(100),
     /** the installation's own address for GitLab (e.g. git.trace-eda.com) and its certificate in ACM, us-east-1, as
      * CloudFront needs; absent, GitLab answers on the distribution's own address */
+    /** CodeBuild's way into GitLab (src/infra/gitlab.ts GitlabConnection): an AWS CodeConnections host and connection,
+     * which a person sets up once in the AWS console (GitLab's own token, api and admin_mode). Until then, false: GitLab
+     * projects get no CodeBuild runner. The installer sets it once both are AVAILABLE */
+    connectionReady: z.boolean().default(false),
     domain: z.object({
       name: z.string().regex(/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/, 'a host name such as git.example.com'),
       certificateArn: z.string().regex(/^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]+$/, 'an ACM certificate in us-east-1 (CloudFront only takes those)'),

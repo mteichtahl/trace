@@ -119,6 +119,9 @@ export interface RunnerProjectProps {
    * TRACE_RUNS_LOG_GROUP, and the role may write gha/<repository>/* there (a check's own lines,
    * src/core/check-stream.ts). Absent: neither */
   runLogs?: { prefix: string }
+  /** the repository lives on trace's own GitLab (docs/gitlab-projects.md): CodeBuild's GITLAB_SELF_MANAGED source at
+   * `<url>/<path>`, through connectionArn (the GitLab connection, src/infra/gitlab.ts); absent: GitHub */
+  gitlab?: { url: string; path: string }
 }
 
 /** The connection's ARN under both of the service's names (codeconnections, and codestar-connections before it). An
@@ -261,11 +264,13 @@ export class RunnerProject extends Construct {
 
     this.project = new codebuild.CfnProject(this, 'Project', {
       name: p.name,
-      description: `GitHub Actions runner for ${p.repository} (trace: its jobs run on AWS)`.slice(0, 255),
+      description: `${p.gitlab ? 'GitLab pipeline' : 'GitHub Actions'} runner for ${p.repository} (trace: its jobs run on AWS)`.slice(0, 255),
       serviceRole: this.role.roleArn,
       source: {
-        type: 'GITHUB',
-        location: `https://github.com/${p.repository}`,
+        // GitLab's runner builds are the same just-in-time runner model (CodeBuild-hosted GitLab runners): a queued
+        // pipeline job starts a build that registers for it, runs it, and is gone
+        type: p.gitlab ? 'GITLAB_SELF_MANAGED' : 'GITHUB',
+        location: p.gitlab ? Fn.join('/', [p.gitlab.url, p.gitlab.path]) : `https://github.com/${p.repository}`,
         // no auth: the account's CodeBuild GitHub source credential (runners.auth 'token')
         ...(p.connectionArn ? { auth: { type: 'CODECONNECTIONS', resource: p.connectionArn } } : {}),
         buildSpec: PLACEHOLDER_BUILDSPEC,

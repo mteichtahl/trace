@@ -71,6 +71,11 @@ describe('GitlabServer', () => {
     expect(policies).toContain('aws:RequestTag/trace:installation')
   })
 
+  it('makes CodeBuild\'s way into GitLab: a GitLab self-managed host at its address and a connection on it', () => {
+    t.hasResourceProperties('AWS::CodeConnections::Host', { Name: 'tr-gitlab', ProviderType: 'GitLabSelfManaged' })
+    t.hasResourceProperties('AWS::CodeConnections::Connection', { ConnectionName: 'tr-gitlab', HostArn: Match.anyValue() })
+  })
+
   it('makes an IAM OIDC provider for GitLab\'s pipeline ID tokens, audience STS', () => {
     t.resourceCountIs('AWS::IAM::OIDCProvider', 1)
     t.hasResourceProperties('AWS::IAM::OIDCProvider', { ClientIdList: ['sts.amazonaws.com'] })
@@ -119,7 +124,7 @@ describe('the installation with trace\'s GitLab', () => {
   const base = { account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/board'], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 
   it('is off by default', () => {
-    expect(InfraPropsSchema.parse(base).gitlab).toEqual({ enabled: false, instanceType: 'm7g.large', volumeGb: 100 })
+    expect(InfraPropsSchema.parse(base).gitlab).toEqual({ enabled: false, instanceType: 'm7g.large', volumeGb: 100, connectionReady: false })
   })
 
   it('refuses a certificate CloudFront cannot use', () => {
@@ -162,6 +167,18 @@ describe('the installation with trace\'s GitLab', () => {
     expect(all).not.toContain('trace/gitlab/agents/other')
     const env = JSON.stringify(s.parent.findResources('AWS::BedrockAgentCore::Runtime'))
     expect(env).toMatch(/TRACE_GITLAB_REPOS":"mteichtahl\/board"/)
+  }, 300_000)
+
+  it('gives a GitLab project a CodeBuild runner on its GitLab path once the connection is set up, and none before', () => {
+    const at = (ready: boolean) => InfraPropsSchema.parse({ ...base, gitlab: { enabled: true, connectionReady: ready }, projectSettings: { 'mteichtahl/board': { forge: 'gitlab' } } })
+    const before = JSON.stringify(synth(at(false), 'GitlabRunnerBefore').all.findResources('AWS::CodeBuild::Project'))
+    expect(before).not.toContain('GITLAB_SELF_MANAGED')
+    const after = synth(at(true), 'GitlabRunnerAfter').all
+    const projects = JSON.stringify(after.findResources('AWS::CodeBuild::Project'))
+    expect(projects).toContain('GITLAB_SELF_MANAGED')
+    expect(projects).toContain('CODECONNECTIONS')
+    expect(projects).toContain('trace/board')
+    expect(projects).not.toContain('https://github.com/mteichtahl/board')
   }, 300_000)
 })
 
