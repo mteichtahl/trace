@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adminToken, waitForGitlab } from '../../src/installer/gitlab.js'
+import { adminToken, gitlabConnectionReady, waitForGitlab, waitForGitlabConnection } from '../../src/installer/gitlab.js'
 
 const instant = async (): Promise<void> => {}
 
@@ -48,5 +48,25 @@ describe('waitForGitlab', () => {
 
   it('has nothing to wait for without an address', async () => {
     expect(await waitForGitlab({ url: '', readSecret: async () => null })).toEqual({ ok: false, detail: 'no GitLab address to wait for (none)' })
+  })
+})
+
+describe('waitForGitlabConnection', () => {
+  it('says once what to do, then waits until the host and the connection are both available', async () => {
+    const states = [{ host: 'PENDING', connection: 'PENDING' }, { host: 'AVAILABLE', connection: 'PENDING' }, { host: 'AVAILABLE', connection: 'AVAILABLE' }]
+    const lines: string[] = []
+    const r = await waitForGitlabConnection({ read: async () => states.shift()!, consoleUrl: 'https://console/x', name: 'tr-gitlab', report: (l) => lines.push(l), sleep: instant, pollMs: 1 })
+    expect(r.ok).toBe(true)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/Hosts tab choose tr-gitlab.*api and admin_mode scopes only.*Update pending connection/)
+  })
+
+  it('stops at once on ERROR, and says what to do when time runs out', async () => {
+    const err = await waitForGitlabConnection({ read: async () => ({ host: 'ERROR', connection: 'PENDING' }), consoleUrl: 'u', name: 'tr-gitlab', report: () => {}, sleep: instant, pollMs: 1 })
+    expect(err).toMatchObject({ ok: false, detail: expect.stringMatching(/status ERROR/) })
+    let t = 0
+    const late = await waitForGitlabConnection({ read: async () => ({ host: 'PENDING', connection: 'PENDING' }), consoleUrl: 'u', name: 'tr-gitlab', report: () => {}, sleep: instant, pollMs: 1, timeoutMs: 5, now: () => (t += 2) })
+    expect(late).toMatchObject({ ok: false, detail: expect.stringMatching(/not set up yet.*run the installer again/) })
+    expect(gitlabConnectionReady({ host: 'AVAILABLE', connection: 'AVAILABLE' })).toBe(true)
   })
 })

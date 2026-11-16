@@ -72,3 +72,48 @@ export async function waitForGitlab(o: GitlabWait): Promise<{ ok: boolean; detai
   const where = r.state === 'unreachable' ? `its token is made but ${base} does not answer yet (a custom domain's DNS must point at CloudFront)` : r.state === 'installing' ? 'it is still installing itself' : `it last said "${r.state ?? 'nothing'}"`
   return { ok: false, detail: r.reason === 'aborted' ? `stopped waiting for GitLab; it carries on, and the next installer run checks it` : `GitLab is not up yet: ${where}. Run the installer again later to check it` }
 }
+
+/** What a person does, once, so CodeBuild can reach trace's GitLab (docs/gitlab-projects.md, build step 5). */
+export const gitlabConnectionTodo = (consoleUrl: string, name: string): string =>
+  `CodeBuild needs a one-time set-up to reach trace's GitLab. Open ${consoleUrl}: on the Hosts tab choose ${name}, then "Set up host", and give it a GitLab personal access token of the root user with the api and admin_mode scopes only (made in GitLab under your avatar > Edit profile > Access tokens; the root password is in Secrets Manager). Then on the Connections tab choose ${name} and "Update pending connection". The installer carries on by itself once both are available.`
+
+export interface GitlabConnectionWait {
+  /** the host's and the connection's status now (CodeConnections GetHost, GetConnection) */
+  read: () => Promise<{ host: string; connection: string }>
+  consoleUrl: string
+  name: string
+  report: (line: string) => void
+  onWait?: (n: WaitNotice) => void
+  pollMs?: number
+  timeoutMs?: number
+  now?: () => number
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+}
+
+/** Whether both are set up. */
+export const gitlabConnectionReady = (s: { host: string; connection: string }): boolean => s.host === 'AVAILABLE' && s.connection === 'AVAILABLE'
+
+/**
+ * Wait until a person has set up the host and the connection (both AVAILABLE): every 30 s, at most 30 minutes, with
+ * Check now. Answers whether they are; says once what to do. A host or connection in ERROR stops at once.
+ */
+export async function waitForGitlabConnection(o: GitlabConnectionWait): Promise<{ ok: boolean; detail: string }> {
+  const now = o.now ?? Date.now
+  let told = false
+  const r = await waitWithTimer<{ ok: boolean; detail: string }>({
+    what: `${o.name} (CodeBuild's way into trace's GitLab) to be set up`,
+    why: 'AWS sends no event when a person sets up a host or a connection',
+    intervalMs: Math.max(o.pollMs ?? 30_000, 1), deadlineAt: now() + (o.timeoutMs ?? 30 * 60_000), now,
+    ...(o.sleep ? { sleep: o.sleep } : {}),
+    check: async () => {
+      const s = await o.read()
+      if (gitlabConnectionReady(s)) return { done: true, value: { ok: true, detail: `${o.name} is set up: GitLab projects get their build runners` }, state: 'AVAILABLE' }
+      if (s.host === 'ERROR' || s.connection === 'ERROR') return { done: true, value: { ok: false, detail: `${o.name} is in status ERROR (host ${s.host}, connection ${s.connection}): delete it at ${o.consoleUrl} and run the installer again` }, state: 'ERROR' }
+      if (!told) { o.report(gitlabConnectionTodo(o.consoleUrl, o.name)); told = true }
+      return { done: false, state: `host ${s.host || 'unknown'}, connection ${s.connection || 'unknown'}` }
+    },
+    report: (n) => o.onWait?.(n),
+  })
+  if (r.done) return r.value
+  return { ok: false, detail: `${o.name} is not set up yet, so GitLab projects have no build runners. ${gitlabConnectionTodo(o.consoleUrl, o.name)} Then run the installer again` }
+}

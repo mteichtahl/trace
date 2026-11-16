@@ -201,6 +201,7 @@ describe('answers', () => {
     expect(plan(a).map((s) => s.id)).not.toContain('gitlab')
     const on = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true } })
     expect(infraInput(on).gitlab).toEqual({ enabled: true })
+    expect(infraInput(on, null, undefined, undefined, { gitlabReady: true }).gitlab).toEqual({ enabled: true, connectionReady: true })
     expect(plan(on).find((s) => s.id === 'gitlab')?.detail).toMatch(/its CloudFront address.*projects stay on GitHub until they are moved/)
     const own = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true, gitlabDomain: 'git.example.com', gitlabCertificateArn: CERT } })
     expect(infraInput(own).gitlab).toEqual({ enabled: true, domain: { name: 'git.example.com', certificateArn: CERT } })

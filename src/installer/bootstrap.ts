@@ -72,8 +72,9 @@ import {
   CognitoIdentityProviderClient, UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_URL_OUTPUT, gitlabAdminTokenSecretName, gitlabRootSecretName } from '../infra/gitlab.js'
-import { waitForGitlab } from './gitlab.js'
+import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_CONNECTION_OUTPUT, GITLAB_HOST_OUTPUT, GITLAB_URL_OUTPUT, gitlabAdminTokenSecretName, gitlabRootSecretName } from '../infra/gitlab.js'
+import { gitlabConnectionReady, gitlabConnectionTodo, waitForGitlab, waitForGitlabConnection } from './gitlab.js'
+import { GetConnectionCommand, GetHostCommand } from '@aws-sdk/client-codeconnections'
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
@@ -278,7 +279,7 @@ export async function resolveSelfBuild(a: Answers, token: string, d: SelfReposit
 
 /** The stack's settings from the answers (and, for the legacy memory's way out and the layout, what is deployed already).
  * `runners`: what apply chose; without it (the plan), the answers' connection, if any, and the stack's default. */
-export function infraInput(a: Answers, existing?: Existing | null, deploy?: LayoutDeploy, runners?: RunnersChoice): InfraInput {
+export function infraInput(a: Answers, existing?: Existing | null, deploy?: LayoutDeploy, runners?: RunnersChoice, o: { gitlabReady?: boolean } = {}): InfraInput {
   const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null || p.generation > 0 || p.forge === 'gitlab')
   const d: LayoutDeploy = deploy ?? layoutDeploys(a, existing).at(-1) ?? { layout: 'nested', why: '' }
   return {
@@ -299,7 +300,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     retainData: a.agents.retainData,
     // null (decide from the preflight) never reaches here after resolveAnswers; on its own it means on
     gpu: { enabled: a.agents.gpuEnabled ?? true, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
-    ...(a.agents.gitlabEnabled ? { gitlab: { enabled: true, ...(a.agents.gitlabDomain && a.agents.gitlabCertificateArn ? { domain: { name: a.agents.gitlabDomain, certificateArn: a.agents.gitlabCertificateArn } } : {}) } } : {}),
+    ...(a.agents.gitlabEnabled ? { gitlab: { enabled: true, ...(o.gitlabReady ? { connectionReady: true } : {}), ...(a.agents.gitlabDomain && a.agents.gitlabCertificateArn ? { domain: { name: a.agents.gitlabDomain, certificateArn: a.agents.gitlabCertificateArn } } : {}) } } : {}),
     cpu: { enabled: a.agents.cpuEnabled ?? true, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
     knowledgeBase: { enabled: a.agents.knowledgeBase ?? true },
     gateway: { enabled: a.agents.libraryGateway },
@@ -653,6 +654,10 @@ export interface Hooks {
   freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
   /** which projects the stack has, and which names are taken in the account (chooseGenerations) */
   names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
+  /** CodeBuild's GitLab host's and connection's status (CodeConnections GetHost, GetConnection) */
+  gitlabConnection?: (hostArn: string, connectionArn: string) => Promise<{ host: string; connection: string }>
+  /** wait for a person to set them up (src/installer/gitlab.ts waitForGitlabConnection) */
+  gitlabConnectionWait?: typeof waitForGitlabConnection
   /** wait for trace's own GitLab to start (src/installer/gitlab.ts waitForGitlab) */
   gitlab?: (o: { url: string; log: (l: string) => void; report: (n: WaitNotice) => void }) => Promise<{ ok: boolean; detail: string }>
   /** wait for the GPU image build (src/installer/aws.ts ensureGpuImage) */
@@ -931,11 +936,26 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     const runnerMessage = runnerAuth.auth === 'connection' ? runnerAuth.connection.message : runnerAuth.message
     log('check', runnerMessage)
     const runnersOf = (r: boolean): RunnersChoice => (choice ? { connectionArn: choice.pass, connectionReady: r } : { auth: 'token' })
-    props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(ready)))
+    // CodeBuild's way into trace's GitLab (src/infra/gitlab.ts): set up by a person once; an earlier run's host and
+    // connection, already AVAILABLE, give the GitLab projects their runners on this deploy
+    const readGitlabConnection = async (hostArn: string, connectionArn: string): Promise<{ host: string; connection: string }> => {
+      if (hooks.gitlabConnection) return hooks.gitlabConnection(hostArn, connectionArn)
+      const c = connectionsClient(creds, a.aws.region)
+      const [h, k] = await Promise.all([
+        c.send(new GetHostCommand({ HostArn: hostArn })).then((x) => x.Status ?? '', () => ''),
+        c.send(new GetConnectionCommand({ ConnectionArn: connectionArn })).then((x) => x.Connection?.ConnectionStatus ?? '', () => ''),
+      ])
+      return { host: h, connection: k }
+    }
+    let gitlabReady = false
+    if (a.agents.gitlabEnabled && existing?.outputs[GITLAB_HOST_OUTPUT] && existing.outputs[GITLAB_CONNECTION_OUTPUT]) {
+      gitlabReady = gitlabConnectionReady(await readGitlabConnection(existing.outputs[GITLAB_HOST_OUTPUT], existing.outputs[GITLAB_CONNECTION_OUTPUT]))
+    }
+    props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(ready), { gitlabReady }))
     // the web app's web ACL, from <prefix>-edge in us-east-1 when the installation is elsewhere (deployEdge, step 4)
     let webAcl: string | null = null
     const envFor = (d: LayoutDeploy, r = ready): Record<string, string> => ({
-      ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(withAcl(infraInput(a, existing, d, runnersOf(r)), webAcl)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
+      ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(withAcl(infraInput(a, existing, d, runnersOf(r), { gitlabReady }), webAcl)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
     })
     const last = deploys.at(-1) ?? { layout: 'nested', why: '' }
     const env = envFor(last)
@@ -947,7 +967,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       const bucket = o[CENTRAL_BUCKET_OUTPUT]
       if (!bucket) throw new Error(`the stack has no output ${CENTRAL_BUCKET_OUTPUT}`)
       const record = installationRecord({
-        stack, region: a.aws.region, props: withAcl(infraInput(a, existing, last, runnersOf(r)), webAcl), runnerAuth: a.runners.auth, connectionArn: a.runners.connectionArn,
+        stack, region: a.aws.region, props: withAcl(infraInput(a, existing, last, runnersOf(r), { gitlabReady }), webAcl), runnerAuth: a.runners.auth, connectionArn: a.runners.connectionArn,
         traceRepository: a.runners.traceRepository, traceBranch: a.runners.traceBranch,
       })
       const text = JSON.stringify(record, null, 1)
@@ -1097,7 +1117,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         // 6 — the runners, now that CodeBuild can make their webhooks
         current = 'runners'
         set('runners', 'running', 'deploying again: this only adds each repository\'s CodeBuild runner project and its GitHub webhook')
-        props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(true)))
+        props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(true), { gitlabReady }))
         const code = await cdk(deployArgs, envFor(last, true), (l) => log('runners', l))
         if (code !== 0) throw new Error(`cdk deploy exited ${code} adding the build runners (run the installer again to carry on)`)
         out = await outputs(creds, a.aws.region, stack)
@@ -1405,6 +1425,37 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       if (r.ok) {
         set('gitlab', 'done', r.detail)
         summary.push(`trace's own GitLab is up at ${url}. Its admin token is kept in Secrets Manager (${gitlabAdminTokenSecretName(props.prefix)}); the root password in ${gitlabRootSecretName(props.prefix)}.`)
+        // CodeBuild's way into it, for the GitLab projects' build runners: a person sets it up once, then a deploy adds
+        // the runners. Waited for only when a project lives on GitLab; otherwise said, for when one does
+        const hostArn = out[GITLAB_HOST_OUTPUT] ?? ''
+        const connArn = out[GITLAB_CONNECTION_OUTPUT] ?? ''
+        const name = `${props.prefix}-gitlab`
+        const gitlabProjects = a.projects.filter((p) => p.forge === 'gitlab')
+        if (!gitlabReady && hostArn && connArn) {
+          if (!gitlabProjects.length) {
+            summary.push(`Before a project moves to trace's GitLab: ${gitlabConnectionTodo(connectionsConsoleUrl(a.aws.region), name)}`)
+          } else {
+            set('gitlab', 'running', `${r.detail}. Waiting for CodeBuild's way into it to be set up`)
+            const c = await (hooks.gitlabConnectionWait ?? waitForGitlabConnection)({
+              read: () => readGitlabConnection(hostArn, connArn), consoleUrl: connectionsConsoleUrl(a.aws.region), name,
+              report: (l) => { log('gitlab', l); set('gitlab', 'running', l) },
+              onWait: (n) => emit({ type: 'wait', step: 'gitlab', wait: n, line: redact(describeWait(n), s) }),
+            })
+            if (c.ok) {
+              gitlabReady = true
+              set('gitlab', 'running', 'deploying again: this only adds the GitLab projects\' CodeBuild runners')
+              props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(runnersReady), { gitlabReady }))
+              const code = await cdk(deployArgs, envFor(last, runnersReady), (l) => log('gitlab', l))
+              if (code !== 0) throw new Error(`cdk deploy exited ${code} adding the GitLab projects' build runners (run the installer again to carry on)`)
+              out = await outputs(creds, a.aws.region, stack)
+              await saveRecord('gitlab', out, runnersReady)
+              set('gitlab', 'done', `${r.detail}; ${c.detail}`)
+            } else {
+              set('gitlab', 'done', `${r.detail}; ${c.detail}`)
+              summary.push(c.detail)
+            }
+          }
+        }
       } else {
         set('gitlab', 'failed', r.detail)
         summary.push(`trace's own GitLab: ${r.detail}. Everything else is installed, and nothing uses GitLab yet.`)
