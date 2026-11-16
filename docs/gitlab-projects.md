@@ -49,7 +49,7 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   - **Each default branch is protected**: push allowed to no one, merge allowed to Maintainers. A Developer may push
     branches and open merge requests but cannot merge, so the guard GitHub needed a ruleset bypass and a live proof for
     is GitLab's ordinary role model. `.gitlab-ci.yml` and `trace/**` changes are held the same way as today's protected
-    paths: by the API's merge rule, plus a push rule rejecting the bot's commits to `.gitlab-ci.yml`.
+    paths: by the API's merge rule (GitLab's push rules are a Premium feature, so trace does not rely on them).
 - **CI moves to `.gitlab-ci.yml`.** The four project workflows (`trace-ci`, `trace-deploy`, `trace-prs`,
   `trace-worker`) become jobs in one generated `.gitlab-ci.yml`, tagged for that project's CodeBuild runner. The harness
   is the same bundled code, run as a Node script in a job instead of a GitHub Action, against a `Forge` client (below).
@@ -81,7 +81,7 @@ the project moves it from the project's Settings, never in GitHub or GitLab. `tr
 gitlab|github` does the same for scripts. The other forge must be set up for the installation: GitLab installed, or a
 GitHub token that can make repositories in the chosen owner; when it is not, the button says why and what to set up.
 
-**The screens** (renders proposed before building, as for every UI change):
+**The screens** (renders proposed before building, as for every UI change; approved by Marc, 16 November 2026):
 
 - **Settings → "Where this project lives"**: the forge it is on now and its repository, and one button, "Move to
   trace's GitLab" or "Move to GitHub". On GitHub, the destination owner is asked for (the installation's default
