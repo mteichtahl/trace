@@ -19,6 +19,10 @@
  * Everything here is in GitLab Community Edition.
  */
 import { z } from 'zod'
+import { type GitlabBuild, gitlabCiTemplate, renderGitlabBuild, renderGitlabCi } from '../core/gitlab-ci.js'
+import { gitlabHookUrl, repositoryName } from '../core/gitlab-path.js'
+import { runnerProjectName } from '../core/project.js'
+import { kbOutputs, projectOutputs } from '../infra/props.js'
 
 /** GitLab's role levels. */
 export const ACCESS = { none: 0, developer: 30, maintainer: 40 } as const
@@ -252,4 +256,31 @@ export async function setUpGitlabProject(admin: GitlabAdmin, o: { group: string;
     if (sch.made) lines.push('the update queue\'s schedule made (twice an hour)')
   }
   return { path: p.path, id: p.id, defaultBranch: p.defaultBranch, agentToken: t.token, agentLogin: t.login, lines }
+}
+
+/**
+ * One trace project on trace's GitLab, set up the way the installer sets it up and the way a move to GitLab finishes:
+ * its pipelines (from trace's template, pinned to trace's own `source`@`ref`), its build when it has a kind, the
+ * project's rules, labels, agents' token and webhook (setUpGitlabProject), then its pipelines' variables from the
+ * stack's outputs, as a GitHub project's repository variables (TRACE_GITLAB_TOKEN is the rotation's).
+ */
+export async function setUpOnGitlab(admin: GitlabAdmin, o: {
+  prefix: string; repo: string; branch: string; root: string; source: string; ref: string; region: string
+  outputs: Record<string, string>; kind?: GitlabBuild | null; hook?: { base: string; secret: string } | null
+}): Promise<ProjectSetup> {
+  const runner = runnerProjectName(o.prefix, o.repo)
+  const ci = renderGitlabCi(gitlabCiTemplate(o.root), { source: o.source, ref: o.ref, branch: o.branch, repository: o.repo, runner, hold: 'hold' })
+  const build = o.kind ? renderGitlabBuild(o.root, o.kind, { runner, branch: o.branch }) : undefined
+  const r = await setUpGitlabProject(admin, {
+    group: o.prefix, slug: repositoryName(o.repo), branch: o.branch, ci, ...(build ? { build } : {}),
+    ...(o.hook ? { hook: { url: gitlabHookUrl(o.hook.base, o.repo), secret: o.hook.secret } } : {}),
+  })
+  const out = projectOutputs(o.repo)
+  const kb = kbOutputs(o.repo)
+  const vars: Record<string, string> = {
+    TRACE_AWS_ROLE: o.outputs[out.roleArn] ?? '', TRACE_AWS_REGION: o.region, TRACE_HOME: o.outputs.TraceHome ?? '', TRACE_AGENT_RUNTIME_ARN: o.outputs[out.runtimeArn] ?? '',
+    TRACE_KB_ID: o.outputs[kb.knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: o.outputs[kb.dataSourceId] ?? '',
+  }
+  for (const [k, v] of Object.entries(vars)) if (v) await admin.setVariable(r.id, k, v)
+  return { ...r, lines: [...r.lines, "its pipelines' variables set"] }
 }

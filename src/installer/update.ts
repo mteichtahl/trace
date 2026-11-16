@@ -60,6 +60,14 @@ import { deployEdge, withAcl } from './edge.js'
 import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
 import { registerWebhooks } from './hooks.js'
+import { type MoveDeps, type MoveEntry, type MovesIo, applyMove, parseMoves, s3MovesIo, withForges } from './moves.js'
+import { gitlabSide, githubSide } from '../core/forge-move-sides.js'
+import { type MoveRecord, forgeLabel } from '../core/forge-move-record.js'
+import { repositoryName } from '../core/gitlab-path.js'
+import { SOURCE } from '../core/onboard.js'
+import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_URL_OUTPUT } from '../infra/gitlab.js'
+import { adminToken as gitlabAdminTokenOf } from './gitlab.js'
+import { GitlabAdmin, setUpOnGitlab } from './gitlab-setup.js'
 import { WEB_HOOKS_OUTPUTS, webHooksSecret } from '../infra/props.js'
 
 /** What the update talks to (tests replace every one). */
@@ -97,6 +105,11 @@ export interface UpdateDeps {
     readSecret: (creds: AwsCredentialIdentity, region: string, name: string) => Promise<string | null>
     register?: (token: string, repo: string, url: string, secret: string) => Promise<'created' | 'updated'>
   }
+  /** the moves between GitHub and trace's GitLab asked for in the web app (installation/pending-moves/*); absent, none */
+  moves?: MovesIo
+  /** a move's homes and set-up, and git (tests replace them; by default GitHub with the shared token, trace's GitLab
+   * with its admin token) */
+  move?: Partial<Pick<MoveDeps, 'sides' | 'setup' | 'git'>>
   log: (line: string) => void
   /** a line of the job's step summary ($GITHUB_STEP_SUMMARY) */
   summary: (line: string) => void
@@ -120,6 +133,7 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
     subject: (t, r) => immutableSubject(t, r),
   },
   pending: s3PendingIo,
+  moves: s3MovesIo,
   putSecret: async (creds, region, secretArn, value) => {
     await new SecretsManagerClient({ region, credentials: creds }).send(new PutSecretValueCommand({ SecretId: secretArn, SecretString: value }))
   },
@@ -261,6 +275,26 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     try { await d.pending?.put(creds, region, bucket, key, JSON.stringify(rec, null, 2)) } catch (e) { log(`Could not update ${key} (${redact(message(e))}).`) }
   }
 
+  // 1c — moves between GitHub and trace's GitLab (src/installer/moves.ts): every recorded project's home set in the
+  // settings, and those ready taken now (marked moving at the deploy step)
+  let moves: MoveEntry[] = []
+  if (d.moves) {
+    try { moves = parseMoves(await d.moves.list(creds, region, bucket), log) } catch (e) { say(`The moves asked for in the web app could not be read (${redact(message(e))}); updating without them.`) }
+  }
+  const putMove = async (key: string, rec: MoveRecord): Promise<void> => {
+    try { await d.moves?.put(creds, region, bucket, key, JSON.stringify(rec, null, 2)) } catch (e) { log(`Could not update ${key} (${redact(message(e))}).`) }
+  }
+  const homes = withForges(props as InfraInput, moves)
+  props = homes.props as Record<string, unknown>
+  for (const x of homes.skipped) {
+    say(`${x.entry.record.repo} is not moved to ${forgeLabel(x.entry.record.to)} by this update: ${x.why}.`)
+    await putMove(x.entry.key, { ...x.entry.record, status: 'failed', step: 'deploy', error: x.why, finished_at: new Date().toISOString() })
+  }
+  for (const x of homes.taken) {
+    say(`Moving ${x.record.repo} to ${forgeLabel(x.record.to)} (asked for by ${x.record.requested_by}).`)
+    await putMove(x.key, { ...x.record, status: 'moving', step: 'deploy' })
+  }
+
   // 2 — how the runners reach GitHub, decided as the installer decides it
   let auth: RunnerAuthChoice
   let input: InfraInput
@@ -304,6 +338,7 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
       const e = pending.find((p) => p.key === x.key)
       if (e) await mark(x.key, markAttempt(e.record, `cdk deploy exited ${code}`))
     }
+    for (const x of homes.taken) await putMove(x.key, { ...x.record, status: 'failed', step: 'deploy', error: `the deploy for its new home failed (cdk deploy exited ${code}); it is where it was`, finished_at: new Date().toISOString() })
     say(`The installation was not updated: cdk deploy exited ${code}. CloudFormation rolls a failed update back, so the installation is as it was. The log above says why; fix it and merge again, or re-run this job.`)
     return 1
   }
@@ -321,11 +356,67 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   // 4 — the runners' variables (best effort from here on: the deploy is done)
   let after: Record<string, string> = {}
   try { after = await d.outputs(creds, region, stack) } catch (e) { say(`The deploy is done, but its outputs could not be read (${redact(message(e))}): the repositories' ${RUNNER_VARIABLE} were not checked.`) }
+
+  // 4a — the moves taken: each project's history, open changes and issues to its new home, the old one archived, the
+  // new one set up (on GitLab here; on GitHub with the variables of the projects added now, below)
+  const toGithub: string[] = []
+  if (homes.taken.length) {
+    const parsedInput = InfraPropsSchema.parse(input)
+    const source = parsedInput.selfUpdate ? { repo: parsedInput.selfUpdate.repository, ref: parsedInput.selfUpdate.branch } : { repo: SOURCE, ref: 'main' }
+    let glToken: string | null = null
+    const gitlabToken = async (): Promise<string> => {
+      if (glToken) return glToken
+      const arn = after[GITLAB_ADMIN_TOKEN_OUTPUT] ?? ''
+      if (!arn) throw new Error('this installation has no GitLab admin token output: is gitlab.enabled on?')
+      const t = gitlabAdminTokenOf(await d.sharedToken(creds, region, arn))
+      if (!t) throw new Error("trace's GitLab has not made its admin token yet")
+      glToken = t
+      secrets = [...secrets, t]
+      if (env.GITHUB_ACTIONS === 'true') log(`::add-mask::${t}`)
+      return t
+    }
+    const gitlabUrl = after[GITLAB_URL_OUTPUT] ?? ''
+    const sideOf = async (forge: 'github' | 'gitlab', repo: string) => forge === 'github'
+      ? githubSide({ repository: repo, token: await readShared(after.GithubSecretArn ?? before.GithubSecretArn ?? '') })
+      : gitlabSide({ url: gitlabUrl, token: await gitlabToken(), group: parsedInput.prefix, name: repositoryName(repo) })
+    const hookBase = (after[WEB_HOOKS_OUTPUTS.address] ?? '').replace(/\/api\/hooks\/github$/, '')
+    const moveDeps: MoveDeps = {
+      put: putMove, log: (l) => log(redact(l)),
+      sides: d.move?.sides ?? (async (r) => ({ from: await sideOf(r.from, r.repo), to: await sideOf(r.to, r.repo) })),
+      setup: d.move?.setup ?? (async (r) => {
+        if (r.to === 'github') return { lines: ['its repository variables are set below'], todo: r.lines[0]?.startsWith('made ') ? [`${r.repo} is new on GitHub: run the installer to give it trace's workflows, rules and labels`] : [] }
+        let hook: { base: string; secret: string } | null = null
+        if (hookBase && d.webhooks) {
+          const raw = await d.webhooks.readSecret(creds, region, webHooksSecret(parsedInput.prefix)).catch(() => null)
+          const secret = raw ? webhookSecretOf(raw) : null
+          if (secret) hook = { base: hookBase, secret }
+        }
+        const branch = projectRefs(parsedInput.repositories).find((x) => x.repository === r.repo)?.branch ?? 'main'
+        const done = await setUpOnGitlab(new GitlabAdmin(await gitlabToken(), { url: gitlabUrl }), {
+          prefix: parsedInput.prefix, repo: r.repo, branch, root: REPO_ROOT, source: source.repo, ref: source.ref, region, outputs: after, kind: null, hook,
+        })
+        return { lines: done.lines, todo: hook ? [] : ["live updates from GitLab are not registered (no webhook secret yet): run the installer"] }
+      }),
+      ...(d.move?.git ? { git: d.move.git } : {}),
+    }
+    for (const x of homes.taken) {
+      const r = await applyMove(moveDeps, x)
+      if (r.status === 'moved') {
+        say(`${r.repo} moved to ${forgeLabel(r.to)}: ${r.lines.join('; ')}.`)
+        for (const t of r.todo) say(`- ${t}`)
+        if (r.to === 'github') toGithub.push(r.repo)
+      } else {
+        say(`${r.repo} was not moved: ${r.error ?? 'it stopped'} (at "${r.step}"). It is where it was, and stays paused until the move is tried again or set aside.`)
+      }
+    }
+  }
   if (choice && !choice.ready) {
     say(`The build runners are not added yet: the GitHub connection ${choice.name} is not authorized, so the workflows keep running on GitHub's runners. Authorize it at ${connectionsConsoleUrl(region)} (choose ${choice.name}, then "Update pending connection"); the next merge to main, or re-running this job, adds the runners.`)
   }
   if (Object.keys(after).length) {
-    const runners = runnerOutputs(input)
+    // a project on trace's GitLab has no GitHub repository variables: its runner is in its pipeline's tags
+    const onGitlab = new Set(Object.entries(InfraPropsSchema.parse(input).projectSettings).filter(([, v]) => v.forge === 'gitlab').map(([k]) => k.toLowerCase()))
+    const runners = runnerOutputs(input).filter((r) => !onGitlab.has(r.repo.toLowerCase()))
     // a runner GitHub refused the webhook of has `none` for its output: its repository stays on GitHub's runners
     const want = runners.map((r) => ({ repo: r.repo, value: ready ? runnerOf(after[r.output]) ?? '' : '' }))
     const refused = ready ? runners.filter((r) => after[r.output] === RUNNER_NONE).map((r) => r.repo) : []
@@ -335,7 +426,9 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     if (!token) log('The shared agent token is empty or could not be read.')
     const byHand: string[] = []
     // projects added now: their token secret and their repository's variables, as the installer sets them
-    for (const x of grown.added) {
+    // the projects added now, and those just moved to GitHub, get what a new project on GitHub gets
+    const newOnGithub = [...grown.added.map((x) => ({ repo: x.repo })), ...toGithub.map((repo) => ({ repo }))]
+    for (const x of newOnGithub) {
       const o = projectOutputs(x.repo)
       const kb = kbOutputs(x.repo)
       try {
@@ -368,19 +461,19 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     }
     // live updates from GitHub for the projects added now, with the secret the installer made (never made here)
     const hooksUrl = after[WEB_HOOKS_OUTPUTS.address]
-    if (grown.added.length && hooksUrl && d.webhooks) {
+    if (newOnGithub.length && hooksUrl && d.webhooks) {
       const name = webHooksSecret(InfraPropsSchema.parse(input).prefix)
       try {
         const raw = await d.webhooks.readSecret(creds, region, name)
         const secret = raw ? webhookSecretOf(raw) : null
         if (typeof secret !== 'string' || !secret) throw new Error(`${name} is not there yet: the installer makes it`)
         if (!token) throw new Error('no shared token')
-        const r = await registerWebhooks(token, grown.added.map((x) => x.repo), hooksUrl, secret, d.webhooks.register ? { register: d.webhooks.register } : {})
+        const r = await registerWebhooks(token, newOnGithub.map((x) => x.repo), hooksUrl, secret, d.webhooks.register ? { register: d.webhooks.register } : {})
         for (const x of r.done) log(`${x.repo}: webhook ${x.state} (live updates from GitHub)`)
         for (const w of r.warnings) byHand.push(`- ${w}`)
       } catch (e) {
-        log(`Live updates from GitHub were not registered for ${grown.added.map((x) => x.repo).join(', ')} (${redact(message(e))})`)
-        byHand.push(`- ${grown.added.map((x) => x.repo).join(', ')}: run the installer again to register live updates from GitHub (meanwhile their screens look again every 60 s)`)
+        log(`Live updates from GitHub were not registered for ${newOnGithub.map((x) => x.repo).join(', ')} (${redact(message(e))})`)
+        byHand.push(`- ${newOnGithub.map((x) => x.repo).join(', ')}: run the installer again to register live updates from GitHub (meanwhile their screens look again every 60 s)`)
       }
     }
     for (const w of want) {

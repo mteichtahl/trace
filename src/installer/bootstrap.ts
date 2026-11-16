@@ -74,9 +74,7 @@ import {
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_CONNECTION_OUTPUT, GITLAB_HOST_OUTPUT, GITLAB_URL_OUTPUT, gitlabAdminTokenSecretName, gitlabRootSecretName } from '../infra/gitlab.js'
 import { adminToken as gitlabAdminTokenOf, gitlabConnectionReady, gitlabConnectionTodo, waitForGitlab, waitForGitlabConnection } from './gitlab.js'
-import { GitlabAdmin, setUpGitlabProject } from './gitlab-setup.js'
-import { gitlabCiTemplate, renderGitlabBuild, renderGitlabCi } from '../core/gitlab-ci.js'
-import { gitlabHookUrl, repositoryName } from '../core/gitlab-path.js'
+import { GitlabAdmin, setUpOnGitlab } from './gitlab-setup.js'
 import { GetConnectionCommand, GetHostCommand } from '@aws-sdk/client-codeconnections'
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
@@ -104,6 +102,7 @@ import { type TourResult, recreateMissingSample, startSampleJourney, startTour, 
 import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
 import { type EdgeDeps, deployEdge, edgeLeftOver, wafPlan, withAcl } from './edge.js'
 import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
+import { type MovesIo, forgesOf, parseMoves, s3MovesIo } from './moves.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
@@ -700,6 +699,8 @@ export interface Hooks {
   saveRecord?: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string, text: string) => Promise<void>
   /** the projects created in the web app that wait for a deploy (src/installer/pending.ts; default: S3) */
   pending?: PendingIo
+  /** the moves between GitHub and trace's GitLab asked for in the web app (installation/pending-moves/*) */
+  moves?: MovesIo
   /** the sample's first journey state (src/installer/sample.ts startSampleJourney) */
   sampleJourney?: (home: string, repo: string, by: string) => Promise<'started' | 'exists'>
   /** the web app's WAF stack in us-east-1 (src/installer/edge.ts): a stack's outputs there, and deleting one left over */
@@ -889,6 +890,22 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         log('check', line)
         summary.push(line)
       }
+    }
+    // moves between GitHub and trace's GitLab made from the web app (src/installer/moves.ts): each project's home as
+    // its record leaves it, so the saved answers follow the move from now on
+    // (a run whose pending records are stubbed, a test's, reads moves only when they are stubbed too)
+    const movesIo = hooks.moves ?? (hooks.pending ? null : s3MovesIo)
+    if (pendingBucket && movesIo) {
+      try {
+        const homes = forgesOf(parseMoves(await movesIo.list(creds, a.aws.region, pendingBucket), (l) => log('check', l)))
+        const moved = a.projects.filter((p) => { const f = homes.get(p.repo.toLowerCase()); return f !== undefined && f !== p.forge })
+        if (moved.length) {
+          a = { ...a, projects: a.projects.map((p) => ({ ...p, forge: homes.get(p.repo.toLowerCase()) ?? p.forge })) }
+          const line = `Keeping the move${moved.length === 1 ? '' : 's'} made in the web app: ${moved.map((p) => `${p.repo} on ${homes.get(p.repo.toLowerCase()) === 'gitlab' ? "trace's GitLab" : 'GitHub'}`).join(', ')}.`
+          log('check', line)
+          summary.push(line)
+        }
+      } catch (e) { log('check', `the moves made in the web app could not be read (${redact(e instanceof Error ? e.message : String(e), s)}); each project stays where these answers say`) }
     }
     steps = plan(a, existing, opts.prev ?? null)
     byId = new Map(steps.map((st) => [st.id, st]))
@@ -1446,27 +1463,13 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
           for (const p of onGitlab) {
             if (!admin) break
             try {
-              const ci = renderGitlabCi(gitlabCiTemplate(REPO_ROOT), {
-                source: a.runners.traceRepository || SOURCE, ref: a.runners.traceBranch || 'main', branch: p.branch, repository: p.repo,
-                runner: runnerProjectName(props.prefix, p.repo), hold: 'hold',
-              })
               // its own build: the kind it was made from (a sample is a KiCad project), else none to add
               const kind = p.create ? (p.create.template === 'sample' ? 'kicad' : p.create.template) : null
-              const build = kind ? renderGitlabBuild(REPO_ROOT, kind, { runner: runnerProjectName(props.prefix, p.repo), branch: p.branch }) : undefined
-              const r2 = await setUpGitlabProject(admin, {
-                group: props.prefix, slug: repositoryName(p.repo), branch: p.branch, ci, ...(build ? { build } : {}),
-                ...(hookSecret && hookBase ? { hook: { url: gitlabHookUrl(hookBase, p.repo), secret: hookSecret } } : {}),
+              const r2 = await setUpOnGitlab(admin, {
+                prefix: props.prefix, repo: p.repo, branch: p.branch, root: REPO_ROOT, source: a.runners.traceRepository || SOURCE, ref: a.runners.traceBranch || 'main',
+                region: a.aws.region, outputs: out, kind, hook: hookSecret && hookBase ? { base: hookBase, secret: hookSecret } : null,
               })
               for (const l of r2.lines) log('gitlab', `${p.repo}: ${l}`)
-              // its pipelines' variables, as a GitHub project's repository variables (step 9): its own role, runtime,
-              // the central store and its knowledge base; TRACE_GITLAB_TOKEN is the rotation's
-              const o = projectOutputs(p.repo)
-              const vars: Record<string, string> = {
-                TRACE_AWS_ROLE: out[o.roleArn] ?? '', TRACE_AWS_REGION: a.aws.region, TRACE_HOME: out.TraceHome ?? '', TRACE_AGENT_RUNTIME_ARN: out[o.runtimeArn] ?? '',
-                TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '',
-              }
-              for (const [k, v] of Object.entries(vars)) if (v) await admin.setVariable(r2.id, k, v)
-              log('gitlab', `${p.repo}: its pipelines' variables set`)
             } catch (e) {
               const m = redact(e instanceof Error ? e.message : String(e), s)
               summary.push(`${p.repo} could not be set up on trace's GitLab: ${m}. Run the installer again to carry on.`)

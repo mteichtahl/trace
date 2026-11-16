@@ -9,13 +9,17 @@
  *                                 there already, when another move of it is going, and when this installation has no
  *                                 GitLab
  *   project.move_status   read    the latest move of the project (any state), or null; the page's progress view polls
- *                                 it, and the bucket's write of the record is a live event too
+ *                                 it, and the bucket's write of the record is a live event too. Looking also moves the
+ *                                 move on: a move waiting for the project to be idle is marked idle once nothing of it
+ *                                 runs (and the update is started again for it), and a project paused for a move that
+ *                                 is done is resumed
  *   project.move_cancel   admin   take back a move the update has not started, or set aside one that failed (its old
  *                                 home is as it was); the project is resumed when it was paused for the move
  */
 import { z } from 'zod'
 import { Conflict } from '../core/central.js'
 import { type ForgeName, FORGES, type MoveRecord, MoveRecordSchema, forgeLabel, inFlight, moveKey, movePauseReason } from '../core/forge-move-record.js'
+import { listJobs } from './actions-jobs.js'
 import { LifecycleError, changeLifecycle, lifecycleOf } from '../core/lifecycle.js'
 import { ActionError, type Context, Repo, def, label, storeAt } from './action-kit.js'
 import { PENDING_PREFIX, startUpdate } from './actions-projects.js'
@@ -43,6 +47,11 @@ async function writeMove(ctx: Context, record: MoveRecord, etag: string | null):
     if (e instanceof Conflict) throw new ActionError('The move was changed by someone else at the same moment: look again and retry.')
     throw e
   }
+}
+
+/** Whether any work of the project is running (a move `when: idle` waits for none); unknown counts as running. */
+async function running(ctx: Context, repo: string): Promise<boolean> {
+  try { return (await listJobs(ctx, repo)).jobs.some((j) => j.state === 'running') } catch { return true }
 }
 
 /** Resume the project when it was paused for the move and is still paused for it. */
@@ -76,14 +85,16 @@ export const MOVE_ACTIONS = {
       await recordLifecycle(ctx, slug, 'paused', by, movePauseReason(to), { move: { from, to, when } })
     }
     if (when === 'now') work = await pauseRunning(ctx, slug, by)
+    const idle = when === 'idle' && !(await running(ctx, slug))
     const record: MoveRecord = MoveRecordSchema.parse({
       repo: slug, from, to, when, requested_by: by, requested_at: new Date().toISOString(), status: 'waiting', paused_for_move: pausedForMove,
+      ...(idle ? { idle_at: new Date().toISOString() } : {}),
     })
     await writeMove(ctx, record, had?.etag ?? null)
     const update = await startUpdate(await ctx.deps.github())
     const first = when === 'now'
       ? (work.running ? `Running work was asked to pause (${work.asked} of ${work.running}). ` : '')
-      : 'It starts once the work running now has finished. '
+      : idle ? '' : 'It starts once the work running now has finished. '
     return {
       move: record,
       started: update.started,
@@ -92,8 +103,20 @@ export const MOVE_ACTIONS = {
   }),
 
   'project.move_status': def('read', Repo, async ({ repo }, ctx) => {
-    const had = await readMove(ctx, repo.toLowerCase())
-    return { move: had?.record ?? null, forge: forgeOf(repo), gitlab: hasGitlab() }
+    const slug = repo.toLowerCase()
+    let had = await readMove(ctx, slug)
+    let resumed = false
+    if (had && had.record.status === 'waiting' && had.record.when === 'idle' && !had.record.idle_at && !(await running(ctx, slug))) {
+      // nothing of it runs any more: the update may take it now
+      const record: MoveRecord = { ...had.record, idle_at: new Date().toISOString() }
+      try {
+        await writeMove(ctx, record, had.etag)
+        had = { record, etag: had.etag }
+        await startUpdate(await ctx.deps.github())
+      } catch { /* someone else marked it at the same moment */ }
+    }
+    if (had && had.record.status === 'moved') resumed = await resumeAfter(ctx, had.record, 'trace').catch(() => false)
+    return { move: had?.record ?? null, forge: forgeOf(slug), gitlab: hasGitlab(), resumed }
   }),
 
   'project.move_cancel': def('admin', Repo, async ({ repo }, ctx) => {

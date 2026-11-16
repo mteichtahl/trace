@@ -339,3 +339,50 @@ describe('the web app\'s WAF outside us-east-1', () => {
     expect(w.cdkArgs.map((a) => a[1])).toEqual(['TraceStack'])
   })
 })
+
+describe('a move asked for in the web app', () => {
+  const GL_RECORD = JSON.stringify(installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: { ...PROPS, gitlab: { enabled: true } }, runnerAuth: 'connection', connectionArn: '', traceRepository: TRACE, traceBranch: 'main', now: new Date('2026-10-01T00:00:00Z') }))
+  const move = (o: Record<string, unknown> = {}) => JSON.stringify({ repo: BOARD, from: 'github', to: 'gitlab', when: 'now', requested_by: 'marc', requested_at: '2026-11-16T00:00:00Z', ...o })
+  const withMoves = (w: World, text: string): Map<string, string> => {
+    const moves = new Map([[`installation/pending-moves/${BOARD}.json`, text]])
+    w.deps.moves = { list: async () => [...moves].map(([key, t]) => ({ key, text: t })), put: async (_c, _r, _b, key, t) => { moves.set(key, t) } }
+    w.deps.move = {
+      git: () => undefined,
+      sides: async () => {
+        const s = (forge: 'github' | 'gitlab'): import('../../src/core/forge-move.js').MoveSide => ({
+          forge, where: forge, ensure: async () => ({ made: false }), git: async () => ({ url: '/x', header: 'h' }), defaultBranch: async () => 'main',
+          openChanges: async () => [], openIssues: async () => [], openChange: async () => 1, openIssue: async () => 1, archive: async () => undefined,
+        })
+        return { from: s('github'), to: s('gitlab') }
+      },
+      setup: async () => ({ lines: ['set up'], todo: [] }),
+    }
+    return moves
+  }
+  const last = (m: Map<string, string>): Record<string, unknown> => JSON.parse([...m.values()][0] ?? '{}') as Record<string, unknown>
+
+  it('deploys the project at its new home, moves it, and leaves its GitHub variables alone', async () => {
+    const w = world({ record: GL_RECORD })
+    const moves = withMoves(w, move())
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect((w.infra[0]?.projectSettings as Record<string, { forge: string }>)[BOARD]?.forge).toBe('gitlab')
+    expect(last(moves)).toMatchObject({ status: 'moved', step: null })
+    expect(w.summary).toContain(`Moving ${BOARD} to trace's GitLab (asked for by marc).`)
+    expect(w.vars.has(`${BOARD}:TRACE_CODEBUILD_PROJECT`)).toBe(false)
+  })
+
+  it('a deploy that fails leaves it where it was, failed at the deploy', async () => {
+    const w = world({ record: GL_RECORD, cdk: 1 })
+    const moves = withMoves(w, move())
+    expect(await updateInstallation(w.deps)).toBe(1)
+    expect(last(moves)).toMatchObject({ status: 'failed', step: 'deploy', error: expect.stringContaining('it is where it was') })
+  })
+
+  it('a move still waiting for the project to be idle is not taken, and the project stays on GitHub', async () => {
+    const w = world({ record: GL_RECORD })
+    const moves = withMoves(w, move({ when: 'idle' }))
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect((w.infra[0]?.projectSettings as Record<string, { forge: string }>)[BOARD]?.forge).toBe('github')
+    expect(last(moves).status ?? 'waiting').toBe('waiting')
+  })
+})
