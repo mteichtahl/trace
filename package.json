@@ -83,7 +83,7 @@
     "esbuild": "^0.28.2",
     "libsodium-wrappers": "^0.8.4",
     "n3": "^2.13.12",
-    "pdfjs-dist": "6.4.299",
+    "pdfjs-dist": "6.5.438",
     "serialport": "^13.0.0",
     "zod": "^4.6.7"
   },
