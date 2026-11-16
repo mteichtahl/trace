@@ -77,6 +77,13 @@ export const AgentAnswers = z.object({
   /** Live updates from GitHub (props.ts web.hooks, src/installer/hooks.ts): a webhook on every project repository, so
    * a change's checks and merges reach people's screens at once; off, the app looks again every 60 s */
   webHooks: z.boolean().default(true),
+  /** trace's own GitLab, where project repositories will live (docs/gitlab-projects.md, props.ts gitlab): Community
+   * Edition on one instance in this account, behind CloudFront. Off by default while the move from GitHub is built. */
+  gitlabEnabled: z.boolean().default(false),
+  /** its own address (e.g. git.example.com), with gitlabCertificateArn; empty: CloudFront's address */
+  gitlabDomain: z.string().trim().regex(/^(([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})?$/, 'a domain name such as git.example.com, or empty').default(''),
+  /** the ACM certificate for gitlabDomain, in us-east-1 (CloudFront's) */
+  gitlabCertificateArn: z.string().trim().regex(/^(arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]{36})?$/, 'an ACM certificate ARN in us-east-1, or empty').default(''),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */
@@ -244,6 +251,7 @@ export const AnswersSchema = z.object({
     else if (extra.indexOf(r) !== i) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is listed twice` })
   })
   if (Boolean(a.agents.webDomain) !== Boolean(a.agents.webCertificateArn)) ctx.addIssue({ code: 'custom', path: ['agents', a.agents.webDomain ? 'webCertificateArn' : 'webDomain'], message: 'the web app\'s custom domain needs its certificate (ACM, us-east-1), and the certificate its domain' })
+  if (Boolean(a.agents.gitlabDomain) !== Boolean(a.agents.gitlabCertificateArn)) ctx.addIssue({ code: 'custom', path: ['agents', a.agents.gitlabDomain ? 'gitlabCertificateArn' : 'gitlabDomain'], message: 'GitLab\'s own domain needs its certificate (ACM, us-east-1), and the certificate its domain' })
   if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>

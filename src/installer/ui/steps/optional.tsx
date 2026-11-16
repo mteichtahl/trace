@@ -61,12 +61,13 @@ const NumberInput = ({ k, hint }: { k: NumberField; hint?: ReactNode }) => {
   )
 }
 
-type Group = 'agents' | 'jobs' | 'builds' | 'web' | 'knowledge' | 'tokens'
+type Group = 'agents' | 'jobs' | 'builds' | 'web' | 'gitlab' | 'knowledge' | 'tokens'
 const GROUPS: { id: Group; title: string; keys: RegExp }[] = [
   { id: 'agents', title: 'Agents', keys: /^agents\.(prefix|model|maxLifetimeHours|idleMinutes|centralBucketName|retainData|migrateLayout)$/ },
   { id: 'jobs', title: 'Graphics card and CPU jobs', keys: /^agents\.(gpu|cpu|image|publish)/ },
   { id: 'builds', title: 'Builds', keys: /^runners\./ },
   { id: 'web', title: 'Web app', keys: /^agents\.web/ },
+  { id: 'gitlab', title: 'trace\'s own GitLab', keys: /^agents\.gitlab/ },
   { id: 'knowledge', title: 'Knowledge and monitoring', keys: /^agents\.(knowledgeBase|libraryGateway|externalAccess|observability|transactionSearch|dashboard|samplingPercent)$/ },
   { id: 'tokens', title: 'Tokens and memory', keys: /^(github\.adminToken|projectTokens\.|projects\.)/ },
 ]
@@ -80,6 +81,7 @@ function reset(g: Group): void {
     if (g === 'jobs') pick('gpuEnabled', 'gpuMaxVcpus', 'gpuSpot', 'cpuEnabled', 'cpuMaxVcpus', 'cpuSpot', 'cpuVcpus', 'cpuMemoryMiB', 'imageSource', 'imageRegistry', 'publishImages')
     if (g === 'builds') s.runners = d.runners
     if (g === 'web') pick('webEnabled', 'webDomain', 'webCertificateArn', 'webEmailFrom', 'webWaf', 'webHooks')
+    if (g === 'gitlab') pick('gitlabEnabled', 'gitlabDomain', 'gitlabCertificateArn')
     if (g === 'knowledge') pick('knowledgeBase', 'libraryGateway', 'externalAccess', 'observability', 'transactionSearch', 'dashboard', 'samplingPercent')
     if (g === 'tokens') { s.github.adminToken = ''; s.projectTokens.clear(); for (const p of s.projects.values()) p.memoryDays = '' }
   })
@@ -222,6 +224,28 @@ function BuildsGroup() {
   )
 }
 
+function GitlabGroup() {
+  const s = useStore()
+  const err = useError()
+  const g = s.agents
+  return (
+    <div className="grid gap-4">
+      <Toggle label="trace's own GitLab" description="GitLab Community Edition in this account, where project repositories will live instead of GitHub. One always-on server behind CloudFront, with daily snapshots and nightly backups: about US$105 to 120 a month. Projects stay on GitHub until they are moved." checked={g.gitlabEnabled} onChange={(v) => update((x) => { x.agents.gitlabEnabled = v })} />
+      {g.gitlabEnabled ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField id="agents.gitlabDomain" label="Its own domain" optional mono value={g.gitlabDomain} placeholder="CloudFront's own address" error={err('agents.gitlabDomain')}
+              onChange={(v) => update((x) => { x.agents.gitlabDomain = v.trim().toLowerCase() })} hint="You can add or change it later. You point its DNS at CloudFront afterwards." />
+            <TextField id="agents.gitlabCertificateArn" label="Its certificate" optional mono value={g.gitlabCertificateArn} placeholder="arn:aws:acm:us-east-1:…" error={err('agents.gitlabCertificateArn')}
+              onChange={(v) => update((x) => { x.agents.gitlabCertificateArn = v.trim() })} hint="An ACM certificate in us-east-1 (CloudFront's region)." />
+          </div>
+          <p className="text-xs text-muted-foreground">The first start installs GitLab on its server, which takes 10 to 20 minutes. You can use trace meanwhile.</p>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 function WebGroup() {
   const s = useStore()
   const err = useError()
@@ -298,7 +322,7 @@ function TokensGroup() {
   )
 }
 
-const BODY: Record<Group, () => ReactNode> = { agents: AgentsGroup, jobs: JobsGroup, builds: BuildsGroup, web: WebGroup, knowledge: KnowledgeGroup, tokens: TokensGroup }
+const BODY: Record<Group, () => ReactNode> = { agents: AgentsGroup, jobs: JobsGroup, builds: BuildsGroup, web: WebGroup, gitlab: GitlabGroup, knowledge: KnowledgeGroup, tokens: TokensGroup }
 
 function Advanced() {
   const s = useStore()
