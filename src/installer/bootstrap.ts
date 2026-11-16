@@ -72,6 +72,8 @@ import {
   CognitoIdentityProviderClient, UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_URL_OUTPUT, gitlabAdminTokenSecretName, gitlabRootSecretName } from '../infra/gitlab.js'
+import { waitForGitlab } from './gitlab.js'
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
@@ -297,6 +299,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     retainData: a.agents.retainData,
     // null (decide from the preflight) never reaches here after resolveAnswers; on its own it means on
     gpu: { enabled: a.agents.gpuEnabled ?? true, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
+    ...(a.agents.gitlabEnabled ? { gitlab: { enabled: true, ...(a.agents.gitlabDomain && a.agents.gitlabCertificateArn ? { domain: { name: a.agents.gitlabDomain, certificateArn: a.agents.gitlabCertificateArn } } : {}) } } : {}),
     cpu: { enabled: a.agents.cpuEnabled ?? true, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
     knowledgeBase: { enabled: a.agents.knowledgeBase ?? true },
     gateway: { enabled: a.agents.libraryGateway },
@@ -595,6 +598,7 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
     ...(smokeOn(a) ? [['smoke', 'Set up the live smoke test', smokeProjectOf(a)
       ? `the smoke user ${smokeEmail(props.prefix)} (an ordinary user that receives no mail and is a Reviewer of ${smokeProjectOf(a)} only, so it can only read; a random password and an authenticator enrolled now, kept as they are while they still sign in), its sign-in in the secret ${smokeSecret(props.prefix)} that only the self-update role may read, and ${SMOKE_SECRET_VARIABLE} on ${selfUpdateOf(a)?.repository}: after each self-update its ci workflow checks every screen of the web app on ${smokeProjectOf(a)} (docs/smoke-test.md)`
       : 'no project yet: the smoke user is made once there is one to check the screens on'] as [string, string, string]] : []),
+    ...(props.gitlab.enabled ? [['gitlab', 'trace\'s own GitLab', `wait until GitLab answers at ${props.gitlab.domain ? `https://${props.gitlab.domain.name} (once its DNS points at CloudFront)` : 'its CloudFront address'} and has made trace's admin token (the first start installs GitLab: 10–20 minutes). Nothing waits on it yet: projects stay on GitHub until they are moved`] as [string, string, string]] : []),
     ['local', 'Save this installation locally', '~/.trace/client.db, so `tracectl login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
       ? `set this account up to publish trace's images, all by API: CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${releaseRepository(a)}'s main and v* tags), the registry's default alias, ${releaseRepository(a)}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY and its trace-images release (where every installation finds the images), then the first release run, on ${selfBuild(a) ? 'its own AWS build runner (Docker-in-Docker)' : 'GitHub\'s runners until it has an AWS one'}`
@@ -648,6 +652,8 @@ export interface Hooks {
   freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
   /** which projects the stack has, and which names are taken in the account (chooseGenerations) */
   names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
+  /** wait for trace's own GitLab to start (src/installer/gitlab.ts waitForGitlab) */
+  gitlab?: (o: { url: string; log: (l: string) => void; report: (n: WaitNotice) => void }) => Promise<{ ok: boolean; detail: string }>
   /** wait for the GPU image build (src/installer/aws.ts ensureGpuImage) */
   gpuImage?: (o: { buildId: string; imageTag: string; startedAfter: Date; log: (l: string) => void; report: (n: WaitNotice) => void }) => Promise<{ ok: boolean; detail: string }>
   /** the library keys stored now (readSecretJson) */
@@ -1381,6 +1387,26 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       } catch (e) {
         const m = redact(e instanceof Error ? e.message : String(e), s)
         summary.push(`The live smoke test is off, but its user or secret could not be removed (${m}): delete ${smokeEmail(props.prefix)} in Cognito and the secret ${smokeSecret(props.prefix)}.`)
+      }
+    }
+
+    // trace's own GitLab (src/installer/gitlab.ts): wait until it has installed itself and made trace's admin token.
+    // Nothing needs it yet (projects stay on GitHub until they move), so a timeout is a line in the summary
+    if (props.gitlab.enabled) {
+      current = 'gitlab'
+      set('gitlab', 'running')
+      const url = out[GITLAB_URL_OUTPUT] ?? ''
+      const tokenArn = out[GITLAB_ADMIN_TOKEN_OUTPUT] ?? ''
+      const report = (n: WaitNotice): void => emit({ type: 'wait', step: 'gitlab', wait: n, line: redact(describeWait(n), s) })
+      const r = await (hooks.gitlab ?? ((o) => waitForGitlab({
+        ...o, readSecret: async () => (await sm.send(new GetSecretValueCommand({ SecretId: tokenArn }))).SecretString ?? null,
+      })))({ url, log: (l) => log('gitlab', l), report })
+      if (r.ok) {
+        set('gitlab', 'done', r.detail)
+        summary.push(`trace's own GitLab is up at ${url}. Its admin token is kept in Secrets Manager (${gitlabAdminTokenSecretName(props.prefix)}); the root password in ${gitlabRootSecretName(props.prefix)}.`)
+      } else {
+        set('gitlab', 'failed', r.detail)
+        summary.push(`trace's own GitLab: ${r.detail}. Everything else is installed, and nothing uses GitLab yet.`)
       }
     }
 

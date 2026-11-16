@@ -195,6 +195,20 @@ describe('answers', () => {
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
 
+  it('makes trace\'s own GitLab only when asked, on CloudFront\'s address or its own domain with its certificate', () => {
+    const a = AnswersSchema.parse(ANSWERS)
+    expect(infraInput(a).gitlab).toBeUndefined()
+    expect(plan(a).map((s) => s.id)).not.toContain('gitlab')
+    const on = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true } })
+    expect(infraInput(on).gitlab).toEqual({ enabled: true })
+    expect(plan(on).find((s) => s.id === 'gitlab')?.detail).toMatch(/its CloudFront address.*projects stay on GitHub until they are moved/)
+    const own = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true, gitlabDomain: 'git.example.com', gitlabCertificateArn: CERT } })
+    expect(infraInput(own).gitlab).toEqual({ enabled: true, domain: { name: 'git.example.com', certificateArn: CERT } })
+    expect(plan(own).find((s) => s.id === 'gitlab')?.detail).toContain('https://git.example.com')
+    expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, gitlabEnabled: true, gitlabDomain: 'git.example.com' } }).success).toBe(false)
+    expect(InfraPropsSchema.safeParse(infraInput(own)).success).toBe(true)
+  })
+
   it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {
     const a = AnswersSchema.parse(ANSWERS)
     expect(infraInput(a).web).toEqual({ enabled: true, waf: { enabled: true }, hooks: { enabled: true } })
