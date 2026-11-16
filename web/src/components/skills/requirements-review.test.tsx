@@ -18,7 +18,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { call } from '@/lib/api'
 import type { SkillView } from '@/lib/types-s1'
 import { SKILL_BY_ID } from './definitions'
-import { DesignSteps, RequirementLine, acceptRest, decidedByReview, withDecision, withLeftOut, type DesignDraft } from './design-steps'
+import { DesignSteps, RequirementLine, acceptRest, closedByRecord, decidedByReview, withDecision, withLeftOut, type DesignDraft } from './design-steps'
 import { withRequirementEdit } from './requirement-edit'
 import { SteppedSkill } from './stepped-skill'
 import { draftChecks, qualityChecks } from './use-skill'
@@ -164,6 +164,12 @@ describe('An intent line no requirement covers', () => {
     expect(decidedByReview('requirements-review', { id: 'intent:I-6' })).toBe(true)
     expect(decidedByReview('requirements-review', { id: 'requirement:R-1' })).toBe(true)
     expect(decidedByReview('pin-plan-review', { id: 'finding:x' })).toBe(false)
+  })
+
+  it('a finding the record decides is waived, never ticked as resolved', () => {
+    expect(closedByRecord({ finding: 'mate:SC1576:unknown', status: 'open' })).toBe(true)
+    expect(closedByRecord({ finding: 'mate:SC1576:unknown', status: 'waived' })).toBe(false)
+    expect(closedByRecord({ status: 'open' })).toBe(false)
   })
 })
 

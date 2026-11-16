@@ -89,11 +89,13 @@ export interface ArchScoreRow { option: string; criterion: string; score: number
 /** A part of a block. `off_board`: it sits off the board (a display, sensor module or battery on a header, connector or
  *  cable), so the case must hold it and the board's own parts do not include it; `size_mm`: its outline, from its
  *  datasheet (x, y, z). */
-export interface BlockPart { mpn: string; role?: string | undefined; key?: boolean | undefined; off_board?: boolean | undefined; size_mm?: number[] | undefined; mates?: PartMate | undefined }
-/** What an off-board part plugs into: the board connector (its reference), the part's own pin names in order from pin
- *  1, as its datasheet gives them, and where in the datasheet (sha256 and page). The pin plan's rows of that connector
- *  are checked against it (record.ts mateCheck). */
-export interface PartMate { connector: string; pins: string[]; source?: string | undefined }
+export interface BlockPart { mpn: string; role?: string | undefined; key?: boolean | undefined; off_board?: boolean | undefined; size_mm?: number[] | undefined; mates?: PartMate | PartMate[] | undefined }
+/** What an off-board part plugs into: the board connector (its reference), the part's own pin names in the order they
+ *  meet that connector's pins from its pin 1, as its datasheet gives them, and where in the datasheet (sha256 and
+ *  page). The pin plan's rows of that connector are checked against it (record.ts mateCheck). A part on more than one
+ *  connector (a compute module on two board-to-board connectors) has one of these per connector; `first` is then the
+ *  part's own number of the pin that meets the connector's pin 1 (101 for a module's second hundred), for the words. */
+export interface PartMate { connector: string; pins: string[]; source?: string | undefined; first?: number | undefined }
 export interface ArchBlockRow { option: string; id: string; name: string; role: string | null; parts: BlockPart[]; requirements: string[]; x: number | null; y: number | null; status: (typeof PROPOSAL_STATUS)[number]; updated: number; by: string | null }
 export interface ArchConnectionRow { option: string; id: string; from: string; to: string; kind: (typeof CONNECTION_KINDS)[number]; label: string; status: (typeof PROPOSAL_STATUS)[number]; updated: number; by: string | null }
 export interface PinRow {

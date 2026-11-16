@@ -113,15 +113,17 @@ export const intentTool = defineTool({
 
 // ------------------------------------------------------------------ design.architecture
 
+const Mate = z.object({
+  connector: z.string().min(1).max(40).describe('the reference of the board connector it plugs into, such as J2'),
+  pins: z.array(z.string().min(1).max(40)).min(1).max(200).describe('its own pin names in the order they meet the connector\'s pins from the connector\'s pin 1, as its datasheet gives them, such as ["VCC", "GND", "SCL", "SDA"]'),
+  source: z.string().max(200).optional().describe('where in its datasheet: the sha256 (8+ digits) and page, such as "ea9a571f p2"'),
+  first: z.number().int().min(1).max(2000).optional().describe('the part\'s own number of the pin that meets the connector\'s pin 1, when it is not 1: 101 for the second connector of a 200-pin module'),
+}).strict()
 const Part = z.object({
   mpn: z.string().min(1).max(80), role: z.string().max(120).optional(), key: z.boolean().optional().describe('a key part: its stock is checked at the architecture gate'),
   off_board: z.boolean().optional().describe('it sits off the board: a display, sensor module or battery on a header, connector or cable. Always a key part, and give size_mm: the case must hold it'),
   size_mm: z.array(z.number().positive().max(2000)).length(3).optional().describe('its outline in millimetres (x, y, z), from its datasheet'),
-  mates: z.object({
-    connector: z.string().min(1).max(40).describe('the reference of the board connector it plugs into, such as J2'),
-    pins: z.array(z.string().min(1).max(40)).min(1).max(100).describe('its own pin names in order from pin 1, as its datasheet gives them, such as ["VCC", "GND", "SCL", "SDA"]'),
-    source: z.string().max(200).optional().describe('where in its datasheet: the sha256 (8+ digits) and page, such as "ea9a571f p2"'),
-  }).strict().optional().describe('off_board: what it plugs into, with its pin order from its datasheet; design.pins check compares it with the connector\'s pins in the pin plan'),
+  mates: z.union([Mate, z.array(Mate).min(1).max(8)]).optional().describe('off_board: what it plugs into, with its pin order from its datasheet; design.pins check compares it with the connector\'s pins in the pin plan. A part on more than one connector (a compute module on two board-to-board connectors) gives a list, one entry per connector'),
 }).strict()
   // a part off the board is one the design depends on: a key part (test-esp32 #136: the display module was never
   // chosen, only the header it plugs into)
@@ -193,7 +195,7 @@ const Pin = z.object({
 /** The off-board parts of the architecture going ahead, for the pin plan check; with a part named, those plugging into it. */
 async function offBoard(part: string | undefined): Promise<MatedPart[]> {
   const d = await decisions()
-  return matedParts(withDesign((x) => architectureView(x.rows(), d.list))).filter((m) => !part || m.mates?.connector === part)
+  return matedParts(withDesign((x) => architectureView(x.rows(), d.list))).filter((m) => !part || m.mates?.some((x) => x.connector === part))
 }
 
 export const pinsTool = defineTool({
