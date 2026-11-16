@@ -1,6 +1,6 @@
 # Project repositories on trace's own GitLab
 
-Status: design, November 2026. Decided 16 November 2026 (Marc): project repositories move from GitHub to a GitLab
+Status: design, November 2026; open questions settled 16 November 2026. Decided 16 November 2026 (Marc): project repositories move from GitHub to a GitLab
 that trace's installer deploys in the installation's own AWS account. trace's own development stays on GitHub
 (`mteichtahl/trace`), as does the installation's self-update from trace's `main`.
 
@@ -89,11 +89,16 @@ plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 8. Moving existing projects (installer and Installation screen).
 9. Removing GitHub project code paths and the GitHub token step for projects; docs.
 
-## Open questions (recommended answers first)
+## Settled 16 November 2026 (Marc)
 
-- **GitLab's address**: the installation's CloudFront address (recommended: nothing to set up), or your own domain such
-  as `git.trace-eda.com` with its certificate in ACM.
-- **People's GitLab accounts**: admins only, reached from "More" (recommended: everyone else stays in trace), or one
-  per trace user.
-- **Edition**: Community Edition (recommended), or Enterprise Edition with a Premium licence if GitLab's own approval
-  rules are ever wanted.
+- **GitLab's address: the installation's CloudFront address first, with room for your own domain.** The installer
+  takes an optional host name (such as `git.trace-eda.com`) and its certificate (ACM, `us-east-1`, as CloudFront needs).
+  Left empty, GitLab answers on the CloudFront address. Setting or changing it later is a re-run of the installer (or
+  the Installation screen): it adds the name to CloudFront, sets GitLab's `external_url`, and moves everything that
+  names the address with it: the IAM OIDC provider and every project role's trust, the CodeConnections host, the
+  group webhook, project remotes in the worker runtime, and the admins' "More" links. The old address keeps
+  answering until the move is done, so nothing in flight breaks. Pointing DNS at CloudFront stays with the person who
+  owns the domain; the installer shows the record to add and waits until it resolves.
+- **Admins only get GitLab accounts.** trace keeps one GitLab account per trace admin in step with trace's admins
+  (made, blocked when no longer an admin), reached from "More". Everyone else stays in trace.
+- **GitLab Community Edition** (free).
