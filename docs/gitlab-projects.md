@@ -42,8 +42,9 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   approval rules, code owners and protected-environment approvals are not needed.
 - **Two identities, as on GitHub** ([agent-identity.md](agent-identity.md)):
   - **trace's API** holds the admin token and is the only thing that merges.
-  - **The agents** act as a `trace-bot` user. Each project gets a **project access token with the Developer role**,
-    minted and rotated by the existing token broker (`<prefix>-github-app-token` becomes `<prefix>-forge-token`): it
+  - **The agents** act as their project's own bot. Each project gets a **project access token with the Developer role**
+    (`trace-agents`; GitLab gives each such token its own bot user, whose username is the project's TRACE_AGENT_LOGIN,
+    so one project's agents can never reach another's), made by the installer (src/installer/gitlab-setup.ts), rotated by the existing token broker (`<prefix>-github-app-token` becomes `<prefix>-forge-token`): it
     decides the project from the caller's IAM role, never from the request, exactly as today. Tokens last one day (the
     shortest GitLab allows) and the broker rotates them every twelve hours.
   - **Each default branch is protected**: push allowed to no one, merge allowed to Maintainers. A Developer may push
@@ -62,7 +63,7 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   "checks").
 - **Events come from GitLab webhooks** to the same hooks endpoint, verified by `X-Gitlab-Token` against the secret in
   `<prefix>/web/forge-hooks`: merge request, pipeline, job, note, push and deployment events, mapped to the events
-  `hook.apply` handles today. One group-level hook covers every project.
+  `hook.apply` handles today. One hook per project (GitLab's group webhooks are a Premium feature).
 - **Stacked changes keep working.** A dependent change's merge request targets its parent's branch, as now. GitLab
   retargets dependent merge requests on its own when the one below merges; the restack job still merges `main` up and
   reports conflicts, and trace's conflict resolver handles them as today.
@@ -86,7 +87,8 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
 2. The `Forge` interface: GitHub behind it, unchanged behaviour, then a GitLab implementation tested against fakes.
 3. The GitLab stack in CDK (instance, storage, backups, CloudFront, secrets) and the installer step "Set up GitLab",
    with its health check.
-4. Identity: the `trace-bot` user, protected branches, the broker minting project access tokens, the IAM OIDC provider
+4. Identity: the group and projects, their settings and labels, protected branches and the agents' project tokens
+   (src/installer/gitlab-setup.ts); then the broker rotating those tokens, the IAM OIDC provider
    and role trust.
 5. CI: the generated `.gitlab-ci.yml`, the harness as a script, the per-project CodeBuild GitLab runner project.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
