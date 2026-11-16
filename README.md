@@ -942,6 +942,32 @@ repositories, people and integrations or changes a setting.
   deploy, and the installer removes `TRACE_UPDATE_ROLE`, so the job no longer runs. It is on by default whenever trace's
   own repository is built on AWS; `tracectl uninstall` removes the job's variables with everything else.
 
+## Projects on trace's own GitLab
+
+An installation can keep its projects' repositories on a GitLab it runs itself, in the same AWS account, instead of on
+GitHub ([docs/gitlab-projects.md](docs/gitlab-projects.md)). People see no difference: the same changes, checks,
+gates, stacks, deploys and logs, in trace. trace's own repository and the installation's self-update stay on GitHub,
+so the installer still asks for a GitHub token.
+
+- **Turning it on.** Installer › Optional › trace's GitLab. It deploys GitLab Community Edition on one Graviton
+  instance (m7g.large) in a private subnet behind CloudFront, with an encrypted data volume, daily snapshots kept 14
+  days and a nightly `gitlab-backup` to the central bucket. It answers on the CloudFront address, or your own domain
+  with its certificate (ACM, us-east-1). Only admins sign in to it; the root password and the admin token are in
+  Secrets Manager (`<prefix>/gitlab/root`, `<prefix>/gitlab/admin-token`). About US$105–120 a month with its NAT gateway.
+- **Its builds** run on AWS CodeBuild, as GitHub projects' do, through a CodeConnections host for GitLab. Setting that
+  up is one step in the AWS console the first time a project lives on GitLab; the installer shows the link, waits, and
+  deploys again with the runners.
+- **The agents** act through a project access token per project (Developer), rotated every 12 hours. The default
+  branch is protected: nobody pushes to it, and trace merges.
+- **Moving a project**, either way: Settings › Where this project lives › Move to … (admins), or
+  `tracectl remote move OWNER/REPO --to gitlab|github [--now] [--watch]`. The project is paused while it moves, usually
+  10 to 30 minutes, then resumes by itself. Every branch, tag and commit goes across; open changes are recreated in
+  stack order with their discussion (new numbers, which the move lists) and open issues with their labels; the old home
+  is archived, never deleted, and moving back reuses it. A move that stops leaves the project where it was.
+  `tracectl remote move status OWNER/REPO` and `move cancel` follow or take it back.
+- **New projects** start on GitHub; move one once it exists. (The installer's saved answers can name a project's
+  `forge`, but its screens do not offer the choice.)
+
 ## Putting another repository under trace
 
 ```sh

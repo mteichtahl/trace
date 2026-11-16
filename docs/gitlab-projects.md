@@ -187,8 +187,11 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
    variables a new project gets, and a line to run the installer when the repository is new there). The API marks a
    `when: idle` move ready once nothing of the project runs, and resumes the project once the record says moved. The
    records keep each project's home until the installer runs again and takes them into its answers
-   (Settings, the confirm sheet, progress, done and failed; renders first) and `tracectl`.
-9. The GitHub token step only when a project is on GitHub; docs.
+   (Settings, the confirm sheet, progress, done and failed; renders first) and `tracectl remote move`.
+9. Docs (README "Projects on trace's own GitLab"). The GitHub token stays required: trace's own repository and the
+   installation's self-update are on GitHub (the scope settled on 16 November), and the token is also what the
+   installer derives the first admin and trace's source from. Making it optional only helps an installation with no
+   self-update and every project on GitLab; not done until one needs it.
 
 ## Settled 16 November 2026 (Marc)
 
