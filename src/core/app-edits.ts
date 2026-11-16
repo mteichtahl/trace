@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { type Backend, Conflict } from './central.js'
 import { projectSlug } from './project.js'
 
-export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin', 'logo', 'rule'] as const
+export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin', 'logo', 'rule', 'import'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 
 /** The folder under a project's own prefix (projects/<slug>/journey/edits): inside the journey's, one of PEOPLE_RECORDS. */
@@ -68,7 +68,7 @@ export const editKey = (repo: string, branch: string): string => `${projectSlug(
 
 /** Whether an edit of this kind made by this person applies on its own once its checks pass (decision A). */
 export const appliesOf = (kind: EditKind, admin: boolean): AppEdit['applies'] =>
-  (admin || kind === 'join' || kind === 'workflows' || kind === 'handin' ? 'auto' : 'review')
+  (admin || kind === 'join' || kind === 'workflows' || kind === 'handin' || kind === 'import' ? 'auto' : 'review')
 
 /**
  * The only files an edit may change, or null (a repository joining trace, its workflows refreshed: trace's own scaffold,
@@ -91,7 +91,7 @@ export function editStray(files: readonly { path: string; previous?: string | nu
 /** The app's words for an edit's kind: "a setting change", "a hand-in". */
 export const EDIT_WORDS: Readonly<Record<EditKind, string>> = {
   setting: 'a setting change', prompt: 'a prompt change', release: 'a release copy', join: 'joining trace',
-  workflows: 'a workflow update', handin: 'a hand-in', logo: 'a logo change', rule: 'a project rule',
+  workflows: 'a workflow update', handin: 'a hand-in', logo: 'a logo change', rule: 'a project rule', import: 'an import of fabrication files',
 }
 
 /** The edits of the projects, in the central bucket's projects prefix (storeAt(ctx, PROJECTS_PREFIX)). */

@@ -50,6 +50,10 @@ export const PENDING_PROJECTS_PREFIX = 'installation/pending-projects/'
 /** Each project's large run outputs kept outside its run record (src/core/artifact-store.ts): projects/<slug>/artifacts/<sha256> */
 export const ARTIFACTS_FOLDER = 'artifacts'
 export const JOBS_PREFIX = 'jobs'
+/** Fabrication files uploaded to start a project from (docs/fab-import.md): imports/<uploader>/<upload>/<file>.<part>,
+ * expired after a day */
+export const IMPORTS_PREFIX = 'imports'
+export const IMPORTS_DAYS = 1
 /** GPU jobs submitted outside any project (a laptop with admin credentials): never a project's prefix. */
 export const LOCAL_JOBS = '_local'
 

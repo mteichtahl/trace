@@ -76,7 +76,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import { integrationsPrefix } from '../core/integrations.js'
-import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, runnerProjectName } from '../core/project.js'
+import { IMPORTS_DAYS, IMPORTS_PREFIX, JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, runnerProjectName } from '../core/project.js'
 import { grantApiRuntime } from './api-grants.js'
 import { ExternalAccess } from './external.js'
 import { LibraryGateway } from './gateway.js'
@@ -190,6 +190,9 @@ export class TraceStack extends Stack {
         { noncurrentVersionExpiration: Duration.days(90) },
         // GPU job staging (src/gpu/protocol.ts): transient, kept a week for debugging
         { prefix: `${JOBS_PREFIX}/`, expiration: Duration.days(7), noncurrentVersionExpiration: Duration.days(1) },
+        // fabrication files uploaded to start a project from (docs/fab-import.md): copied into its repository when it
+        // is made, so kept a day only
+        { prefix: `${IMPORTS_PREFIX}/`, expiration: Duration.days(IMPORTS_DAYS), noncurrentVersionExpiration: Duration.days(1) },
       ],
     })
     // Its object events go to EventBridge (default bus), where rules pick the few that matter: a project's journey

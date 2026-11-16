@@ -180,6 +180,7 @@ import { ThreadId, isAuthor } from '../core/chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
+import { IMPORT_ACTIONS } from './actions-import.js'
 import { LOGO_ACTIONS } from './actions-logo.js'
 import { RULE_ANSWER_ACTIONS } from './rule-answers.js'
 import { DOCUMENT_ACTIONS } from './actions-documents.js'
@@ -933,6 +934,7 @@ export const ACTIONS = {
   ...SKILL_ACTIONS,
   ...DESIGN_ACTIONS,
   ...HANDIN_ACTIONS,
+  ...IMPORT_ACTIONS,
   ...LOGO_ACTIONS,
   ...RULE_ANSWER_ACTIONS,
   ...DOCUMENT_ACTIONS,

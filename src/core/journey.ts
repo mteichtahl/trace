@@ -1866,6 +1866,54 @@ export function startJourney(db: DatabaseSync, o: StartOptions): JourneyRecord {
   return loadJourney(db) as JourneyRecord
 }
 
+/** What signs a gate passed on an import (docs/fab-import.md), as its signature's notes say. */
+export const IMPORT_SIGNATURE_NOTE = 'Signed on the import evidence: the design was made outside trace and given as its fabrication files and overview.'
+
+/** The gates an import at `entry` signs: every gate of the stages before it, in order. Pure. */
+export function gatesBefore(r: Pick<JourneyRecord, 'stages' | 'gates'>, entry: StageId): GateRow[] {
+  const at = r.stages.find((s) => s.id === entry)
+  if (!at) return []
+  const before = new Set(r.stages.filter((s) => s.ord < at.ord).map((s) => s.id))
+  return r.gates.filter((g) => before.has(g.stage))
+}
+
+/**
+ * Enter a project started from fabrication files at `entry` (docs/fab-import.md "Where it enters"): every criterion of
+ * the stages before it met on the import's evidence, each of their gates signed once by the importing admin with
+ * IMPORT_SIGNATURE_NOTE, those stages finished, and the project at `entry`. Only a journey still at its first stage
+ * with nothing signed is entered; logged as `journey.imported`. Answers the gates it signed.
+ */
+export function enterImported(db: DatabaseSync, o: { entry: StageId; signer: Signer; evidence: readonly Evidence[]; summary: string; detail?: Record<string, unknown> }): { entered: StageId; signed: string[] } {
+  const r = need(db)
+  const first = [...r.stages].sort((a, b) => a.ord - b.ord)[0]
+  if (!r.stages.some((s) => s.id === o.entry)) throw new JourneyError(`This project's template has no ${STAGE_NAMES[o.entry]} stage to start an import at.`)
+  if (r.journey.currentStage !== first?.id || r.signatures.length) throw new JourneyError('Only a project that has just started can be entered on an import: this one has moved on already.')
+  const gates = gatesBefore(r, o.entry)
+  const entryOrd = r.stages.find((s) => s.id === o.entry)!.ord
+  const t = now()
+  transaction(db, () => {
+    for (const g of gates) {
+      const criteria = r.criteria.filter((c) => c.gate === g.id)
+      for (const c of criteria) {
+        db.prepare("UPDATE gate_criteria SET status='met', evidence=?, checked_at=?, checked_by=?, updated=? WHERE id=?").run(JSON.stringify(o.evidence), t, o.signer.label, t, c.id)
+      }
+      db.prepare('INSERT INTO gate_signatures (id, gate, revision, by, by_hash, at, criteria, waivers, notes) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(newId(), g.id, r.journey.revision, o.signer.label, o.signer.hash, t, JSON.stringify(criteria.map((c) => ({ id: c.id, text: c.text, status: 'met', evidence: o.evidence, waiver: null }))), '[]', IMPORT_SIGNATURE_NOTE)
+    }
+    for (const s of r.stages) {
+      if (s.ord < entryOrd) db.prepare('UPDATE stages SET started=COALESCE(started, ?), finished=?, updated=? WHERE id=?').run(t, t, t, s.id)
+      else if (s.id === o.entry) db.prepare('UPDATE stages SET started=?, finished=NULL, updated=? WHERE id=?').run(t, t, s.id)
+    }
+    db.prepare("UPDATE journey SET current_stage=?, updated=? WHERE id='current'").run(o.entry, t)
+    decide(db, {
+      kind: 'journey.imported', stage: o.entry, ref: null, by: o.signer.label,
+      summary: `${o.summary} The project starts at ${STAGE_NAMES[o.entry]}${gates.length ? `; ${plural(gates.length, 'gate')} before it ${gates.length === 1 ? 'was' : 'were'} signed on the import evidence` : ''}.`,
+      detail: { entry: o.entry, gates: gates.map((g) => g.id), evidence: o.evidence, ...(o.detail ?? {}) },
+    })
+  })
+  return { entered: o.entry, signed: gates.map((g) => g.id) }
+}
+
 const amount = (n: number | null, currency: string): string => (n === null ? 'none' : `${currency === 'USD' ? 'US$' : `${currency} `}${n}`)
 
 /**

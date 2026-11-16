@@ -489,6 +489,7 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
     headline: 'Building the release package',
     request: [
       'The release approval gate was signed: the project is in Fabricate. Prepare the order for JLCPCB.',
+      'A project started from fabrication files (its overview in the docs folder, and the import\'s inspection beside the files in hardware/<board>/release/rev<revision>/) has no board file: record its package with fab.import on that folder instead of kicad.fab and kicad.board, and check stock on its imported BOM.',
       'Build the release package with kicad.fab (house jlcpcb, zipped) from the released board on the default branch, into hardware/<board>/release/rev<revision>/: Gerbers and drill, the parts list and the placement file in JLCPCB\'s columns. Fix nothing in the design here: a problem the package shows is a question for a person (journey.ask). Read the board with kicad.board, so its layers, size, thickness and copper are in the record for the order options. Record fabricate.order.package with journey.check, citing the kicad.fab run.',
       'Check stock and prices again today: parts.bom_check on the package\'s parts list at the build quantity, fresh, then shape.check fabricate.order.stock records the criterion. A line now short or out of stock is a question for a person (journey.ask), with an in-stock alternative where there is one.',
       'Do not order, pay or sign anything: a person checks the order sheet in Order submit and signs the order gate.',

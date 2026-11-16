@@ -29,9 +29,11 @@ export const BACKEND_ONLY = new Set(['chats.reply'])
 
 const CALL_TIMEOUT_MS = 14 * 60_000
 
-/** design.handin carries KiCad files as base64 (at most 3.5 MB of files together, src/api/actions-handin.ts): its body
- * may be this large; every other action's stays at 1 MB. */
+/** design.handin carries KiCad files as base64 (at most 3.5 MB of files together, src/api/actions-handin.ts), and
+ * projects.import_upload a part of an imported file (3 MB, src/api/actions-import.ts): their body may be this large;
+ * every other action's stays at 1 MB. */
 export const HANDIN_BODY = 6 * MB
+export const LARGE_BODY_ACTIONS: ReadonlySet<string> = new Set(['design.handin', 'projects.import_upload'])
 
 /**
  * How long the API runtime has to start answering (its status and headers) before the call fails with 503
@@ -158,7 +160,7 @@ export function callRoutes(deps: WebDeps, publisher?: () => Publisher) {
     route('POST', '/api/call', async (req, ctx) => {
       const s = await signedIn(req, ctx, deps)
       const { action, ...args } = parseBody(req, Body, HANDIN_BODY)
-      if (action !== 'design.handin' && Buffer.byteLength(req.body) > MB) throw new WebError(413, 'the body is larger than 1 MB')
+      if (!LARGE_BODY_ACTIONS.has(action) && Buffer.byteLength(req.body) > MB) throw new WebError(413, 'the body is larger than 1 MB')
       if (BACKEND_ONLY.has(action)) throw new WebError(403, 'that action is the chat agent\'s own', 'backend_only')
       const who: Caller = { config: s.config, token: s.token, sub: s.claims.sub }
       return {
