@@ -154,7 +154,10 @@ trace), plus snapshot storage. CloudFront and CodeBuild costs are unchanged.
    (src/installer/gitlab-setup.ts); then their rotation and the IAM OIDC provider for GitLab's pipeline ID tokens;
    then each project's forge in its settings, its roles trusting GitLab's ID tokens, its own token secret, and the API
    routing its calls there.
-5. CI: the generated `.gitlab-ci.yml`, the harness as a script, the per-project CodeBuild GitLab runner project.
+5. CI: the per-project CodeBuild GitLab runner project, through an AWS CodeConnections host and connection for
+   trace's GitLab (made by the stack, set up once by a person in the AWS console, as the GitHub connection is: the
+   installer shows the link and waits, then sets `gitlab.connectionReady`); then the generated `.gitlab-ci.yml` and the
+   harness as a script.
 6. Events and the app: GitLab webhooks into `hook.apply`; changes, checks, logs, deploys and the admins' "More" links.
 7. Stacked merge requests, restack and conflict handling on GitLab; the live smoke test running against GitLab.
 8. Moving a project in both directions: the mover, the pause, the change-number map; then its screens in the web app

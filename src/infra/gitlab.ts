@@ -25,6 +25,7 @@
 import { CfnOutput, Duration, NestedStack, type NestedStackProps, RemovalPolicy, SecretValue, Size, Stack, Tags } from 'aws-cdk-lib'
 import * as acm from 'aws-cdk-lib/aws-certificatemanager'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
+import * as codeconnections from 'aws-cdk-lib/aws-codeconnections'
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
 import * as dlm from 'aws-cdk-lib/aws-dlm'
 import * as ec2 from 'aws-cdk-lib/aws-ec2'
@@ -50,6 +51,8 @@ export const gitlabUrlParameter = (prefix: string): string => `/${prefix}/gitlab
 /** Where GitLab's own nightly backups go in the central bucket. */
 export const GITLAB_BACKUP_PREFIX = 'gitlab-backups/'
 export const GITLAB_OIDC_OUTPUT = 'GitlabOidcProviderArn'
+export const GITLAB_CONNECTION_OUTPUT = 'GitlabConnectionArn'
+export const GITLAB_HOST_OUTPUT = 'GitlabHostArn'
 export const gitlabRotateName = (prefix: string): string => `${prefix}-gitlab-token-rotate`
 
 export interface GitlabProps extends NestedStackProps {
@@ -192,6 +195,10 @@ export class GitlabServer extends NestedStack {
   readonly distribution: cloudfront.Distribution
   /** the IAM OIDC provider for GitLab's pipeline ID tokens (audience sts.amazonaws.com): the projects' roles trust it */
   readonly oidc: iam.OidcProviderNative
+  /** CodeBuild's way into GitLab: an AWS CodeConnections host for this GitLab and a connection on it, both PENDING
+   * until a person sets them up once in the AWS console (gitlab.connectionReady) */
+  readonly connectionArn: string
+  readonly hostArn: string
 
   constructor(scope: Construct, id: string, p: GitlabProps) {
     super(scope, id, p)
@@ -335,6 +342,22 @@ export class GitlabServer extends NestedStack {
     // the native resource (no custom resource, no thumbprint: IAM checks the address's certificate itself)
     this.oidc = new iam.OidcProviderNative(this, 'Oidc', { url: this.url, clientIds: ['sts.amazonaws.com'] })
     new CfnOutput(this, 'OidcProviderArn', { value: this.oidc.oidcProviderArn })
+
+    // ---- CodeBuild's way into GitLab, for the projects' runners. A host and a connection made here are PENDING: a
+    // person sets the host up once in the AWS console with a GitLab token (api, admin_mode) and then the connection;
+    // the installer shows the link and waits (gitlab.connectionReady). Kept with the stack's GitLab, never retained
+    // apart from it: they are this GitLab's and no other's
+    const host = new codeconnections.CfnHost(this, 'Host', {
+      name: `${p.prefix}-gitlab`.slice(0, 64), providerType: 'GitLabSelfManaged', providerEndpoint: this.url,
+    })
+    const connection = new codeconnections.CfnConnection(this, 'Connection', {
+      connectionName: `${p.prefix}-gitlab`.slice(0, 32), hostArn: host.attrHostArn,
+      tags: [{ key: 'trace:installation', value: p.prefix }],
+    })
+    this.hostArn = host.attrHostArn
+    this.connectionArn = connection.attrConnectionArn
+    new CfnOutput(this, 'HostArn', { value: this.hostArn })
+    new CfnOutput(this, 'ConnectionArn', { value: this.connectionArn })
 
     new CfnOutput(this, 'Url', { value: this.url })
     new CfnOutput(this, 'DistributionDomain', { value: this.distribution.distributionDomainName })

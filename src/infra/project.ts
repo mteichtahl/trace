@@ -225,7 +225,7 @@ export interface ProjectProps {
   runnerSource: { connectionArn: string | null; webhooks: string | null } | null
   /** trace's own GitLab (src/infra/gitlab.ts): its address and the IAM OIDC provider for its pipeline ID tokens; null
    * without one. Used only when the project lives there (projectSettings forge 'gitlab') */
-  gitlab?: { url: string; oidcProviderArn: string } | null
+  gitlab?: { url: string; oidcProviderArn: string; connectionArn?: string | null } | null
 }
 
 /**
@@ -688,11 +688,17 @@ export class ProjectStack extends Construct {
     // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job
     // assumes the OIDC role above for that, as before). With a connection, only once it is authorized (connectionReady)
     const { computeType, image, privileged } = cfg.runners
-    // (a project on trace's GitLab gets its GitLab runner with its pipelines: docs/gitlab-projects.md, build step 5)
-    this.runner = p.runnerSource && !onGitlab
+    // On trace's GitLab, its runner reaches GitLab through the GitLab connection (src/infra/gitlab.ts), once a person
+    // has set it up (gitlab.connectionReady); until then it has none, and its pipelines wait
+    const gitlabRunner = onGitlab && onGitlab.connectionArn ? { connectionArn: onGitlab.connectionArn, url: onGitlab.url } : null
+    const source = onGitlab
+      ? (gitlabRunner ? { connectionArn: gitlabRunner.connectionArn, webhooks: p.runnerSource?.webhooks ?? null } : null)
+      : p.runnerSource
+    this.runner = source
       ? new RunnerProject(this, 'Runner', {
-          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.runnerSource.connectionArn, webhooks: p.runnerSource.webhooks,
+          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: source.connectionArn, webhooks: source.webhooks,
           computeType, image, privileged, runLogs: { prefix: cfg.prefix }, ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),
+          ...(gitlabRunner ? { gitlab: { url: gitlabRunner.url, path: gitlabProjectPath(cfg.prefix, repository) } } : {}),
           tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
         })
       : null

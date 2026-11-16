@@ -92,7 +92,7 @@ import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
 import { GithubAppBroker } from './github-app.js'
-import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_OIDC_OUTPUT, GITLAB_URL_OUTPUT, GitlabServer } from './gitlab.js'
+import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_CONNECTION_OUTPUT, GITLAB_HOST_OUTPUT, GITLAB_OIDC_OUTPUT, GITLAB_URL_OUTPUT, GitlabServer } from './gitlab.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { apiVocabularyStatement } from './voice.js'
 import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
@@ -359,6 +359,8 @@ export class TraceStack extends Stack {
       new CfnOutput(this, GITLAB_URL_OUTPUT, { value: gitlab.url })
       new CfnOutput(this, GITLAB_ADMIN_TOKEN_OUTPUT, { value: gitlab.adminTokenSecret.secretArn })
       new CfnOutput(this, GITLAB_OIDC_OUTPUT, { value: gitlab.oidc.oidcProviderArn })
+      new CfnOutput(this, GITLAB_CONNECTION_OUTPUT, { value: gitlab.connectionArn })
+      new CfnOutput(this, GITLAB_HOST_OUTPUT, { value: gitlab.hostArn })
     }
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
@@ -366,7 +368,7 @@ export class TraceStack extends Stack {
       tools: tools ? { images: tools.images, tag: tools.tag } : null,
       runnerSource,
       // a project on trace's GitLab: its pipelines sign in with GitLab's ID tokens (src/infra/project.ts)
-      gitlab: gitlab ? { url: gitlab.url, oidcProviderArn: gitlab.oidc.oidcProviderArn } : null,
+      gitlab: gitlab ? { url: gitlab.url, oidcProviderArn: gitlab.oidc.oidcProviderArn, connectionArn: cfg.gitlab.connectionReady ? gitlab.connectionArn : null } : null,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
         // the build of the image it runs, which its jobs name (src/agents/runtime/job-index.ts whereWords)
