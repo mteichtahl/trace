@@ -13,6 +13,10 @@ function fakeGitlab() {
   const variables = new Map<string, string>()
   const hooks = new Map<number, { id: number; url: string }[]>()
   const labels = new Map<number, Set<string>>()
+  const files = new Map<string, string>()
+  const branches = new Set<string>()
+  const schedules = new Map<number, { id: number; description: string }[]>()
+  const mrs: { project: number; source: string }[] = []
   let next = 100
   const res = (status: number, body: unknown) => new Response(body === null ? null : JSON.stringify(body), { status })
   const fetch = (async (u: string, init: RequestInit) => {
@@ -69,6 +73,31 @@ function fakeGitlab() {
         list.push({ id: next++, url: String(body?.url) }); return res(201, {})
       }
       if (/^\/hooks\/\d+$/.test(rest) && method === 'PUT') return res(200, {})
+      if ((m = /^\/repository\/branches\/(.+)$/.exec(rest))) {
+        if (method === 'GET') return branches.has(`${id}:${m[1]}`) ? res(200, { name: m[1], commit: { id: 'c' } }) : res(404, {})
+        if (method === 'DELETE') { branches.delete(`${id}:${m[1]}`); return res(204, null) }
+      }
+      if (rest === '/repository/commits' && method === 'POST') {
+        branches.add(`${id}:${body?.branch}`)
+        for (const a of (body?.actions ?? []) as { file_path: string; content: string }[]) files.set(`${id}:${body?.branch}:${a.file_path}`, a.content)
+        return res(201, { id: 'c1' })
+      }
+      if ((m = /^\/repository\/files\/(.+)$/.exec(rest)) && method === 'GET') {
+        const ref = new URL(u).searchParams.get('ref')
+        const f = files.get(`${id}:${ref}:${m[1]}`)
+        return f === undefined ? res(404, {}) : res(200, { content: Buffer.from(f).toString('base64') })
+      }
+      if (rest === '/merge_requests') {
+        if (method === 'GET') return res(200, mrs.filter((x) => x.project === id).map((x, i) => ({ iid: i + 1, source: x.source })))
+        mrs.push({ project: id, source: String(body?.source_branch) }); return res(201, { iid: mrs.length })
+      }
+      if (rest === '/pipeline_schedules') {
+        const list = schedules.get(id) ?? []
+        schedules.set(id, list)
+        if (method === 'GET') return res(200, list)
+        list.push({ id: next++, description: String(body?.description) }); return res(201, {})
+      }
+      if (/^\/pipeline_schedules\/\d+$/.test(rest) && method === 'PUT') return res(200, {})
       if (rest === '/labels') {
         const set = labels.get(id) ?? new Set<string>()
         labels.set(id, set)
@@ -79,7 +108,7 @@ function fakeGitlab() {
     if (method === 'GET' && (m = /^\/users\/(\d+)$/.exec(path))) return res(200, { username: `project_${Number(m[1]) - 900}_bot_abc` })
     return res(404, { message: `no route ${method} ${path}` })
   }) as unknown as typeof globalThis.fetch
-  return { fetch, asked, projects, protectedBranches, tokens, variables, hooks, labels }
+  return { fetch, asked, projects, protectedBranches, tokens, variables, hooks, labels, files, branches, schedules, mrs }
 }
 
 describe('setUpGitlabProject', () => {
@@ -121,4 +150,25 @@ describe('setUpGitlabProject', () => {
     expect(e).toBeInstanceOf(GitlabSetupError)
     expect(e).toMatchObject({ status: 403 })
   })
+
+  it('commits the pipelines to an empty project before protecting its branch, and proposes a change to one with history', async () => {
+    const gl = fakeGitlab()
+    const admin = new GitlabAdmin('t', { url: 'https://git.example', fetch: gl.fetch })
+    const first = await setUpGitlabProject(admin, { group: 'trace', slug: 'board', branch: 'main', ci: 'stages: [a]\n' })
+    expect(first.lines).toContain('.gitlab-ci.yml committed')
+    expect(gl.files.get(`${first.id}:main:.gitlab-ci.yml`)).toBe('stages: [a]\n')
+    const commitAt = gl.asked.findIndex((a) => a.path.endsWith('/repository/commits'))
+    const protectAt = gl.asked.findIndex((a) => a.method === 'POST' && a.path.endsWith('/protected_branches'))
+    expect(commitAt).toBeLessThan(protectAt)
+    expect(gl.schedules.get(first.id)).toHaveLength(1)
+
+    const same = await setUpGitlabProject(admin, { group: 'trace', slug: 'board', branch: 'main', ci: 'stages: [a]\n' })
+    expect(same.lines).toContain('.gitlab-ci.yml is current')
+    const changed = await setUpGitlabProject(admin, { group: 'trace', slug: 'board', branch: 'main', ci: 'stages: [b]\n' })
+    expect(changed.lines.some((l) => l.includes('proposed (trace/pipelines)'))).toBe(true)
+    expect(gl.mrs).toEqual([{ project: first.id, source: 'trace/pipelines' }])
+    expect(gl.files.get(`${first.id}:main:.gitlab-ci.yml`)).toBe('stages: [a]\n')
+    expect(gl.schedules.get(first.id)).toHaveLength(1)
+  })
 })
+

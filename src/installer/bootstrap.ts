@@ -73,7 +73,10 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { GITLAB_ADMIN_TOKEN_OUTPUT, GITLAB_CONNECTION_OUTPUT, GITLAB_HOST_OUTPUT, GITLAB_URL_OUTPUT, gitlabAdminTokenSecretName, gitlabRootSecretName } from '../infra/gitlab.js'
-import { gitlabConnectionReady, gitlabConnectionTodo, waitForGitlab, waitForGitlabConnection } from './gitlab.js'
+import { adminToken as gitlabAdminTokenOf, gitlabConnectionReady, gitlabConnectionTodo, waitForGitlab, waitForGitlabConnection } from './gitlab.js'
+import { GitlabAdmin, setUpGitlabProject } from './gitlab-setup.js'
+import { gitlabCiTemplate, renderGitlabCi } from '../core/gitlab-ci.js'
+import { gitlabHookUrl, repositoryName } from '../core/gitlab-path.js'
 import { GetConnectionCommand, GetHostCommand } from '@aws-sdk/client-codeconnections'
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
@@ -81,7 +84,7 @@ import { type Principal, GROUPS, assign, assignments, setClass, unassign } from 
 import { answers as savedAnswers, saveAnswers, saveInstallation } from '../core/client.js'
 import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName, IntegrationStore, checkIntegration, secretsManagerApi } from '../core/integrations.js'
 import { SOURCE, register } from '../core/onboard.js'
-import { RUNNER_VARIABLE, runnerOf } from '../core/project.js'
+import { RUNNER_VARIABLE, runnerOf, runnerProjectName } from '../core/project.js'
 import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
@@ -658,6 +661,8 @@ export interface Hooks {
   gitlabConnection?: (hostArn: string, connectionArn: string) => Promise<{ host: string; connection: string }>
   /** wait for a person to set them up (src/installer/gitlab.ts waitForGitlabConnection) */
   gitlabConnectionWait?: typeof waitForGitlabConnection
+  /** trace's GitLab's admin client for setting projects up (src/installer/gitlab-setup.ts) */
+  gitlabAdmin?: (url: string) => GitlabAdmin
   /** wait for trace's own GitLab to start (src/installer/gitlab.ts waitForGitlab) */
   gitlab?: (o: { url: string; log: (l: string) => void; report: (n: WaitNotice) => void }) => Promise<{ ok: boolean; detail: string }>
   /** wait for the GPU image build (src/installer/aws.ts ensureGpuImage) */
@@ -1362,7 +1367,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         set('web', 'running')
         const wh = hooks.webhooks ?? {}
         const r = await setUpWebhooks({
-          prefix: props.prefix, outputs: out, repos: a.projects.map((p) => p.repo), token: adminToken,
+          prefix: props.prefix, outputs: out, repos: a.projects.filter((p) => p.forge !== 'gitlab').map((p) => p.repo), token: adminToken,
           secrets: wh.secrets ?? await liveHooksSecretIo(creds, a.aws.region),
           clientSecret: wh.clientSecret ?? ((pool, client) => liveClientSecret(creds, a.aws.region, pool, client)),
           ...(wh.register ? { register: wh.register } : {}),
@@ -1425,6 +1430,37 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       if (r.ok) {
         set('gitlab', 'done', r.detail)
         summary.push(`trace's own GitLab is up at ${url}. Its admin token is kept in Secrets Manager (${gitlabAdminTokenSecretName(props.prefix)}); the root password in ${gitlabRootSecretName(props.prefix)}.`)
+        // each project that lives there: its group, project, rules, labels, agents' token, pipelines and webhook
+        // (src/installer/gitlab-setup.ts); a project that fails is a summary line, the others go on
+        const onGitlab = a.projects.filter((p) => p.forge === 'gitlab')
+        if (onGitlab.length) {
+          const adminRaw = (await sm.send(new GetSecretValueCommand({ SecretId: tokenArn }))).SecretString ?? ''
+          const adminTokenValue = gitlabAdminTokenOf(adminRaw)
+          const hookBase = (out[WEB_HOOKS_OUTPUTS.address] ?? '').replace(/\/api\/hooks\/github$/, '')
+          let hookSecret: string | null = null
+          if (hookBase && webHooksOn(props)) {
+            try { hookSecret = (await ensureHooksSecret(hooks.webhooks?.secrets ?? await liveHooksSecretIo(creds, a.aws.region), webHooksSecret(props.prefix))).webhookSecret } catch { hookSecret = null }
+          }
+          const admin = hooks.gitlabAdmin?.(url) ?? (adminTokenValue ? new GitlabAdmin(adminTokenValue, { url }) : null)
+          for (const p of onGitlab) {
+            if (!admin) break
+            try {
+              const ci = renderGitlabCi(gitlabCiTemplate(REPO_ROOT), {
+                source: a.runners.traceRepository || SOURCE, ref: a.runners.traceBranch || 'main', branch: p.branch, repository: p.repo,
+                runner: runnerProjectName(props.prefix, p.repo), hold: 'hold',
+              })
+              const r2 = await setUpGitlabProject(admin, {
+                group: props.prefix, slug: repositoryName(p.repo), branch: p.branch, ci,
+                ...(hookSecret && hookBase ? { hook: { url: gitlabHookUrl(hookBase, p.repo), secret: hookSecret } } : {}),
+              })
+              for (const l of r2.lines) log('gitlab', `${p.repo}: ${l}`)
+            } catch (e) {
+              const m = redact(e instanceof Error ? e.message : String(e), s)
+              summary.push(`${p.repo} could not be set up on trace's GitLab: ${m}. Run the installer again to carry on.`)
+            }
+          }
+          if (!admin) summary.push('The GitLab projects could not be set up: trace\'s GitLab has not made its admin token yet. Run the installer again in a few minutes.')
+        }
         // CodeBuild's way into it, for the GitLab projects' build runners: a person sets it up once, then a deploy adds
         // the runners. Waited for only when a project lives on GitLab; otherwise said, for when one does
         const hostArn = out[GITLAB_HOST_OUTPUT] ?? ''
