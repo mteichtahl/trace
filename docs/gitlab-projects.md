@@ -65,8 +65,9 @@ self-managed GitLab (February 2025), reached through CodeConnections as the GitH
   with a GitLab implementation. Merge requests carry what pull requests did; pipelines and jobs stand in for check runs
   and statuses; GitLab environments and deployments for GitHub's. trace's words in the app do not change ("change",
   "checks").
-- **Events come from GitLab webhooks** to the same hooks endpoint, verified by `X-Gitlab-Token` against the secret in
-  `<prefix>/web/forge-hooks`: merge request, pipeline, job, note, push and deployment events, mapped to the events
+- **Events come from GitLab webhooks** to the same hooks function (`/api/hooks/gitlab`, src/web/hooks.ts), verified by
+  `X-Gitlab-Token` against the same webhook secret as GitHub's, the project named by the hook's own address
+  (`?repo=owner/name`, as GitLab names it by its path): merge request, pipeline, job, note, push and deployment events, mapped to the events
   `hook.apply` handles today. One hook per project (GitLab's group webhooks are a Premium feature).
 - **Stacked changes keep working.** A dependent change's merge request targets its parent's branch, as now. GitLab
   retargets dependent merge requests on its own when the one below merges; the restack job still merges `main` up and
