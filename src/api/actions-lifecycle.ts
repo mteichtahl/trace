@@ -65,7 +65,7 @@ export async function lifecycleGate(name: string, need: Need, args: Record<strin
 const WORDS: Record<LifecycleChange, string> = { paused: 'paused the project', resumed: 'resumed the project', retired: 'retired the project', restored: 'restored the project' }
 
 /** The change in the project's decisions log; a project with no journey yet has none, and that is fine. */
-async function record(ctx: Context, repo: string, change: LifecycleChange, by: string, reason: string | null, detail: Record<string, unknown> = {}): Promise<void> {
+export async function recordLifecycle(ctx: Context, repo: string, change: LifecycleChange, by: string, reason: string | null, detail: Record<string, unknown> = {}): Promise<void> {
   try {
     await writeJourney(ctx, repo, (db) => {
       if (!loadJourney(db)) return { result: null, changed: false }
@@ -79,7 +79,7 @@ async function record(ctx: Context, repo: string, change: LifecycleChange, by: s
 }
 
 /** Ask the project's running tasks to stop at their next safe point (they can be resumed one by one later). */
-async function pauseRunning(ctx: Context, repo: string, by: string): Promise<{ asked: number; running: number }> {
+export async function pauseRunning(ctx: Context, repo: string, by: string): Promise<{ asked: number; running: number }> {
   try {
     const jobs = await ctx.deps.jobs()
     const { jobs: views } = await listJobs(ctx, repo)
@@ -123,14 +123,14 @@ export const LIFECYCLE_ACTIONS_DEFS = {
     const by = label(ctx.principal)
     const l = await plain(() => changeLifecycle(repo, 'paused', by, reason ?? null))
     const work = await pauseRunning(ctx, repo, by)
-    await record(ctx, repo, 'paused', by, reason ?? null, { work })
+    await recordLifecycle(ctx, repo, 'paused', by, reason ?? null, { work })
     return { ...view(repo, l, ctx.principal), work, summary: `Paused. ${workWords(work)}` }
   }),
 
   'project.resume': def('write', Repo, async ({ repo }, ctx) => {
     const by = label(ctx.principal)
     const l = await plain(() => changeLifecycle(repo, 'resumed', by))
-    await record(ctx, repo, 'resumed', by, null)
+    await recordLifecycle(ctx, repo, 'resumed', by, null)
     return { ...view(repo, l, ctx.principal), summary: l.retired ? 'Resumed, but it is still retired: it does no work until an admin restores it.' : 'Resumed: queued work starts at its turn. Paused tasks stay paused until someone resumes each one.' }
   }),
 
@@ -138,14 +138,14 @@ export const LIFECYCLE_ACTIONS_DEFS = {
     const by = label(ctx.principal)
     const l = await plain(() => changeLifecycle(repo, 'retired', by, reason ?? null))
     const work = await pauseRunning(ctx, repo, by)
-    await record(ctx, repo, 'retired', by, reason ?? null, { work })
+    await recordLifecycle(ctx, repo, 'retired', by, reason ?? null, { work })
     return { ...view(repo, l, ctx.principal), work, summary: `Retired: it is hidden from everyone, and kept, so an admin can restore it. ${workWords(work)}` }
   }),
 
   'project.restore': def('admin', Repo, async ({ repo }, ctx) => {
     const by = label(ctx.principal)
     const l = await plain(() => changeLifecycle(repo, 'restored', by))
-    await record(ctx, repo, 'restored', by, null)
+    await recordLifecycle(ctx, repo, 'restored', by, null)
     return { ...view(repo, l, ctx.principal), summary: l.paused ? `Restored. It is still paused (by ${l.paused.by}): resume it when it should carry on.` : 'Restored: it is back in everyone\'s lists, as it was.' }
   }),
 
