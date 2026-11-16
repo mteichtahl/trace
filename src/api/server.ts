@@ -53,8 +53,11 @@ import { bucketStore } from './action-kit.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 
 const MAX_BODY = 2 * 1024 * 1024
-/** design.handin's files (src/api/actions-handin.ts: 3.5 MB together, as base64): the one larger body. */
+/** design.handin's files (src/api/actions-handin.ts: 3.5 MB together, as base64) and a part of an imported file
+ * (src/api/actions-import.ts: 3 MB, as base64): the larger bodies. */
 const MAX_HANDIN_BODY = 6 * 1024 * 1024
+/** The actions whose body may be larger than MAX_BODY, up to MAX_HANDIN_BODY. */
+export const LARGE_BODY_ACTIONS: ReadonlySet<string> = new Set(['design.handin', 'projects.import_upload'])
 
 const Body = z.object({ action: z.string().min(1).max(64) }).catchall(z.unknown())
 
@@ -118,12 +121,12 @@ async function readBody(req: IncomingMessage): Promise<string> {
     chunks.push(b)
   }
   const text = Buffer.concat(chunks).toString('utf8')
-  // only design.handin may be larger than 2 MB: judged by the action the body actually names once parsed (a later
-  // duplicate "action" key wins in JSON.parse, so the start of the text proves nothing)
+  // only design.handin and projects.import_upload may be larger than 2 MB: judged by the action the body actually
+  // names once parsed (a later duplicate "action" key wins in JSON.parse, so the start of the text proves nothing)
   if (size > MAX_BODY) {
     let action: unknown
     try { action = (JSON.parse(text) as { action?: unknown }).action } catch { action = null }
-    if (action !== 'design.handin') throw new ActionError('the body is larger than 2 MB')
+    if (typeof action !== 'string' || !LARGE_BODY_ACTIONS.has(action)) throw new ActionError('the body is larger than 2 MB')
   }
   return text
 }

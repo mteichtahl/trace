@@ -34,7 +34,7 @@ import { RegionInfo } from 'aws-cdk-lib/region-info'
 import type * as s3 from 'aws-cdk-lib/aws-s3'
 import type * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
-import { ARTIFACTS_FOLDER, PROJECTS_PREFIX } from '../core/project.js'
+import { ARTIFACTS_FOLDER, IMPORTS_PREFIX, PROJECTS_PREFIX } from '../core/project.js'
 import { SERVICES_SEEN } from '../core/services-seen.js'
 import { ACTUALS_OBJECTS } from './cost.js'
 import { KB_RETRIEVE_ACTIONS, knowledgeBaseArn } from './knowledge.js'
@@ -108,6 +108,9 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
     // waiting for the next stack update (projects.create): read, and write only with conditional puts
     // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
     grantPrefixes(role, p.central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS}`, `${PROJECTS_PREFIX}/*/${JOURNEY}`, PENDING] })
+    // fabrication files uploaded to start a project from (projects.import_upload, docs/fab-import.md): an admin's own,
+    // read and written in parts, expired by the bucket after a day
+    p.central.grantReadWrite(role, `${IMPORTS_PREFIX}/*`)
   } else {
     // systems: the access store read only (the verifier's lookup, projects), and when each system last called, as one
     // small object per system beside it (src/core/services-seen.ts): plain puts there, nothing else of access/

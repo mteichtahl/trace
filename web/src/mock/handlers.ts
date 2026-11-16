@@ -26,6 +26,7 @@ import { rendersAction } from './renders'
 import { docsAction } from './docs'
 import { REOPEN_REPO, reopenOn, reopened } from './reopen'
 import { ownedAction, ownedStagesOf, ownedStepOf } from './owned'
+import { fabImportAction } from './fab-import'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -40,6 +41,7 @@ const tokens = () => ({ accessToken: 'mock-access', idToken: 'mock-id', expiresI
 function action(name: string, a: Record<string, unknown>): Response {
   const repo = a.repo as string
   const own = ownedAction(name); if (own) return own
+  const fab = fabImportAction(name, a); if (fab) return fab
   const ch = changesAction(name, a, (r, n) => { inbox = inbox.filter((i) => !(i.change?.repo === r && i.change.number === n)) }); if (ch) return ch
   const dep = deploysAction(name, a); if (dep) return dep
   const hl = healthAction(name, a); if (hl) return hl

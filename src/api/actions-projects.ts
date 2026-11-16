@@ -53,7 +53,7 @@ import { TemplateStore } from '../core/template-store.js'
 import { z } from 'zod'
 import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, isAdmin, membersOf, setClass } from '../core/access.js'
 import { Conflict } from '../core/central.js'
-import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, loadJourney, startJourney, updateAbout } from '../core/journey.js'
+import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, loadJourney, STAGE_NAMES, startJourney, updateAbout } from '../core/journey.js'
 import { forgetNoJourney } from '../core/journey-store.js'
 import { lifecycleOf } from '../core/lifecycle.js'
 import { projects as registered, register } from '../core/onboard.js'
@@ -66,6 +66,7 @@ import { appliesOf } from '../core/app-edits.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
 import { editStore, editorName } from './edits.js'
 import { startQueued } from './agent-queue.js'
+import { checkUpload, enterAtImport, ImportArg, importFiles, importWork, refusalOf } from './actions-import.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
 
@@ -91,7 +92,10 @@ const Create = z.object({
   later: z.array(z.enum(LATER_STAGES)).max(3).default([]),
   /** apply the repository settings the loop needs (auto-merge, labels, ruleset) */
   apply: z.boolean().default(true),
-})
+  /** start from fabrication files (docs/fab-import.md): the upload (projects.import_upload), the overview and where
+   * the journey enters; with start 'import' only */
+  import: ImportArg.optional(),
+}).refine((a) => !a.import || a.start === 'import', { message: 'an import is given with start: import', path: ['import'] })
 
 export type StepState = 'done' | 'skipped' | 'failed' | 'waiting'
 export interface Step { id: string; title: string; state: StepState; detail: string }
@@ -555,6 +559,15 @@ export const PROJECT_ACTIONS = {
     const step = (id: string, title: string, state: StepState, detail: string): void => { steps.push({ id, title, state, detail }) }
     const repo = a.repo
 
+    // 0. the fabrication files, when it starts from them (docs/fab-import.md): checked before anything is made, so a
+    // blocking finding makes no repository
+    const quantity = a.build?.quantity ?? BuildSchema.parse({}).quantity
+    const imported = a.import ? await checkUpload(ctx, { upload: a.import.upload, overview: a.import.overview, quantity, built: a.import.entry === 'bringup' }) : null
+    if (imported) {
+      const refused = refusalOf(imported.inspection)
+      if (refused) throw new ActionError(refused)
+    }
+
     // 1. onboard
     if (!ctx.deps.onboard) throw new ActionError('This installation cannot put repositories under trace from the API.')
     // nothing is created on top of what is there: onboarding a "new" repository that exists would push the starter
@@ -577,7 +590,7 @@ export const PROJECT_ACTIONS = {
       step('repository', a.new ? 'Create the repository' : 'Connect the repository', 'done', [joining ? what.replace(/ It is held for a person to merge\./, '').replace(/ \(https:[^)]*\)/, '') : what, ...(joining ? [joining] : []), ...r.settings.map((x) => `${x[0]?.toUpperCase()}${x.slice(1)}.`)].join(' '))
     } catch (e) {
       step('repository', a.new ? 'Create the repository' : 'Connect the repository', 'failed', message(e))
-      for (const [id, title] of [['registry', 'Add it to trace\'s list of projects'], ['people', 'Add people'], ['journey', 'Start the journey'], ['cloud', 'Set up the project\'s agent and knowledge base']] as const) {
+      for (const [id, title] of [['registry', 'Add it to trace\'s list of projects'], ['people', 'Add people'], ['journey', 'Start the journey'], ...(imported ? [['import', 'Bring in the fabrication files'] as const] : []), ['cloud', 'Set up the project\'s agent and knowledge base']] as const) {
         step(id, title, 'skipped', 'Waits for the repository step. Send the request again once it is fixed; every step is safe to repeat.')
       }
       return { repo, ok: false, steps, waits: [] }
@@ -649,6 +662,31 @@ export const PROJECT_ACTIONS = {
     } catch (e) {
       const already = e instanceof Error && /already has a journey/.test(e.message)
       step('journey', 'Start the journey', already ? 'skipped' : 'failed', message(e))
+    }
+
+    // 4b. the fabrication files into the repository, the journey entered at its stage and that stage's work asked for
+    // (docs/fab-import.md "What trace sets up"); queued until the project's agent is set up
+    if (imported && a.import) {
+      const title = 'Bring in the fabrication files'
+      try {
+        const f = await importFiles(ctx, repo, { ...a.import, name: a.name, quantity, files: imported.files, inspection: imported.inspection })
+        const entered = await enterAtImport(ctx, repo, { entry: a.import.entry, paths: f.paths, inspection: imported.inspection, change: f.change })
+        const jobs = await ctx.deps.jobs()
+        const started: string[] = []
+        for (const w of importWork({ entry: a.import.entry, dir: f.paths.dir, bom: f.paths.bom, quantity, change: f.title })) {
+          const s = await jobs.startJob({ kind: 'task', repository: repo, request: w.request, headline: w.headline, agent: w.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub }).catch(() => null)
+          if (s?.accepted) started.push(w.started)
+        }
+        const warnings = imported.inspection.findings.filter((x) => x.severity === 'warning').length
+        step('import', title, 'done', [
+          `Its change "${f.title}" is on the project's Changes: trace applies it once its checks pass.`,
+          `The project starts at ${STAGE_NAMES[a.import.entry]}${entered.signed.length ? `, with ${entered.signed.length} earlier gate${entered.signed.length === 1 ? '' : 's'} signed on the import evidence` : ''}.`,
+          ...(warnings ? [`${warnings} warning${warnings === 1 ? '' : 's'} from the check ${warnings === 1 ? 'is' : 'are'} carried into the project.`] : []),
+          ...started,
+        ].join(' '))
+      } catch (e) {
+        step('import', title, 'failed', `${message(e)} The files are kept for a day: send the request again once it is fixed.`)
+      }
     }
 
     // 5. the project's own cloud resources: at the next update of the installation, started now when it can be
