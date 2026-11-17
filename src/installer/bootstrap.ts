@@ -102,6 +102,7 @@ import { type TourResult, recreateMissingSample, startSampleJourney, startTour, 
 import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
 import { type EdgeDeps, deployEdge, edgeLeftOver, wafPlan, withAcl } from './edge.js'
 import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
+import { type StackWaitDeps, cfnStackStatus, waitForStack, waitingCdk } from './stack-wait.js'
 import { type MovesIo, forgesOf, parseMoves, s3MovesIo } from './moves.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
@@ -653,6 +654,10 @@ export interface Hooks {
   smoke?: SmokeIo
   cdk?: (args: string[], env: Record<string, string>, onLine: (l: string) => void) => Promise<number>
   outputs?: (creds: AwsCredentialIdentity, region: string, stack: string) => Promise<Record<string, string>>
+  /** the trace stack's status before each deploy (default: CloudFormation's); a busy stack is waited for */
+  stackStatus?: () => Promise<string | null>
+  /** how the wait for a busy stack looks again (tests) */
+  stackWait?: Pick<StackWaitDeps, 'sleep' | 'now' | 'every' | 'timeout'>
   freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
   /** which projects the stack has, and which names are taken in the account (chooseGenerations) */
   names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
@@ -840,13 +845,20 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
   }
   const log = (id: string, line: string): void => emit({ type: 'log', step: id, line: redact(line, s) })
   const summary: string[] = []
-  const cdk = hooks.cdk ?? ((args, env, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], env, onLine))
   let current = 'check'
   let stack = stackName(a.agents.prefix)
+  // each deploy of the trace stack waits for any update already running on it (the self-update, say) to finish
+  // (src/installer/stack-wait.ts)
+  let waitCreds: AwsCredentialIdentity | null = null
+  const cdk = waitingCdk(hooks.cdk ?? ((args, env, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], env, onLine)), () => stack,
+    (name, onLine) => waitForStack(name, {
+      status: hooks.stackStatus ?? (waitCreds ? cfnStackStatus(waitCreds, a.aws.region, name) : async () => null), log: onLine, ...(hooks.stackWait ?? {}),
+    }))
   try {
     // 1 — the account, and everything the answers leave to be worked out (derive.ts)
     set('check', 'running')
     const creds = await credentials(a.aws, s)
+    waitCreds = creds
     const facts = await (hooks.facts ?? ((c, x) => liveFacts(c, x, s.githubToken)))(creds, a)
     if (!a.github.login && !facts.login) facts.login = (await checkToken(s.githubToken)).login
     const resolved = resolveAnswers(a, facts)

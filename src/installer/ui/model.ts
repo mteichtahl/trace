@@ -10,7 +10,7 @@
  * A step's Continue stays off while it has a blocker, and the blocker is named beside it.
  */
 import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName } from '../../core/integrations-catalog.js'
-import { type AnswersInput, AnswersSchema, type Check, RUNNER_AUTH, RUNNER_COMPUTE_TYPES, type Step, type WaitNoticeView } from '../answers.js'
+import { type AnswersInput, AnswersSchema, type Check, RUNNER_AUTH, RUNNER_COMPUTE_TYPES, STORED_TOKEN, type Step, type WaitNoticeView } from '../answers.js'
 
 // ------------------------------------------------------------------ the server's answers (shapes the page relies on)
 
@@ -39,6 +39,8 @@ export interface Env {
   profiles: { names: string[]; regions: Record<string, string> }
   saved: AnswersInput | null
   installed: { stack: string; region: string } | null
+  /** an earlier installation from this computer keeps a GitHub token the page can use (STORED_TOKEN) */
+  storedToken?: boolean
   node: string
   defaultRegion: string
 }
@@ -156,6 +158,7 @@ export function tokenKind(t: string): 'fine-grained' | 'classic' | 'oauth' | 'ap
 /** What is wrong with a GitHub token as typed ('' when nothing is), before GitHub is asked. */
 export function githubTokenError(raw: string, required = true): string {
   const t = raw.trim()
+  if (t === STORED_TOKEN) return ''
   if (!t) return required ? 'Paste a GitHub token.' : ''
   if (/\s/.test(t)) return 'A token has no spaces or line breaks: copy it again.'
   if (t.length < 20) return 'That is too short to be a GitHub token.'
@@ -169,6 +172,7 @@ export function githubTokenError(raw: string, required = true): string {
 /** A note about a token that is valid but not ideal ('' when none). */
 export function githubTokenNote(raw: string): string {
   const t = raw.trim()
+  if (t === STORED_TOKEN) return ''
   if (tokenKind(t) === 'unknown' && t.length >= 20 && !/\s/.test(t)) return 'This does not look like a GitHub personal access token (github_pat_… or ghp_…); it will be tried anyway.'
   if (tokenKind(t) === 'classic') return 'Works. A fine-grained token limited to trace\'s repositories is safer.'
   return ''
@@ -503,6 +507,8 @@ export function loadSaved(s: State, env: Env): void {
   s.env = env
   const saved = env.saved
   if (!saved) return
+  // a second run: the installation's own GitHub token, unless one is typed (the server reads it; the page never sees it)
+  if (env.storedToken && !s.github.token) s.github.token = STORED_TOKEN
   s.aws.mode = saved.aws?.mode ?? 'profile'
   s.aws.profile = saved.aws?.profile ?? 'default'
   s.aws.region = saved.aws?.region ?? ''
