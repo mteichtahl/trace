@@ -134,20 +134,13 @@ export function codeLang(path: string): string | null {
 export const isLog = (path: string): boolean => extOf(path) === 'log' || /\.log\.txt$/i.test(path)
 
 /** Which kinds can compare two versions, and how. */
-export type CompareMode = 'text' | 'table' | 'image' | 'kicad' | 'database' | 'sides'
-
-/**
- * Every kind compares: the ones with their own difference view (text, rows, pictures, KiCad, databases), and the rest
- * (fabrication layers, 3D models, PDFs, video, plots, firmware, archives, compressed files, anything else) in their own
- * viewer, Before, After or side by side. Nothing ends in "download to review".
- */
-export function compareMode(kind: ViewerKind): CompareMode {
+export function compareMode(kind: ViewerKind): 'text' | 'table' | 'image' | 'kicad' | 'database' | null {
   if (kind === 'database') return 'database'
   if (kind === 'code' || kind === 'markdown' || kind === 'wavedrom' || kind === 'vcd' || kind === 'spice' || kind === 'touchstone' || kind === 'report') return 'text'
   if (kind === 'table') return 'table'
   if (kind === 'image' || kind === 'svg') return 'image'
   if (kind === 'schematic' || kind === 'board') return 'kicad'
-  return 'sides'
+  return null
 }
 
 /** A sentence about a file trace cannot draw, when it knows what the file is (shown with Download). */

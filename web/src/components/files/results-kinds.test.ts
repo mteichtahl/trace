@@ -69,7 +69,7 @@ describe('result files from the tools', () => {
   it('compares text results line by line', () => {
     expect(compareMode('spice')).toBe('text')
     expect(compareMode('touchstone')).toBe('text')
-    expect(compareMode('gzip')).toBe('sides')
+    expect(compareMode('gzip')).toBeNull()
   })
 
   it('says what a binary CAN log is', () => {

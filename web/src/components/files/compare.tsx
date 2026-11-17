@@ -15,9 +15,7 @@ import { svgDataUrl } from './sanitize'
 import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerSize } from './viewers/common'
 import { PictureCompare } from './viewers/image'
 import { KiCadCompare } from './viewers/kicad'
-import { lazy, Suspense, useState } from 'react'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { ViewerFor } from './viewers'
+import { lazy, Suspense } from 'react'
 
 const DatabaseCompare = lazy(() => import('./viewers/database').then((m) => ({ default: m.DatabaseCompare })))
 import { TextDiff } from './text-diff'
@@ -117,37 +115,6 @@ function KiCad({ file, before, after, size }: { file: FileRef; before: string; a
   return <KiCadCompare file={file} before={a.data} after={b.data} beforeLabel={short(before)} afterLabel={after === 'current' ? 'current' : short(after)} size={size} />
 }
 
-/**
- * Two versions of a file that has no difference view of its own (fabrication layers, a 3D model, a PDF, a video, a plot,
- * firmware, an archive, anything else): each drawn by the file's own viewer, with Before, After and Side by side.
- */
-export function SidesCompare({ file, before, after, size }: { file: FileRef; before: string; after: string; size: ViewerSize }) {
-  const [side, setSide] = useState<'before' | 'after' | 'both'>('after')
-  const afterCommit = after === 'current' ? undefined : after
-  const pane = (label: string, commit: string | undefined) => (
-    <div key={label} className="relative min-h-[300px] min-w-0 bg-background">
-      <span className="absolute left-2 top-2 z-10 rounded bg-background/90 px-1.5 py-0.5 text-[11px] font-medium">{label}</span>
-      <ViewerFor file={file} size={size} commit={commit} />
-    </div>
-  )
-  return (
-    <div className={cn('flex flex-col', AREA[size])}>
-      <Controls>
-        <ToggleGroup type="single" size="sm" variant="outline" value={side} onValueChange={(v) => v && setSide(v as typeof side)} aria-label="Which version">
-          <ToggleGroupItem value="before" className="h-7 px-3 text-xs">Before</ToggleGroupItem>
-          <ToggleGroupItem value="after" className="h-7 px-3 text-xs">After</ToggleGroupItem>
-          <ToggleGroupItem value="both" className="h-7 px-3 text-xs">Side by side</ToggleGroupItem>
-        </ToggleGroup>
-      </Controls>
-      <div className={cn('min-h-0 flex-1 overflow-auto', side === 'both' && 'grid grid-cols-1 gap-px bg-border md:grid-cols-2')}>
-        {side === 'before' && pane('Before', before)}
-        {side === 'after' && pane('After', afterCommit)}
-        {side === 'both' && [pane('Before', before), pane('After', afterCommit)]}
-      </div>
-    </div>
-  )
-}
-
 /** Compare `before` (a commit) with `after` (a commit, or 'current'). */
 export function CompareView({ file, before, after, size }: { file: FileRef; before: string; after: string; size: ViewerSize }) {
   const mode = compareMode(viewerKind(file.path))
@@ -161,5 +128,5 @@ export function CompareView({ file, before, after, size }: { file: FileRef; befo
         <DatabaseCompare before={{ file, commit: before }} after={{ file, commit: after === 'current' ? undefined : after }} size={size} />
       </Suspense>
     )
-  return <SidesCompare file={file} before={before} after={after} size={size} />
+  return <Note>Versions of this kind of file cannot be compared here. Download each to compare them.</Note>
 }

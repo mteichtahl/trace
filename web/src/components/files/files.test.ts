@@ -85,7 +85,7 @@ describe('kind detection', () => {
     expect(compareMode('code')).toBe('text')
     expect(compareMode('table')).toBe('table')
     expect(compareMode('image')).toBe('image')
-    expect(compareMode('pdf')).toBe('sides')
+    expect(compareMode('pdf')).toBeNull()
   })
 })
 

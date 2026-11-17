@@ -2,19 +2,21 @@
  * One file of a change, its before and after (change.diff gives the two sides as commits; the bytes come through the
  * File viewer's own reading, files.url at that commit). Schematics and boards open in the KiCanvas viewer with a
  * Before / After switch (or both side by side); parts lists compare row by row; text files show the diff; pictures
- * sit side by side; every other kind opens in its own viewer, before and after. A file added or removed shows its one
- * side. No file ends in "download to review".
+ * sit side by side. A file added or removed shows its one side.
  */
 import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useState } from 'react'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { CompareView } from '@/components/files/compare'
-import { resolveUrl, useFileText } from '@/components/files/data'
+import { downloadFile, resolveUrl, useFileText } from '@/components/files/data'
+import { Download } from 'lucide-react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import { baseName, extOf, viewerKind } from '@/components/files/kinds'
 import { svgDataUrl } from '@/components/files/sanitize'
 import { PictureCompare } from '@/components/files/viewers/image'
 import { OverlayView, overlayAvailable } from './overlay'
-import { ViewerError, ViewerLoading } from '@/components/files/viewers/common'
+import { Note, ViewerError, ViewerLoading } from '@/components/files/viewers/common'
 import { ViewerFor } from '@/components/files/viewers'
 import { KiCanvasView } from '@/components/files/viewers/kicad'
 import { q } from '@/lib/queries'
@@ -103,7 +105,7 @@ export function ChangeFileView({ repo, number, file }: { repo: string; number: n
   const d = useQuery({ ...q('change.diff', { repo, number, path: file.path }), staleTime: 60_000 })
   if (d.isError) return <ViewerError error={d.error} onRetry={() => void d.refetch()} what="this file's change" />
   if (!d.data) return <ViewerLoading size="sheet" label="Opening the change to this file" />
-  const { before, after } = d.data
+  const { before, after, binary } = d.data
   if (file.kind === 'schematic' || file.kind === 'board') return <KiCadSides repo={repo} file={file} before={before} after={after} />
   // a database is stored as bytes, but its tables and rows are shown and compared, read in the browser
   if (viewerKind(file.path) === 'database') {
@@ -123,8 +125,7 @@ export function ChangeFileView({ repo, number, file }: { repo: string; number: n
       </div>
     )
   }
-  // a file that is not text (a fabrication layer, a model, a PDF, firmware, an archive, anything else) is still opened
-  // here, by its own viewer, before and after; the viewer says so plainly when trace cannot draw the kind
+  if (binary || file.kind === 'binary') return <Downloads repo={repo} file={file} before={before} after={after} />
   const ref = { repo, path: file.path }
   // one side only: added or removed
   if (!before || !after) {
@@ -140,6 +141,23 @@ export function ChangeFileView({ repo, number, file }: { repo: string; number: n
   return (
     <div className="h-full min-h-[320px]">
       <CompareView file={before.path ? { repo, path: file.path } : ref} before={before.ref} after={after.ref} size="sheet" />
+    </div>
+  )
+}
+
+/**
+ * A file the app cannot show (a database, an archive): download either version from here (files.url at the change's
+ * base and head commits), so nobody goes to GitHub for it.
+ */
+function Downloads({ repo, file, before, after }: { repo: string; file: ChangeFile; before: { ref: string; path?: string } | null; after: { ref: string } | null }) {
+  const get = (path: string, ref: string) => void downloadFile({ repo, path }, ref).catch((e: unknown) => toast.error('Could not download the file', { description: e instanceof Error ? e.message : String(e) }))
+  return (
+    <div className="flex h-full min-h-[200px] flex-col items-start gap-3 p-5">
+      <Note>This file is not text or a picture, so it cannot be shown here. Download either version to open it on your computer.</Note>
+      <div className="flex flex-wrap gap-2">
+        {before && <Button variant="outline" size="sm" onClick={() => get(before.path ?? file.path, before.ref)}><Download aria-hidden /> Download before</Button>}
+        {after && <Button variant="outline" size="sm" onClick={() => get(file.path, after.ref)}><Download aria-hidden /> Download after</Button>}
+      </div>
     </div>
   )
 }
