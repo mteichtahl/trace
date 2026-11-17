@@ -367,6 +367,27 @@ export async function freeSecretNames(creds: AwsCredentialIdentity, region: stri
 }
 
 /**
+ * Delete the named secrets outright, whether or not they are scheduled for deletion, so a stack can create them: for
+ * names only a stack makes and that the stack does not hold now (a first deploy that failed and left them behind).
+ * Answers a line per secret deleted.
+ */
+export async function clearSecretNames(creds: AwsCredentialIdentity, region: string, names: readonly string[]): Promise<string[]> {
+  const sm = new SecretsManagerClient({ region, credentials: creds })
+  const out: string[] = []
+  for (const name of names) {
+    try {
+      await sm.send(new DescribeSecretCommand({ SecretId: name }))
+      await sm.send(new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }))
+      out.push(`${name}: left by an earlier deploy that failed; deleted so this one can create it`)
+    } catch (e) {
+      if (e instanceof ResourceNotFoundException) continue
+      throw e
+    }
+  }
+  return out
+}
+
+/**
  * The facts derive.ts needs that the answers leave open, and only those (src/installer/derive.ts resolveAnswers):
  * the account always (STS), the profile's region, the token's login and email, the region's models, the GPU and CPU
  * quotas, and whether the region has S3 Vectors. A fact that cannot be read is left out (its default applies).

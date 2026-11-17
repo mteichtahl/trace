@@ -232,14 +232,15 @@ export class GitlabServer extends NestedStack {
       secretName: gitlabRootSecretName(p.prefix),
       description: 'trace: GitLab\'s root password (made by the stack, used once at install)',
       generateSecretString: { passwordLength: 32, excludePunctuation: true },
-      removalPolicy: RemovalPolicy.RETAIN,
+      // goes with the stack (and with a first deploy that fails, which would otherwise leave the name taken)
+      removalPolicy: RemovalPolicy.DESTROY,
     })
     this.adminTokenSecret = new secrets.Secret(this, 'AdminToken', {
       secretName: gitlabAdminTokenSecretName(p.prefix),
       description: 'trace: GitLab admin token for trace\'s API and installer (written by the GitLab instance)',
       // a placeholder until the instance writes the token (an empty secret value is not allowed)
       secretStringValue: SecretValue.unsafePlainText('pending'),
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.DESTROY,
     })
 
     // ---- data volume, kept when the stack goes, snapshotted daily
