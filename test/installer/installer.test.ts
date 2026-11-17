@@ -565,6 +565,37 @@ describe('the local server', () => {
     }
   })
 
+  it("uses the installation's stored GitHub token when the page sends STORED_TOKEN, read once", async () => {
+    const { STORED_TOKEN } = await import('../../src/installer/answers.js')
+    const seen: string[] = []
+    let reads = 0
+    const i = createInstaller({
+      uiScript: '', traceRepository: () => null,
+      storedTokens: async () => { reads++; return { githubToken: TOKEN, projectTokens: {} } },
+      preflight: async (_in, t) => { seen.push(t); return { checks: [], facts: { account: '123456789012' }, token: null, repos: [], ok: true } },
+    })
+    await new Promise<void>((r) => i.server.listen(0, '127.0.0.1', () => r()))
+    const port = (i.server.address() as AddressInfo).port
+    const post = (path: string, body: unknown): Promise<{ status: number; body: string }> => new Promise((resolveP, reject) => {
+      const req = request({ host: '127.0.0.1', port, path, method: 'POST', headers: { host: `localhost:${port}`, 'x-trace-key': i.key, 'content-type': 'application/json' } },
+        (res) => { let b = ''; res.on('data', (d: Buffer) => { b += d.toString() }); res.on('end', () => resolveP({ status: res.statusCode ?? 0, body: b })) })
+      req.on('error', reject)
+      req.end(JSON.stringify(body))
+    })
+    try {
+      // an earlier installation from this computer (its answers saved)
+      const { saveAnswers } = await import('../../src/core/client.js')
+      if (!AnswersSchema.safeParse(savedAnswers().answers).success) saveAnswers({ answers: AnswersSchema.parse(ANSWERS) })
+      const r = await post('/api/preflight', { aws: { mode: 'keys' }, secrets: { awsAccessKeyId: 'AKIA', awsSecretAccessKey: 'x' }, token: STORED_TOKEN })
+      expect(r.status).toBe(200)
+      expect(seen).toEqual([TOKEN])
+      await post('/api/preflight', { aws: { mode: 'keys' }, secrets: { awsAccessKeyId: 'AKIA', awsSecretAccessKey: 'x' }, token: STORED_TOKEN })
+      expect(reads).toBe(1)
+    } finally {
+      i.server.close()
+    }
+  })
+
   it("says on the GitHub check which repository trace came from and whether the token can configure it", async () => {
     const r = await call('/api/github/check', { key, method: 'POST', body: JSON.stringify({ token: TOKEN, repos: ['mteichtahl/board'] }) })
     expect(r.status).toBe(200)

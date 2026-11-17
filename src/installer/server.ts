@@ -21,7 +21,9 @@ import { checkNow } from '../core/wait.js'
 import { stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { IntegrationNameSchema, checkIntegration, valuesFor } from '../core/integrations.js'
-import { type Answers, AnswersSchema, AwsAnswers, type InstallEvent, SecretsSchema } from './answers.js'
+import { type Answers, AnswersSchema, AwsAnswers, type InstallEvent, STORED_TOKEN, SecretsSchema } from './answers.js'
+import { storedTokens } from './lifecycle.js'
+import { secretsManagerApi } from '../core/integrations.js'
 import { type Hooks, apply, changesSince, plan, timeline } from './bootstrap.js'
 import { checkAws, credentials, profiles } from './aws.js'
 import { DEFAULT_REGION } from './derive.js'
@@ -39,6 +41,8 @@ export interface InstallerOptions {
   uiStyles?: string
   /** tests: the preflight, the fixes, the integration checks and the install's hooks */
   preflight?: (i: PreflightInput, token: string, onProgress?: OnProgress) => Promise<PreflightResult>
+  /** the installation's stored GitHub tokens (default: read from Secrets Manager with the saved answers; tests) */
+  storedTokens?: (a: Answers) => Promise<{ githubToken: string; projectTokens: Record<string, string> }>
   fix?: typeof fix
   checkIntegration?: typeof checkIntegration
   hooks?: Hooks
@@ -113,6 +117,24 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
   const css = opts.uiStyles ?? (opts.uiScript !== undefined ? '' : readFileSync(join(REPO_ROOT, 'dist', 'installer', 'ui.css'), 'utf8'))
   let run: RunState | null = null
 
+  // the installation's own GitHub tokens, read once from Secrets Manager with the saved answers' AWS credentials, when
+  // the page sends STORED_TOKEN (a second run: nothing to type again). They stay in this process.
+  let stored: Promise<{ githubToken: string; projectTokens: Record<string, string> }> | null = null
+  const storedOnce = (): Promise<{ githubToken: string; projectTokens: Record<string, string> }> => {
+    stored ??= (async () => {
+      const prev = previous()
+      if (!prev) throw new HttpError(409, 'There is no earlier installation on this computer to take the token from: paste a GitHub token.')
+      if (opts.storedTokens) return opts.storedTokens(prev)
+      const creds = await resolveCredentials(prev.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '' })
+      const sm = await secretsManagerApi({ region: prev.aws.region || DEFAULT_REGION, credentials: creds })
+      return storedTokens(prev, sm.get).catch((e: unknown) => { throw new HttpError(409, `The installation's stored GitHub token could not be read (${e instanceof Error ? e.message : String(e)}): paste a GitHub token.`) })
+    })()
+    stored.catch(() => { stored = null })
+    return stored
+  }
+  /** A token as the page sent it, with STORED_TOKEN swapped for the installation's own. */
+  const tokenOf = async (t: string): Promise<string> => (t === STORED_TOKEN ? (await storedOnce()).githubToken : t)
+
   // The key travels in the query only where a browser can't set a header (opening the page, EventSource); the API
   // takes it as a header, so it never sits in a URL the page fetches.
   const authorised = (req: IncomingMessage, url: URL): boolean => {
@@ -126,7 +148,8 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
   // everything at once, before anything is created (src/installer/preflight.ts): what is derived, and each finding;
   // onProgress hears each check start and end (the page shows them while it waits)
   const runPreflight = async (raw: unknown, onProgress: OnProgress = () => undefined): Promise<unknown> => {
-    const b = PreflightBody.parse(raw)
+    const parsed = PreflightBody.parse(raw)
+    const b = { ...parsed, token: await tokenOf(parsed.token), adminToken: parsed.adminToken === STORED_TOKEN ? '' : parsed.adminToken }
     onProgress({ id: 'credentials', label: b.aws.mode === 'profile' ? `Reading the AWS profile "${b.aws.profile}"` : 'Reading the AWS access keys', state: 'running' })
     const creds = await resolveCredentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
       .catch((e: unknown) => { onProgress({ id: 'credentials', label: 'Reading the AWS credentials', state: 'failed', detail: errorText(e) }); throw e })
@@ -149,11 +172,14 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       profiles: await profiles(),
       saved: (savedAnswers().answers ?? null) as unknown,
       installed: installation(),
+      // an earlier installation from here: the page may use its stored GitHub token (STORED_TOKEN) instead of asking
+      storedToken: Boolean(previous() && installation()),
       node: process.version,
       defaultRegion: DEFAULT_REGION,
     }),
     'POST /api/github/check': async (req) => {
-      const { token, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(200).default([]) }).parse(await body(req))
+      const { token: given, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(200).default([]) }).parse(await body(req))
+      const token = await tokenOf(given)
       const info = await checkToken(token)
       const access = await Promise.all(repos.map(async (r) => ({ repo: r, ...(await canConfigure(token, r)) })))
       // trace's own repository, and whether this token can set its variables (the page's "build trace's own repository
@@ -174,7 +200,7 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       const b = z.object({ aws: AwsAnswers.unwrap().pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial().default({}), token: z.string().default(''), fix: FixRequest }).parse(await body(req))
       const creds = await resolveCredentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
       const region = b.aws.region || (await profiles()).regions[b.aws.profile] || DEFAULT_REGION
-      return { detail: await (opts.fix ?? fix)(b.fix, { creds, region, token: b.token }) }
+      return { detail: await (opts.fix ?? fix)(b.fix, { creds, region, token: b.token ? await tokenOf(b.token) : '' }) }
     },
     // an integration's keys, checked with its service (never stored here: that is the install's)
     'POST /api/integrations/check': async (req) => {
@@ -193,7 +219,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       if (run && !run.done) throw new HttpError(409, 'an installation is already running')
       const b = z.object({ answers: z.unknown(), secrets: z.unknown() }).parse(await body(req))
       const a = AnswersSchema.parse(b.answers)
-      const s = SecretsSchema.parse(b.secrets)
+      const given = SecretsSchema.parse(b.secrets)
+      // the installation's own token, and each project's own one that is not typed again
+      const s = given.githubToken === STORED_TOKEN
+        ? await storedOnce().then((t) => ({ ...given, githubToken: t.githubToken, projectTokens: { ...t.projectTokens, ...given.projectTokens } }))
+        : given
       const state: RunState = { events: [], listeners: new Set(), done: false }
       run = state
       const emit = (e: InstallEvent): void => {

@@ -60,6 +60,7 @@ import { deployEdge, withAcl } from './edge.js'
 import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
 import { registerWebhooks } from './hooks.js'
+import { type StackWaitDeps, cfnStackStatus, waitForStack } from './stack-wait.js'
 import { type MoveDeps, type MoveEntry, type MovesIo, applyMove, parseMoves, s3MovesIo, withForges } from './moves.js'
 import { gitlabSide, githubSide } from '../core/forge-move-sides.js'
 import { type MoveRecord, forgeLabel } from '../core/forge-move-record.js'
@@ -75,6 +76,11 @@ export interface UpdateDeps {
   env: NodeJS.ProcessEnv
   credentials: () => Promise<AwsCredentialIdentity>
   outputs: (creds: AwsCredentialIdentity, region: string, stack: string) => Promise<Record<string, string>>
+  /** the stack's status before the deploy, which waits while another update runs (the installer's, say); absent, it
+   * does not wait (src/installer/stack-wait.ts) */
+  stackStatus?: (creds: AwsCredentialIdentity, region: string, stack: string) => () => Promise<string | null>
+  /** how that wait looks again (tests) */
+  stackWait?: Pick<StackWaitDeps, 'sleep' | 'now' | 'every' | 'timeout'>
   /** the installation record's text */
   readRecord: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string) => Promise<string>
   resolveConnection: (creds: AwsCredentialIdentity, region: string, o: { prefix: string; given?: string; deployed: Record<string, string> | null }) => Promise<ConnectionChoice>
@@ -119,6 +125,7 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
   env,
   credentials: () => fromNodeProviderChain()(),
   outputs: (creds, region, stack) => stackOutputs(creds, region, stack),
+  stackStatus: cfnStackStatus,
   readRecord: async (creds, region, bucket, key) => {
     const r = await new S3Client({ region, credentials: creds }).send(new GetObjectCommand({ Bucket: bucket, Key: key }))
     return (await r.Body?.transformToString('utf8')) ?? ''
@@ -330,6 +337,14 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   input = withAcl(input, edge.aclArn)
   if (edge.note) { if (edge.ok) log(edge.note); else say(edge.note) }
   log(`Deploying ${stack} from this commit${ready ? '' : ', without the build runners (the GitHub connection is not authorized yet)'}. When the agent image changed, CodeBuild builds it again: allow 20–40 minutes.`)
+  // the installer (or an earlier update) may be deploying the stack now: wait for it rather than fail
+  if (d.stackStatus) {
+    try { await waitForStack(stack, { status: d.stackStatus(creds, region, stack), log: (l) => log(redact(l)), ...(d.stackWait ?? {}) }) } catch (e) {
+      say(`Not deployed: ${redact(message(e))}.`)
+      for (const x of homes.taken) await putMove(x.key, { ...x.record, status: 'failed', step: 'deploy', error: 'another update of the stack was still running; it is where it was', finished_at: new Date().toISOString() })
+      return 1
+    }
+  }
   const code = await d.cdk(cdkDeployArgs(stack, app), {
     ...awsEnv(creds, region), TRACE_INFRA: JSON.stringify(input), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
   }, (l) => log(redact(l)))

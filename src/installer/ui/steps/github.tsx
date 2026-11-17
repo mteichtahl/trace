@@ -2,6 +2,7 @@ import { Loader2, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { checkGithub } from '../actions.js'
+import { STORED_TOKEN } from '../../answers.js'
 import { ghCurrent, githubTokenError, githubTokenNote } from '../model.js'
 import { Code, CopyButton, Ext, Help, Note, Steps, TextField } from '../parts.js'
 import { update, useStore } from '../store.js'
@@ -23,10 +24,20 @@ export function GithubStep() {
   return (
     <>
       <div className="grid gap-3">
-        <TextField id="github.token" label="GitHub token" secret mono autoFocus value={s.github.token} placeholder="github_pat_… or ghp_…"
-          error={s.touched.has('github.token') || s.tried.has('github') ? typed : ''}
-          hint={note || 'Paste it: it is checked with GitHub as soon as it is complete. It is held in memory only.'}
-          onChange={(v) => update((x) => { x.github.token = v; x.ghError = '' })} />
+        {s.github.token === STORED_TOKEN ? (
+          <Note tone="ok" title="Using the GitHub token this installation keeps">
+            <p>It is read from AWS Secrets Manager ({s.agents.prefix}/github-token) with your AWS credentials, so there is nothing to paste. Each project's own token is kept too.</p>
+            <Button variant="outline" size="xs" onClick={() => update((x) => { x.github.token = ''; x.ghError = ''; x.gh = null })}>Use another token</Button>
+          </Note>
+        ) : (
+          <TextField id="github.token" label="GitHub token" secret mono autoFocus value={s.github.token} placeholder="github_pat_… or ghp_…"
+            error={s.touched.has('github.token') || s.tried.has('github') ? typed : ''}
+            hint={note || 'Paste it: it is checked with GitHub as soon as it is complete. It is held in memory only.'}
+            onChange={(v) => update((x) => { x.github.token = v; x.ghError = '' })} />
+        )}
+        {s.github.token === '' && s.env?.storedToken ? (
+          <Button variant="ghost" size="xs" className="justify-self-start" onClick={() => update((x) => { x.github.token = STORED_TOKEN; x.ghError = '' })}>Use the token this installation keeps</Button>
+        ) : null}
         {typed ? null : (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
             {s.ghBusy || !fresh && !s.ghError ? <><Loader2 className="size-3.5 animate-spin text-primary" />Checking with GitHub…</> : null}
