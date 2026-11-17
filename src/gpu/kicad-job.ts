@@ -15,10 +15,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { MODEL_VARS, MODELS_DIR } from '../tools/kicad/models3d.js'
 
-export const PROJECT_TOKEN = '@PROJECT@'
-export const OUT_TOKEN = '@OUT@'
-/** In out.tar: the folders this run used, { project, out } */
-export const SIDECAR = '.trace-kicad-job.json'
+export { OUT_TOKEN, PROJECT_TOKEN, SIDECAR } from './kicad-job-tokens.js'
+import { OUT_TOKEN, PROJECT_TOKEN, SIDECAR } from './kicad-job-tokens.js'
 
 export interface KicadJobArgs { projectTar: string; outTar: string; work: string; outName: string; outKind: 'file' | 'dir'; cli: string[] }
 

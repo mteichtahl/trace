@@ -27,7 +27,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
 import { runJob } from '../../gpu/jobs.js'
-import { OUT_TOKEN, PROJECT_TOKEN, SIDECAR } from '../../gpu/kicad-job.js'
+import { OUT_TOKEN, PROJECT_TOKEN, SIDECAR } from '../../gpu/kicad-job-tokens.js'
 import type { CliResult } from './project.js'
 
 /** Where src/gpu/kicad-job.ts is in the tools and GPU images. */
