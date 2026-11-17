@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DecisionCard } from '@/components/decision-card'
 import type { InboxItem } from '@/lib/types'
-import { decisionFor, inboxItems, queueOrder } from './next'
+import { decisionFor, inboxItems, queueOrder } from './next-queue'
 
 const q: InboxItem = {
   id: 'n2', kind: 'question', repo: 'acme/motor-driver', project: 'Motor driver', summary: 'Stall current? **It recommends 4.2 A**', createdAt: new Date().toISOString(),

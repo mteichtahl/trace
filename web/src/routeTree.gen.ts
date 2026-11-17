@@ -63,6 +63,7 @@ import { Route as AppPIdMemoryRecentRouteImport } from './routes/_app/p/$id/memo
 import { Route as AppPIdRequirementsRidRouteImport } from './routes/_app/p/$id/requirements.$rid'
 import { Route as AppPIdRunsRunRouteImport } from './routes/_app/p/$id/runs.$run'
 import { Route as AppPIdSettingsIndexRouteImport } from './routes/_app/p/$id/settings/index'
+import { Route as AppPIdSettingsSectionRouteImport } from './routes/_app/p/$id/settings/$section'
 import { Route as AppPIdSettingsPromptsRouteImport } from './routes/_app/p/$id/settings/prompts'
 import { Route as AppPIdFilesSplatRouteImport } from './routes/_app/p/$id_/files/$'
 import { Route as FocusPIdDoSkillRouteImport } from './routes/_focus/p/$id/do/$skill'
@@ -337,6 +338,11 @@ const AppPIdSettingsIndexRoute = AppPIdSettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => AppPIdRoute,
 } as any)
+const AppPIdSettingsSectionRoute = AppPIdSettingsSectionRouteImport.update({
+  id: '/settings/$section',
+  path: '/settings/$section',
+  getParentRoute: () => AppPIdRoute,
+} as any)
 const AppPIdSettingsPromptsRoute = AppPIdSettingsPromptsRouteImport.update({
   id: '/settings/prompts',
   path: '/settings/prompts',
@@ -412,6 +418,7 @@ export interface FileRoutesByFullPath {
   '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
   '/p/$id/runs/$run': typeof AppPIdRunsRunRoute
+  '/p/$id/settings/$section': typeof AppPIdSettingsSectionRoute
   '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/p/$id/files/$': typeof AppPIdFilesSplatRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
@@ -467,6 +474,7 @@ export interface FileRoutesByTo {
   '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
   '/p/$id/runs/$run': typeof AppPIdRunsRunRoute
+  '/p/$id/settings/$section': typeof AppPIdSettingsSectionRoute
   '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/p/$id/files/$': typeof AppPIdFilesSplatRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
@@ -529,6 +537,7 @@ export interface FileRoutesById {
   '/_app/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/_app/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
   '/_app/p/$id/runs/$run': typeof AppPIdRunsRunRoute
+  '/_app/p/$id/settings/$section': typeof AppPIdSettingsSectionRoute
   '/_app/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/_app/p/$id_/files/$': typeof AppPIdFilesSplatRoute
   '/_focus/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
@@ -590,6 +599,7 @@ export interface FileRouteTypes {
     | '/p/$id/memory/recent'
     | '/p/$id/requirements/$rid'
     | '/p/$id/runs/$run'
+    | '/p/$id/settings/$section'
     | '/p/$id/settings/prompts'
     | '/p/$id/files/$'
     | '/p/$id/do/$skill'
@@ -645,6 +655,7 @@ export interface FileRouteTypes {
     | '/p/$id/memory/recent'
     | '/p/$id/requirements/$rid'
     | '/p/$id/runs/$run'
+    | '/p/$id/settings/$section'
     | '/p/$id/settings/prompts'
     | '/p/$id/files/$'
     | '/p/$id/do/$skill'
@@ -706,6 +717,7 @@ export interface FileRouteTypes {
     | '/_app/p/$id/memory/recent'
     | '/_app/p/$id/requirements/$rid'
     | '/_app/p/$id/runs/$run'
+    | '/_app/p/$id/settings/$section'
     | '/_app/p/$id/settings/prompts'
     | '/_app/p/$id_/files/$'
     | '/_focus/p/$id/do/$skill'
@@ -1108,6 +1120,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPIdSettingsIndexRouteImport
       parentRoute: typeof AppPIdRoute
     }
+    '/_app/p/$id/settings/$section': {
+      id: '/_app/p/$id/settings/$section'
+      path: '/settings/$section'
+      fullPath: '/p/$id/settings/$section'
+      preLoaderRoute: typeof AppPIdSettingsSectionRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
     '/_app/p/$id/settings/prompts': {
       id: '/_app/p/$id/settings/prompts'
       path: '/settings/prompts'
@@ -1231,6 +1250,7 @@ interface AppPIdRouteChildren {
   AppPIdIndexRoute: typeof AppPIdIndexRoute
   AppPIdChangesNumberRoute: typeof AppPIdChangesNumberRoute
   AppPIdRunsRunRoute: typeof AppPIdRunsRunRoute
+  AppPIdSettingsSectionRoute: typeof AppPIdSettingsSectionRoute
   AppPIdSettingsPromptsRoute: typeof AppPIdSettingsPromptsRoute
   AppPIdChangesIndexRoute: typeof AppPIdChangesIndexRoute
   AppPIdFilesIndexRoute: typeof AppPIdFilesIndexRoute
@@ -1251,6 +1271,7 @@ const AppPIdRouteChildren: AppPIdRouteChildren = {
   AppPIdIndexRoute: AppPIdIndexRoute,
   AppPIdChangesNumberRoute: AppPIdChangesNumberRoute,
   AppPIdRunsRunRoute: AppPIdRunsRunRoute,
+  AppPIdSettingsSectionRoute: AppPIdSettingsSectionRoute,
   AppPIdSettingsPromptsRoute: AppPIdSettingsPromptsRoute,
   AppPIdChangesIndexRoute: AppPIdChangesIndexRoute,
   AppPIdFilesIndexRoute: AppPIdFilesIndexRoute,

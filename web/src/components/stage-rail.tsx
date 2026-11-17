@@ -65,7 +65,18 @@ function StageDot({ s, size = 26 }: { s: Stage; size?: number }) {
       </svg>
     )
   }
-  if (s.state === 'current' || s.state === 'reopened') {
+  if (s.state === 'reopened') {
+    // sent back here: amber, with a turn-back arrow, whatever caused it (docs/ui-simplify.md, "One exception card")
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden className="text-warning-foreground" data-reopened>
+        <circle cx={r} cy={r} r={r - 2} fill="var(--background)" stroke="currentColor" strokeWidth={3} />
+        <foreignObject x={size * 0.27} y={size * 0.27} width={size * 0.46} height={size * 0.46}>
+          <CornerUpLeft className="size-full" strokeWidth={3} />
+        </foreignObject>
+      </svg>
+    )
+  }
+  if (s.state === 'current') {
     return (
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden className="text-primary">
         <circle cx={r} cy={r} r={r - 2} fill="var(--background)" stroke="currentColor" strokeWidth={3} />

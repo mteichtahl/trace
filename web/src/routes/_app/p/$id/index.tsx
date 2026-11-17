@@ -1,28 +1,30 @@
 /**
- * Project overview: where is it (stage rail, and under it the current stage's guide: its purpose, its steps with who
- * does each, and what the gate needs; a segmented bar with "step 3 of 5" on phones), what is the one next step (the
- * card, with its place in the stage, trace's recommendation and what happens after), the changes trace made waiting
- * to be reviewed, the build when it is failing (with "Ask trace to fix something"), and what is happening around it (Waiting on people, trace is doing, Queued, and Recently as a short timeline). Any stage on
- * the rail, and "What happens in <Stage>", opens the stage sheet. A job one specialist asked another for reads "Asked by the …
- * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
- * summaries; for admins, the cost summary is the project's two budgets (the build budget for the order, the cloud-work
- * allowance for trace's own work: budgets.tsx), and a warning under the next step when the current stage nears or
- * passes its share of the cloud-work allowance, with its biggest jobs (cost.get warning).
+ * Project overview, one column on every screen size (docs/ui-simplify.md, "The Overview"): where it is (the stage
+ * rail; a segmented bar on a phone; any stage and "What happens in <Stage>" open the stage sheet), the one next step
+ * (the card, with its place in the stage, trace's recommendation and what happens after), whatever went wrong or went
+ * back as one exception card (the failing build, gates to sign again, checks out of date, the cloud-work allowance
+ * warning: the most blocking shown, the rest under "N more"), then everything around the project as folded rows that
+ * open in place: the gate's checklist, Changes from trace, Waiting on people, trace is working (doing, ended without
+ * finishing, queued, fixes asked for), Recently, and Requirements and cost (for admins, the two budgets:
+ * budgets.tsx). A job one specialist asked another for reads "Asked by the … specialist: …" (its title), and a queued
+ * one can be declined there.
  * Reference screen for a project tab.
  */
 import { useQuery } from '@tanstack/react-query'
 import { RecentTimeline } from '@/components/project/recent-timeline'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { CircleHelp } from 'lucide-react'
+import { ArrowRight, CircleHelp } from 'lucide-react'
 import { useState } from 'react'
 import { StageCelebration, useStageCelebration } from '@/components/changes/celebration'
-import { ChangesFromTrace, useChanges } from '@/components/changes/changes-list'
+import { useChanges } from '@/components/changes/changes-list'
 import { FoldLink, FoldRow, FoldRows } from '@/components/fold-row'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useAcceptNow } from '@/components/changes/use-change-actions'
-import { StageChip, StageGuidePanel, StageSheet } from '@/components/stage-guide'
+import { GateChecklist, StageChip, StageSheet, gateRowCount } from '@/components/stage-guide'
+import { ExceptionCard, ExceptionStack } from '@/components/exception-card'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth'
-import { changeOf, nextPlace } from '@/lib/guided'
+import { changeOf, changeState, nextPlace } from '@/lib/guided'
 import { q } from '@/lib/queries'
 import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -51,7 +53,7 @@ import type { CostView } from '@/lib/types-s1'
 import { SKILLS } from '@/components/skills/definitions'
 import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
-import { BuildHealth } from '@/components/project/build-health'
+import { BuildFailing, FixRequests, showsHealth } from '@/components/project/build-health'
 import { SpendWarningCard } from '@/components/project/spend-by-job'
 import { Budgets, SpentSoFar } from '@/components/project/budgets'
 import { spentTotal } from '@/components/project/gate-spend'
@@ -92,6 +94,8 @@ function Overview() {
   const held = !!(life.data?.paused || life.data?.retired)
   // a project paused for a move between GitHub and GitLab: the Next card shows the move
   const moveState = useMove(repo)
+  // the build, read here too (the same cached query as the card's) so the exception stack knows whether it has a card
+  const health = useQuery({ ...q('health.get', { repo }), staleTime: 30_000, refetchInterval: 60_000 })
   const moving = going(moveState.data?.move) || moveState.data?.move?.status === 'failed'
   void navigate
 
@@ -216,22 +220,33 @@ function Overview() {
   )
   // evidence gone out of date since it was checked (journey.get stale_evidence): one plain line each, opening its gate
   const outOfDate = d.staleEvidence?.length ? (
-    <div className="mt-4 space-y-1.5" aria-label="Out of date">
-      {d.staleEvidence.map((s) => (
-        <p key={s.criterion} className="text-sm">
-          <Link to="/p/$id/gates/$gate" params={{ id, gate: s.gate }} className="font-medium hover:underline">{s.text}</Link>
-          <span className="text-muted-foreground"> {s.why}</span>
-        </p>
-      ))}
-    </div>
+    <ExceptionCard
+      key="stale"
+      tone="warning"
+      label="Out of date"
+      title={`${plural(d.staleEvidence.length, 'check')} out of date`}
+      body="The design changed after these were checked. trace checks them again before the gate can be signed."
+      detailLabel="Which ones"
+      open={d.staleEvidence.length <= 3}
+      detail={
+        <div className="space-y-1.5">
+          {d.staleEvidence.map((s) => (
+            <p key={s.criterion} className="text-sm">
+              <Link to="/p/$id/gates/$gate" params={{ id, gate: s.gate }} className="font-medium hover:underline">{s.text}</Link>
+              <span className="text-muted-foreground"> {s.why}</span>
+            </p>
+          ))}
+        </div>
+      }
+    />
   ) : null
   // the two budgets, the build's and the cloud-work allowance, each with what counts against it (admins)
   const budgets = admin && cost.data?.money ? cost.data : undefined
   const spendWarning = admin && cost.data?.money && cost.data.warning
-    ? <SpendWarningCard warning={cost.data.warning} currency={cost.data.currency} id={id} className="mt-4" />
+    ? <SpendWarningCard key="spend" warning={cost.data.warning} currency={cost.data.currency} id={id} open={false} />
     : null
   // after a change of requirements: the gates to sign again, and which keep their evidence (journey.get resign)
-  const resign = d.resign ? <ResignGates resign={d.resign} id={id} className="mt-4" /> : null
+  const resign = d.resign ? <ResignGates key="resign" resign={d.resign} id={id} /> : null
   // Accept now: kept while an accept is on its way, so the card shows its progress even if a refresh meanwhile says otherwise
   const onAccept = changeNo && (canAccept || acceptNow.busy) ? () => acceptNow.run({ number: changeNo, title: change.data?.title ?? `Change ${changeNo}`, step: place }) : undefined
   const nextCard = held ? (moving ? <MoveNextCard repo={repo} /> : <HeldNextCard repo={repo} part={part} />) : (
@@ -253,103 +268,68 @@ function Overview() {
     />
   )
 
-  if (phone) {
-    const changeList = changes.data?.changes ?? []
-    const forYou = changeList.filter((c) => c.verdict === 'ready').length
-    const waitingOn = [...new Set(d.questions.map((qn) => qn.to).filter(Boolean))]
-    const working = [doingCount && `${doingCount} now`, queued.length && `${queued.length} queued`].filter(Boolean).join(' · ')
-    const r = d.summary?.requirements
-    const c = d.summary?.cost
-    return (
-      // room under the content for the pinned action bar
-      <div className="space-y-3 pb-28 pt-3">
-        <StageCelebration shown={celebrate} />
-        <StageChip j={d} admin={admin} onOpen={(s) => setSheet(s)} />
-        <StageSheet j={d} stage={sheet} admin={admin} held={held} onOpenChange={(o) => !o && setSheet(null)} />
-        {nextCard}
-        {resign}
-        {outOfDate}
-        {spendWarning}
-        <FoldRows label="Around this project">
-          {(changeList.length > 0 || d.changesUnavailable) && (
-            <FoldLink label="Changes from trace" to="/p/$id/changes" params={{ id }} count={forYou ? `${forYou} for you` : changeList.length || undefined} accent={forYou > 0} />
-          )}
-          <FoldRow label={waitingOn.length === 1 ? `Waiting on ${waitingOn[0]}` : 'Waiting on people'} count={d.questions.length ? plural(d.questions.length, 'question') : 'nothing'}>
-            {waitingList}
-          </FoldRow>
-          <FoldRow label="trace is working" count={working || 'idle'} description="What trace is doing now, and what is queued after it.">
-            <div className="space-y-6">
-              {doingList}
-              {lostJobs.length > 0 && <Section label="Ended without finishing" count={lostJobs.length}>{lostList}</Section>}
-              {queued.length > 0 && <Section label="Queued" count={queued.length}>{queuedList}</Section>}
-            </div>
-          </FoldRow>
-          <FoldRow label="Recently" count={d.recent.length ? ago(d.recent[0]!.at) : undefined}>
-            {recentList}
-            <Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="mt-3 inline-block text-sm text-primary hover:underline">Full history</Link>
-          </FoldRow>
-          {(r || c || budgets) && (
-            <FoldRow label="Requirements and cost" count={[r && `${r.accepted}`, budgets ? `${money(spentTotal(budgets).total, budgets.currency)} spent` : c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
-              <div className="space-y-4"><SideSummary j={d} id={id} budgets={budgets} /></div>
-            </FoldRow>
-          )}
-        </FoldRows>
-      </div>
-    )
-  }
-
+  const changeList = changes.data?.changes ?? []
+  const forYou = changeList.filter((c) => changeState(c) === 'yours').length
+  const waitingOn = [...new Set(d.questions.map((qn) => qn.to).filter(Boolean))]
+  const working = [doingCount && `${doingCount} now`, queued.length && `${queued.length} queued`, lostJobs.length && `${lostJobs.length} ended early`].filter(Boolean).join(' · ')
+  const r = d.summary?.requirements
+  const c = d.summary?.cost
+  const gateRow = gateRowCount(d)
+  const stage = d.stages.find((x) => x.state === 'current' || x.state === 'reopened')
+  // one column on every screen size (docs/ui-simplify.md): where it is, the one next step, at most one exception
+  // showing, then everything around the project folded into rows that open in place (in a drawer on a phone)
   return (
-    <div className="pb-12">
+    <div className={cn('space-y-3 pt-3 md:mx-auto md:max-w-[1000px] md:space-y-4 md:pt-6', phone ? 'pb-28' : 'pb-12')}>
       <StageCelebration shown={celebrate} />
-      <div className="mt-6 overflow-hidden rounded-xl border bg-card">
-        <div className="p-5 md:px-6 md:pt-6 md:pb-4">
+      {phone ? (
+        <StageChip j={d} admin={admin} onOpen={(s) => setSheet(s)} />
+      ) : (
+        <div className="rounded-xl border bg-card p-5 md:px-6 md:pt-6 md:pb-4">
           <StageRail stages={d.stages} gates={d.gates} onSelect={(s) => setSheet(s)} />
+          {stage && (
+            <button type="button" onClick={() => setSheet(stage)} className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline">
+              What happens in {stage.name} <ArrowRight className="size-3.5" aria-hidden />
+            </button>
+          )}
         </div>
-        <StageGuidePanel j={d} admin={admin} held={held} onWhat={(s) => setSheet(s)} />
-      </div>
+      )}
       <StageSheet j={d} stage={sheet} admin={admin} held={held} onOpenChange={(o) => !o && setSheet(null)} />
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="min-w-0">
-          {nextCard}
-          {resign}
-          {outOfDate}
-          {spendWarning}
-
-          <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
-
-          {/* the build when it is failing, the fixes asked for, and Ask trace to fix something (health.get) */}
-          <BuildHealth repo={repo} jobs={d.jobs} write={projects.data !== undefined && write && !held} />
-
-          <Section label="Waiting on people" count={d.questions.length} className="mt-10">
-            {waitingList}
-          </Section>
-
-          <Section label="trace is doing" count={doingCount}>
+      {nextCard}
+      {/* everything that went wrong or went back, in one shape and one place: the most blocking first */}
+      <ExceptionStack>
+        {[showsHealth(health.data) ? <BuildFailing key="build" repo={repo} jobs={d.jobs} open={false} /> : null, resign, outOfDate, spendWarning]}
+      </ExceptionStack>
+      <FoldRows label="Everything else here">
+        {gateRow && (
+          <FoldRow inline={!phone} label={`To pass the ${stage?.name ?? ''} gate`.replace('  ', ' ')} count={gateRow.count} accent={gateRow.ready}>
+            <GateChecklist j={d} admin={admin} held={held} />
+          </FoldRow>
+        )}
+        {(changeList.length > 0 || d.changesUnavailable) && (
+          <FoldLink label="Changes from trace" to="/p/$id/changes" params={{ id }} count={forYou ? `${forYou} for you` : changeList.length || undefined} accent={forYou > 0} />
+        )}
+        <FoldRow inline={!phone} label={waitingOn.length === 1 ? `Waiting on ${waitingOn[0]}` : 'Waiting on people'} count={d.questions.length ? plural(d.questions.length, 'question') : 'nothing'}>
+          {waitingList}
+        </FoldRow>
+        <FoldRow inline={!phone} label="trace is working" count={working || 'idle'} description="What trace is doing now, and what is queued after it.">
+          <div className="space-y-6" id="s-trace-is-doing">
             {doingList}
-          </Section>
-
-          {lostJobs.length > 0 && (
-            <Section label="Ended without finishing" count={lostJobs.length}>
-              {lostList}
-            </Section>
-          )}
-
-          {queued.length > 0 && (
-            <Section label="Queued" count={queued.length}>
-              {queuedList}
-            </Section>
-          )}
-
-          <Section label="Recently" action={<Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="text-primary hover:underline">Full history</Link>}>
-            {recentList}
-          </Section>
-        </div>
-
-        <aside className="space-y-4">
-          <SideSummary j={d} id={id} budgets={budgets} />
-        </aside>
-      </div>
+            {lostJobs.length > 0 && <Section label="Ended without finishing" count={lostJobs.length}>{lostList}</Section>}
+            {queued.length > 0 && <Section label="Queued" count={queued.length}>{queuedList}</Section>}
+            {/* the fixes asked for, and Ask trace to fix something (health.get) */}
+            <FixRequests repo={repo} jobs={d.jobs} write={projects.data !== undefined && write && !held} />
+          </div>
+        </FoldRow>
+        <FoldRow inline={!phone} label="Recently" count={d.recent.length ? ago(d.recent[0]!.at) : undefined}>
+          {recentList}
+          <Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="mt-3 inline-block text-sm text-primary hover:underline">Full history</Link>
+        </FoldRow>
+        {(r || c || budgets) && (
+          <FoldRow inline={!phone} label="Requirements and cost" count={[r && `${r.accepted} accepted`, budgets ? `${money(spentTotal(budgets).total, budgets.currency)} spent` : c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
+            <div className="grid gap-4 md:grid-cols-2"><SideSummary j={d} id={id} budgets={budgets} /></div>
+          </FoldRow>
+        )}
+      </FoldRows>
     </div>
   )
 }

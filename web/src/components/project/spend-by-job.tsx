@@ -6,11 +6,11 @@
  * nothing showed it (issue log #72, #100, #113). The words are pure functions, tested on their own.
  */
 import { Link } from '@tanstack/react-router'
-import { TriangleAlert } from 'lucide-react'
+import { ExceptionCard } from '@/components/exception-card'
+import { Button } from '@/components/ui/button'
 import { StatusBadge, type Status } from '@/components/status-badge'
 import { duration, money, plural } from '@/lib/format'
 import type { JobSpendView, SpendByJobView, SpendWarning } from '@/lib/types-s1'
-import { cn } from '@/lib/utils'
 
 const OUTCOME: Partial<Record<JobSpendView['outcome'], { status: Status; label: string }>> = {
   failed: { status: 'failing', label: 'Failed' },
@@ -66,32 +66,41 @@ export function warningText(w: SpendWarning, currency: string): { title: string;
 }
 
 /** The warning card (Overview, Cost and time): the words, and the stage's biggest jobs. */
-export function SpendWarningCard({ warning, currency, id, link = true, className }: { warning: SpendWarning; currency: string; id: string; link?: boolean; className?: string }) {
+export function SpendWarningCard({ warning, currency, id, link = true, open = true, className }: { warning: SpendWarning; currency: string; id: string; link?: boolean; /** the biggest jobs listed from the start */ open?: boolean; className?: string }) {
   const t = warningText(warning, currency)
   return (
-    <div role="status" className={cn('rounded-xl border border-warning/50 bg-warning/10 p-4 text-sm', className)}>
-      <p className="flex items-start gap-2 font-semibold"><TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning-foreground" aria-hidden />{t.title}</p>
-      <p className="mt-1 pl-6">{t.body}</p>
-      {warning.top.length > 0 && (
-        <div className="mt-2 pl-6">
-          <p className="text-xs text-muted-foreground">Biggest jobs in {warning.stage}</p>
-          <ul className="mt-1 space-y-1">
-            {warning.top.map((j) => (
-              <li key={j.id ?? 'none'} className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 truncate">{j.title}<span className="text-muted-foreground">{j.specialist ? ` · ${j.specialist}` : ''}{j.repeat ? ` · ${REPEAT_LABEL[j.repeat.kind]}` : ''}</span></span>
-                <span className="shrink-0 font-medium tabular-nums">{money(j.amount, currency)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+    <ExceptionCard
+      tone="warning"
+      label="Cloud-work allowance"
+      title={t.title}
+      body={t.body}
+      action={link && (
+        <Button asChild size="sm" variant="outline">
+          <Link to="/p/$id/cost" params={{ id }}>See what each job cost</Link>
+        </Button>
       )}
-      {link && (
-        <div className="mt-3 flex flex-wrap gap-4 pl-6">
-          <Link to="/p/$id/cost" params={{ id }} className="text-primary hover:underline">See what each job cost</Link>
-          <Link to="/p/$id/settings" params={{ id }} className="text-primary hover:underline">Cloud-work allowance in Settings</Link>
-        </div>
+      detailLabel={`Biggest jobs in ${warning.stage}`}
+      open={open}
+      className={className}
+      detail={(warning.top.length > 0 || link) && (
+        <>
+          {warning.top.length > 0 && (
+            <>
+              <p className="text-xs text-muted-foreground">Biggest jobs in {warning.stage}</p>
+              <ul className="mt-1 space-y-1">
+                {warning.top.map((j) => (
+                  <li key={j.id ?? 'none'} className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 truncate">{j.title}<span className="text-muted-foreground">{j.specialist ? ` · ${j.specialist}` : ''}{j.repeat ? ` · ${REPEAT_LABEL[j.repeat.kind]}` : ''}</span></span>
+                    <span className="shrink-0 font-medium tabular-nums">{money(j.amount, currency)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {link && <Link to="/p/$id/settings" params={{ id }} className="mt-3 inline-block text-primary hover:underline">Cloud-work allowance in Settings</Link>}
+        </>
       )}
-    </div>
+    />
   )
 }
 

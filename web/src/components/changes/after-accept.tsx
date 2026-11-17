@@ -103,7 +103,7 @@ export function NextBody({ v, onBack, className }: { v: NextView; onBack: () => 
       {v.more ? (
         <div className="space-y-2">
           <Button className="h-12 w-full text-base" asChild>
-            <Link to="/next" onClick={onBack}>{v.back} <ArrowRight aria-hidden /></Link>
+            <Link to="/" onClick={onBack}>{v.back} <ArrowRight aria-hidden /></Link>
           </Button>
           <Button variant="outline" className="h-11 w-full" onClick={onBack}>Back to the project</Button>
         </div>

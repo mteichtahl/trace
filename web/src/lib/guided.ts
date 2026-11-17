@@ -110,6 +110,35 @@ export const VERDICT_WORDS: Record<ChangeVerdict, { pill: string; tone: 'primary
   applying: { pill: 'Applying', tone: 'neutral' },
 }
 
+/**
+ * The three states a person sorts changes by (docs/ui-simplify.md, "Changes"): yours (it waits for you: to review, or
+ * to ask for a fix), trace's (trace is still making, checking, updating or applying it), blocked (it cannot go on
+ * until something else happens: the change it builds on, or checks that cannot start). The verdict's own words stay in
+ * the line under the title.
+ */
+export type ChangeState = 'yours' | 'trace' | 'blocked'
+
+export const STATE_WORDS: Record<ChangeState, { pill: string; tab: string; tone: 'primary' | 'neutral' | 'bad' | 'warning' }> = {
+  yours: { pill: 'For you', tab: 'For you', tone: 'primary' },
+  trace: { pill: 'trace is on it', tab: 'trace is on it', tone: 'neutral' },
+  blocked: { pill: 'Blocked', tab: 'Blocked', tone: 'warning' },
+}
+
+export function changeState(c: Pick<ChangeSummary, 'verdict' | 'stuck' | 'working' | 'answers'>): ChangeState {
+  // its job is still at it: whatever its checks say, it is trace's until the job finishes
+  if (c.working) return 'trace'
+  if (c.stuck) return 'blocked'
+  switch (c.verdict) {
+    case 'ready': return 'yours'
+    // no job is fixing it: asking for changes is the person's step
+    case 'failing': return 'yours'
+    // an answer trace is still applying is trace's; otherwise the person asks for changes
+    case 'unfinished': return c.answers?.length && !c.answers.some((a) => a.stopped) ? 'trace' : 'yours'
+    case 'checking': case 'applying': case 'conflict': return 'trace'
+    default: return 'blocked'
+  }
+}
+
 /** The words for an edit's kind, as a tag beside its title: "Setting", "Hand-in". */
 export const KIND_TAG: Record<NonNullable<ChangeSummary['kind']>, string | null> = {
   work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in', rule: 'Project rule',

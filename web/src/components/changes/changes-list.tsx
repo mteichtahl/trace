@@ -10,7 +10,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { CircleCheck, CircleX, Loader2, OctagonPause } from 'lucide-react'
 import { Section } from '@/components/shell/app-shell'
-import { KIND_TAG, changeLine, checksWords, VERDICT_WORDS } from '@/lib/guided'
+import { KIND_TAG, STATE_WORDS, VERDICT_WORDS, changeLine, changeState, checksWords } from '@/lib/guided'
 import { projectId } from '@/lib/api'
 import { pollEvery, useLiveStatus } from '@/lib/live'
 import { ago } from '@/lib/format'
@@ -27,8 +27,9 @@ const PILL_TONE = {
   warning: 'bg-warning/15 text-warning-foreground',
 } as const
 
-export function ChangePill({ verdict, className }: { verdict: ChangeVerdict; className?: string }) {
-  const v = VERDICT_WORDS[verdict]
+/** A change's pill: one of the three states when given the change (For you, trace is on it, Blocked), else its verdict's own word. */
+export function ChangePill({ verdict, change, className }: { verdict: ChangeVerdict; change?: Pick<ChangeSummary, 'verdict' | 'stuck' | 'working' | 'answers'>; className?: string }) {
+  const v = change ? STATE_WORDS[changeState(change)] : VERDICT_WORDS[verdict]
   return <span className={cn('inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-xs font-medium', PILL_TONE[v.tone], className)}>{v.pill}</span>
 }
 
@@ -87,7 +88,7 @@ export function ChangesFromTrace({ repo, unavailable, className }: { repo: strin
         {changes.map((c) => (
           <li key={c.number}>
             <Link to="/p/$id/changes/$number" params={{ id, number: String(c.number) }} className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/50" data-density-item>
-              <ChangePill verdict={c.verdict} className="justify-center sm:w-[84px]" />
+              <ChangePill verdict={c.verdict} change={c} className="justify-center sm:w-[104px]" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold sm:truncate">
                   {c.kind && KIND_TAG[c.kind] ? <span className="mr-1.5 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-medium">{KIND_TAG[c.kind]}</span> : null}

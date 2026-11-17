@@ -59,7 +59,7 @@ export function useShortcuts() {
       }
       if (Date.now() - g < 1200) {
         g = 0
-        const to = k === 'h' ? '/' : k === 'p' ? '/projects' : k === 'n' || k === 'i' ? '/next' : null
+        const to = k === 'h' ? '/' : k === 'p' ? '/projects' : k === 'n' || k === 'i' ? '/' : null
         if (to) {
           e.preventDefault()
           void navigate({ to })

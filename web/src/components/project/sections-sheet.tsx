@@ -17,6 +17,8 @@ export interface SectionTab {
   id: string
   label: string
   to: string
+  /** the tab it sits in on wider screens: sections of one tab are listed together under its name */
+  group?: string
 }
 
 const ICON: Record<string, LucideIcon> = {
@@ -47,6 +49,8 @@ const LATER: { id: string; label: string; stage: (j?: Journey) => string }[] = [
   { id: 'build', label: 'Build', stage: () => 'Release' },
   { id: 'renders', label: 'Renders', stage: () => 'Release' },
 ]
+
+const GROUP_WORDS: Record<string, string> = { design: 'Design', proof: 'Proof', more: 'More' }
 
 const and = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 
@@ -112,12 +116,14 @@ export function SectionsSheet({ name, base, tabs, journey, changes, ready, check
         </DrawerHeader>
         <nav aria-label="Project sections" className="overflow-y-auto px-3 pb-6">
           <ul className="space-y-0.5">
-            {tabs.map((t) => {
+            {tabs.map((t, n) => {
               const Icon = ICON[t.id] ?? PanelsTopLeft
               const active = isHere(t)
               const line = statusLine(t.id, journey, { changes, ready })
+              const heading = t.group && t.group !== 'overview' && t.group !== 'changes' && t.group !== tabs[n - 1]?.group ? GROUP_WORDS[t.group] : undefined
               return (
-                <li key={t.id}>
+                <li key={t.id} className={cn(!heading && n > 0 && t.group !== tabs[n - 1]?.group && tabs[n - 1]?.group !== 'overview' && 'mt-3')}>
+                  {heading && <p className="section-label px-3 pb-1 pt-3">{heading}</p>}
                   <Link
                     to={base + t.to}
                     onClick={() => setOpen(false)}
@@ -130,7 +136,7 @@ export function SectionsSheet({ name, base, tabs, journey, changes, ready, check
                       {line && <span className="block text-xs text-muted-foreground">{line}</span>}
                     </span>
                     {t.id === 'changes' && ready > 0 && <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-xs font-semibold text-primary">{ready} for you</span>}
-                    {t.id === 'changes' && checking > 0 && <span className="shrink-0 rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-semibold text-orange-700 dark:text-orange-300">{checking} checking</span>}
+                    {t.id === 'changes' && checking > 0 && <span className="shrink-0 rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-semibold text-orange-700 dark:text-orange-300">{checking} with trace</span>}
                     {active && <span className="shrink-0 text-xs font-semibold text-primary">You are here</span>}
                   </Link>
                 </li>

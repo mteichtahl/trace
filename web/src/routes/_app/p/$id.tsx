@@ -1,7 +1,8 @@
 /**
- * A project: one header (name, revision badge, template, people, the rare-actions menu) and a short row of tabs that
- * appear only once the project has reached the stage that fills them (visibleTabs). Each tab is a child route under
- * routes/_app/p/$id/; Overview is the index.
+ * A project: one header (name, revision badge, template, people, the rare-actions menu) and five tabs (Overview,
+ * Design, Proof, Changes, More: docs/ui-simplify.md, "Five tabs"). A tab holds one or more sections, each a child
+ * route under routes/_app/p/$id/ that appears only once the project has reached the stage that fills it
+ * (visibleTabs); a tab with several shows them as a short row under the tab row. Overview is the index.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, createFileRoute, useRouterState } from '@tanstack/react-router'
@@ -23,6 +24,7 @@ import { NotShared, QueryError } from '@/components/states'
 import { ApiError, projectName, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { initials } from '@/lib/format'
+import { changeState } from '@/lib/guided'
 import { q, useCall, useJourney, useProjects } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -36,38 +38,71 @@ export const Route = createFileRoute('/_app/p/$id')({
   component: ProjectLayout,
 })
 
+export type TabGroupId = 'overview' | 'design' | 'proof' | 'changes' | 'more'
+
+/** One of a project's sections: a page under /p/$id, shown inside one of the five tabs (docs/ui-simplify.md, "Five tabs"). */
 export interface ProjectTab {
   id: string
   label: string
   /** the path under /p/$id */
   to: string
+  /** the tab it sits in */
+  group: TabGroupId
+  /** other paths under /p/$id that belong to it (a run's page belongs to Evidence) */
+  also?: string[]
 }
 
 const reached = (j: Journey, names: string[]): boolean =>
   j.stages.some((s) => names.includes(s.name.toLowerCase()) && s.state !== 'queued' && s.state !== 'skipped')
 
-/** The tabs a project shows (docs/ui-design.md, "Inside a project"). */
+/**
+ * The sections a project shows, each once it has reached the stage that fills it, in the order of the five tabs:
+ * Overview; Design (requirements, the design, the build, renders); Proof (evidence, decisions, documents); Changes;
+ * More (files, cost and time, memory, settings).
+ */
 export function visibleTabs(j: Journey, o: { admin: boolean }): ProjectTab[] {
   const tabs: (ProjectTab & { show: boolean })[] = [
-    { id: 'overview', label: 'Overview', to: '', show: true },
-    { id: 'requirements', label: 'Requirements', to: '/requirements', show: reached(j, ['define']) },
-    { id: 'design', label: 'Design', to: '/design', show: reached(j, ['architect']) },
-    // the project's documents, which Scribe keeps from Architect on (docs/scribe.md)
-    { id: 'docs', label: 'Documents', to: '/docs', show: reached(j, ['architect']) },
-    { id: 'changes', label: 'Changes', to: '/changes', show: true },
-    // from the first run on: Capture where the template has it (checks start running there), else Prove
-    { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['capture', 'prove']) },
-    { id: 'build', label: 'Build', to: '/build', show: reached(j, ['release']) },
+    { id: 'overview', label: 'Overview', to: '', group: 'overview', show: true },
+    { id: 'requirements', label: 'Requirements', to: '/requirements', group: 'design', show: reached(j, ['define']) },
+    { id: 'design', label: 'Design', to: '/design', group: 'design', show: reached(j, ['architect']) },
+    { id: 'build', label: 'Build', to: '/build', group: 'design', show: reached(j, ['release']) },
     // each revision's renders, made when it is cut (docs/revision-renders.md)
-    { id: 'renders', label: 'Renders', to: '/renders', show: reached(j, ['release']) },
-    { id: 'decisions', label: 'Decisions', to: '/decisions', show: j.gates.some((g) => g.state === 'signed') },
-    { id: 'files', label: 'Files', to: '/files', show: true },
-    { id: 'settings', label: 'Settings', to: '/settings', show: true },
-    { id: 'cost', label: 'Cost and time', to: '/cost', show: o.admin },
-    { id: 'memory', label: 'Memory', to: '/memory', show: !!j.hasMemory },
+    { id: 'renders', label: 'Renders', to: '/renders', group: 'design', show: reached(j, ['release']) },
+    // from the first run on: Capture where the template has it (checks start running there), else Prove
+    { id: 'evidence', label: 'Evidence', to: '/evidence', group: 'proof', also: ['/runs'], show: reached(j, ['capture', 'prove']) },
+    { id: 'decisions', label: 'Decisions', to: '/decisions', group: 'proof', show: j.gates.some((g) => g.state === 'signed') },
+    // the project's documents, which Scribe keeps from Architect on (docs/scribe.md)
+    { id: 'docs', label: 'Documents', to: '/docs', group: 'proof', show: reached(j, ['architect']) },
+    { id: 'changes', label: 'Changes', to: '/changes', group: 'changes', show: true },
+    { id: 'files', label: 'Files', to: '/files', group: 'more', show: true },
+    { id: 'cost', label: 'Cost and time', to: '/cost', group: 'more', show: o.admin },
+    { id: 'memory', label: 'Memory', to: '/memory', group: 'more', show: !!j.hasMemory },
+    { id: 'settings', label: 'Settings', to: '/settings', group: 'more', show: true },
   ]
-  return tabs.filter((t) => t.show)
+  return tabs.filter((t) => t.show).map(({ show: _show, ...t }) => t)
 }
+
+export const GROUP_LABEL: Record<TabGroupId, string> = { overview: 'Overview', design: 'Design', proof: 'Proof', changes: 'Changes', more: 'More' }
+const GROUP_ORDER: TabGroupId[] = ['overview', 'design', 'proof', 'changes', 'more']
+
+export interface TabGroup {
+  id: TabGroupId
+  label: string
+  /** where the tab goes: its first section */
+  to: string
+  sections: ProjectTab[]
+}
+
+/** The five tabs, each with the sections the project has reached; a tab with none yet is left out. */
+export function tabGroups(sections: ProjectTab[]): TabGroup[] {
+  return GROUP_ORDER.map((id) => ({ id, label: GROUP_LABEL[id], sections: sections.filter((t) => t.group === id) }))
+    .filter((g) => g.sections.length > 0)
+    .map((g) => ({ ...g, to: g.sections[0]!.to }))
+}
+
+/** Whether a path under the project (after /p/$id) is this section's. */
+export const inSection = (t: ProjectTab, rest: string): boolean =>
+  t.to === '' ? rest === '' || rest === '/' : [t.to, ...(t.also ?? [])].some((p) => rest === p || rest.startsWith(`${p}/`))
 
 function People({ repo }: { repo: string }) {
   const members = useQuery(q('project.members', { repo }))
@@ -112,10 +147,15 @@ function ProjectLayout() {
   if (j.isError) return j.error instanceof ApiError && j.error.noAccess ? <NotShared /> : <div className="p-6"><QueryError error={j.error} what="this project" onRetry={() => void j.refetch()} /></div>
 
   const tabs = j.data ? visibleTabs(j.data, { admin: user?.class === 'admin' }) : []
-  const ready = (changes.data?.changes ?? []).filter((c) => c.verdict === 'ready').length
-  /** changes whose checks are still running: shown in orange beside the ready count */
-  const checking = (changes.data?.changes ?? []).filter((c) => c.verdict === 'checking').length
-  const all = 10
+  // the same count the Changes list opens on: every change in the For you state (lib/guided.ts changeState)
+  const ready = (changes.data?.changes ?? []).filter((c) => changeState(c) === 'yours').length
+  /** changes trace is still making, checking or updating: shown in orange beside the count for you */
+  const checking = (changes.data?.changes ?? []).filter((c) => changeState(c) === 'trace').length
+  const groups = tabGroups(tabs)
+  const rest = pathname.startsWith(base) ? pathname.slice(base.length) : ''
+  /** the section the person is on, and the tab it sits in */
+  const here = tabs.find((t) => inSection(t, rest))
+  const group = groups.find((g) => g.id === here?.group)
   return (
     <div className="mx-auto w-full max-w-[1200px] px-4 pt-4 md:px-6 md:pt-8">
       <header className="flex flex-wrap items-center gap-3 max-md:flex-nowrap">
@@ -175,28 +215,39 @@ function ProjectLayout() {
         </div>
       </header>
       <nav aria-label="Project" className="mt-5 flex items-end gap-1 overflow-x-auto border-b max-md:hidden">
-        {tabs.map((t) => {
-          const to = base + t.to
-          const active = t.to === '' ? pathname === base || pathname === `${base}/` : pathname.startsWith(to)
+        {groups.map((g) => {
+          const active = g.id === here?.group
           return (
-            <Link key={t.id} to={to} aria-current={active ? 'page' : undefined} className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 pb-2.5 pt-1 text-sm', active ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              {t.label}
-              {t.id === 'changes' && ready > 0 && (
+            <Link key={g.id} to={base + g.to} aria-current={active ? 'page' : undefined} className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 pb-2.5 pt-1 text-sm', active ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+              {g.label}
+              {g.id === 'changes' && ready > 0 && (
                 <span className="flex size-[18px] items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground" aria-label={`${ready} ready for you`}>{ready}</span>
               )}
-              {t.id === 'changes' && checking > 0 && (
+              {g.id === 'changes' && checking > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-orange-500 px-1 text-[11px] font-semibold text-white" aria-label={`${checking} being checked`}>{checking}</span>
+                    <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-orange-500 px-1 text-[11px] font-semibold text-white" aria-label={`${checking} with trace`}>{checking}</span>
                   </TooltipTrigger>
-                  <TooltipContent>{checking} {checking === 1 ? 'change is' : 'changes are'} being checked</TooltipContent>
+                  <TooltipContent>trace is still working on {checking} {checking === 1 ? 'change' : 'changes'}</TooltipContent>
                 </Tooltip>
               )}
             </Link>
           )
         })}
-        {j.data && tabs.length < all && <span className="hidden pb-2.5 pl-3 text-xs text-muted-foreground lg:inline">More tabs appear as the project reaches later stages</span>}
       </nav>
+      {/* the sections inside the tab the person is on, when it has more than one */}
+      {group && group.sections.length > 1 && (
+        <nav aria-label={`${group.label} sections`} className="mt-3 flex flex-wrap gap-1 max-md:hidden">
+          {group.sections.map((t) => {
+            const active = t.id === here?.id
+            return (
+              <Link key={t.id} to={base + t.to} aria-current={active ? 'page' : undefined} className={cn('rounded-md px-2.5 py-1 text-sm', active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground')}>
+                {t.label}
+              </Link>
+            )
+          })}
+        </nav>
+      )}
       <PausedBanner repo={repo} part={part} className="mt-4" />
       <AgentSetupNotice repo={repo} className="mt-4" />
       <PauseDialog repo={repo} name={name} open={dialog === 'pause'} onOpenChange={(o) => setDialog(o ? 'pause' : null)} />

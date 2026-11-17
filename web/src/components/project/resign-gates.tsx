@@ -5,11 +5,11 @@
  * (test-esp32 log #62, #71: four gates went back to Queued with nothing saying that most of them were unchanged).
  */
 import { Link } from '@tanstack/react-router'
-import { RotateCcw } from 'lucide-react'
+import { ExceptionCard } from '@/components/exception-card'
+import { Button } from '@/components/ui/button'
 import { StatusBadge, type Status } from '@/components/status-badge'
 import { plural } from '@/lib/format'
 import type { Journey } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 type Resign = NonNullable<Journey['resign']>
 
@@ -33,25 +33,39 @@ export function resignText(r: Resign): { title: string; body: string } {
   }
 }
 
-export function ResignGates({ resign, id, className }: { resign: Resign; id: string; className?: string }) {
+export function ResignGates({ resign, id, open = true, className }: { resign: Resign; id: string; /** the gates listed from the start */ open?: boolean; className?: string }) {
   const t = resignText(resign)
+  const first = resign.gates.find((g) => g.state !== 'signed')
   return (
-    <section aria-label="Gates to sign again" className={cn('rounded-xl border bg-card p-4 text-sm', className)}>
-      <p className="flex items-start gap-2 font-semibold"><RotateCcw className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />{t.title}</p>
-      <p className="mt-1 pl-6 text-muted-foreground">{t.body}</p>
-      <ul className="mt-3 divide-y border-t pl-6">
-        {resign.gates.map((g) => (
-          <li key={g.gate} className="flex flex-col gap-1 py-2.5 sm:flex-row sm:items-start sm:gap-4">
-            <div className="min-w-0 flex-1">
-              <Link to="/p/$id/gates/$gate" params={{ id, gate: g.gate }} className="font-medium hover:underline">
-                {g.name.replace(/^./, (c) => c.toUpperCase())}
-              </Link>
-              <p className="text-xs text-muted-foreground">{g.why}</p>
-            </div>
-            <StatusBadge status={STATE[g.state].status} label={STATE[g.state].label} className="shrink-0 self-start" />
-          </li>
-        ))}
-      </ul>
-    </section>
+    <ExceptionCard
+      tone="back"
+      label="Gates to sign again"
+      title={t.title}
+      body={<span className="text-muted-foreground">{t.body}</span>}
+      sentBack="Define"
+      action={first && (
+        <Button asChild size="sm" variant="outline">
+          <Link to="/p/$id/gates/$gate" params={{ id, gate: first.gate }}>Open {first.name}</Link>
+        </Button>
+      )}
+      detailLabel="Which gates, and why"
+      open={open}
+      className={className}
+      detail={
+        <ul className="divide-y border-t">
+          {resign.gates.map((g) => (
+            <li key={g.gate} className="flex flex-col gap-1 py-2.5 sm:flex-row sm:items-start sm:gap-4">
+              <div className="min-w-0 flex-1">
+                <Link to="/p/$id/gates/$gate" params={{ id, gate: g.gate }} className="font-medium hover:underline">
+                  {g.name.replace(/^./, (c) => c.toUpperCase())}
+                </Link>
+                <p className="text-xs text-muted-foreground">{g.why}</p>
+              </div>
+              <StatusBadge status={STATE[g.state].status} label={STATE[g.state].label} className="shrink-0 self-start" />
+            </li>
+          ))}
+        </ul>
+      }
+    />
   )
 }

@@ -18,7 +18,7 @@ test.describe('sign-in', () => {
   })
 })
 
-test('Home shows what needs you and the projects @phone', async ({ app, page }) => {
+test('Home shows the projects under the queue @phone', async ({ app, page }) => {
   await app.open('/')
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Projects' }).filter({ visible: true }).first()).toBeVisible()
@@ -26,10 +26,12 @@ test('Home shows what needs you and the projects @phone', async ({ app, page }) 
 })
 
 test('Next lists the next thing to do', async ({ app, page }) => {
+  // the old address lands on Home, which is the queue (docs/ui-simplify.md, "One queue")
   await app.open('/next')
-  await expect(page.getByRole('heading', { name: 'Next', level: 1 })).toBeVisible()
+  await expect(page).toHaveURL(/\/(\?.*)?$/)
+  await expect(page.getByText(/your projects/i).first()).toBeVisible()
   // the count says how many need the person: one card alone, or the first with the rest under Up next
-  const count = page.getByText(/^(Just this one|1 of \d+ for you)$/)
+  const count = page.getByText(/^(Just this one|1 of \d+)$/)
   if (!(await app.hasData(count, page.getByText(/^All clear\./), 'nothing needs the smoke user right now'))) return test.skip(true, 'live: nothing needs the smoke user right now')
   const upNext = page.getByRole('heading', { name: /^Up next/ })
   if (await page.getByText('Just this one', { exact: true }).isVisible()) await expect(upNext).toHaveCount(0)
