@@ -216,3 +216,19 @@ describe('the installer page: checks that run by themselves', () => {
     expect(dueChecks(s).integrations).toEqual([])
   })
 })
+
+describe('a second run', () => {
+  it("starts with the installation's stored GitHub token, which needs no checking as typed; a token typed stays", async () => {
+    const m = await import('../../src/installer/ui/model.js')
+    const { STORED_TOKEN } = await import('../../src/installer/answers.js')
+    const env = { profiles: { names: ['default'], regions: {} }, saved: { aws: { mode: 'profile', profile: 'default' } }, installed: { stack: 'TraceStack', region: 'us-east-1' }, storedToken: true, node: 'v24', defaultRegion: 'us-east-1' } as never
+    const s = m.initialState()
+    m.loadSaved(s, env)
+    expect(s.github.token).toBe(STORED_TOKEN)
+    expect(m.githubTokenError(STORED_TOKEN)).toBe('')
+    const t = m.initialState()
+    t.github.token = 'github_pat_typed'
+    m.loadSaved(t, env)
+    expect(t.github.token).toBe('github_pat_typed')
+  })
+})

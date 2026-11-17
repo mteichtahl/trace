@@ -268,7 +268,9 @@ export async function preflight(input: PreflightInput, d: PreflightDeps, onProgr
   facts.existing = stackNow
   if (existing.ok && stackNow) {
     const st = stackNow.status
-    if (st.endsWith('_IN_PROGRESS')) add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is ${st}: a deploy or delete is running`, fix: 'Wait for it to finish, then check again.' })
+    if (st === 'DELETE_IN_PROGRESS') add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is ${st}: it is being deleted`, fix: 'Wait for it to finish, then check again.' })
+    // an update running (the self-update after a change to trace's main, say): the deploy waits for it (stack-wait.ts)
+    else if (st.endsWith('_IN_PROGRESS')) add({ id: 'stack', status: 'warn', title: stack, detail: `${stack} is ${st}: an update is running now. Installing waits for it to finish, then deploys.` })
     else if (st === 'ROLLBACK_COMPLETE' || st === 'ROLLBACK_FAILED') {
       add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is ${st}: its first deploy failed and CloudFormation cannot update it.`, fix: 'Delete it (nothing in it is in use) and install again.', action: { id: 'delete-failed-stack', label: `Delete ${stack}`, params: { stack } } })
     } else if (st === 'UPDATE_ROLLBACK_FAILED') add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is UPDATE_ROLLBACK_FAILED`, fix: 'Continue the rollback (the installer does, with ContinueUpdateRollback), then check again.', action: { id: 'continue-rollback', label: `Continue ${stack}'s rollback`, params: { stack } } })

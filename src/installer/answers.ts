@@ -260,6 +260,13 @@ export const AnswersSchema = z.object({
 export type Answers = z.output<typeof AnswersSchema>
 export type AnswersInput = z.input<typeof AnswersSchema>
 
+/**
+ * What the page sends in place of a GitHub token to mean "the one this installation keeps" (`<prefix>/github-token` in
+ * Secrets Manager, read with the saved answers' AWS credentials): a second run needs no token typed again. The local
+ * server swaps it for the stored token (src/installer/server.ts); the token itself never reaches the page.
+ */
+export const STORED_TOKEN = 'stored:this-installation'
+
 export const SecretsSchema = z.object({
   /** The shared token: the API's (it reads and writes every project's settings), and every project's agent token
    * unless that project has its own below. Stored in Secrets Manager (and as each such repository's TRACE_TOKEN). */
