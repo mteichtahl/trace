@@ -795,6 +795,19 @@ export interface JourneyView {
   stages: StageView[]; gates: GateView[]; next: NextStep; questions: QuestionView[]; waivers: WaiverView[]
   decisions: { id: string; at: string; kind: string; stage: string | null; ref: string | null; summary: string; by: string | null }[]
   firmware_track: boolean
+  /** started from fabrication files (docs/fab-import.md): where it entered, and the design's own name, revision and
+   * tool as its Gerbers say them. The screens that speak of a schematic, a board file or a release read it */
+  imported?: ImportedView
+}
+export interface ImportedView { entry: StageId; name: string | null; revision: string | null; tool: string | null; dir: string | null }
+
+/** The import a journey was entered on (its `journey.imported` decision), or undefined. Pure. */
+export function importedOf(r: Pick<JourneyRecord, 'decisions'>): ImportedView | undefined {
+  const d = r.decisions.find((x) => x.kind === 'journey.imported')
+  if (!d) return undefined
+  const det = (d.detail ?? {}) as { entry?: unknown; source?: { name?: unknown; revision?: unknown; tool?: unknown; dir?: unknown } }
+  const s = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+  return { entry: (s(det.entry) ?? d.stage ?? 'fabricate') as StageId, name: s(det.source?.name), revision: s(det.source?.revision), tool: s(det.source?.tool), dir: s(det.source?.dir) }
 }
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
@@ -1710,6 +1723,7 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
     // R55: the log read "ea9a571f p2" and "five layout.fit findings" where the gate page said "the datasheet, page 2")
     decisions: oneEntryPerWaiverAnswer(r.decisions.slice(0, 200)).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: plainCriterionRefs(plainCodeRefs(d.summary), r.criteria), by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
+    ...(importedOf(r) ? { imported: importedOf(r) as ImportedView } : {}),
   }
 }
 
@@ -1861,7 +1875,7 @@ export function startJourney(db: DatabaseSync, o: StartOptions): JourneyRecord {
       }
     })
     db.prepare("INSERT OR REPLACE INTO journey_template (id, template, version, doc, at, by) VALUES ('current',?,?,?,?,?)").run(o.template, def.version, JSON.stringify(def.doc), t, o.by)
-    decide(db, { kind: 'journey.started', stage: first.id, ref: null, by: o.by, summary: `The project started from the ${def.doc.name === TEMPLATE_NAMES[o.template] ? TEMPLATE_NAMES[o.template] : `${def.doc.name} (${TEMPLATE_NAMES[o.template]})`} template${def.version ? `, version ${def.version}` : ''}, at ${STAGE_NAMES[first.id]}.`, detail: { template: o.template, later: o.later ?? [], version: def.version } })
+    decide(db, { kind: 'journey.started', stage: first.id, ref: null, by: o.by, summary: `The project started from the ${def.doc.name === TEMPLATE_NAMES[o.template] ? TEMPLATE_NAMES[o.template] : `${def.doc.name} (${TEMPLATE_NAMES[o.template]})`} template${def.version ? `, version ${def.version}` : ''}${o.start === 'import' ? ': its design comes from outside trace, and the import says where it enters' : `, at ${STAGE_NAMES[first.id]}`}.`, detail: { template: o.template, later: o.later ?? [], version: def.version } })
   })
   return loadJourney(db) as JourneyRecord
 }

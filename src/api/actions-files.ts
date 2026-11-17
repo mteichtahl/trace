@@ -47,6 +47,10 @@ const EXT: readonly [RegExp, FileKind][] = [
   [/\.(gbr|ger|gtl|gbl|gto|gbo|gts|gbs|gtp|gbp|gm1|gko|g[0-9]+|drl|xln|exc)$/i, 'fabrication'],
   [/(^|\/)(fab|fabrication|gerbers?|production|jlcpcb)\/.*\.(zip|csv|xlsx?)$/i, 'fabrication'],
   [/(-|_)(bom|cpl|pos|top-pos|bottom-pos)\.(csv|xlsx?)$/i, 'fabrication'],
+  // a release folder's package: the Gerber zip and, on an imported project, trace's inspection of the files beside it
+  // (docs/fab-import.md; potroller-carrier-m20: Files listed the BOM and placement file but not the zip or import.json)
+  [/(-|_)gerbers?\.zip$/i, 'fabrication'],
+  [/(^|\/)release\/[^/]+\/[^/]+\.(zip|json)$/i, 'fabrication'],
   [/\.(c|h|cc|cpp|hpp|rs|s|ld|ino|v|sv|vh|vhd|vhdl|elf|hex|bin|map|uf2|bit|bitstream)$/i, 'firmware'],
   [/(^|\/)(Cargo\.toml|platformio\.ini|CMakeLists\.txt|memory\.x)$/i, 'firmware'],
   [/\.(pdf|md|markdown|txt|rst|docx?|odt|html?)$/i, 'documents'],

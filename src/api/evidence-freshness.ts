@@ -27,6 +27,17 @@ export const evidenceRuns = (r: JourneyRecord): string[] =>
 /** The criteria a rule check's report backs: "clean, or each finding is waived". */
 export const RULE_CHECKS: Readonly<Record<string, 'erc' | 'drc'>> = { 'capture.erc': 'erc', 'layout.drc': 'drc' }
 const CHECK_WORDS = { erc: 'electrical rule check', drc: 'design rule check' } as const
+/**
+ * A criterion met on an import's evidence (docs/fab-import.md): the project was started from its fabrication files, the
+ * criterion's stage came before its entry, and what it cites is the import's files, not a run. There is no schematic
+ * or board file for a rule check to be run on, so there is no report to read again: the import's gate signature is
+ * what stands (potroller-carrier-m20: the Overview said "2 checks out of date … run it, and accept the change that
+ * holds it" of a board that has no KiCad source). Pure.
+ */
+export function metOnImport(r: Pick<JourneyRecord, 'decisions'>, c: { evidence: readonly Evidence[] }): boolean {
+  return r.decisions.some((d) => d.kind === 'journey.imported') && c.evidence.length > 0 && c.evidence.every((e) => e.kind !== 'run')
+}
+
 /** The open findings listed with a criterion at most (its run lists them all). */
 export const FINDINGS_LISTED = 50
 
@@ -85,7 +96,7 @@ export function acceptedRecord(db: DatabaseSync, r: JourneyRecord, files: Readon
   for (const c of r.criteria) {
     const check = RULE_CHECKS[c.id]
     // a met one only: one not met already says so, and its run lists the findings
-    if (!check || c.owner !== 'trace' || c.status !== 'met') continue
+    if (!check || c.owner !== 'trace' || c.status !== 'met' || metOnImport(r, c)) continue
     const again = ruleCheck(db, check, r)
     if (again) criteria.set(c.id, again)
   }
@@ -95,7 +106,7 @@ export function acceptedRecord(db: DatabaseSync, r: JourneyRecord, files: Readon
 export async function evidenceStaleness(ctx: Context, repo: string, r: JourneyRecord | null): Promise<AcceptedRecord | undefined> {
   if (!r) return undefined
   // the record is read only when it could take a met criterion back (GitHub's allowance: journey.get is looked at often)
-  if (!evidenceRuns(r).length && !r.criteria.some((c) => c.owner === 'trace' && c.status === 'met' && RULE_CHECKS[c.id])) return undefined
+  if (!evidenceRuns(r).length && !r.criteria.some((c) => c.owner === 'trace' && c.status === 'met' && RULE_CHECKS[c.id] && !metOnImport(r, c))) return undefined
   try {
     const gh = await ctx.deps.github()
     const { branch } = await gh.defaultBranch(repo)

@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { IMPORT_PART, importBranch, importWork, joinParts, overviewDoc, partKey, refusalOf } from '../../src/api/actions-import.js'
+import { IMPORT_PART, importBranch, importWork, joinParts, overviewDoc, partKey, refusalOf, sourceWords } from '../../src/api/actions-import.js'
+import { metOnImport } from '../../src/api/evidence-freshness.js'
 import { editStore } from '../../src/api/edits.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { AccessDenied } from '../../src/core/access.js'
@@ -108,6 +109,22 @@ describe('the parts of an upload', () => {
   })
 })
 
+describe('what the import says of the design it was given', () => {
+  it('names its revision, project and tool, and where trace keeps it; nothing when the Gerbers name nothing', () => {
+    expect(sourceWords({ project: { name: 'carrier', revision: 'M.20' }, tool: 'KiCad Pcbnew 10.0.8' }, 'hardware/carrier/release/revA'))
+      .toBe('The files are revision M.20 of carrier, made in KiCad Pcbnew 10.0.8; trace keeps them as its revision A, under hardware/carrier/release/revA, named after the design.')
+    expect(sourceWords({ project: { name: null, revision: null }, tool: null }, 'hardware/board/release/revA')).toBe('')
+    expect(sourceWords({ project: { name: null, revision: null }, tool: 'EasyEDA' }, 'hardware/board/release/revA')).toBe('The files are the design, made in EasyEDA; trace keeps them as its revision A, under hardware/board/release/revA.')
+  })
+  it('a criterion met on the import\'s files has no rule check to read again', () => {
+    const imported = { decisions: [{ kind: 'journey.imported' }] } as never
+    expect(metOnImport(imported, { evidence: [{ kind: 'file', ref: 'docs/overview.md' }] })).toBe(true)
+    // one an agent checked with a run is read again as ever, and so is any criterion of a project not imported
+    expect(metOnImport(imported, { evidence: [{ kind: 'run', ref: 'abc' }] })).toBe(false)
+    expect(metOnImport({ decisions: [] } as never, { evidence: [{ kind: 'file', ref: 'docs/overview.md' }] })).toBe(false)
+  })
+})
+
 describe('entering a journey on an import', () => {
   it('meets and signs every gate before the entry, finishes those stages, and logs it', () => {
     const db = open(join(mkdtempSync(join(scratch, 'j-')), 'journey.db'), { wal: false })
@@ -196,8 +213,17 @@ describe('projects.create with an import', () => {
     expect(edits.find((e) => e.branch === c.branch)).toMatchObject({ kind: 'import', applies: 'auto', paths: c.files, number: expect.any(Number) })
     const bytes = await journeyStore(ctx(ADMIN), 'acme/carrier').bytes()
     expect(bytes).toBeTruthy()
-    const j = await run(ADMIN, 'journey.get', { repo: 'acme/carrier' }) as { current_stage: string; start: string }
+    const j = await run(ADMIN, 'journey.get', { repo: 'acme/carrier' }) as { current_stage: string; start: string; imported?: unknown; decisions: { kind: string; summary: string }[]; stale_evidence?: unknown[] }
     expect(j).toMatchObject({ current_stage: 'fabricate', start: 'import' })
+    // the design's own name, revision and tool, and where trace keeps it (potroller-carrier-m20: M.20 became "Rev A"
+    // and the files were renamed after the Gerbers' project, with nothing saying so)
+    expect(j.imported).toEqual({ entry: 'fabricate', name: 'potroller-supervisor', revision: 'M.20', tool: 'KiCad Pcbnew 10.0.8', dir: 'hardware/potroller-supervisor/release/revA' })
+    expect(j.decisions.find((d) => d.kind === 'journey.imported')?.summary).toContain('The files are revision M.20 of potroller-supervisor, made in KiCad Pcbnew 10.0.8; trace keeps them as its revision A, under hardware/potroller-supervisor/release/revA, named after the design.')
+    // never "started … at Define" beside "starts at Fabricate"
+    expect(j.decisions.find((d) => d.kind === 'journey.started')?.summary).toBe('The project started from the Board template: its design comes from outside trace, and the import says where it enters.')
+    expect(r.steps.find((s) => s.id === 'journey')?.detail).toMatch(/the fabrication files place it at Fabricate\.$/)
+    // the rule checks the import signed for are not "out of date": there is no schematic or board file to run them on
+    expect(j.stale_evidence ?? []).toEqual([])
     expect(started.map((s) => [s.repository, s.agent, s.headline])).toEqual([
       ['acme/carrier', 'impl', 'Recording the imported release package'],
       ['acme/carrier', 'verify', 'Drafting requirements from the overview'],

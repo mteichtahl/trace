@@ -651,6 +651,10 @@ describe('files', () => {
     expect(JSON.stringify(r)).not.toContain('node_modules')
     expect(JSON.stringify(r)).not.toContain('project.db')
     expect(kindOf('out/board-top-pos.csv')).toBe('fabrication')
+    // an imported project's package: the Gerber zip and trace's inspection beside it
+    expect(kindOf('hardware/carrier/release/revA/carrier-gerbers.zip')).toBe('fabrication')
+    expect(kindOf('hardware/carrier/release/revA/import.json')).toBe('fabrication')
+    expect(kindOf('package.json')).toBe('other')
   })
 
   it('files.url: bytes up to 8 MB, GitHub\'s link above, and evidence from the record', async () => {
