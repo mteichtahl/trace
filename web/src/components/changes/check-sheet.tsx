@@ -5,6 +5,7 @@
  * files as findings) and Log (the end of the build job's log, when the check is one), with previous and next check.
  * Admins get the check on GitHub under More. Data: change.check, asked again every 10 s while the check runs.
  */
+import { jobLabel } from '@/lib/check-names'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, CircleCheck, CircleDashed, CircleMinus, CircleX, Loader2 } from 'lucide-react'
 import { useState } from 'react'
@@ -62,7 +63,7 @@ export function CheckRow({ check: k, onOpen, className }: { check: ChangeCheck; 
     <button type="button" onClick={onOpen} className={cn('flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted/60 active:bg-muted', className)}>
       <I.icon className={cn('mt-0.5 size-4 shrink-0', I.cls)} aria-hidden />
       <span className="min-w-0 flex-1">
-        {k.name}{k.summary && <span className="text-muted-foreground">: {k.summary}</span>}<span className="sr-only"> ({I.word})</span>
+        <span title={k.name}>{jobLabel(k.name)}</span>{k.summary && <span className="text-muted-foreground">: {k.summary}</span>}<span className="sr-only"> ({I.word})</span>
       </span>
       <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
     </button>

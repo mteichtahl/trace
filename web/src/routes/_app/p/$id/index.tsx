@@ -301,7 +301,7 @@ function Overview() {
       </ExceptionStack>
       <FoldRows label="Everything else here">
         {gateRow && (
-          <FoldRow inline={!phone} label={`To pass the ${stage?.name ?? ''} gate`.replace('  ', ' ')} count={gateRow.count} accent={gateRow.ready}>
+          <FoldRow inline={!phone} label={gateRow.name ? `To pass the ${/gate$/i.test(gateRow.name) ? gateRow.name.replace(/^./, (c) => c.toLowerCase()) : `${gateRow.name.replace(/^./, (c) => c.toLowerCase())} gate`}` : `To pass the ${stage?.name ?? ''} gate`.replace('  ', ' ')} count={gateRow.count} accent={gateRow.ready}>
             <GateChecklist j={d} admin={admin} held={held} />
           </FoldRow>
         )}

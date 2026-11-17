@@ -6,6 +6,7 @@
  * log one tap away. Checks change.runs has no job for (commit statuses, other apps' checks) keep their line from
  * change.get as before.
  */
+import { jobLabel } from '@/lib/check-names'
 import { CircleCheck, CircleDashed, CircleMinus, CircleX, Clock, Loader2, SquareTerminal } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -80,7 +81,7 @@ function JobRow({ j, now, onWatch, onOpen }: { j: CheckJob; now: number; onWatch
       <li className="flex items-start gap-3 py-3">
         <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
-          <p className="text-sm"><span className="font-medium">{j.name}</span><span className="text-muted-foreground"> · waiting for a build machine</span></p>
+          <p className="text-sm"><span className="font-medium" title={j.name}>{jobLabel(j.name)}</span><span className="text-muted-foreground"> · waiting for a build machine</span></p>
           <p className="mt-0.5 text-xs text-muted-foreground">Starts when one is free. Usually under a minute{waited !== null ? `; waiting ${duration(waited, { short: true })}` : ''}.</p>
         </div>
       </li>
@@ -93,7 +94,7 @@ function JobRow({ j, now, onWatch, onOpen }: { j: CheckJob; now: number; onWatch
         <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-primary" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">{j.name}</span>
+            <span className="font-medium" title={j.name}>{jobLabel(j.name)}</span>
             {j.stepIndex && j.stepCount ? <span className="rounded-full border border-primary/30 bg-primary-soft px-2 py-px text-xs text-primary">Step {j.stepIndex} of {j.stepCount}</span> : null}
           </p>
           {text && <p className="mt-0.5 text-sm">{text}</p>}
@@ -117,7 +118,7 @@ function JobRow({ j, now, onWatch, onOpen }: { j: CheckJob; now: number; onWatch
   return (
     <li className="flex items-center gap-3 py-3">
       <I.icon className={cn('size-4 shrink-0', I.cls)} aria-hidden />
-      <p className="min-w-0 flex-1 text-sm"><span className="font-medium">{j.name}</span><span className="text-muted-foreground"> · {word}{took !== null && j.state !== 'skipped' ? ` in ${duration(took, { short: true })}` : ''}</span></p>
+      <p className="min-w-0 flex-1 text-sm"><span className="font-medium" title={j.name}>{jobLabel(j.name)}</span><span className="text-muted-foreground"> · {word}{took !== null && j.state !== 'skipped' ? ` in ${duration(took, { short: true })}` : ''}</span></p>
       {/* a finished check opens its result (report, findings, log: CheckSheet) where the page has it, else its log */}
       {j.state !== 'skipped' && <Button variant="ghost" size="sm" onClick={() => (onOpen ? onOpen() : onWatch(j))} aria-label={`${onOpen ? 'Result' : 'Log'} of ${j.name}`}>{onOpen ? 'Result' : 'Log'}</Button>}
     </li>

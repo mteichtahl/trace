@@ -18,7 +18,8 @@ test('the changes table lists changes and one opens for review @phone', async ({
   const row = first.locator('xpath=../*').filter({ visible: true }).filter({ hasNotText: /cannot start/i }).first()
   await row.click()
   await expect(page).toHaveURL(/\/changes\/\d+/)
-  await expect(page.getByRole('heading', { name: 'What trace did' })).toBeVisible()
+  // a specialist's change says what trace did; an edit a person made in the app says what it changes
+  await expect(page.getByRole('heading', { name: /What trace did|What it changes/ })).toBeVisible()
   // desktop shows a Checks section; a phone folds it into one line ("1 of 1 check passed")
   await expect(page.getByText(/\bchecks? (passed|failing|running)|^Checks/i).filter({ visible: true }).first()).toBeVisible()
   const decision = page.getByRole('region', { name: 'Your decision' })
@@ -29,7 +30,9 @@ test('the changes table lists changes and one opens for review @phone', async ({
     return
   }
   await expect(page.getByRole('button', { name: 'Accept into the design' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Ask for changes' })).toBeVisible()
+  // an edit made in the app is accepted or discarded: only a specialist's change can be asked to change
+  if (await page.getByRole('heading', { name: 'What trace did' }).isVisible()) await expect(page.getByRole('button', { name: 'Ask for changes' })).toBeVisible()
+  else await expect(page.getByRole('button', { name: 'Discard' })).toBeVisible()
 })
 
 test('a changed file shows its before and after', async ({ app, page }) => {

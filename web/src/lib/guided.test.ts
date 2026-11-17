@@ -120,6 +120,19 @@ describe('reading the change actions', () => {
     expect(readChange({ ...summary, url: 'https://evil.example/x' }).url).toBe('')
   })
 
+  it('reads an edit made in the app as an edit: its kind, who made it, how it applies and what may be done with it', () => {
+    // these were typed and never read, so the import's change read "From an import of fabrication files by you" with
+    // a "Talk to an import of fabrication files by you" box (potroller-carrier-m20)
+    const edit = readChange({ ...summary, kind: 'import', by_name: 'Marc', mine: true, applies: 'auto', from: 'an import of fabrication files by you', may_ask: false, may_discard: true, rule_blocks: false })
+    expect(edit).toMatchObject({ kind: 'import', by_name: 'Marc', mine: true, applies: 'auto', may_ask: false, may_discard: true, rule_blocks: false })
+    expect(readChange({ ...summary, kind: 'something else' }).kind).toBeUndefined()
+    expect(readChange({ ...summary }).may_ask).toBeUndefined()
+    // applying by itself is not "no recommendation yet"
+    expect(recommendationWords({ verdict: 'none', why: 'Its checks passed: trace applies it now.' })).toBe('Nothing for you to do.')
+    expect(recommendationWords({ verdict: 'none', why: '1 check is failing. trace does not apply it while that is so: discard it, or make the change again.' })).toBe('trace will not apply this.')
+    expect(recommendationWords({ verdict: 'none', why: '' })).toBe('trace has no recommendation yet.')
+  })
+
   it('change.get: keeps the accepted requirements a change edits, so the page can say so before accepting (log #112)', () => {
     const edits = { ids: ['REQ-367d71'], reopens: true, asked: null, says: 'Changes a requirement (REQ-367d71): accepting it reopens Define and every gate after it.', edits: [{ id: 'REQ-367d71', what: 'REQ-367d71: its acceptance criterion changes.' }] }
     expect(readChange({ ...summary, requirement_edits: edits }).requirement_edits).toEqual(edits)
@@ -189,6 +202,9 @@ describe('the steps and the now-step', () => {
       { id: 'change:18', text: '', owner: 'you', state: 'now', ref: { kind: 'change', id: '18' } }, { id: 'sign:layout', text: '', owner: 'admins', state: 'next', ref: null },
     ]
     expect(steps.map((_, i) => stepLabel(steps, i))).toEqual(['trace · done', 'trace · alongside you', 'You · now', 'An admin · after you'])
+    // two of trace's own steps in a row: "next", never "trace · after trace"
+    const own = [{ id: 'a', text: 'x', owner: 'trace', state: 'now' }, { id: 'b', text: 'y', owner: 'trace', state: 'next' }] as never
+    expect([0, 1].map((i) => stepLabel(own, i))).toEqual(['trace · now', 'trace · next'])
     // read from journey.get as it is sent
     expect(readSteps([{ id: 'layout.fit', text: 'Fits', owner: 'trace', state: 'later', ref: null, alongside: true }])?.[0]).toMatchObject({ alongside: true })
     expect(readSteps([{ id: 'layout.fit', text: 'Fits', owner: 'trace', state: 'later', ref: null }])?.[0]).not.toHaveProperty('alongside')

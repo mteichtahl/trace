@@ -84,7 +84,7 @@ export function stepLabel(steps: StageStep[], i: number): string {
     case 'now': return s.stopped ? `${who} · stopped` : `${who} · now`
     case 'next': {
       const now = steps.find((x) => x.state === 'now')
-      return now?.owner === 'you' ? `${who} · after you` : now ? `${who} · after ${ownerWord(now).replace(/^An? /, 'the ').replace(/^You$/, 'you')}` : `${who} · next`
+      return now?.owner === 'you' ? `${who} · after you` : now && ownerWord(now) === who ? `${who} · next` : now ? `${who} · after ${ownerWord(now).replace(/^An? /, 'the ').replace(/^You$/, 'you')}` : `${who} · next`
     }
     default: return who
   }
@@ -141,7 +141,7 @@ export function changeState(c: Pick<ChangeSummary, 'verdict' | 'stuck' | 'workin
 
 /** The words for an edit's kind, as a tag beside its title: "Setting", "Hand-in". */
 export const KIND_TAG: Record<NonNullable<ChangeSummary['kind']>, string | null> = {
-  work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in', rule: 'Project rule',
+  work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in', logo: 'Logo', rule: 'Project rule', import: 'Import',
 }
 
 /**
@@ -238,7 +238,9 @@ export function recommendationWords(r: ChangeDetail['recommendation'], working?:
     case 'accept': return 'trace recommends accepting.'
     case 'ask': return 'trace recommends asking for changes.'
     case 'wait': return 'trace recommends waiting for the checks.'
-    default: return 'trace has no recommendation yet.'
+    // an edit trace applies by itself once its checks pass, or will not apply as it stands: the words under the
+    // heading say which, and "no recommendation yet" over them read as trace not having looked
+    default: return /trace applies it now/.test(r.why) ? 'Nothing for you to do.' : /trace does not apply it/.test(r.why) ? 'trace will not apply this.' : r.why ? 'trace has no recommendation here.' : 'trace has no recommendation yet.'
   }
 }
 

@@ -74,7 +74,7 @@ const later = (r: Response, ms = 500) => new Promise<Response>((res) => setTimeo
 
 const OFF: Omit<DeploysView, 'environment'> = {
   enabled: false, url: null, auto: false, may_approve: false, running: null, request: null, in_progress: null, recent: [],
-  recommendation: { verdict: 'none', why: 'Deploys are off for this project. An admin turns them on in the project\'s settings (deploy.enabled).' },
+  recommendation: { verdict: 'none', why: 'Deploys are off for this project. An admin turns them on in the project\'s Settings, under Deploys.' },
 }
 
 /** An answer for the deploy actions, or undefined for any other action. */

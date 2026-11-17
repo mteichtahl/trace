@@ -123,13 +123,16 @@ export function GateChecklist({ j, admin, held, className }: { j: Journey; admin
 }
 
 /** "4 of 7 met", or "ready to sign", for the checklist's folded row. */
-export function gateRowCount(j: Journey): { count: string; ready: boolean } | null {
+export function gateRowCount(j: Journey): { count: string; ready: boolean; name?: string } | null {
   const c = currentStage(j)
   if (!c) return null
   const gate = gateOf(j.gates, c.stage)
   const meter = gateMeter(gate, c.stage)
   const ready = gate?.state === 'ready'
-  return { count: ready ? 'ready to sign' : meter.total ? `${meter.met} of ${meter.total} met` : 'no criteria yet', ready }
+  // the gate by its own name: a stage with two gates (Fabricate: the order, then the boards received) counts all its
+  // criteria on the stage strip ("0 of 5") and this gate's alone here ("0 of 3"), which read as a contradiction under
+  // "the Fabricate gate" (potroller-carrier-m20)
+  return { count: ready ? 'ready to sign' : meter.total ? `${meter.met} of ${meter.total} met` : 'no criteria yet', ready, ...(gate?.name ? { name: gate.name } : {}) }
 }
 
 /** The phone's stage: one segment per stage (done dark, current accent) and "step 3 of 5". */

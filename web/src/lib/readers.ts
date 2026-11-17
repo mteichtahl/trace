@@ -7,7 +7,7 @@
  * answers in the app's shapes) and the tests keep working.
  */
 import type {
-  AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeLink, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
+  AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeKind, ChangeLink, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
   HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RequirementEdits, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, StuckChecks, Waiver,
 } from './types'
 import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
@@ -163,6 +163,8 @@ export function verdictOf(c: Pick<ChangeSummary, 'checks' | 'mergeable'> & { ver
   return 'blocked'
 }
 
+const CHANGE_KINDS = new Set<string>(['work', 'setting', 'prompt', 'release', 'join', 'workflows', 'handin', 'logo', 'rule', 'import'])
+
 /** One ChangeSummary (changes.list, change.get), tolerant of missing fields. */
 export function readChangeSummary(c: Obj): ChangeSummary {
   const state = c.state === 'merged' || c.state === 'closed' ? c.state : 'open'
@@ -178,6 +180,13 @@ export function readChangeSummary(c: Obj): ChangeSummary {
     ...(c.working === true ? { working: true } : {}),
     ...(c.working === true && c.updating === true ? { updating: true } : {}),
     ...(readStuck(c.stuck) ? { stuck: readStuck(c.stuck)! } : {}),
+    // an edit a person made in the app: its kind, who made it and how it applies. These were typed and never read,
+    // so every edit read as a specialist's work ("From an import of fabrication files by you", "Talk to an import of
+    // fabrication files by you": potroller-carrier-m20)
+    ...(CHANGE_KINDS.has(String(c.kind)) ? { kind: c.kind as ChangeKind } : {}),
+    ...(str(c.by_name) ? { by_name: String(c.by_name) } : {}),
+    ...(typeof c.mine === 'boolean' ? { mine: c.mine } : {}),
+    ...(c.applies === 'auto' || c.applies === 'review' ? { applies: c.applies } : {}),
   }
 }
 
@@ -220,6 +229,9 @@ export function readChange(raw: unknown): ChangeDetail {
     ...(Array.isArray(c.requirements_tested) && c.requirements_tested.length ? { requirements_tested: c.requirements_tested.map(String) } : {}),
     recommendation: { verdict, why: str(rec.why) ?? '' },
     may_accept: c.may_accept === true,
+    ...(typeof c.rule_blocks === 'boolean' ? { rule_blocks: c.rule_blocks } : {}),
+    ...(typeof c.may_ask === 'boolean' ? { may_ask: c.may_ask } : {}),
+    ...(typeof c.may_discard === 'boolean' ? { may_discard: c.may_discard } : {}),
     blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),
     base: ref(c.base), head: ref(c.head),
     ...(readRequirementEdits(c.requirement_edits) ? { requirement_edits: readRequirementEdits(c.requirement_edits)! } : {}),

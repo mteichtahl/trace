@@ -22,6 +22,7 @@
  * they start until the agent is there, then starts it by itself (src/api/agent-queue.ts). agentQueueNote says so
  * beside a button that starts work.
  */
+import { progressLabel } from '@/lib/check-names'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Circle, Clock, Loader2, TriangleAlert, X } from 'lucide-react'
 import { createContext, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -150,7 +151,7 @@ export function UpdateProgress({ setup: s, className }: { setup: AgentSetup; cla
             return (
               <li key={`${i}-${st.name}`} className={cn('flex min-w-0 items-center gap-1.5', st.state === 'waiting' && 'text-muted-foreground', st.state === 'failed' && 'font-medium')}>
                 <Icon className={cn('size-3.5 shrink-0', c)} aria-hidden />
-                <span className="min-w-0 truncate" title={st.name}>{st.name}</span>
+                <span className="min-w-0 truncate" title={st.name}>{progressLabel(st.name)}</span>
                 <span className="sr-only">: {word}</span>
               </li>
             )

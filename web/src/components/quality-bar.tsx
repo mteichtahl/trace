@@ -194,6 +194,9 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
               </Tooltip>
             )}
             {ready && saving && <span id="quality-missing" className="text-xs text-muted-foreground">{queued ? 'Saving your draft, then submitting…' : 'Saving your draft…'}</span>}
+            {/* the line under the button keeps its place when there is nothing to say, so the button does not move as the
+                last check is met and a click in flight still lands on it (potroller-carrier-m20) */}
+            {ready && !saving && <span className="text-xs" aria-hidden>&nbsp;</span>}
             {!ready && (
               <span id="quality-missing" className="max-w-xs text-right text-xs text-muted-foreground">
                 {blocked ? `Waits for the project's agent${todo.length ? ` · ${todo.length} check${todo.length > 1 ? 's' : ''} left` : ''}` : `${todo.length} check${todo.length > 1 ? 's' : ''} left`}

@@ -261,7 +261,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
                 <div className="mt-3"><DataTable id="order-options" persist={false} data={o.options} columns={optionCols} getRowId={(r) => r.option} noun="options" /></div>
               </>
             ) : (
-              <p className="mt-1 text-sm text-muted-foreground">{o.optionsNote ?? 'No board options yet: the release package records them when it is built (kicad.fab).'}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{o.optionsNote ?? 'No board options yet: the release package records them.'}</p>
             )}
             <p className="mt-4 text-xs text-muted-foreground">Files</p>
             {o.files.length ? (
@@ -285,7 +285,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
                 <div className="mt-3"><DataTable id="order-parts" persist={false} data={o.parts} columns={partCols} getRowId={(r) => r.ref} noun="lines" /></div>
               </>
             ) : (
-              <p className="mt-1 text-sm text-muted-foreground">There is no parts check at {o.boards} boards yet: stock and prices are checked on the day of the order (parts.bom_check).</p>
+              <p className="mt-1 text-sm text-muted-foreground">There is no parts check at {o.boards} boards yet: trace checks stock and prices on the day of the order.</p>
             )}
           </section>
 
