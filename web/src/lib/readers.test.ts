@@ -79,7 +79,9 @@ describe('reading the API\'s answers', () => {
     expect(j.stages.map((s) => s.state)).toEqual(['current', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued'])
     expect(j.stages[0]).toMatchObject({ id: 'define', name: 'Define', criteria: { met: 2, total: 2 } })
     const g = j.gates.find((x) => x.id === 'define')!
-    expect(g).toMatchObject({ name: 'the requirements baseline gate', after: 'define', state: 'ready' })
+    expect(g).toMatchObject({ name: 'the requirements baseline gate', after: 'define', state: 'open' })
+    // every criterion is met, but work is still pending on it (a job or an open change): never "ready" while it is
+    expect(g.pending?.length ?? 0).toBeGreaterThan(0)
     expect(g.criteria.map((c) => [c.id, c.status])).toEqual([['define.accepted', 'met'], ['define.measurable', 'waived']])
     expect(g.criteria[0]!.evidence).toEqual({ kind: 'run', label: 'the requirements list', id: 'run-1', to: '/p/acme~answers/runs/run-1' })
     expect(g.waivers).toEqual([expect.objectContaining({ risk: 'degraded', caught: 'Bring up', reason: 'Two criteria wait for the bench.' })])

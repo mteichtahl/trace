@@ -1107,7 +1107,10 @@ export const JOURNEY_ACTIONS = {
         const r: JourneyRecord | null = await withJourneyDb(ctx, p.repo, (db) => loadJourney(db))
         if (!r) return []
         const facts = await agentFacts(ctx, p.repo)
-        const items = inboxItems(p.repo, r, { hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part, sub: ctx.principal.sub }, undefined, facts)
+        // a gate is ready to sign only when no job still works on the project (pendingOf): its jobs from the index,
+        // the open changes left to journey.get; unknown jobs leave the gate as it is
+        const rows = isAdmin(ctx.principal) ? await jobIndex(ctx, p.repo).read((db) => loadJobs(db)).then((x) => x.result, () => null) : null
+        const items = inboxItems(p.repo, r, { hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part, sub: ctx.principal.sub }, undefined, facts, rows ? pendingOf([], null, [], rows) : null)
         // the open pull requests trace's jobs opened, for those who can merge them (admins and contributors)
         const wantReview = (!a.kinds || a.kinds.includes('review')) && (isAdmin(ctx.principal) || p.part === 'contributor')
         if (wantReview) items.push(...await openReviews(ctx, p.repo, r.journey.name ?? p.repo, r.journey.currentStage).catch((e: unknown) => {
