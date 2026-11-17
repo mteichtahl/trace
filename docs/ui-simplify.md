@@ -50,7 +50,7 @@ The project's Next step card stays: it is the same item, on the project it belon
 three times before the first scroll.
 
 **Now:** one column, the phone's structure (web/src/routes/_app/p/$id/index.tsx): the stage rail, the Next step card,
-the exception card (section 4), then folded rows under "Around this project": the gate's checklist (section 6),
+the exception card (section 4), then folded rows: the gate's checklist (section 6),
 Changes from trace, Waiting on people, trace is working, Recently, Requirements and cost. A row shows its count and
 opens in place (in a drawer on a phone). The stage guide (purpose, steps) opens from the rail and from "What happens
 in Capture" instead of sitting open above the card.
