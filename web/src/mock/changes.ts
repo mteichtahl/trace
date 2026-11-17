@@ -67,11 +67,24 @@ const DECISIONS_AFTER = `${DECISIONS_BEFORE}- The 3.3 V regulator is the AP2112K
 `
 const RENDER_AFTER = DRAWING_SVG.replace('Soil sensor enclosure outline', 'Soil sensor front end, probe moved 4 mm').replace('<rect x="300" y="20"', '<rect x="296" y="24"')
 
+// one change touching every kind the review screen has a viewer for: a net list and JSON compared by key, a 3D shape and a
+// Gerber layer shown Before / After (none of them downloaded to review)
+const NET_BEFORE = '(export (version "E")\n  (nets\n    (net (code "1") (name "GND") (node (ref "C1") (pin "2")) (node (ref "U1") (pin "4")))\n    (net (code "2") (name "/VCC") (node (ref "U1") (pin "8") (pinfunction "VCC")) (node (ref "C1") (pin "1")))\n    (net (code "3") (name "SDA") (node (ref "U1") (pin "5")) (node (ref "R1") (pin "1")))))\n'
+const NET_AFTER = '(export (version "E")\n  (nets\n    (net (code "1") (name "GND") (node (ref "C1") (pin "2")) (node (ref "U1") (pin "4")) (node (ref "D3") (pin "2")))\n    (net (code "2") (name "/VCC") (node (ref "U1") (pin "8") (pinfunction "VCC")) (node (ref "C1") (pin "1")))\n    (net (code "4") (name "PG") (node (ref "U1") (pin "3")) (node (ref "D3") (pin "1")))))\n'
+const SETTINGS_BEFORE = JSON.stringify({ fab: { house: 'JLCPCB', layers: 2, finish: 'HASL' }, quantity: 10, tests: ['power', 'display'] }, null, 2) + '\n'
+const SETTINGS_AFTER = JSON.stringify({ fab: { house: 'JLCPCB', layers: 4, finish: 'ENIG' }, quantity: 10, tests: ['power', 'display', 'usb'], enclosure: { clearance_mm: 0.5 } }, null, 2) + '\n'
+const stl = (h: number) => `solid lid\n${[[0, 0, 0, 40, 0, 0, 0, 30, 0], [40, 0, 0, 40, 30, 0, 0, 30, 0], [0, 0, 0, 0, 0, h, 40, 0, 0], [0, 0, h, 40, 0, h, 40, 0, 0], [0, 0, 0, 0, 30, 0, 0, 0, h], [0, 30, 0, 0, 30, h, 0, 0, h]].map((t) => `facet normal 0 0 1\n outer loop\n  vertex ${t[0]} ${t[1]} ${t[2]}\n  vertex ${t[3]} ${t[4]} ${t[5]}\n  vertex ${t[6]} ${t[7]} ${t[8]}\n endloop\nendfacet`).join('\n')}\nendsolid lid\n`
+const GERBER = (w: number) => `%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.25*%\n%ADD11R,1.6X1.6*%\nD10*\nX0Y0D02*\nX200000Y0D01*\nX200000Y${w * 10000}D01*\nX0Y${w * 10000}D01*\nX0Y0D01*\nD11*\nX50000Y50000D03*\nX150000Y50000D03*\nM02*\n`
+
 const FILES: Record<string, { before: string | Uint8Array | null; after: string | Uint8Array | null; mime: string }> = {
   'hardware/parts.db': { before: PARTS_DB_BEFORE, after: PARTS_DB_AFTER, mime: 'application/vnd.sqlite3' },
   // the project's record: a change adding tool runs and the same files again beside its tests (test-esp32 log #49)
   '.trace/project.db': { before: RECORD_DB_BEFORE, after: RECORD_DB_AFTER, mime: 'application/vnd.sqlite3' },
   'hardware/power.kicad_sch': { before: SCH_BEFORE, after: sch, mime: 'text/plain' },
+  'hardware/soil-sensor.net': { before: NET_BEFORE, after: NET_AFTER, mime: 'text/plain' },
+  'docs/settings.json': { before: SETTINGS_BEFORE, after: SETTINGS_AFTER, mime: 'application/json' },
+  'mechanical/lid.stl': { before: stl(8), after: stl(12), mime: 'model/stl' },
+  'fab/soil-sensor-F_Cu.gtl': { before: GERBER(30), after: GERBER(36), mime: 'text/plain' },
   'docs/decisions.md': { before: DECISIONS_BEFORE, after: DECISIONS_AFTER, mime: 'text/markdown' },
   'hardware/sensor.kicad_sch': { before: sch, after: sch, mime: 'text/plain' },
   'docs/renders/front.svg': { before: DRAWING_SVG, after: RENDER_AFTER, mime: 'image/svg+xml' },
@@ -87,6 +100,7 @@ export function changeFileContent(path: string, commit?: string): { bytes: strin
   const t = commit === BASE ? f.before : f.after
   return t === null ? null : { bytes: t, mime: f.mime }
 }
+
 
 const summary = (n: number, o: Partial<ChangeDetail>): ChangeDetail => ({
   number: n, title: '', url: `https://github.com/acme/soil-sensor/pull/${n}`, draft: false, held: true, from: 'the schematic specialist', job_id: `job_${n}`,
@@ -112,6 +126,10 @@ const CHANGES: Record<string, ChangeDetail[]> = {
         { path: 'hardware/parts-list.csv', status: 'modified', additions: 6, deletions: 1, kind: 'parts' },
         { path: 'docs/decisions.md', status: 'modified', additions: 4, deletions: 0, kind: 'text' },
         { path: 'hardware/parts.db', status: 'modified', additions: 0, deletions: 0, kind: 'binary' },
+        { path: 'hardware/soil-sensor.net', status: 'modified', additions: 6, deletions: 4, kind: 'text' },
+        { path: 'docs/settings.json', status: 'modified', additions: 5, deletions: 2, kind: 'text' },
+        { path: 'mechanical/lid.stl', status: 'modified', additions: 0, deletions: 0, kind: 'binary' },
+        { path: 'fab/soil-sensor-F_Cu.gtl', status: 'modified', additions: 2, deletions: 2, kind: 'binary' },
       ],
       checks_list: [
         { name: 'Electrical rules check', state: 'passed', summary: 'No errors', id: 'job:9101' },

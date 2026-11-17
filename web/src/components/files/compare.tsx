@@ -212,9 +212,9 @@ export function SidesCompare({ file, before, after, size }: { file: FileRef; bef
   const [side, setSide] = useState<'before' | 'after' | 'both'>('after')
   const afterCommit = after === 'current' ? undefined : after
   const pane = (label: string, commit: string | undefined) => (
-    <div key={label} className="relative min-h-[300px] min-w-0 bg-background">
-      <span className="absolute left-2 top-2 z-10 rounded bg-background/90 px-1.5 py-0.5 text-[11px] font-medium">{label}</span>
-      <ViewerFor file={file} size={size} commit={commit} />
+    <div key={label} className="flex min-h-[300px] min-w-0 flex-col bg-background">
+      <span className="border-b px-3 py-1 text-[11px] font-medium text-muted-foreground">{label}</span>
+      <div className="relative h-[min(60vh,520px)] min-h-0 overflow-auto"><ViewerFor file={file} size={size} commit={commit} /></div>
     </div>
   )
   return (
