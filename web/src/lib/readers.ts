@@ -25,10 +25,18 @@ const projectName = (repo: string): string => repo.split('/').pop() || repo
 
 const EVIDENCE_KINDS = new Set(['run', 'datasheet', 'requirement', 'file', 'record', 'memory', 'part', 'chat'])
 
+/**
+ * Whether a string can be a run's id (what the run action takes: up to 64 letters, digits, `_` or `-`). An agent's
+ * evidence can cite a run by something else (a description, a graph name), which the run action refuses with "run: id:
+ * Too big"; such a citation is shown as a record, not opened as a run.
+ */
+export const isRunId = (s: string | null | undefined): boolean => !!s && /^[A-Za-z0-9_-]{1,64}$/.test(s)
+
 /** The API's evidence ({ kind, ref, label }) as a chip, with an address for runs. */
 export function readEvidence(e: Obj, repo: string): EvidenceRef {
-  const kind = (EVIDENCE_KINDS.has(String(e.kind)) ? e.kind : 'record') as EvidenceRef['kind']
   const ref = str(e.ref) ?? str(e.id) ?? ''
+  const named = (EVIDENCE_KINDS.has(String(e.kind)) ? e.kind : 'record') as EvidenceRef['kind']
+  const kind: EvidenceRef['kind'] = named === 'run' && !isRunId(ref) ? 'record' : named
   return { kind, label: str(e.label) ?? ref, id: ref, ...(kind === 'run' && ref ? { to: `/p/${pid(repo)}/runs/${ref}` } : {}) }
 }
 

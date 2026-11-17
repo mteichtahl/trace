@@ -69,6 +69,11 @@ describe('an evidence chip opens on what it cites (#129)', () => {
   it('a run chip opens the run itself, in its project', () => {
     expect(runOfChip({ kind: 'run', id: 'run-r1', to: '/p/mteichtahl~test-esp32-e2e/runs/run-r1' })).toEqual({ repo: 'mteichtahl/test-esp32-e2e', id: 'run-r1' })
     expect(runOfChip({ kind: 'datasheet', id: 'U1' })).toBeNull()
+    // a citation by something that cannot be a run id (a graph name, a description) is not opened as a run: the run
+    // action refuses it ("run: id: Too big")
+    const long = `urn:trace:trace:mteichtahl%2Fboard:run:${'a'.repeat(60)}`
+    expect(runOfChip({ kind: 'run', id: long, to: `/p/mteichtahl~board/runs/${encodeURIComponent(long)}` })).toBeNull()
+    expect(runOfChip({ kind: 'run', id: long, to: '/p/mteichtahl~board/runs/5e6f7a8b9c0d1e2f' })).toEqual({ repo: 'mteichtahl/board', id: '5e6f7a8b9c0d1e2f' })
   })
   it('anything else says what it is, never "Evidence cited here." alone', () => {
     expect(chipSummary({ kind: 'datasheet', label: 'U1 datasheet', id: 'AMS1117' })).toBe('trace cited a datasheet (AMS1117) without saying what it shows.')
