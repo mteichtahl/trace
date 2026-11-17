@@ -299,7 +299,7 @@ function Overview() {
       <ExceptionStack>
         {[showsHealth(health.data) ? <BuildFailing key="build" repo={repo} jobs={d.jobs} open={false} /> : null, resign, outOfDate, spendWarning]}
       </ExceptionStack>
-      <FoldRows label="Around this project">
+      <FoldRows label="Everything else here">
         {gateRow && (
           <FoldRow inline={!phone} label={`To pass the ${stage?.name ?? ''} gate`.replace('  ', ' ')} count={gateRow.count} accent={gateRow.ready}>
             <GateChecklist j={d} admin={admin} held={held} />
