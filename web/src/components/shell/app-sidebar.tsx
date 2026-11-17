@@ -1,4 +1,8 @@
-/** The left rail (shadcn Sidebar, collapsible to icons): the areas, the person's pinned projects with badges, and the person. */
+/**
+ * The left rail (shadcn Sidebar, collapsible to icons): Next (with the one count of what needs this person), Projects
+ * and Knowledge; the person's pinned projects (a dot when one has something in Next); System (Agents, Operations and,
+ * for admins, Admin); and the person.
+ */
 import { Link, useRouterState } from '@tanstack/react-router'
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem,
@@ -34,6 +38,8 @@ export function AppSidebar() {
   const needs = inboxItems(inbox.data)
   const waiting = (repo: string) => needs.some((i) => i.repo === repo)
 
+  const areas = AREAS.filter((a) => !('admin' in a && a.admin) || admin)
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="px-3 pb-3 pt-4">
@@ -44,7 +50,7 @@ export function AppSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
-            {AREAS.filter((a) => !('admin' in a && a.admin) || admin).map((a) => (
+            {areas.filter((a) => !('system' in a)).map((a) => (
               <SidebarMenuItem key={a.to}>
                 <SidebarMenuButton asChild isActive={isActive(pathname, a)} tooltip={a.label} className="h-9 data-[active=true]:font-medium">
                   <Link to={a.to}>
@@ -83,6 +89,26 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroup>
         )}
+        <SidebarGroup>
+          <SidebarGroupLabel>System</SidebarGroupLabel>
+          <SidebarMenu>
+            {areas.filter((a) => 'system' in a).map((a) => (
+              <SidebarMenuItem key={a.to}>
+                <SidebarMenuButton asChild isActive={isActive(pathname, a)} tooltip={a.label} className="h-9 data-[active=true]:font-medium">
+                  <Link to={a.to}>
+                    <a.icon />
+                    <span>{a.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+                {'count' in a && needs.length > 0 && (
+                  <SidebarMenuBadge className="rounded-full bg-primary text-primary-foreground peer-hover/menu-button:text-primary-foreground peer-data-[active=true]/menu-button:text-primary-foreground" aria-label={`${needs.length} for you`}>
+                    {needs.length}
+                  </SidebarMenuBadge>
+                )}
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-3">
         {user && (
