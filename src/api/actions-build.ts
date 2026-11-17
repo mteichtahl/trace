@@ -113,7 +113,7 @@ export function benchView(b: BenchInput) {
         ...(id ? { identity: { manufacturer: id.manufacturer, model: id.model, serial: id.serial, firmware: id.firmware, at: iso(id.at), run: id.runId } } : {}),
       }
     }),
-    ...(b.instruments.length ? {} : { note: 'No instruments are set up (hil.instruments): Bench setup connects them.' }),
+    ...(b.instruments.length ? {} : { note: 'No instruments are set up yet: Bench setup connects them.' }),
     readings: b.readings.map(readingView),
     boards: boards.map((serial) => ({ serial, steps: stepStates(b.readings.filter((r) => r.board === serial)).map((s) => ({ step: s.step, readings: s.readings, passed: s.passed, failing: s.failing })) })),
   }
@@ -248,7 +248,7 @@ export function orderSheet(db: DatabaseSync, o: { quantity: number; unitCost: nu
       ...(recorded.some((x) => x.group === 'pcba') ? [{ option: 'Assembly quantity', value: String(o.quantity), source: 'the build plan', decided: true }] : []),
     ]
     : []
-  const optionsNote = !current || !fab ? null : recorded ? null : `The release package run ${fab.id} recorded no board options (it was made before kicad.fab recorded them): build the package again to have them here.`
+  const optionsNote = !current || !fab ? null : recorded ? null : `The release package run ${fab.id} recorded no board options (it was made before trace recorded them): build the package again to have them here.`
 
   // the parts: the newest check at the build quantity, against sign-off's prices
   const checks = partsChecks(db)
@@ -331,7 +331,7 @@ export const BUILD_ACTIONS = {
           wait: null, ...rest, target,
           ...(b.hardware ? { hardware } : {}),
         } as never)
-        if (b.hardware && !hardware) notes.push('The build plan includes panel and mounting hardware, but no hardware list is made yet: kicad.fab or kicad.bom with hardware makes it.')
+        if (b.hardware && !hardware) notes.push('The build plan includes panel and mounting hardware, but no hardware list is made yet: trace makes it with the parts list or the release package.')
         if (b.unit_cost === null && !q) notes.push('No target unit cost is set in the build plan, and no quote is recorded, so the order\'s cost is not known yet.')
       }
       const readings = unionReadings(loadReadings(db), live.readings)

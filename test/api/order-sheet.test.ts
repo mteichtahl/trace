@@ -117,7 +117,7 @@ describe('the order being prepared (#217, #226)', () => {
     const old = fab(w, FAB_STARTED + 60, { options: false })
     s = orderSheet(w.db, at)
     expect(s.options).toEqual([])
-    expect(s.optionsNote).toBe(`The release package run ${old} recorded no board options (it was made before kicad.fab recorded them): build the package again to have them here.`)
+    expect(s.optionsNote).toBe(`The release package run ${old} recorded no board options (it was made before trace recorded them): build the package again to have them here.`)
     fab(w, FAB_STARTED + 120, { status: 'fail' })
     expect(orderSheet(w.db, at).missing[0]).toMatch(/did not pass/)
   })

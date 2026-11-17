@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NewProjectDraft } from '@/lib/types-s1'
-import { type RepoCheck, buildWords, checks, partsFor, recommendTemplate, repoOk, slug, stepOk } from './rules'
+import { type RepoCheck, buildWords, checks, partsFor, recommendStart, recommendTemplate, repoOk, slug, stepOk } from './rules'
 
 const d: NewProjectDraft = {
   name: 'Soil sensor 2', description: '', icon: { glyph: 'sensor', colour: 'green' }, start: 'idea', template: 'board',
@@ -32,6 +32,11 @@ describe('New project', () => {
   })
   it('recommends a template with why', () => {
     expect(recommendTemplate('LoRa sensor with an STM32', 'idea').template).toBe('board')
+    // how it starts, from the same words
+    expect(recommendStart('Carrier board, revision M.20. Imported from finished JLCPCB order files.')?.start).toBe('files')
+    expect(recommendStart('We have the Gerbers and a pick and place file')?.start).toBe('files')
+    expect(recommendStart('An existing KiCad project for a soil sensor')?.start).toBe('design')
+    expect(recommendStart('A soil sensor that runs a year on two AA cells')).toBeNull()
     expect(recommendTemplate('FPGA panel controller with MCU firmware', 'idea').template).toBe('mixed')
   })
   it('names the repository from the project', () => expect(slug('Soil sensor 2!')).toBe('soil-sensor-2'))

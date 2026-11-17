@@ -101,6 +101,18 @@ export function partsFor(cls: PersonClass | 'new'): ('contributor' | 'reviewer')
 }
 
 /** The template trace recommends, with why. */
+/**
+ * How the project most likely starts, from its name and description: fabrication files when they speak of Gerbers, an
+ * order or files already made; an existing design when they speak of a KiCad project or a finished schematic; else an
+ * idea. The New project screen marks it "trace recommends" (a description saying "imported from finished JLCPCB order
+ * files" used to get no recommendation: potroller-carrier-m20). Pure.
+ */
+export function recommendStart(text: string): { start: NewProjectDraft['start']; why: string } | null {
+  if (/\b(gerbers?|fabrication files?|order files?|pick[- ]and[- ]place|placement file|already (made|built|ordered|fabricated)|imported from)\b/i.test(text)) return { start: 'files', why: 'Your description speaks of files made for the fab: trace checks them and starts at Fabricate.' }
+  if (/\b(kicad (project|design)|existing (design|schematic|board)|\.kicad_(pro|sch|pcb)|schematic is (done|finished|drawn))\b/i.test(text)) return { start: 'design', why: 'Your description speaks of a design that exists: trace reads it and proposes where it enters.' }
+  return null
+}
+
 export function recommendTemplate(text: string, start: NewProjectDraft['start']): { template: Template; why: string } {
   if (start === 'files') return { template: 'board', why: 'Fabrication files make a board: the Board template takes it from Fabricate' }
   const fpga = /\b(fpga|cpld|verilog|vhdl|lattice|xilinx)/i.test(text)

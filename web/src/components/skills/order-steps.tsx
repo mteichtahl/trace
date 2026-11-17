@@ -47,7 +47,7 @@ export function OrderStep({ repo, step, view, draft, setDraft, loading }: { repo
 }
 
 function Stock({ v }: { v: OrderSheetView['stock'] }) {
-  if (!v) return <EmptyState className="mt-2">No parts check is recorded yet: trace re-checks stock and prices (parts.bom_check) when Fabricate opens.</EmptyState>
+  if (!v) return <EmptyState className="mt-2">No parts check is recorded yet: trace checks stock and prices again when Fabricate opens.</EmptyState>
   const c = v.currency ?? ''
   return (
     <div className="mt-2 space-y-3">
@@ -79,7 +79,7 @@ function Stock({ v }: { v: OrderSheetView['stock'] }) {
 }
 
 function Package({ repo, v }: { repo: string; v: OrderSheetView['package'] }) {
-  if (!v) return <EmptyState className="mt-2">No release package is recorded yet: trace builds it (kicad.fab) when Fabricate opens.</EmptyState>
+  if (!v) return <EmptyState className="mt-2">No release package is recorded yet: trace builds it when Fabricate opens, or records the imported one.</EmptyState>
   const upload = v.files.filter((f) => f.upload)
   const rest = v.files.filter((f) => !f.upload)
   const item = (f: NonNullable<OrderSheetView['package']>['files'][number]) => (
@@ -136,7 +136,7 @@ function CaseOrder({ c }: { c: NonNullable<OrderSheetView['case']> }) {
 }
 
 function Options({ v, entered, toggle: tick }: { v: OrderSheetView; entered: string[]; toggle: (id: string) => void }) {
-  if (!v.board_run) return <EmptyState className="mt-2">The board's own options are not recorded yet: trace records them with the release package (kicad.fab).</EmptyState>
+  if (!v.board_run) return <EmptyState className="mt-2">The board's own options are not recorded yet: trace records them with the release package.</EmptyState>
   const groups = [['board', 'PCB'], ['assembly', 'PCB assembly']] as const
   return (
     <div className="mt-2 space-y-3">
@@ -164,7 +164,7 @@ function Options({ v, entered, toggle: tick }: { v: OrderSheetView; entered: str
 }
 
 function Matching({ v, draft, setDraft }: { v: OrderSheetView; draft: OrderDraft; setDraft: (fn: (d: OrderDraft) => OrderDraft) => void }) {
-  if (!v.lines.length) return <EmptyState className="mt-2">No parts list is recorded yet: the package's parts list (kicad.fab) gives each line's LCSC part.</EmptyState>
+  if (!v.lines.length) return <EmptyState className="mt-2">No parts list is recorded yet: the release package's parts list gives each line's LCSC part.</EmptyState>
   const set = (key: string, to: 'matched' | 'unplaced' | null) => setDraft((d) => ({
     ...d, matched: (d.matched ?? []).filter((x) => x !== key).concat(to === 'matched' ? [key] : []), unplaced: (d.unplaced ?? []).filter((x) => x !== key).concat(to === 'unplaced' ? [key] : []),
   }))

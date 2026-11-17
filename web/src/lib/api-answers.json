@@ -5023,7 +5023,7 @@
       "bench": {
         "configured": false,
         "instruments": [],
-        "note": "No instruments are set up (hil.instruments): Bench setup connects them.",
+        "note": "No instruments are set up yet: Bench setup connects them.",
         "readings": [],
         "boards": []
       },

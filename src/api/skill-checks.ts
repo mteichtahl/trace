@@ -580,12 +580,12 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   // ---- Bench setup
   'bench-setup/limits': (i) => {
     const psus = i.instruments.filter((x) => x.kind === 'psu')
-    if (!psus.length) return notMet('limits', 'No power supply is set up in hil.instruments.')
+    if (!psus.length) return notMet('limits', 'No power supply is set up yet: add one in Bench setup.')
     const open = psus.filter((p) => !(p.limits?.max_voltage_v && p.limits?.max_current_a))
     return open.length ? notMet('limits', `${open.map((p) => p.name).join(', ')} without both a voltage and a current limit.`) : met('limits')
   },
   'bench-setup/idn': (i) => {
-    if (!i.instruments.length) return notMet('idn', 'No instruments are set up in hil.instruments.')
+    if (!i.instruments.length) return notMet('idn', 'No instruments are set up yet: add them in Bench setup.')
     const ids = new Map((i.ids ?? []).map((x) => [x.instrument, x]))
     const silent = i.instruments.filter((x) => !ids.get(x.name)?.ok)
     return silent.length ? notMet('idn', `${silent.map((x) => x.name).join(', ')} ${silent.length === 1 ? 'has' : 'have'} not answered its identity query: run hil.idn on the bench.`) : met('idn', i.instruments.map((x) => `${x.name}: ${[ids.get(x.name)?.manufacturer, ids.get(x.name)?.model].filter(Boolean).join(' ')}`).join('; '))

@@ -13,7 +13,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
-import { ArrowLeft, ChevronRight, Lightbulb, Lock, Shield, X } from 'lucide-react'
+import { ArrowLeft, ChevronRight, Lightbulb, Loader2, Lock, Shield, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -28,7 +28,7 @@ import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { useTraceContext } from '@/components/chat/context'
 import { FocusLayout } from '@/components/focus/focus-layout'
 import { FlatNote } from '@/components/installation/layout'
-import { buildWords, checks as allChecks, FAB_TEMPLATES, partsFor, recommendTemplate, repoOf, slug, stepsFor, type StepId } from '@/components/new-project/rules'
+import { buildWords, checks as allChecks, FAB_TEMPLATES, partsFor, recommendStart, recommendTemplate, repoOf, slug, stepsFor, type StepId } from '@/components/new-project/rules'
 import { ENTRY_WORDS, signedBefore } from '@/components/new-project/fab-import'
 import { FabFilesStep, useFabCheck } from '@/components/new-project/fab-files-step'
 import { RepoNote } from '@/components/new-project/repo-note'
@@ -108,6 +108,7 @@ function NewProject() {
   const [created, setCreated] = useState<Created | null>(null)
   const recGlyph = recommendGlyph(`${d.name} ${d.description}`)
   const rec = recommendTemplate(`${d.name} ${d.description}`, d.start)
+  const recStart = recommendStart(`${d.name} ${d.description}`)
   const close = () => (window.history.length > 1 ? router.history.back() : void navigate({ to: '/projects' }))
 
   useTraceContext({ label: 'New project', description: 'The person is creating a project', value: { step, name: d.name, template: d.template } }, 'screen')
@@ -193,10 +194,11 @@ function NewProject() {
         <div className="max-w-[720px] space-y-6">
           <h1 className="text-2xl font-semibold tracking-tight">How does it start?</h1>
           <RadioGroup value={d.start} onValueChange={(v) => set({ start: v as NewProjectDraft['start'], template: recommendTemplate(`${d.name} ${d.description}`, v as NewProjectDraft['start']).template })} className="grid gap-3 lg:grid-cols-3">
-            <Choice value="idea" title="From an idea" detail="Opens the Intent builder: trace asks one topic at a time and drafts the requirements." />
-            <Choice value="design" title="From an existing KiCad design" detail="Opens Design import: trace infers the intent and places the project at its entry stage." />
-            <Choice value="files" title="From fabrication files" detail="Gerbers, a bill of materials and a pick and place file, with an overview: trace checks them and starts the project at Fabricate." />
+            <Choice value="idea" title="From an idea" detail="Opens the Intent builder: trace asks one topic at a time and drafts the requirements." {...(recStart ? {} : { badge: 'trace recommends' })} />
+            <Choice value="design" title="From an existing KiCad design" detail="Opens Design import: trace infers the intent and places the project at its entry stage." {...(recStart?.start === 'design' ? { badge: 'trace recommends' } : {})} />
+            <Choice value="files" title="From fabrication files" detail="Gerbers, a bill of materials and a pick and place file, with an overview: trace checks them and starts the project at Fabricate." {...(recStart?.start === 'files' ? { badge: 'trace recommends' } : {})} />
           </RadioGroup>
+          <p className="text-sm text-muted-foreground" data-testid="start-why">{recStart ? recStart.why : 'Nothing in the description speaks of an existing design or of files made for the fab, so trace recommends starting from the idea.'}</p>
           <fieldset>
             <legend className="mb-2 text-sm font-medium">Template</legend>
             <RadioGroup value={d.template} onValueChange={(v) => set({ template: v as Template })} className="grid gap-2 sm:grid-cols-2">
@@ -288,6 +290,7 @@ function NewProject() {
             <p className="mt-2 text-xs text-muted-foreground">Most of it takes under a minute; the onboarding change's checks may take a few more, shown as they run.</p>
           </div>
           <FlatNote />
+          {create.isPending && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" aria-hidden /> Creating the project: the repository, its record{d.start === 'files' ? ' and the change that brings in your files' : ''}. This takes about 20 seconds, and the next screen says how each step went.</p>}
           {create.isError && <ErrorState title="The project was not created." kept="Everything you entered is kept." detail={String(create.error)} onRetry={() => void continueOrCreate()} />}
         </div>
       )}
@@ -413,7 +416,7 @@ function TraceTip({ step, d }: { step: StepId; d: NewProjectDraft }) {
     files: 'Export the Gerbers, BOM and pick and place for JLCPCB from your design tool (KiCad: Fabrication outputs), from the same origin. The overview is the project\'s intent: the more of the six topics it covers, the better trace\'s requirements will be.',
     repository: 'A new private repository named from the project is the simplest start. The template and repository cannot change later: the record depends on them.',
     people: 'Give the project a second person who can answer questions while you are away. Inviting someone sends one email; they sign in with a passkey and land on this project.',
-    build: '10 boards is JLCPCB\'s usual minimum. The build budget is the order\'s (boards, parts, case); the cloud-work allowance is trace\'s own spend, and trace warns before a stage uses its share.',
+    build: '10 boards suits a first run: JLCPCB makes as few as 5 boards and assembles as few as 2 of them. The build budget is the order\'s (boards, parts, case); the cloud-work allowance is trace\'s own spend, and trace warns before a stage uses its share.',
     review: 'Nothing is created until you press Create.',
   }
   return <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm"><span className="rounded-sm bg-primary/10 px-1.5 text-xs text-primary">trace recommends</span><p className="mt-2">{tips[step]}</p></div>
@@ -422,7 +425,6 @@ function TraceTip({ step, d }: { step: StepId; d: NewProjectDraft }) {
 function CreatedView({ created, draft: d, onOpen, onClose }: { created: Created; draft: NewProjectDraft; onOpen: () => void; onClose: () => void }) {
   // when it was created, once: made again on each render, every line's clock went back to "20 s so far" whenever the
   // notice looked again (test-esp32 log #6)
-  const [now] = useState(() => new Date().toISOString())
   // the project's agent arrives with the installation update: until project.agent says it is there, the notice
   // follows it (its own next look and Check now), and the button says what the project will be like
   const waitsForAgent = created.waits.some((w) => w.id === AGENT_WAIT)
@@ -434,11 +436,11 @@ function CreatedView({ created, draft: d, onOpen, onClose }: { created: Created;
       <div className="mx-auto w-full max-w-[720px] flex-1 overflow-y-auto px-4 py-10">
         <div className="flex items-center gap-3"><ProjectIconView icon={d.icon} size={48} /><div><h1 className="text-2xl font-semibold tracking-tight">{createdTitle(d.name, settingUp)}</h1><p className="text-sm font-mono text-muted-foreground">{created.repo}</p></div></div>
         <div className="mt-6 divide-y rounded-xl border">
-          {created.done.map((t, i) => <RunLine key={i} run={{ id: `c${i}`, title: t, state: 'done', startedAt: now }} />)}
+          {created.done.map((t, i) => <RunLine key={i} run={{ id: `c${i}`, title: t, state: 'done' }} />)}
           {/* the installation update is no wait on a worker: the notice below checks on it, and once the agent is
               there its line is done like the others (it kept its clock while the page said "You can start now") */}
           {created.waits.map((w) => (w.id === AGENT_WAIT && !settingUp
-            ? <RunLine key={w.id} run={{ id: w.id, title: 'Set up the project\'s agent and knowledge base', state: 'done', startedAt: now }} />
+            ? <RunLine key={w.id} run={{ id: w.id, title: 'Set up the project\'s agent and knowledge base', state: 'done' }} />
             : <WaitLine key={w.id} wait={w} onCheckNow={w.id === AGENT_WAIT ? undefined : (x) => call('tools.check_now', { repo: created.repo, waitId: x.id })} />))}
         </div>
         {waitsForAgent && <AgentSetupNotice repo={created.repo} className="mt-4" />}

@@ -208,7 +208,7 @@ export function inProgress(running: DeployFacts['running'], approvals: DeployFac
 
 /** trace's recommendation, with its reason. */
 export function recommend(v: Omit<DeploysView, 'recommendation' | 'may_approve'>, newest: string | null): DeploysView['recommendation'] {
-  if (!v.enabled) return { verdict: 'none', why: 'Deploys are off for this project. An admin turns them on in the project\'s settings (deploy.enabled).' }
+  if (!v.enabled) return { verdict: 'none', why: 'Deploys are off for this project. An admin turns them on in the project\'s Settings, under Deploys.' }
   if (v.in_progress) return { verdict: 'none', why: 'A deploy is running now. Wait for it to finish before deciding anything else.' }
   const r = v.request
   if (!r) return { verdict: 'none', why: v.running ? `Nothing is waiting: ${v.environment} runs the newest commit that passed its build.` : 'Nothing is waiting. A request appears here when the build passes on the main branch.' }

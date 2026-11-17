@@ -166,7 +166,7 @@ function Emc({ v }: { v: ReleaseView['emc'] }) {
 }
 
 function Parts({ v, acked, toggle }: { v: ReleaseView['parts']; acked: string[]; toggle: (key: string) => void }) {
-  if (!v) return <EmptyState className="mt-2">No parts check is recorded yet: parts.bom_check at the build quantity gives the cost, stock, sellers and lifecycle.</EmptyState>
+  if (!v) return <EmptyState className="mt-2">No parts check is recorded yet: trace's check at the build quantity gives the cost, stock, sellers and lifecycle.</EmptyState>
   const fitted = v.lines.filter((l) => l.need > 0)
   const forBuild = v.build_quantity === null ? 'No build quantity is set in the build plan.' : v.boards === v.build_quantity ? `${money(v.for_build, v.currency)} for ${v.build_quantity} boards.` : `About ${money(v.for_build, v.currency)} for ${v.build_quantity} boards (checked for ${v.boards}).`
   return (
