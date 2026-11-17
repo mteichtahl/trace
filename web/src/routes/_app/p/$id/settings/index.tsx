@@ -1,18 +1,17 @@
 /**
- * Settings (/p/:id/settings): what the project is and who works on it. The template and repository are shown
- * read-only with the reason (the record depends on them). Name, description, icon, the people and their parts, the
- * build quantity, the build budget (the order's), the cloud-work allowance (trace's own spend) and the later stages, and the logo on the project's documents (project-logo.tsx), are editable by admins: each change is written to the journey
- * record with project.update (they are what the project is, not repository settings) or, for people, assign — and
- * says "Saved" when it lands. Everyone else reads. The project's rules (project-rules.tsx) list the answers made rules and
- * where each stands. Where this project lives (GitHub or trace's GitLab) and moving it (move.tsx). Agent instructions for
- * this project are one link away.
+ * Settings (/p/:id/settings): what is changed often, on one short page (docs/ui-simplify.md, "Project Settings"): the
+ * name, description and icon, the people and their parts, and the build quantity, the build budget (the order's) and
+ * the cloud-work allowance (trace's own spend). Editable by admins: each change is written to the journey record with
+ * project.update (they are what the project is, not repository settings) or, for people, assign, and says "Saved"
+ * when it lands. Everyone else reads. The rest is one row each under More settings, on its own page
+ * (settings/$section.tsx): Documents (the logo), Project rules, Where this project lives (and what was fixed when it
+ * was made), Later stages, and Agent instructions (settings/prompts.tsx).
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { Check, Loader2, Lock } from 'lucide-react'
+import { Check, ChevronRight, Loader2, Lock } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -20,9 +19,6 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useTraceContext } from '@/components/chat/context'
 import { IconPicker, ProjectIconView } from '@/components/project/project-icon'
-import { ProjectLogo } from '@/components/project/project-logo'
-import { ProjectRules } from '@/components/project/project-rules'
-import { MoveCard } from '@/components/project/move'
 import { TabSkeleton } from '@/components/project/shared'
 import { Section } from '@/components/shell/app-shell'
 import { StatusBadge } from '@/components/status-badge'
@@ -40,7 +36,23 @@ export const Route = createFileRoute('/_app/p/$id/settings/')({
   component: Settings,
 })
 
-const TEMPLATE: Record<string, string> = { board: 'Board', fpga: 'FPGA', firmware: 'Firmware', mixed: 'Mixed' }
+/** The settings changed rarely, each on its own page under Settings (docs/ui-simplify.md, "Project Settings"). */
+export const SETTINGS_PAGES = [
+  { id: 'documents', label: 'Documents', line: "The logo on the cover and page header of this project's documents." },
+  { id: 'rules', label: 'Project rules', line: 'The answers made rules that every agent follows on this project.' },
+  { id: 'where', label: 'Where this project lives', line: 'GitHub or trace\'s GitLab, its template and its repository.' },
+  { id: 'stages', label: 'Later stages', line: 'Certify, Produce and Sustain.' },
+  { id: 'prompts', label: 'Agent instructions', line: "What this project's agents are told, on top of the installation's instructions." },
+] as const
+
+const LATER_NAME: Record<string, string> = { certify: 'Certify', produce: 'Produce', sustain: 'Sustain' }
+
+/** "Certify and Sustain are on." / "None on: the project ends at its first accepted board." */
+export function laterLine(on: ReadonlySet<string>): string {
+  const names = ['certify', 'produce', 'sustain'].filter((k) => on.has(k)).map((k) => LATER_NAME[k]!)
+  if (!names.length) return 'None on: the project ends at its first accepted board.'
+  return `${names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`} ${names.length === 1 ? 'is' : 'are'} on.`
+}
 
 function Settings() {
   const { id } = Route.useParams()
@@ -87,27 +99,6 @@ function Settings() {
             <div className="flex-1"><IconPicker value={icon} disabled={!admin || pending === 'icon'} onChange={(x) => save('icon', { icon: JSON.stringify({ glyph: x.glyph, colour: x.colour }) })} /></div>
           </div>
         </div>
-      </Section>
-
-      <Section label="Documents">
-        <ProjectLogo repo={repo} name={j.data.name} icon={icon} admin={admin} />
-      </Section>
-
-      <Section label="Project rules">
-        <ProjectRules repo={repo} canWrite={user?.class !== 'guest'} />
-      </Section>
-
-      <Section label="Where this project lives">
-        <MoveCard repo={repo} name={j.data.name} admin={admin} />
-      </Section>
-
-      <Section label="Fixed when the project was made">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 rounded-xl border p-5 text-sm">
-          <dt className="text-muted-foreground">Template</dt>
-          <dd><span className="font-medium">{TEMPLATE[j.data.template]}</span> <span className="text-muted-foreground">· Fixed: the stages, gates and every record so far follow from it.</span></dd>
-          <dt className="text-muted-foreground">Repository</dt>
-          <dd><span className="font-mono">{repo}</span> on <span className="font-mono">{String(s.data.config.branch ?? 'main')}</span> <span className="text-muted-foreground">· Fixed: the project's record lives in it.</span></dd>
-        </dl>
       </Section>
 
       <Section label="People and their parts" count={members.data?.length}>
@@ -159,22 +150,18 @@ function Settings() {
         </div>
       </Section>
 
-      <Section label="Later stages">
-        <ul className="divide-y rounded-xl border">
-          {([['certify', 'Certify', 'Formal compliance testing at an accredited lab'], ['produce', 'Produce', 'Hand the design to volume manufacture'], ['sustain', 'Sustain', 'Keep it buildable: lifecycle, alternates, field issues']] as const).map(([k, name, what]) => (
-            <li key={k} className="flex items-center gap-3 px-5 py-3">
-              <span className="flex-1"><span className="block text-sm font-medium">{name}</span><span className="block text-xs text-muted-foreground">{what}</span></span>
-              <Switch checked={later.has(k)} disabled={!admin || pending === 'later'} aria-label={name} onCheckedChange={(on) => save('later', { later: (['certify', 'produce', 'sustain'] as const).filter((x) => (x === k ? on : later.has(x))) })} />
-            </li>
+      <Section label="More settings">
+        <nav aria-label="More settings" className="divide-y overflow-hidden rounded-xl border bg-card">
+          {SETTINGS_PAGES.map((p) => (
+            <Link key={p.id} to={p.id === 'prompts' ? '/p/$id/settings/prompts' : '/p/$id/settings/$section'} params={p.id === 'prompts' ? { id } : { id, section: p.id }} className="flex min-h-14 items-center gap-3 px-5 py-3 hover:bg-muted/50">
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">{p.label}</span>
+                <span className="block text-xs text-muted-foreground">{p.id === 'stages' ? laterLine(later) : p.line}</span>
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            </Link>
           ))}
-        </ul>
-      </Section>
-
-      <Section label="Agent instructions">
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border p-5 text-sm">
-          <p className="flex-1">What this project's agents are told, on top of the installation's instructions. Editing them opens a change for review.</p>
-          <Button asChild variant="outline"><Link to="/p/$id/settings/prompts" params={{ id }}>Agent instructions</Link></Button>
-        </div>
+        </nav>
       </Section>
     </div>
   )

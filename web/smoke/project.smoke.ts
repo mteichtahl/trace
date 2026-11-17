@@ -85,7 +85,9 @@ test('settings, cost and memory open with their data', async ({ app, page }) => 
 })
 
 test('settings: the project logo for its documents, with a sample cover', async ({ app, page }) => {
+  // each rarely changed setting has its own page under Settings (docs/ui-simplify.md)
   await app.open(projectPath('/settings'))
+  await page.getByRole('navigation', { name: 'More settings' }).getByRole('link', { name: /^Documents/ }).click()
   await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible()
   await expect(page.getByLabel('Sample cover page')).toBeVisible()
 })

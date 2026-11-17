@@ -126,11 +126,18 @@ behind it. Evidence coverage (Proof) stays the per-requirement view. The stage's
 
 - **One list of running work:** the top bar's "trace is working" and its sheet (docs/progress-and-logs.md). Home's In
   progress is gone; a project's own jobs stay in its "trace is working" row.
-- **System:** Agents, Operations and Admin sit under one System heading in the rail, below the things a person does
-  every day (Next, Projects, Knowledge).
+- **System:** the rail leads with what a person does every day (Next, Projects, Knowledge), then the pinned projects,
+  then one System heading over Agents, Operations and, for admins, Admin (web/src/components/shell/nav.ts).
 
 ## 8. Project Settings
 
-The Settings page keeps what is changed often: name and icon, people, build and budget. Documents (logo), Project
-rules, Where it lives, Later stages and Agent instructions each get a sub-page, listed as rows with their current
-value.
+The Settings page keeps what is changed often: name, description and icon; people and their parts; build and budget.
+The rest is one row each under More settings, each on its own page (web/src/routes/_app/p/$id/settings/$section.tsx):
+
+| Page | Address | Holds |
+| --- | --- | --- |
+| Documents | `settings/documents` | the logo on the project's documents |
+| Project rules | `settings/rules` | the answers made rules |
+| Where this project lives | `settings/where` | GitHub or trace's GitLab, moving between them, and the template and repository fixed when it was made |
+| Later stages | `settings/stages` | Certify, Produce, Sustain (the row says which are on) |
+| Agent instructions | `settings/prompts` | as before |
