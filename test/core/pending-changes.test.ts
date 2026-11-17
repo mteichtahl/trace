@@ -9,7 +9,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type PendingChanges, type Viewer, applyChange, guardsFabricate, isReleased, journeyView, loadJourney, loadOrders, nextRevision,
-  pendingBlockers, type QuestionView, recordOpen, recordOrder, returnForChange, setCriterion, signBlockers, signGate, startJourney, withAsks, withPending,
+  inboxItems, pendingBlockers, type QuestionView, recordOpen, recordOrder, returnForChange, setCriterion, signBlockers, signGate, startJourney, withAsks, withPending,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { changesStage } from '../../src/api/actions-design.js'
@@ -102,6 +102,18 @@ describe('every gate, while its stage has work pending', () => {
     expect(v.gates.find((g) => g.id === 'define')).toMatchObject({ may_sign: false, pending: [expect.stringMatching(/still working/)] })
     expect(v.next).toMatchObject({ kind: 'working', belongs_to: 'trace', job_id: 'job-1' })
     expect(v.next.summary).toMatch(/is locked: 1 job is still working/)
+  })
+
+  it('is never "ready" while a job still works on it: not on the stage guide, the strip or the inbox', () => {
+    start()
+    meetAll('define'); openAll('define')
+    const busy: PendingChanges = { changes: [], requirements: [], work: [{ id: 'job-1', title: 'Check the intent', state: 'running' }] }
+    expect(journeyView(rec(), ADMIN).gates.find((g) => g.id === 'define')?.state).toBe('ready')
+    expect(withPending(rec(), journeyView(rec(), ADMIN), ADMIN, busy).gates.find((g) => g.id === 'define')?.state).toBe('open')
+    expect(inboxItems('o/r', rec(), ADMIN).map((i) => i.id)).toContain('gate:define')
+    expect(inboxItems('o/r', rec(), ADMIN, undefined, null, busy).map((i) => i.id)).not.toContain('gate:define')
+    // once the job is done, it is ready again
+    expect(inboxItems('o/r', rec(), ADMIN, undefined, null, NONE).map((i) => i.id)).toContain('gate:define')
   })
 
   it('a job waiting on a person\'s answer says so, with the question to answer, not "still working" (#197)', () => {

@@ -978,7 +978,10 @@ export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: Jo
     // a gate of a later stage (queued) is not held yet, except the gates into Fabricate, which always show the lock
     const extra = g.signature || (g.state === 'queued' && !guardsFabricate(r, g.id)) ? [] : pendingBlockers(r, g.id, pending)
     const asks = asking.filter((a) => extra.includes(askingLine(a))).map((a) => ({ question: a.asking.question, text: a.asking.text, job: a.title, for: a.asking.for, line: askingLine(a) }))
-    return extra.length ? { ...g, may_sign: false, pending: extra, ...(asks.length ? { asking: asks } : {}), missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
+    // held: never "ready" while a job still works on it or a change is open, wherever the state is read (the stage
+    // guide's "ready to sign", the stage strip, the inbox): only may_sign said so, and the gate read ready to sign while
+    // its work was still running
+    return extra.length ? { ...g, ...(g.state === 'ready' ? { state: 'open' as const } : {}), may_sign: false, pending: extra, ...(asks.length ? { asking: asks } : {}), missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
   })
   let next = view.next
   const locked = next.kind === 'gate' && next.ref?.kind === 'gate' ? gates.find((g) => g.id === next.ref?.id && pendingBlockers(r, g.id, pending).length) : undefined
@@ -2605,7 +2608,7 @@ export interface InboxItem {
  * The four kinds that earn a notification on one project, for one viewer (docs/ui-design.md "Notifications"): gates
  * and spend go to admins; questions and stuck agents to the person asked, or the contributors when no one was.
  */
-export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: number = now(), facts?: AgentFacts | null): InboxItem[] {
+export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: number = now(), facts?: AgentFacts | null, pending?: PendingChanges | null): InboxItem[] {
   const r = withoutDismissed(facts ? mergeAgentFacts(r0, facts) : r0)
   const out: InboxItem[] = []
   const project = r.journey.name ?? repo
@@ -2615,6 +2618,8 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
     for (const g of r.gates.filter((x) => x.stage === stage)) {
       const v = gateView(r, g.id, viewer)
       if (v.state !== 'ready') continue
+      // not while a job still works on it or a change of it is open (withPending): it is not ready to sign yet
+      if (pending && pendingBlockers(r, g.id, pending).length) continue
       const since = Math.max(...r.criteria.filter((c) => c.gate === g.id).map((c) => c.checkedAt ?? 0), r.stages.find((s) => s.id === stage)?.started ?? 0)
       if (g.id === 'fabricate.order') {
         const b = r.journey.build

@@ -620,7 +620,7 @@
           "stage": "define",
           "name": "requirements baseline",
           "title": "the requirements baseline gate",
-          "state": "ready",
+          "state": "open",
           "met": 2,
           "total": 2,
           "criteria": [
