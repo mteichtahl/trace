@@ -22,6 +22,7 @@ import { type Evidence, type StageId, enterImported, STAGE_NAMES } from '../core
 import { IMPORTS_PREFIX } from '../core/project.js'
 import { type Entry, importPaths, inspect, type Inspection, inspectionView, MAX_CSV, MAX_GERBER_ZIP, MAX_OVERVIEW, MB } from '../tools/fab/inspect.js'
 import { ActionError, type Context, def, hashOf, label, slugify, storeAt, writeJourney } from './action-kit.js'
+import { publicName } from './actions-changes.js'
 import { editorName, recordEdit } from './edits.js'
 
 /** The most of one file one request carries: 3 MB, so as base64 (4 MB) with the rest it stays under WAF's 5,000,000 bytes. */
@@ -162,7 +163,7 @@ export async function importFiles(ctx: Context, repo: string, o: ImportRequest &
     { path: paths.bom, content: o.files.bom! },
     { path: paths.cpl, content: o.files.cpl! },
     { path: paths.inspection, content: new TextEncoder().encode(`${JSON.stringify({ imported_at: at, by, ...view }, null, 2)}\n`) },
-    { path: paths.overview, content: new TextEncoder().encode(overviewDoc(o.name, o.overview, await editorName(ctx), at)) },
+    { path: paths.overview, content: new TextEncoder().encode(overviewDoc(o.name, o.overview, await publicName(ctx), at)) },
   ]
   const title = 'Import the fabrication files'
   const message = [title, '', ...files.map((f) => `- ${f.path}`), '', `Imported by ${by} through the trace API (docs/fab-import.md).`].join('\n')
@@ -178,6 +179,20 @@ export async function importFiles(ctx: Context, repo: string, o: ImportRequest &
   return { change: edit.number, branch, title, paths }
 }
 
+const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`
+
+/**
+ * Where the imported design came from and where it is kept, one sentence: "The files are revision M.20 of
+ * potroller-supervisor, made in KiCad Pcbnew 10.0.8; trace keeps them as its revision A, under
+ * hardware/potroller-supervisor/release/revA, named after the design." Empty when the Gerbers name nothing. Pure.
+ */
+export function sourceWords(s: Pick<Inspection['summary'], 'project' | 'tool'>, dir: string): string {
+  const what = [s.project.revision ? `revision ${s.project.revision}` : null, s.project.name ? `of ${s.project.name}` : null].filter(Boolean).join(' ')
+  if (!what && !s.tool) return ''
+  const rev = /\/rev([^/]+)$/.exec(dir)?.[1] ?? 'A'
+  return `The files are ${what || 'the design'}${s.tool ? `, made in ${s.tool}` : ''}; trace keeps them as its revision ${rev}, under ${dir}${s.project.name ? ', named after the design' : ''}.`
+}
+
 /** Enter the journey at the import's stage, on the import's evidence. Answers the gates it signed. */
 export async function enterAtImport(ctx: Context, repo: string, o: { entry: Entry; paths: ReturnType<typeof importPaths>; inspection: Inspection; change: number | null }): Promise<{ signed: string[] }> {
   const evidence: Evidence[] = [
@@ -188,11 +203,18 @@ export async function enterAtImport(ctx: Context, repo: string, o: { entry: Entr
     { kind: 'file', ref: o.paths.inspection, label: 'trace\'s inspection of the files' },
   ]
   const s = o.inspection.summary
+  const warnings = o.inspection.findings.filter((f) => f.severity === 'warning').map((f) => ({ id: f.id, text: f.text }))
   return writeJourney(ctx, repo, (db) => {
     const r = enterImported(db, {
       entry: o.entry as StageId, signer: { hash: hashOf(ctx.principal), label: label(ctx.principal) }, evidence,
-      summary: `The project was started from its fabrication files: a ${s.board.layers}-layer ${s.board.width_mm} × ${s.board.height_mm} mm board, ${s.bom.lines} BOM lines and ${s.placements.total} placements, with ${o.inspection.findings.filter((f) => f.severity === 'warning').length} warnings carried in.`,
-      detail: { change: o.change, warnings: o.inspection.findings.filter((f) => f.severity === 'warning').map((f) => ({ id: f.id, text: f.text })) },
+      // the design's own name and revision, and where its files are kept under trace's revision: the import keeps the
+      // files under the Gerbers' project name, not the names they were given with (potroller-carrier-m20: revision M.20
+      // of "potroller-supervisor" became "Rev A" and renamed files, with nothing saying so)
+      summary: [
+        `The project was started from its fabrication files: a ${s.board.layers}-layer ${s.board.width_mm} × ${s.board.height_mm} mm board, ${s.bom.lines} BOM lines and ${s.placements.total} placements, with ${plural(warnings.length, 'warning')} carried in.`,
+        sourceWords(s, o.paths.dir),
+      ].filter(Boolean).join(' '),
+      detail: { change: o.change, warnings, source: { name: s.project.name, revision: s.project.revision, tool: s.tool, dir: o.paths.dir } },
     })
     return { result: { signed: r.signed } }
   })

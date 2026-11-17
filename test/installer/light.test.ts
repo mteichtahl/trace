@@ -167,6 +167,26 @@ describe('the preflight', () => {
     expect(pending.checks.find((x) => x.id === 'bedrock.model')?.detail).toMatch(/pending/)
   })
 
+  it('refuses a model the account\'s data retention setting does not allow, and never changes the setting', async () => {
+    const models = async () => [{ id: 'us.anthropic.claude-fable-5-1', name: 'Claude Fable 5.1' }, { id: 'us.anthropic.claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }]
+    const chosen = { ...IN, model: 'us.anthropic.claude-fable-5-1' }
+    const refused = await preflight(chosen, deps({ models, dataRetention: async () => 'default' }))
+    const c = refused.checks.find((x) => x.id === 'bedrock.retention')
+    expect(c?.status).toBe('fail')
+    expect(c?.detail).toMatch(/this account's is "default"\. Every agent job and chat reply would fail\./)
+    expect(c?.fix).toMatch(/us\.anthropic\.claude-sonnet-4-6 works with the account as it is/)
+    expect(c?.action).toBeUndefined()
+    expect(refused.ok).toBe(false)
+    const allowed = await preflight(chosen, deps({ models, dataRetention: async () => 'aws_review' }))
+    expect(allowed.checks.find((x) => x.id === 'bedrock.retention')?.status).toBe('ok')
+    const unread = await preflight(chosen, deps({ models, dataRetention: async () => { throw new Error('AccessDenied') } }))
+    expect(unread.checks.find((x) => x.id === 'bedrock.retention')?.status).toBe('warn')
+    // a model that needs no such setting is not asked about, and the newest Sonnet is still what is picked unasked
+    const sonnet = await preflight(IN, deps({ models, dataRetention: async () => 'default' }))
+    expect(sonnet.checks.some((x) => x.id === 'bedrock.retention')).toBe(false)
+    expect(sonnet.checks.find((x) => x.id === 'bedrock.model')?.detail).toMatch(/claude-sonnet-4-6/)
+  })
+
   it('turns GPU jobs off at a quota of 0 and offers the increase, by API', async () => {
     const r = await preflight(IN, deps({ quota: async (code) => (code === QUOTAS.gpuOnDemand ? 0 : 256) }))
     const g = r.checks.find((c) => c.id === 'gpu.quota')

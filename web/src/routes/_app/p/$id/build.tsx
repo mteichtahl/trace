@@ -41,6 +41,7 @@ import { WaitLine } from '@/components/wait-line'
 import { projectId, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ago, money } from '@/lib/format'
+import { importedRelease } from '@/lib/imported'
 import { useAction, useCall, useJourney } from '@/lib/queries'
 import type { HardwareLine, HardwareList, OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
@@ -60,6 +61,7 @@ function Build() {
   const repo = repoOf(id)
   const b = useAction('build.get', { repo })
   const data = b.data
+  const imported = useJourney(repo).data?.imported
   useTraceContext({ label: 'Build', description: 'The project tab on screen', value: { tab: 'build', orders: data?.orders.map((o) => ({ id: o.id, state: o.state, total: o.total })) ?? [] } }, 'screen')
 
   // deploys come from GitHub and the deploy workflow, not the build record: shown whatever build.get answers
@@ -94,7 +96,7 @@ function Build() {
 
       <Section label="Releases" count={data.releases.length} className="mt-10">
         {data.releases.length === 0 ? (
-          <EmptyState>No release yet. The release gate freezes the design files into one.</EmptyState>
+          <EmptyState>{imported ? importedRelease(imported) : 'No release yet. The release gate freezes the design files into one.'}</EmptyState>
         ) : (
           <ul className="divide-y rounded-xl border">
             {data.releases.map((r) => (
@@ -241,7 +243,10 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
           {o.changed && <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm"><StatusBadge status="warning" /> {o.changed}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
-          {!signed && user?.class === 'admin' && <Button asChild><Link to="/p/$id/gates/$gate" params={{ id, gate: orderGate?.id ?? 'fabricate.order' }}>Sign the order gate</Link></Button>}
+          {/* the gate can be signed only once the order is ready: until then the button reads the gate, and does not look like the next thing to press (potroller-carrier-m20) */}
+          {!signed && user?.class === 'admin' && (o.ready === true
+            ? <Button asChild><Link to="/p/$id/gates/$gate" params={{ id, gate: orderGate?.id ?? 'fabricate.order' }}>Sign the order gate</Link></Button>
+            : <Button asChild variant="outline" className="bg-background"><Link to="/p/$id/gates/$gate" params={{ id, gate: orderGate?.id ?? 'fabricate.order' }}>See what the order gate needs</Link></Button>)}
           <Button variant="outline" className="bg-background" disabled={!o.files.length} onClick={() => toast('The package (Gerbers, parts list and placement file) downloads from the release.')}><Download /> Download the package</Button>
         </div>
       </section>

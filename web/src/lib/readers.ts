@@ -337,10 +337,16 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
   // someone who cannot do it (a reviewer: "Read the stage") reads the gate's evidence instead
   const to0 = n.yours || !(isObj(n.ref) && n.ref.kind === 'criterion') ? refTo(repo, n.ref, criterionGate) : (criterionGate.get(String(n.ref.id)) ? `/p/${pid(repo)}/gates/${criterionGate.get(String(n.ref.id))}` : undefined)
   // "Use <option>": the question opens with that option already chosen, not to be picked again (#198)
-  const to = to0 && isObj(n.ref) && n.ref.kind === 'question' ? withChosen(to0, raw.questions, String(n.ref.id), str(n.button)) : to0
+  const to1 = to0 && isObj(n.ref) && n.ref.kind === 'question' ? withChosen(to0, raw.questions, String(n.ref.id), str(n.button)) : to0
+  // "Watch" opens the job that is working, with its steps and log, not the gate the criterion belongs to
+  // (potroller-carrier-m20: Watch opened the gate's signing page)
+  const to2 = kind === 'working' && str(n.job_id) ? `/p/${pid(repo)}/runs/${encodeURIComponent(String(n.job_id))}` : to1
+  // the installation's to mend (its model cannot be reached): the step opens its health
+  const opens = isObj(n.ref) && n.ref.kind === 'action' && n.ref.id === 'open.installation'
+  const to = opens ? '/admin/installation' : to2
   const stepAt = isObj(n.step) && Number(n.step.total) > 0 ? { index: Number(n.step.index), total: Number(n.step.total) } : null
   // an action the button calls (requirements.draft) has no address: the card calls it (lib/next-actions.ts)
-  const act = isObj(n.ref) && n.ref.kind === 'action' && str(n.ref.id) ? String(n.ref.id) : undefined
+  const act = !opens && isObj(n.ref) && n.ref.kind === 'action' && str(n.ref.id) ? String(n.ref.id) : undefined
   const next: NextStep = {
     kind: (kind === 'answer' ? 'task' : kind === 'done' ? 'none' : kind) as NextStep['kind'], owner, summary,
     ...(str(n.why) ? { why: String(n.why) } : {}),
@@ -378,6 +384,11 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     handoffs: arr(raw.handoffs).map((h) => readHandoff(h, repo)),
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
+    ...(isObj(raw.imported) ? { imported: {
+      entry: String(raw.imported.entry ?? 'fabricate'),
+      ...(str(raw.imported.name) ? { name: String(raw.imported.name) } : {}), ...(str(raw.imported.revision) ? { revision: String(raw.imported.revision) } : {}),
+      ...(str(raw.imported.tool) ? { tool: String(raw.imported.tool) } : {}), ...(str(raw.imported.dir) ? { dir: String(raw.imported.dir) } : {}),
+    } } : {}),
     ...(str(raw.changes_unavailable) ? { changesUnavailable: String(raw.changes_unavailable) } : {}),
     ...(arr(raw.stale_evidence).length ? { staleEvidence: arr(raw.stale_evidence).map((x) => ({ criterion: String(x.criterion), gate: String(x.gate), text: String(x.text), why: String(x.why) })) } : {}),
     ...(isObj(raw.resign) && arr(raw.resign.gates).length ? { resign: {

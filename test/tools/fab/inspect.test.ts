@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { checkOverview, designators, drillFile, fromFunction, fromName, gerberExtents, importPaths, inspect, inspectionView, jobFile, mmOf, readBom, readCpl, readGerbers } from '../../../src/tools/fab/inspect.js'
+import { checkOverview, designators, drillFile, fromFunction, fromName, gerberExtents, importPaths, inspect, inspectionView, jobFile, mmOf, readBom, readCpl, readGerbers, toolWords } from '../../../src/tools/fab/inspect.js'
 
 const dir = join(import.meta.dirname, '../../fixtures/fab-import')
 const zip = readFileSync(join(dir, 'potroller-supervisor-gerbers.zip'))
@@ -57,7 +57,10 @@ describe('the Gerbers', () => {
     expect(g.drills).toMatchObject({ smallest_mm: 0.15, plated_files: 1, unplated_files: 1 })
     expect(g.drills.holes).toBeGreaterThan(100)
     expect(g.files.filter((f) => f.kind === 'drill-map')).toHaveLength(2)
-    expect(g.tool).toMatch(/^KiCad Pcbnew 10\.0\.8/)
+    // the version without its build and packaging suffix ("10.0.8-10.0.8~ubuntu24.04.1")
+    expect(g.tool).toBe('KiCad Pcbnew 10.0.8')
+    expect(toolWords('KiCad,Pcbnew,10.0.8-10.0.8~ubuntu24.04.1')).toBe('KiCad Pcbnew 10.0.8')
+    expect(toolWords('EasyEDA,,v6.5.40')).toBe('EasyEDA v6.5.40')
     expect(g.project).toEqual({ name: 'potroller-supervisor', revision: 'M.20' })
   })
 

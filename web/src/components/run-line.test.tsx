@@ -85,6 +85,18 @@ describe('RunLine', () => {
       expect(splitRuns([lost], t0 + 25 * 3600_000).ended).toEqual([])
     })
 
+    it('a failed job stays on the Overview for a day with why, until the same work is started again', () => {
+      const error = "trace could not reach its model: the AWS account's data retention setting for Amazon Bedrock does not allow the model this installation uses. An admin runs the installer again. (The model said: API Error: 400 data retention mode 'default' is not available for this model.)"
+      const failed: RunSummary = { ...run, id: 'f', state: 'failed', startedAt: new Date(t0).toISOString(), endedAt: new Date(t0 + 8000).toISOString(), error }
+      expect(splitRuns([failed], t0 + 60_000).ended).toEqual([failed])
+      expect(runDetail(failed, t0 + 60_000)).toBe("It failed: trace could not reach its model: the AWS account's data retention setting for Amazon Bedrock does not allow the model this installation uses. An admin runs the installer again.")
+      expect(runDetail({ ...failed, error: undefined }, t0)).toBe('It failed, and gave no reason.')
+      // started again: the newer job speaks for the work
+      const again: RunSummary = { ...run, id: 'g', state: 'running', startedAt: new Date(t0 + 60_000).toISOString() }
+      expect(splitRuns([failed, again], t0 + 90_000).ended).toEqual([])
+      expect(splitRuns([failed], t0 + 25 * 3600_000).ended).toEqual([])
+    })
+
     it('shows no controls once lost by the clock', () => {
       render(<RunLine run={{ ...r, heard: { ...heard, lostAt: new Date(Date.now() - 1000).toISOString(), overdueAt: new Date(Date.now() - 2000).toISOString() } }} onPause={noop} onCancel={noop} />)
       expect(screen.queryByRole('button', { name: 'Controls for Routing the board' })).toBeNull()

@@ -658,7 +658,7 @@ export const PROJECT_ACTIONS = {
         return { result: { view: journeyView(rec, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: true, part: 'contributor' }) } }
       })
       journey = r.view
-      step('journey', 'Start the journey', 'done', `Started from the ${TEMPLATE_NAMES[a.template]} template${definition.version ? ` (version ${definition.version})` : ''} at ${r.view.stages[0]?.name ?? 'the first stage'}.`)
+      step('journey', 'Start the journey', 'done', `Started from the ${TEMPLATE_NAMES[a.template]} template${definition.version ? ` (version ${definition.version})` : ''}${imported && a.import ? `; the fabrication files place it at ${STAGE_NAMES[a.import.entry]}` : ` at ${r.view.stages[0]?.name ?? 'the first stage'}`}.`)
     } catch (e) {
       const already = e instanceof Error && /already has a journey/.test(e.message)
       step('journey', 'Start the journey', already ? 'skipped' : 'failed', message(e))

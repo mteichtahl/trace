@@ -94,6 +94,23 @@ project (repository, registry, people, journey, the project's cloud resources), 
 The earlier stages are not redone: there is no source for trace to check them on. A later change to the design comes
 back as a new revision, designed in trace or imported again.
 
+### What the screens say of an imported project
+
+`journey.get` answers `imported` for a project entered this way: where it entered, and the design's own name, revision
+and tool as its Gerbers say them, with the folder trace keeps the files in. The import's decision says the same in
+words ("The files are revision M.20 of potroller-supervisor, made in KiCad Pcbnew 10.0.8; trace keeps them as its
+revision A, under hardware/potroller-supervisor/release/revA, named after the design"), since trace's revision letter
+and file names are its own, not the design's.
+
+- **Rule checks.** A criterion met on the import's files (`metOnImport`, src/api/evidence-freshness.ts) is never read
+  again as an electrical or design rule check: there is no schematic or board file to run one on, so the Overview does
+  not ask for one.
+- **Design.** One statement that the board was designed outside trace, and where its files and order are; the tabs'
+  empty states say there is no schematic, board file, block diagram or pin plan, never that trace will draft one.
+- **Build.** "Releases" says the package is the imported one. The order gate's button reads "See what the order gate
+  needs" until the order is ready, then "Sign the order gate".
+- **Files.** The Gerber zip and `import.json` are listed with the fabrication files.
+
 ## The actions
 
 | Action | Need | Does |

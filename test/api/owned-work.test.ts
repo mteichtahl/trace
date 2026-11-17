@@ -84,6 +84,26 @@ describe('trace\'s criterion with nothing working on it (#161)', () => {
       .toMatchObject({ state: 'stopped', why: 'trace could not start its work: the budget has nothing left for cloud work.' })
   })
 
+  it('a job that failed is not waited for, and the step says why it failed (potroller-carrier-m20)', () => {
+    const RAW = "trace could not reach its model: the AWS account's data retention setting for Amazon Bedrock does not allow the model this installation uses. An admin runs the installer again and chooses another model, or changes the account's Bedrock data retention setting in AWS. (The model said: API Error: 400 data retention mode 'default' is not available for this model.)"
+    // started 40 s ago, failed 30 s ago: not "starting" for two minutes over a job that is gone
+    const failedNow = { ...quiet, rows: [row({ id: 'job-2', state: 'failed', startedAt: AT - 40, endedAt: AT - 30, updatedAt: AT - 30, error: RAW })] }
+    const due = ownedDue(working, rec('signoff', [decision(OWNED_STARTED, AT - 45, { job: 'job-2' })]), failedNow)
+    expect(due).toMatchObject({ state: 'stopped' })
+    expect(due?.why).toBe("trace started its work, and it stopped at once: the AWS account's data retention setting for Amazon Bedrock does not allow the model this installation uses.")
+    expect(due?.blocked).toMatch(/^An admin runs the installer again .* No agent can work on any project until then\.$/)
+    // an admin is sent to the installation's health; nobody is told to start it again
+    const admin = ownedStep(working, due!, { admin: true, part: null })
+    expect(admin.step).toMatchObject({ kind: 'task', yours: true, button: 'Open the installation\'s health', ref: { kind: 'action', id: 'open.installation' } })
+    expect(admin.step.recommendation).toMatch(/^trace recommends mending the installation first\./)
+    const other = ownedStep(working, due!, contributor)
+    expect(other.step).toMatchObject({ belongs_to: 'admins', yours: false, button: 'Read the stage' })
+    // any other failure: its first sentence, and Start it as before
+    const broke = ownedDue(working, rec('signoff', [decision(OWNED_STARTED, AT - 3600)]), { ...quiet, rows: [row({ state: 'failed', endedAt: AT - 3500, updatedAt: AT - 3500, error: 'kicad-cli exited 1. More detail follows.' })] })
+    expect(broke).toMatchObject({ state: 'stopped', why: 'trace started its work once, and that work failed: kicad-cli exited 1.' })
+    expect(broke?.blocked).toBeUndefined()
+  })
+
   it('never says "trace is working" over nothing: started, it says trace started it; stopped, it offers Start it', () => {
     const due = ownedDue(working, rec('signoff'), quiet)!
     const started = ownedStep(working, { ...due, state: 'starting' }, contributor, { words: 'The Verification agent works on "Every requirement is verified or waived".', job: 'h.job-9' })

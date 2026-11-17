@@ -63,8 +63,8 @@ describe('the order being prepared (#217, #226)', () => {
     const s = orderSheet(w.db, at)
     expect(s.ready).toBe(false)
     expect(s.missing).toEqual([
-      'The release package is not built yet: kicad.fab builds the Gerbers, BOM and placement file.',
-      'There is no parts check yet: parts.bom_check checks stock and price at 10 boards.',
+      'The release package is not recorded yet: trace builds the Gerbers, bill of materials and placement file from the released design, or records the ones the project was imported with.',
+      'There is no parts check yet: trace checks stock and price at 10 boards on the day of the order.',
     ])
     expect(s).toMatchObject({ files: [], options: [], parts: [], render: null, basis: 'target', target: 90 })
     expect(s.checkedAt).toBeUndefined()

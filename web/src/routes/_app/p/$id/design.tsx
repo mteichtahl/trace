@@ -39,7 +39,8 @@ import { FindingsList, FindingsPicture } from '@/components/skills/findings'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
-import { useAction } from '@/lib/queries'
+import { IMPORTED_EMPTY, importedDesign } from '@/lib/imported'
+import { useAction, useJourney } from '@/lib/queries'
 import type { Block, CaseView, DesignView, PictureFinding } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { type FileFinding, useFileText } from '@/components/files/data'
@@ -84,6 +85,8 @@ function Design() {
   const [layers, setLayers] = useState<Record<string, boolean>>({})
   const pinUrl = useUrlView('pins')
   const data = d.data
+  // started from fabrication files: there is no design in trace to show, and the tab says so once
+  const imported = useJourney(repo).data?.imported
   const [option, setOption] = useOption(data?.architecture)
   const reqs = useAction('requirements.trace', { repo }, { enabled: tab === 'architecture' })
   const current = data?.sheets.find((s) => s.id === sheet) ?? data?.sheets[0]
@@ -116,7 +119,9 @@ function Design() {
         {data.architecture ? <><span className="font-semibold">{data.architecture.option}.</span> </> : null}
         {data.sheets.length} schematic sheet{data.sheets.length === 1 ? '' : 's'}{data.board ? ', a board' : ''}; {open ? `${open} findings to fix or waive.` : 'no open findings.'}
       </p>
-      {data.notes?.length ? <div className="mt-3 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
+      {imported
+        ? <p className="mt-3 rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground" data-testid="imported-design">{importedDesign(imported)}</p>
+        : data.notes?.length ? <div className="mt-3 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
       <DesignFiles repo={repo} className="mt-3" />
       <Tabs value={tab} onValueChange={setTab} className="mt-4">
         <TabsList className="max-w-full overflow-x-auto">
@@ -150,13 +155,13 @@ function Design() {
               <OptionsTable a={data.architecture} current={option} />
             </>
           ) : (
-            <EmptyState>No architecture record yet. The agents propose options in Architect, and Architecture choice records the one chosen.</EmptyState>
+            <EmptyState>{imported ? IMPORTED_EMPTY.architecture : 'No architecture record yet. The agents propose options in Architect, and Architecture choice records the one chosen.'}</EmptyState>
           )}
         </TabsContent>
 
         <TabsContent value="sheets" className="mt-4">
           {data.sheets.length === 0 ? (
-            <EmptyState>No schematic yet. trace drafts the sheets from the architecture in Capture.</EmptyState>
+            <EmptyState>{imported ? IMPORTED_EMPTY.sheets : 'No schematic yet. trace drafts the sheets from the architecture in Capture.'}</EmptyState>
           ) : (
             <div className="grid gap-4 lg:grid-cols-[180px_minmax(0,1fr)]">
               <nav aria-label="Sheets" className="flex gap-1 overflow-x-auto lg:flex-col">
@@ -218,7 +223,7 @@ function Design() {
               )}
             </>
           ) : (
-            <EmptyState>No pin plan yet. The firmware track proposes it in Capture, and Pin plan review agrees it with the schematic.</EmptyState>
+            <EmptyState>{imported ? IMPORTED_EMPTY.pins : 'No pin plan yet. The firmware track proposes it in Capture, and Pin plan review agrees it with the schematic.'}</EmptyState>
           )}
         </TabsContent>
 
@@ -233,7 +238,7 @@ function Design() {
               <FindingsList findings={data.board.findings} selected={selected} onSelect={setSelected} empty="The placement and design rule checks are clean." />
             </div>
           ) : (
-            <EmptyState>No board yet. It starts in Layout, once the schematic gate is signed.</EmptyState>
+            <EmptyState>{imported ? IMPORTED_EMPTY.board : 'No board yet. It starts in Layout, once the schematic gate is signed.'}</EmptyState>
           )}
         </TabsContent>
 

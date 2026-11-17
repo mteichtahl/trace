@@ -235,7 +235,7 @@ export function orderSheet(db: DatabaseSync, o: { quantity: number; unitCost: nu
   const res = fab ? runResult(db, fab.id) : null
   const current = fab !== null && (o.fabricateStarted === null || fab.started >= o.fabricateStarted)
   const files = current && Array.isArray(res?.files) ? (res.files as unknown[]).map((f) => (typeof f === 'string' ? f : (f as { path?: string }).path ?? '')).filter(Boolean).map((p) => p.split('/').pop() ?? p) : []
-  if (!fab) missing.push('The release package is not built yet: kicad.fab builds the Gerbers, BOM and placement file.')
+  if (!fab) missing.push('The release package is not recorded yet: trace builds the Gerbers, bill of materials and placement file from the released design, or records the ones the project was imported with.')
   else if (!current) missing.push(`The newest release package (run ${fab.id}) was built before Fabricate began: build it again from the released design.`)
   else if (fab.status !== 'pass') missing.push(`The release package run ${fab.id} did not pass${fab.summary ? `: ${fab.summary}` : ''}.`)
   else if (!files.length) missing.push(`The release package run ${fab.id} lists no files.`)
@@ -259,7 +259,7 @@ export function orderSheet(db: DatabaseSync, o: { quantity: number; unitCost: nu
   const parts: SheetPart[] = (check?.lines ?? []).map((l) => ({ ref: l.ref, name: l.mpn, lcsc: l.code, stock: l.stock, need: l.need, status: l.status, then: thenOf.get(l.code || l.mpn) ?? l.price, now: l.price }))
   if (!check) {
     const other = checks[0]
-    missing.push(other ? `The parts were checked for ${other.boards ?? 'an unknown number of'} boards, not ${o.quantity}: check them again at the build quantity.` : `There is no parts check yet: parts.bom_check checks stock and price at ${o.quantity} boards.`)
+    missing.push(other ? `The parts were checked for ${other.boards ?? 'an unknown number of'} boards, not ${o.quantity}: check them again at the build quantity.` : `There is no parts check yet: trace checks stock and price at ${o.quantity} board${o.quantity === 1 ? '' : 's'} on the day of the order.`)
   } else {
     const short = parts.filter((p) => p.status !== 'ok' || p.stock < p.need)
     if (!parts.length) missing.push(`The parts check ${check.run} has no lines.`)

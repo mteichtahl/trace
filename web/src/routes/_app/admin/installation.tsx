@@ -29,6 +29,7 @@ import type { IntegrationName, IntegrationStatus } from '@/lib/admin-types'
 import { loadConfig } from '@/lib/config'
 import { ago } from '@/lib/format'
 import { useLiveStatus } from '@/lib/live'
+import { modelHealth } from '@/lib/model-health'
 import { q, useAction, useProjects } from '@/lib/queries'
 
 export const Route = createFileRoute('/_app/admin/installation')({
@@ -72,6 +73,7 @@ function Installation() {
   const statuses = useQueries({ queries: repos.map((repo) => ({ ...q('status', { repo }), retry: false })) })
   const waits = useQueries({ queries: repos.map((repo) => q('tools.waits', { repo })) })
   const agents = useQueries({ queries: repos.map((repo) => ({ ...q('project.agent', { repo }), retry: false, refetchInterval: (query: { state: { data?: unknown } }) => setupLookEvery(notReady(query.state.data) ? query.state.data : undefined) })) })
+  const jobs = useQueries({ queries: repos.map((repo) => ({ ...q('jobs.list', { repo }), retry: false })) })
   const [editing, setEditing] = useState<IntegrationStatus | null>(null)
   const [removing, setRemoving] = useState<IntegrationStatus | null>(null)
 
@@ -93,6 +95,11 @@ function Installation() {
     detail: config.data && !config.data.events.realtime ? 'No live endpoint is configured; screens refresh when you act.' : live.lastUpdate ? `Last heard from ${ago(live.lastUpdate)}.` : undefined,
     todo: live.state === 'offline' ? 'Check your network; the app keeps what it had and catches up when it is back.' : undefined,
   })
+  // the agents' model: every project's newest jobs say whether it answers (lib/model-health.ts)
+  if (repos.length && jobs.every((j) => !j.isLoading)) {
+    const m = modelHealth(jobs.flatMap((j) => j.data?.jobs ?? []))
+    lines.push({ id: 'model', what: 'The agents\' model', status: m.status, word: m.word, detail: m.detail, todo: m.todo })
+  }
   if (config.data) {
     const f = config.data.features
     lines.push({ id: 'voice', what: 'Voice (reading aloud and dictation)', status: f.voice ? 'verified' : 'idle', word: f.voice ? 'On' : 'Off', todo: f.voice ? undefined : 'Turn it on in the installer\'s Advanced settings.' })

@@ -646,6 +646,9 @@ export interface Journey {
   next: NextStep
   questions: Question[]
   waivers: Waiver[]
+  /** started from fabrication files (journey.get `imported`): the design's own name, revision and tool, and where
+   * its files are kept. Screens that speak of a schematic, a board file or a release say what is true of it instead */
+  imported?: { entry: string; name?: string; revision?: string; tool?: string; dir?: string }
   /** live and queued jobs for this project (assumed part of journey.get) */
   jobs: RunSummary[]
   /** the hand-offs between its specialists (journey.get `handoffs`; absent in older answers and mocks) */

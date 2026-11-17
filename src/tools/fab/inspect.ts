@@ -32,6 +32,16 @@ export const MIN_TOPICS = 4
 
 export type Severity = 'blocking' | 'warning' | 'note'
 export type FileKey = 'gerbers' | 'bom' | 'cpl' | 'overview'
+/**
+ * A Gerber's GenerationSoftware attribute in words: "KiCad,Pcbnew,10.0.8-10.0.8~ubuntu24.04.1" is "KiCad Pcbnew 10.0.8"
+ * (the version without its build and packaging suffix, which a person does not need). Pure.
+ */
+export function toolWords(gen: string): string {
+  const [vendor = '', app = '', version = ''] = gen.split(',').map((x) => x.trim())
+  const v = version.replace(/^(\d+(?:\.\d+)*)[-~+].*$/, '$1')
+  return [vendor, app, v].filter(Boolean).join(' ').replace(/\s+/g, ' ')
+}
+
 export interface Finding {
   id: string
   severity: Severity
@@ -196,7 +206,7 @@ export function readGerbers(zip: Uint8Array): Gerbers {
     if (k.kind === 'other' && /^M48\s*$/m.test(text.slice(0, 200))) { k = { kind: 'drill', side: null, layer: null, plated: /NPTH/i.test(path) ? false : null }; from = 'content' }
     files.push({ name: baseName(path), bytes: buf.length, ...k, from })
     const gen = attr(text, 'GenerationSoftware')
-    if (gen && !tool) tool = gen.split(',').slice(0, 3).filter(Boolean).join(' ').replace(/\s+/g, ' ')
+    if (gen && !tool) tool = toolWords(gen)
     const pid = attr(text, 'ProjectId')
     if (pid && !project.name) {
       const [name, , rev] = pid.split(',')

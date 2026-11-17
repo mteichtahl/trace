@@ -58,6 +58,13 @@ export interface ChatViewProps {
   className?: string
 }
 
+/** A failed reply's reason as a sentence: the chat agent's own words, with a capital and a full stop. */
+export function replyFailure(message: string | undefined): string {
+  const text = (message ?? '').trim().replace(/^trace (cannot|could not) reply:\s*/i, '')
+  if (!text) return 'Something went wrong on the way. Try again in a moment.'
+  return text.replace(/^./, (c) => c.toUpperCase()).replace(/[.!?]?$/, (c) => c || '.')
+}
+
 export function ChatView({ agentId, repo, threadId, placeholder, intro, pinIntro = false, onThread, className }: ChatViewProps) {
   const { agent } = useAgent({ agentId })
   const { copilotkit } = useCopilotKit()
@@ -159,11 +166,23 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, pinIntro
     }
   }, [agent, agentId, repo, onThread])
 
+  // a reply that failed: said in the conversation, under the person's message, with Try again (the run's error event
+  // reached only the browser's console, and the panel showed nothing at all: potroller-carrier-m20)
+  const [failedReply, setFailedReply] = useState<string | null>(null)
+  useEffect(() => {
+    const sub = agent.subscribe?.({
+      onRunErrorEvent: ({ event }) => { setFailedReply(replyFailure(event.message)) },
+      onRunFailed: ({ error }) => { setFailedReply((was) => was ?? replyFailure(error.message)) },
+    })
+    return () => sub?.unsubscribe()
+  }, [agent])
+
   const run = useCallback(async () => {
+    setFailedReply(null)
     try {
       await copilotkit.runAgent({ agent })
     } catch (e) {
-      toast.error('trace could not reply', { description: e instanceof Error ? e.message : String(e) })
+      setFailedReply((was) => was ?? replyFailure(e instanceof Error ? e.message : String(e)))
     }
     const last = [...(agent.messages as AnyMsg[])].reverse().find((m) => m.role === 'assistant' && textOf(m))
     if (last && prefs.voice.speech !== false && prefs.voice.readAloud !== 'off') {
@@ -335,6 +354,15 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, pinIntro
             </span>
             trace is working
           </p>
+        )}
+        {failedReply && !running && (
+          <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-sm">
+            <p className="font-medium">trace could not reply</p>
+            <p className="mt-0.5 text-muted-foreground">{failedReply}</p>
+            {messages[messages.length - 1]?.role === 'user' && (
+              <Button size="sm" variant="outline" className="mt-2" onClick={retry}>Try again</Button>
+            )}
+          </div>
         )}
       </div>
       <div className="border-t p-3">

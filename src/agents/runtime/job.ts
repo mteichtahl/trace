@@ -72,6 +72,7 @@ import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { toolSteps } from './tool-steps.js'
 import { type ModelUse, recordModelUse } from '../../core/cost.js'
+import { explainModelError } from '../../core/model-errors.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, memoryLine, noMemory, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { composeTask, taskBranch } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
@@ -962,7 +963,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
   } catch (e) {
     // paused: not a failure, and nothing to report on the item yet
     if (e instanceof JobPaused) throw e
-    const msg = redact(errText(e))
+    // a model that cannot be reached is said in plain words first, the raw error after them (model-errors.ts)
+    const msg = explainModelError(redact(errText(e)))
     await endMemory(mem, ctx, log, false, msg)
     if (answering && handoffs && !settled) await handoffs.settle(answering.id, endedWithout(ctx.signal.aborted ? 'aborted' : 'failed', msg)).catch(() => false)
     if (prep?.issue) {
