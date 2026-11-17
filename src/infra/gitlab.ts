@@ -73,6 +73,34 @@ const AMAZON_ROOT_CA_1 = '8da7f965ec5efc37910f1c6e59fdc1cc6a6ede16'
 
 /** The script the instance runs at first boot: install GitLab, keep its address in step, back it up, make the token. */
 export function gitlabUserData(o: { prefix: string; region: string; bucket: string; volumeId: string; rootSecret: string; tokenSecret: string; urlParameter: string; vpcCidr: string }): string {
+  // The set-up runs as its own service, started without waiting, not in the user data itself: user data runs inside
+  // cloud-init's boot step, multi-user.target waits for that step, and GitLab's supervisor (gitlab-runsvdir.service)
+  // starts only After=multi-user.target. Run from the user data, gitlab-ctl reconfigure waited for the supervisor,
+  // which waited for the boot to finish, which waited for the reconfigure: it hung at "wait for logrotate service
+  // socket" on the first real install.
+  return `#!/bin/bash
+set -euo pipefail
+cat > /usr/local/bin/trace-gitlab-setup <<'TRACE_SETUP'
+${gitlabSetup(o)}
+TRACE_SETUP
+chmod 755 /usr/local/bin/trace-gitlab-setup
+cat > /etc/systemd/system/trace-gitlab-setup.service <<'UNIT'
+[Unit]
+Description=trace: install and set up GitLab (apart from cloud-init, which GitLab's supervisor waits for)
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/trace-gitlab-setup
+TimeoutStartSec=0
+UNIT
+systemctl daemon-reload
+systemctl start --no-block trace-gitlab-setup.service
+`
+}
+
+/** The set-up itself (what /usr/local/bin/trace-gitlab-setup runs): safe to run again. */
+function gitlabSetup(o: { prefix: string; region: string; bucket: string; volumeId: string; rootSecret: string; tokenSecret: string; urlParameter: string; vpcCidr: string }): string {
   return `#!/bin/bash
 set -euo pipefail
 exec > >(tee -a /var/log/trace-gitlab.log) 2>&1

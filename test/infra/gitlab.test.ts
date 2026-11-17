@@ -42,6 +42,16 @@ describe('GitlabServer', () => {
     expect(JSON.stringify(ingress)).not.toMatch(/"FromPort":22/)
   })
 
+  it('sets GitLab up in its own service, not inside cloud-init, which GitLab\'s supervisor waits for', async () => {
+    const { gitlabUserData } = await import('../../src/infra/gitlab.js')
+    const ud = gitlabUserData({ prefix: 'tr', region: 'us-east-1', bucket: 'b', volumeId: 'vol-1', rootSecret: 'tr/gitlab/root', tokenSecret: 'tr/gitlab/admin-token', urlParameter: '/tr/gitlab/external-url', vpcCidr: '10.0.0.0/16' })
+    const [outer, inner] = [ud.replace(/<<'TRACE_SETUP'[\s\S]*?\nTRACE_SETUP\n/, ''), ud.match(/<<'TRACE_SETUP'\n([\s\S]*?)\nTRACE_SETUP\n/)?.[1] ?? '']
+    expect(outer).not.toContain('gitlab-ctl reconfigure')
+    expect(outer).toContain('systemctl start --no-block trace-gitlab-setup.service')
+    expect(outer).not.toMatch(/WantedBy=multi-user/)
+    expect(inner).toContain('gitlab-ctl reconfigure')
+  })
+
   it('its secrets go with the stack, so a first deploy that fails leaves no name taken', () => {
     for (const r of Object.values(t.findResources('AWS::SecretsManager::Secret'))) expect((r as { DeletionPolicy?: string }).DeletionPolicy).toBe('Delete')
   })
