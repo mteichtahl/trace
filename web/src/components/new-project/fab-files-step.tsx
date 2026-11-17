@@ -1,12 +1,13 @@
 /**
- * New project's "Fabrication files" step (docs/fab-import.md): the Gerbers, the bill of materials and the pick and
- * place, each uploaded in parts as it is given (projects.import_upload), and the project overview with the six topics it
+ * New project's "Design files" step (docs/fab-import.md): the design's source files (schematics, layouts, net lists) as
+ * one zip, and the optional fabrication files, the Gerbers, the bill of materials and the pick and place, each
+ * uploaded in parts as it is given (projects.import_upload), and the project overview with the six topics it
  * should cover. trace checks them as soon as they change (projects.import_check, useFabCheck): a summary of the board
  * and its parts first, the problems and warnings below it, and what trace read on request. It ends with where the
  * project starts, with trace's recommendation and the gates that will be signed on the import's evidence.
  */
 import { useQuery } from '@tanstack/react-query'
-import { ChevronRight, CircleAlert, CircleCheck, FileArchive, FileSpreadsheet, FileText, Info, Lightbulb, Loader2, TriangleAlert, Upload } from 'lucide-react'
+import { ChevronRight, CircleAlert, CircleCheck, FileArchive, FileSpreadsheet, FileText, FolderTree, Info, Lightbulb, Loader2, TriangleAlert, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -19,7 +20,7 @@ import { call } from '@/lib/api'
 import { q } from '@/lib/queries'
 import type { FabDraft, NewProjectDraft } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
-import { blankFab, boardWords, countWords, ENTRY_WORDS, FAB_FILES, type FabCheck, type FabFile, fileRefusal, guessFile, MAX_OVERVIEW, mb, MIN_OVERVIEW, partsOf, partsWords, signedBefore } from './fab-import'
+import { blankFab, boardWords, countWords, ENTRY_WORDS, FAB_FILES, type FabCheck, type FabFile, fileRefusal, guessFile, MAX_OVERVIEW, mb, MIN_OVERVIEW, partsOf, partsWords, signedBefore, sourceWords } from './fab-import'
 
 /** The inspection of the draft's files and overview, asked again once typing pauses or a file arrives. */
 export function useFabCheck(d: NewProjectDraft, enabled: boolean) {
@@ -81,19 +82,19 @@ export function FabFilesStep({ d, set, check, checking }: { d: NewProjectDraft; 
   const loadOverview = async (f: File) => setFab({ overview: (await f.text()).slice(0, MAX_OVERVIEW) })
 
   const fresh = check && check.upload === fab.upload ? check : undefined
-  const allGiven = FAB_FILES.every((x) => fab.files[x.id])
+  const hasDesign = !!(fab.files.source || fab.files.gerbers)
   const topics = fresh?.overview.topics
 
   return (
     <div className="max-w-[820px] space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">The fabrication files</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Give trace the files you would send JLCPCB, and tell it about the project. trace checks them before anything is created, then keeps them in the project's repository.</p>
+        <h1 className="text-2xl font-semibold tracking-tight">The design files</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Give trace the project's files (schematics, layouts, net lists) and tell it about the project. The Gerbers, bill of materials and pick and place are optional: trace builds what you leave out. trace checks the files before anything is created, then keeps them in the project's repository.</p>
       </div>
 
       <section aria-labelledby="fab-files-h" className="space-y-3">
-        <h2 id="fab-files-h" className="text-sm font-medium">Files <span className="font-normal text-muted-foreground">· drop all three on any box, or choose each</span></h2>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <h2 id="fab-files-h" className="text-sm font-medium">Files <span className="font-normal text-muted-foreground">· drop several on any box, or choose each</span></h2>
+        <div className="grid gap-3 sm:grid-cols-2">
           {FAB_FILES.map((x) => <FileBox key={x.id} file={x} given={fab.files[x.id]} sending={sending[x.id]} findings={fresh?.findings.filter((f) => f.file === x.id && f.severity === 'blocking').length ?? 0} onDrop={(l) => drop(x.id, l)} />)}
         </div>
       </section>
@@ -132,13 +133,13 @@ export function FabFilesStep({ d, set, check, checking }: { d: NewProjectDraft; 
         <Switch checked={fab.built} onCheckedChange={(v) => setFab({ built: v })} aria-label="The boards are already built" />
       </div>
 
-      <CheckResult fresh={fresh} checking={checking} allGiven={allGiven} built={fab.built} />
+      <CheckResult fresh={fresh} checking={checking} hasDesign={hasDesign} built={fab.built} />
     </div>
   )
 }
 
 const TOPIC_TITLES = ['What it does', 'Where it is used', 'Power', 'Interfaces', 'Size and mounting', 'Quantity and cost']
-const ICONS: Record<FabFile, typeof FileArchive> = { gerbers: FileArchive, bom: FileSpreadsheet, cpl: FileSpreadsheet }
+const ICONS: Record<FabFile, typeof FileArchive> = { source: FolderTree, gerbers: FileArchive, bom: FileSpreadsheet, cpl: FileSpreadsheet }
 
 function FileBox({ file, given, sending, findings, onDrop }: { file: (typeof FAB_FILES)[number]; given: { name: string; bytes: number } | undefined; sending: Sending | undefined; findings: number; onDrop: (l: FileList) => void }) {
   const input = useRef<HTMLInputElement>(null)
@@ -155,7 +156,7 @@ function FileBox({ file, given, sending, findings, onDrop }: { file: (typeof FAB
       className={cn('flex min-h-[148px] cursor-pointer flex-col gap-2 rounded-xl border-2 p-4 text-sm transition-colors',
         over ? 'border-primary bg-primary/5' : given && !findings ? 'border-solid border-verified/40 bg-verified/5' : given ? 'border-solid border-destructive/40' : 'border-dashed hover:bg-accent/40')}
     >
-      <span className="flex items-center gap-2 font-medium"><Icon className="size-4 text-muted-foreground" aria-hidden />{file.title}</span>
+      <span className="flex items-center gap-2 font-medium"><Icon className="size-4 text-muted-foreground" aria-hidden />{file.title}{file.optional && <span className="text-xs font-normal text-muted-foreground">optional</span>}</span>
       {busy ? (
         <span className="mt-auto space-y-1.5"><Progress value={((sending.sent + 0.5) / sending.parts) * 100} aria-label={`Uploading ${file.title}`} /><span className="block text-xs text-muted-foreground">Uploading{sending.parts > 1 ? `, part ${sending.sent + 1} of ${sending.parts}` : ''}…</span></span>
       ) : given ? (
@@ -188,8 +189,8 @@ const SEVERITY = {
   note: { icon: Info, tone: 'text-muted-foreground', title: 'Notes' },
 } as const
 
-function CheckResult({ fresh, checking, allGiven, built }: { fresh: FabCheck | undefined; checking: boolean; allGiven: boolean; built: boolean }) {
-  if (!allGiven && !fresh) return <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">trace checks the files as soon as all three are given.</p>
+function CheckResult({ fresh, checking, hasDesign, built }: { fresh: FabCheck | undefined; checking: boolean; hasDesign: boolean; built: boolean }) {
+  if (!hasDesign && !fresh) return <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">trace checks the files as soon as the design files (or the Gerbers) are given.</p>
   if (!fresh) return <p className="flex items-center gap-2 rounded-xl border px-4 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" aria-hidden /> Checking the files…</p>
   const s = fresh.summary
   const entry = built ? 'bringup' : fresh.recommended.entry
@@ -201,8 +202,9 @@ function CheckResult({ fresh, checking, allGiven, built }: { fresh: FabCheck | u
             <h2 id="fab-check-h" className="flex items-center gap-2 font-medium">
               What trace found {checking && <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="Checking again" />}
             </h2>
-            {allGiven && s.board.layers > 0 && <p className="mt-1 text-sm">{boardWords(s)}.</p>}
-            {allGiven && s.bom.lines > 0 && <p className="text-sm">{partsWords(s)}.</p>}
+            {s.source.files > 0 && <p className="mt-1 text-sm">{sourceWords(s)}, in {s.source.files} design files.</p>}
+            {s.board.layers > 0 && <p className="mt-1 text-sm">{boardWords(s)}.</p>}
+            {s.bom.lines > 0 && <p className="text-sm">{partsWords(s)}.</p>}
             {(s.tool || s.project.name) && <p className="mt-1 text-xs text-muted-foreground">{[s.tool ? `Made in ${s.tool}` : null, s.project.name ? `project ${s.project.name}${s.project.revision ? `, revision ${s.project.revision}` : ''}` : null].filter(Boolean).join(' · ')}</p>}
           </div>
           <span className={cn('rounded-md px-2 py-1 text-xs font-medium', !fresh.ok ? 'bg-destructive/10 text-destructive' : fresh.findings.some((f) => f.severity === 'warning') ? 'bg-warning/15 text-warning-foreground' : 'bg-verified/10 text-verified')}>{countWords(fresh)}</span>
@@ -229,18 +231,28 @@ function CheckResult({ fresh, checking, allGiven, built }: { fresh: FabCheck | u
             })}
           </div>
         )}
-        {allGiven && fresh.layers.length > 0 && (
+        {(fresh.layers.length > 0 || fresh.source_files.length > 0) && (
           <Collapsible className="border-t">
-            <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium"><ChevronRight className="size-4 transition-transform group-data-[state=open]:rotate-90" /> What trace read <span className="font-normal text-muted-foreground">· {fresh.layers.length} files, the order options</span></CollapsibleTrigger>
+            <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium"><ChevronRight className="size-4 transition-transform group-data-[state=open]:rotate-90" /> What trace read <span className="font-normal text-muted-foreground">· {fresh.source_files.length + fresh.layers.length} files{fresh.order_options.length ? ', the order options' : ''}</span></CollapsibleTrigger>
             <CollapsibleContent className="grid gap-4 border-t px-4 py-4 text-sm md:grid-cols-2">
-              <table className="w-full text-left text-xs">
-                <caption className="mb-1 text-left text-xs font-medium text-muted-foreground">In the Gerber zip</caption>
-                <tbody>{fresh.layers.map((l) => <tr key={l.name} className="border-b last:border-0"><td className="py-1 pr-2 font-mono">{l.name}</td><td className="py-1 text-muted-foreground">{layerWords(l)}</td></tr>)}</tbody>
-              </table>
-              <table className="w-full text-left text-xs">
-                <caption className="mb-1 text-left text-xs font-medium text-muted-foreground">For JLCPCB's order page</caption>
-                <tbody>{fresh.order_options.map((o) => <tr key={o.option} className="border-b last:border-0"><td className="py-1 pr-2">{o.option}</td><td className="py-1">{o.value}{!o.decided && <span className="block text-muted-foreground">JLCPCB's default</span>}</td></tr>)}</tbody>
-              </table>
+              {fresh.source_files.length > 0 && (
+                <table className="w-full text-left text-xs">
+                  <caption className="mb-1 text-left text-xs font-medium text-muted-foreground">In the design files zip</caption>
+                  <tbody>{fresh.source_files.map((f) => <tr key={f.path} className="border-b last:border-0"><td className="py-1 pr-2 font-mono">{f.path}</td><td className="py-1 text-muted-foreground">{SOURCE_KIND[f.kind] ?? f.kind}</td></tr>)}</tbody>
+                </table>
+              )}
+              {fresh.layers.length > 0 && (
+                <table className="w-full text-left text-xs">
+                  <caption className="mb-1 text-left text-xs font-medium text-muted-foreground">In the Gerber zip</caption>
+                  <tbody>{fresh.layers.map((l) => <tr key={l.name} className="border-b last:border-0"><td className="py-1 pr-2 font-mono">{l.name}</td><td className="py-1 text-muted-foreground">{layerWords(l)}</td></tr>)}</tbody>
+                </table>
+              )}
+              {fresh.order_options.length > 0 && (
+                <table className="w-full text-left text-xs">
+                  <caption className="mb-1 text-left text-xs font-medium text-muted-foreground">For JLCPCB's order page</caption>
+                  <tbody>{fresh.order_options.map((o) => <tr key={o.option} className="border-b last:border-0"><td className="py-1 pr-2">{o.option}</td><td className="py-1">{o.value}{!o.decided && <span className="block text-muted-foreground">JLCPCB's default</span>}</td></tr>)}</tbody>
+                </table>
+              )}
             </CollapsibleContent>
           </Collapsible>
         )}
@@ -254,6 +266,8 @@ function CheckResult({ fresh, checking, allGiven, built }: { fresh: FabCheck | u
     </section>
   )
 }
+
+const SOURCE_KIND: Record<string, string> = { schematic: 'schematic', layout: 'board layout', netlist: 'net list', project: 'project file', library: 'library', other: 'kept, not read' }
 
 function layerWords(l: FabCheck['layers'][number]): string {
   const side = l.side === 'top' ? 'top ' : l.side === 'bottom' ? 'bottom ' : l.side === 'inner' ? 'inner ' : ''

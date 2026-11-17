@@ -10,8 +10,8 @@ import type { NewProjectDraft } from '@/lib/types-s1'
 
 export const STEPS = [
   { id: 'about', title: 'About', sub: 'Name, description, icon' },
-  { id: 'start', title: 'How it starts', sub: 'An idea, a KiCad design or fabrication files; the template' },
-  { id: 'files', title: 'Fabrication files', sub: 'Gerbers, BOM, pick and place, and an overview' },
+  { id: 'start', title: 'How it starts', sub: 'An idea, a KiCad design or design and fabrication files; the template' },
+  { id: 'files', title: 'Design files', sub: 'Schematics, layouts and net lists; fabrication files optional; an overview' },
   { id: 'repository', title: 'Repository', sub: 'New or existing' },
   { id: 'people', title: 'People', sub: 'Who works on it, and their part' },
   { id: 'build', title: 'Build and budget', sub: 'Quantity, budget, later stages' },

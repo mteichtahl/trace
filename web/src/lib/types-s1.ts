@@ -822,7 +822,7 @@ export interface FabDraft {
   overview: string
   /** the boards are built already: the project enters at Bring up */
   built: boolean
-  files: Partial<Record<'gerbers' | 'bom' | 'cpl', { name: string; bytes: number }>>
+  files: Partial<Record<'source' | 'gerbers' | 'bom' | 'cpl', { name: string; bytes: number }>>
 }
 
 export interface NewProjectDraft {
