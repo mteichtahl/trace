@@ -17,6 +17,7 @@
  *   imageRegistry  where trace's images are published: the source's trace-images release (src/installer/release.ts
  *                  publishedRegistry), unless props.ts PUBLISHED_REGISTRY pins one; none yet, so they are built
  */
+import { needsRetentionMode } from '../core/model-errors.js'
 import { SOURCE } from '../core/onboard.js'
 import { PUBLISHED_REGISTRY } from '../infra/props.js'
 import type { Answers } from './answers.js'
@@ -64,7 +65,10 @@ export function pickModel(models: readonly { id: string }[], region: string): st
   const bare = (id: string): string => id.replace(/^[a-z-]+\./, '')
   const global = (id: string): number => (id.startsWith('global.') ? 1 : 0)
   const newest = (xs: string[]): string | undefined => [...xs].sort((a, b) => bare(b).localeCompare(bare(a)) || global(a) - global(b))[0]
-  return newest(sonnet) ?? newest(claude) ?? `${geography(region) === 'ca' ? 'us' : geography(region)}.anthropic.claude-sonnet-4-6`
+  // never, unasked, a model Bedrock runs only under a chosen data retention setting (model-errors.ts): the account
+  // may not have it, and then every call fails
+  const open = claude.filter((id) => !needsRetentionMode(id))
+  return newest(sonnet) ?? newest(open) ?? newest(claude) ?? `${geography(region) === 'ca' ? 'us' : geography(region)}.anthropic.claude-sonnet-4-6`
 }
 
 export interface Resolved { answers: Answers; derived: string[]; missing: string[] }

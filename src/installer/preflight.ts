@@ -24,6 +24,7 @@
  *                     CodeConnections connection, else CodeBuild's GitHub source credential (the token, imported)
  */
 import type { AwsCredentialIdentity } from '@smithy/types'
+import { RETENTION_LINK, RETENTION_OK, needsRetentionMode } from '../core/model-errors.js'
 import { SOURCE } from '../core/onboard.js'
 import { PUBLISHED_REGISTRY, TOOLS_IMAGE_OUTPUT, stackName } from '../infra/props.js'
 import type { Check, FixAction } from './answers.js'
@@ -73,6 +74,7 @@ export const PROGRESS_LABELS: Record<string, string> = {
   source: 'Checking trace\'s own repository',
   registry: 'Finding trace\'s published images',
   modelAccess: 'Checking the account may use the model',
+  dataRetention: 'Checking the account\'s data retention setting allows the model',
   cognito: 'Checking the sign-in domain is free',
   repos: 'Checking the token\'s access to each repository',
 }
@@ -86,6 +88,8 @@ export interface PreflightDeps {
   agentCore(): Promise<void>
   models(): Promise<{ id: string; name: string }[]>
   modelAccess(model: string): Promise<ModelAccess>
+  /** the account's data retention mode for Amazon Bedrock (GetAccountDataRetention): "default", "aws_review", … */
+  dataRetention?(): Promise<string>
   /** Service Quotas ec2 value (applied, else the AWS default); null when unknown */
   quota(code: string): Promise<number | null>
   vpcs(): Promise<{ count: number; quota: number | null }>
@@ -215,6 +219,29 @@ export async function preflight(input: PreflightInput, d: PreflightDeps, onProgr
         action: { id: 'bedrock-agreement', label: 'Accept the model agreement', params: { model: foundationModelOf(model) } },
       })
     } else add({ id: 'bedrock.model', status: 'info', title: 'Bedrock model', detail: `${model}: access could not be checked (${access.detail}). Access to most models is enabled on first use; Anthropic's also needs the first-time-use form, which the installer sends when asked.` })
+  }
+
+  // a model Bedrock runs only under a chosen data retention mode (Anthropic's Mythos class): with the account on
+  // another mode every call is refused ("data retention mode 'default' is not available for this model"), so every
+  // agent job and chat reply would fail. The installer never changes the setting: what the account shares with AWS or
+  // the model's provider is the account owner's decision
+  if (needsRetentionMode(model) && d.dataRetention) {
+    const mode = await track('dataRetention', () => (d.dataRetention as () => Promise<string>)()).catch((e: unknown) => `unknown: ${msg(e)}`)
+    if (RETENTION_OK.includes(mode)) add({ id: 'bedrock.retention', status: 'ok', title: 'Model data retention', detail: `${model} needs a data retention setting the account has (${mode}).` })
+    else if (mode.startsWith('unknown')) {
+      add({
+        id: 'bedrock.retention', status: 'warn', title: 'Model data retention', detail: `${model} runs only for accounts that have chosen a data retention setting it allows, and the account's could not be read (${mode.slice(9)}).`,
+        fix: 'Check the setting in AWS before installing, or choose a Sonnet model under Advanced: with the wrong setting every agent job and chat reply fails.', link: RETENTION_LINK,
+      })
+    } else {
+      const others = modelList.filter((m) => !needsRetentionMode(m.id))
+      add({
+        id: 'bedrock.retention', status: 'fail', title: 'Model data retention',
+        detail: `${model} cannot be used: it runs only for accounts that have chosen a data retention setting it allows, and this account's is "${mode}". Every agent job and chat reply would fail.`,
+        fix: `Choose another model under Advanced${others.length ? ` (${pickModel(others, region)} works with the account as it is)` : ''}, or change the account's Amazon Bedrock data retention setting in AWS and check again. The installer does not change it: what the account shares is its owner's decision.`,
+        link: RETENTION_LINK,
+      })
+    }
   }
 
   // knowledge bases' vectors
@@ -397,6 +424,7 @@ export async function liveDeps(creds: AwsCredentialIdentity, region: string, tok
       }
       return { status, useCase, detail: a.agreementAvailability?.errorMessage ?? `${a.authorizationStatus ?? ''} ${a.entitlementAvailability ?? ''}`.trim() }
     },
+    dataRetention: async () => (await brc.send(new bedrock.GetAccountDataRetentionCommand({}))).mode ?? 'default',
     quota: async (code) => {
       const service = code === QUOTAS.vpcs ? 'vpc' : 'ec2'
       try {

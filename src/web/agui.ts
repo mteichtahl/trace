@@ -51,6 +51,7 @@ import { newToolRunId } from '../core/run-logs.js'
 import { composeChat, fenceResult } from '../prompts/chat.js'
 import type { Layers } from '../prompts/resolve.js'
 import { chatPrompts } from './chat-prompts.js'
+import { modelProblem } from '../core/model-errors.js'
 import { type WebDeps, signedIn } from './deps.js'
 import { API_UNAVAILABLE, type Caller, callApi, publishChange } from './call.js'
 import type { Publisher } from './events.js'
@@ -418,11 +419,14 @@ export async function runAgent(deps: WebDeps, who: Caller, input: RunInput, sink
   } catch (e) {
     const name = e instanceof Error ? e.name : 'Error'
     const throttled = /Throttl|TooManyRequests|ServiceQuota/.test(name)
+    const problem = throttled ? null : modelProblem(e instanceof Error ? `${e.name}: ${e.message}` : String(e))
     deps.log({ warning: 'agui run failed', error: name, message: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
     emit({
       type: EventType.RUN_ERROR,
-      message: throttled ? 'trace is busy right now: try again in a moment' : name === 'BadInput' ? 'there is nothing to answer yet' : RUN_FAILED,
-      code: throttled ? 'throttled' : 'run_failed',
+      // a problem with the installation's model is said in plain words (src/core/model-errors.ts): no retry mends it,
+      // and "try again in a moment" sent people round in a circle
+      message: throttled ? 'trace is busy right now: try again in a moment' : name === 'BadInput' ? 'there is nothing to answer yet' : problem ? `trace cannot reply: ${problem.what}. ${problem.todo.replace(/^./, (c) => c.toUpperCase())}.` : RUN_FAILED,
+      code: throttled ? 'throttled' : problem ? `model_${problem.kind}` : 'run_failed',
     })
   } finally {
     clearInterval(beat)

@@ -25,6 +25,7 @@
  * is one too (OWNED_REFUSED), with the reason. Pure.
  */
 import { type JobRow, indexedHandle, isLive } from '../core/job-index.js'
+import { modelProblem } from '../core/model-errors.js'
 import { type GateView, type JourneyRecord, type NextStep, STAGE_NAMES, type StageId, type Viewer } from '../core/journey.js'
 import { STARTING_S } from './drafting.js'
 
@@ -41,11 +42,15 @@ export interface OwnedDue {
   job: string | null
   /** stopped: why, in words ("Its work ended without meeting it.") */
   why: string | null
+  /** stopped, and starting it again cannot help until an admin mends the installation (its model cannot be reached:
+   * src/core/model-errors.ts): what to do, in words */
+  blocked?: string
 }
 
 type Gates = readonly Pick<GateView, 'id' | 'criteria'>[]
 type Rec = Pick<JourneyRecord, 'journey' | 'stages' | 'decisions'>
 
+const upper = (s: string): string => s.replace(/^./, (c) => c.toUpperCase())
 const lower = (s: string): string => s.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())
 
 /** When the current stage opened, or opened again (seconds); 0 when the record does not say. */
@@ -66,6 +71,8 @@ function criterionOf(gates: Gates, id: string): { gate: string; c: GateView['cri
 const done = (c: Pick<GateView['criteria'][number], 'status'>): boolean => c.status === 'met' || c.status === 'waived'
 /** A job of trace's own (not a sweep, not a delegated worker). */
 const own = (j: JobRow): boolean => j.kind !== 'sweep' && !j.parentJob
+/** A job of trace's own that failed: it opens no change, so nothing of its is still on its way. */
+const failed = (j: JobRow): boolean => own(j) && j.state === 'failed'
 /** When a job last did anything the index saw: queued, started, ended or updated (seconds). */
 const touched = (j: JobRow): number => Math.max(j.queuedAt ?? 0, j.startedAt ?? 0, j.endedAt ?? 0, j.updatedAt)
 
@@ -82,7 +89,11 @@ export function ownedDue(next: NextStep, r: Rec, o: { gates: Gates; rows: readon
   if (o.working > 0 || o.queued > 0 || o.changes > 0) return null
   const since = stageSince(r)
   // the stage opened a moment ago (its own job may not be listed yet), or a job started or ended a moment ago
-  if (o.at - since < STARTING_S || o.rows.some((j) => own(j) && o.at - touched(j) < STARTING_S)) return null
+  // (a job that failed is not waited for: the step said "trace is working" for minutes after a job had failed in
+  // eight seconds, potroller-carrier-m20)
+  const lastFailed = o.rows.filter((j) => failed(j) && touched(j) >= since).sort((a, b) => touched(b) - touched(a))[0]
+  if (o.rows.some((j) => own(j) && !failed(j) && o.at - touched(j) < STARTING_S)) return null
+  if (o.at - since < STARTING_S && !lastFailed) return null
   const id = next.ref.id
   const base = { criterion: id, text: found.c.text, gate: found.gate, stage: r.journey.currentStage }
   // the record's decisions are newest first
@@ -94,8 +105,24 @@ export function ownedDue(next: NextStep, r: Rec, o: { gates: Gates; rows: readon
     const reason = typeof detail.reason === 'string' && detail.reason ? detail.reason.replace(/\.$/, '') : 'it did not accept the job'
     return { state: 'stopped', ...base, job, why: `trace could not start its work: ${reason}.` }
   }
-  if (o.at - last.at < STARTING_S) return { state: 'starting', ...base, job, why: null }
-  return { state: 'stopped', ...base, job, why: 'trace started its work once, and that work ended without meeting it.' }
+  // why its work ended, when the job said: the newest failed job since the start (the step used to say only that the
+  // work "ended without meeting it", and the reason was on the Agents screen alone)
+  const ended = lastFailed && touched(lastFailed) >= last.at ? lastFailed : undefined
+  if (o.at - last.at < STARTING_S && !ended) return { state: 'starting', ...base, job, why: null }
+  const problem = modelProblem(ended?.error ?? ended?.summary)
+  if (problem && !problem.retry) return { state: 'stopped', ...base, job, why: `trace started its work, and it stopped at once: ${problem.what}.`, blocked: `${upper(problem.todo)}. No agent can work on any project until then.` }
+  const said = reasonOf(ended)
+  return { state: 'stopped', ...base, job, why: said ? `trace started its work once, and that work failed: ${said}.` : 'trace started its work once, and that work ended without meeting it.' }
+}
+
+/** A failed job's reason as one short sentence without its full stop, or null when it gave none. Pure. */
+export function reasonOf(j: Pick<JobRow, 'error' | 'summary'> | undefined): string | null {
+  const text = (j?.error ?? '').trim()
+  if (!text) return null
+  const problem = modelProblem(text)
+  if (problem) return problem.what
+  const first = (text.split(/(?<=[.!?])\s|\n/)[0] ?? text).replace(/[.!?]$/, '')
+  return first.length > 200 ? `${first.slice(0, 197)}…` : first
 }
 
 /**
@@ -119,6 +146,21 @@ export function ownedStep(next: NextStep, d: OwnedDue, viewer: Pick<Viewer, 'adm
   }
   const mine = viewer.admin || viewer.part === 'contributor'
   const { job_id: _job, ...rest } = next
+  // the installation's to mend, not the project's: starting it again would fail the same way
+  if (d.blocked) {
+    return {
+      stopped: true,
+      step: {
+        ...rest, kind: 'task', belongs_to: viewer.admin ? 'you' : 'admins', yours: viewer.admin,
+        summary: `trace cannot work on ${stage}: ${lower(d.text)}. ${d.why ?? ''}`.trim(),
+        why: `Nothing can work on it until the installation is mended, and ${lower(next.why)}`.replace(/\.?$/, '.'),
+        recommendation: `trace recommends mending the installation first. ${d.blocked}`,
+        button: viewer.admin ? 'Open the installation\'s health' : 'Read the stage',
+        ref: viewer.admin ? { kind: 'action', id: 'open.installation' } : { kind: 'gate', id: d.gate },
+        after: 'Once the model answers again, come back here and start the work: trace carries on from what the record holds.',
+      },
+    }
+  }
   return {
     stopped: true,
     step: {

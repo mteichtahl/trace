@@ -98,8 +98,24 @@ export function splitRuns(jobs: readonly RunSummary[], now: number): { doing: Ru
     else if (st === 'lost' && now - Date.parse(r.heard?.at ?? r.startedAt ?? '') < 24 * 3600_000) ended.push(lostNow(r, st))
     // declined by its specialist as another's work and not sent on yet: it ended without its work done (test log R26)
     else if (r.declined && !r.declined.sent && now - Date.parse(r.endedAt ?? r.startedAt ?? '') < 24 * 3600_000) ended.push(r)
+    // failed in the last day, and nothing with its title was started after it: over, with why (a failed job used to
+    // leave the Overview altogether, and "trace is working: idle" said nothing of it: potroller-carrier-m20)
+    else if (r.state === 'failed' && now - Date.parse(r.endedAt ?? r.startedAt ?? '') < 24 * 3600_000
+      && !jobs.some((o) => o !== r && o.title === r.title && (o.startedAt ?? o.endedAt ?? '') > (r.startedAt ?? r.endedAt ?? ''))) ended.push(r)
   }
   return { doing, ended }
+}
+
+/**
+ * Why a job failed, for a person: its own words without the raw error the runtime keeps after them for the log
+ * ("… (The model said: API Error: 400 …)"), and without the runtime's "trace could not reach its model" lead-in said
+ * twice. Pure.
+ */
+export function failureWords(error: string | undefined): string {
+  const text = (error ?? '').replace(/ \(The model said: [\s\S]*\)$/, '').trim()
+  if (!text) return 'It failed, and gave no reason.'
+  const short = text.length > 400 ? `${text.slice(0, 397)}…` : text
+  return /^trace could not reach its model/.test(short) ? short.replace(/^trace/, 'It failed: trace') : `It failed: ${short}`
 }
 
 export function runDetail(run: RunSummary, now: number): string {
@@ -114,6 +130,7 @@ export function runDetail(run: RunSummary, now: number): string {
   }
   if (run.state === 'paused') return `Paused${run.pausedBy ? ` by ${run.pausedBy}` : ''}: its work so far is kept${run.branch ? ` on ${run.branch}` : ''}. Resume carries on from there.`
   if (run.state === 'lost') return run.step ?? 'trace lost contact with it.'
+  if (run.state === 'failed') return failureWords(run.error ?? run.step)
   // finished: what it came to, not how long it has run
   if (run.declined) return run.step ?? `Declined: it says this is the ${run.declined.toName} specialist's work.`
   const parts: string[] = []
