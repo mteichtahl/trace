@@ -24,7 +24,7 @@ import { GateChecklist, StageChip, StageSheet, gateRowCount } from '@/components
 import { ExceptionCard, ExceptionStack } from '@/components/exception-card'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth'
-import { changeOf, nextPlace } from '@/lib/guided'
+import { changeOf, changeState, nextPlace } from '@/lib/guided'
 import { q } from '@/lib/queries'
 import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -269,7 +269,7 @@ function Overview() {
   )
 
   const changeList = changes.data?.changes ?? []
-  const forYou = changeList.filter((c) => c.verdict === 'ready').length
+  const forYou = changeList.filter((c) => changeState(c) === 'yours').length
   const waitingOn = [...new Set(d.questions.map((qn) => qn.to).filter(Boolean))]
   const working = [doingCount && `${doingCount} now`, queued.length && `${queued.length} queued`, lostJobs.length && `${lostJobs.length} ended early`].filter(Boolean).join(' · ')
   const r = d.summary?.requirements

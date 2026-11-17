@@ -24,6 +24,7 @@ import { NotShared, QueryError } from '@/components/states'
 import { ApiError, projectName, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { initials } from '@/lib/format'
+import { changeState } from '@/lib/guided'
 import { q, useCall, useJourney, useProjects } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -146,9 +147,10 @@ function ProjectLayout() {
   if (j.isError) return j.error instanceof ApiError && j.error.noAccess ? <NotShared /> : <div className="p-6"><QueryError error={j.error} what="this project" onRetry={() => void j.refetch()} /></div>
 
   const tabs = j.data ? visibleTabs(j.data, { admin: user?.class === 'admin' }) : []
-  const ready = (changes.data?.changes ?? []).filter((c) => c.verdict === 'ready').length
-  /** changes whose checks are still running: shown in orange beside the ready count */
-  const checking = (changes.data?.changes ?? []).filter((c) => c.verdict === 'checking').length
+  // the same count the Changes list opens on: every change in the For you state (lib/guided.ts changeState)
+  const ready = (changes.data?.changes ?? []).filter((c) => changeState(c) === 'yours').length
+  /** changes trace is still making, checking or updating: shown in orange beside the count for you */
+  const checking = (changes.data?.changes ?? []).filter((c) => changeState(c) === 'trace').length
   const groups = tabGroups(tabs)
   const rest = pathname.startsWith(base) ? pathname.slice(base.length) : ''
   /** the section the person is on, and the tab it sits in */
@@ -224,9 +226,9 @@ function ProjectLayout() {
               {g.id === 'changes' && checking > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-orange-500 px-1 text-[11px] font-semibold text-white" aria-label={`${checking} being checked`}>{checking}</span>
+                    <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-orange-500 px-1 text-[11px] font-semibold text-white" aria-label={`${checking} with trace`}>{checking}</span>
                   </TooltipTrigger>
-                  <TooltipContent>{checking} {checking === 1 ? 'change is' : 'changes are'} being checked</TooltipContent>
+                  <TooltipContent>trace is still working on {checking} {checking === 1 ? 'change' : 'changes'}</TooltipContent>
                 </Tooltip>
               )}
             </Link>
