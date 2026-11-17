@@ -2,7 +2,8 @@
  * Mock mode for starting a project from fabrication files (docs/fab-import.md): projects.import_upload keeps which files
  * each upload has, and projects.import_check answers what the API answers for the Potroller carrier's real files
  * (test/fixtures/fab-import: a 10-layer KiCad board, 133 BOM lines, 774 placements), with the overview's topics found
- * by a rough look at its words. VITE_MOCK_FAB=blocked answers the placement file as not sharing the Gerbers' origin.
+ * by a rough look at its words, and for design source files the same KiCad project's schematic, layout and project file.
+ * VITE_MOCK_FAB=blocked answers the placement file as not sharing the Gerbers' origin.
  */
 import type { FabCheck, FabFile } from '@/components/new-project/fab-import'
 
@@ -10,7 +11,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const ok = (result: unknown) => json({ ok: true, result })
 const later = (r: Response, ms = 500) => new Promise<Response>((res) => setTimeout(() => res(r), ms)) as unknown as Response
 
-const SIZES: Record<FabFile, number> = { gerbers: 3_258_613, bom: 15_355, cpl: 29_735 }
+const SIZES: Record<FabFile, number> = { source: 412_880, gerbers: 3_258_613, bom: 15_355, cpl: 29_735 }
 const given = new Map<string, Set<FabFile>>()
 
 const TOPICS = [
@@ -28,6 +29,11 @@ const LAYERS: FabCheck['layers'] = [
   ...Array.from({ length: 8 }, (_, i) => [`In${i + 1}_Cu.g${i + 1}`, 'copper', 'inner', i + 2] as const),
   ['NPTH-drl_map.gbr', 'drill-map', null, null], ['NPTH.drl', 'drill', null, null], ['PTH-drl_map.gbr', 'drill-map', null, null], ['PTH.drl', 'drill', null, null], ['job.gbrjob', 'job', null, null],
 ].map(([n, kind, side, layer]) => ({ name: `potroller-supervisor-${n}`, kind: kind as string, side: side as string | null, layer: layer as number | null, bytes: 100_000 }))
+
+const SOURCE_FILES: FabCheck['source_files'] = [
+  { path: 'potroller-supervisor.kicad_pcb', kind: 'layout', bytes: 9_420_113 }, { path: 'potroller-supervisor.kicad_pro', kind: 'project', bytes: 41_208 },
+  { path: 'potroller-supervisor.kicad_sch', kind: 'schematic', bytes: 1_803_552 }, { path: 'fp-lib-table', kind: 'other', bytes: 214 },
+]
 
 const OPTIONS: FabCheck['order_options'] = [
   { group: 'pcb', option: 'Base material', value: 'FR-4', source: 'JLCPCB\'s default: not decided in the files', decided: false },
@@ -52,11 +58,14 @@ export function mockFabCheck(upload: string, files: ReadonlySet<FabFile>, overvi
   const overviewOk = t.length >= 300 && found >= 4
   const has = (f: FabFile) => files.has(f)
   const all = has('gerbers') && has('bom') && has('cpl')
+  const design = has('source') || has('gerbers')
   const blockedOrigin = import.meta.env.VITE_MOCK_FAB === 'blocked'
   const findings: FabCheck['findings'] = [
-    ...(!has('gerbers') ? [{ id: 'gerbers.missing', severity: 'blocking' as const, file: 'gerbers' as const, text: 'No Gerber zip was given.', fix: 'Give the Gerber and drill files, zipped together.' }] : []),
-    ...(!has('bom') ? [{ id: 'bom.missing', severity: 'blocking' as const, file: 'bom' as const, text: 'No bill of materials was given.', fix: 'Give the BOM as a CSV, in JLCPCB\'s columns if you have them.' }] : []),
-    ...(!has('cpl') ? [{ id: 'cpl.missing', severity: 'blocking' as const, file: 'cpl' as const, text: 'No pick and place file was given.', fix: 'Give the placement (CPL) file as a CSV.' }] : []),
+    ...(!design ? [{ id: 'design.missing', severity: 'blocking' as const, file: 'source' as const, text: 'No design files were given.', fix: 'Give the design\'s source files (schematics, layout, net lists), or its Gerbers.' }] : []),
+    ...(has('gerbers') && !has('source') ? [{ id: 'source.missing', severity: 'warning' as const, file: 'source' as const, text: 'No design source files were given: trace cannot check the design\'s rules, or change the design, from the fabrication files alone.', fix: 'Give the schematics, layout and net lists too, if you have them.' }] : []),
+    ...(design && !has('gerbers') ? [{ id: 'gerbers.missing', severity: 'note' as const, file: 'gerbers' as const, text: 'No Gerber zip was given.', fix: 'Nothing to do: trace builds the Gerbers from the design when the boards are made.' }] : []),
+    ...(design && !has('bom') ? [{ id: 'bom.missing', severity: 'note' as const, file: 'bom' as const, text: 'No bill of materials was given.', fix: has('source') ? 'Nothing to do: trace builds the BOM from the design.' : 'Without a BOM the order is for bare boards: give it as a CSV to have the boards assembled.' }] : []),
+    ...(design && !has('cpl') ? [{ id: 'cpl.missing', severity: 'note' as const, file: 'cpl' as const, text: 'No pick and place file was given.', fix: has('source') ? 'Nothing to do: trace builds the placement file from the board.' : 'Without a placement file the order is for bare boards: give it as a CSV to have the boards assembled.' }] : []),
     ...(all && blockedOrigin ? [{ id: 'cpl.origin', severity: 'blocking' as const, file: 'cpl' as const, text: '774 of 774 placements are outside the board outline: the placement file and the Gerbers do not share an origin.', fix: 'Export both from the same origin (KiCad: "Use drill/place file origin" the same in both), then give them again.' }] : []),
     ...(!overviewOk ? [{
       id: 'overview.thin', severity: 'blocking' as const, file: 'overview' as const,
@@ -70,17 +79,18 @@ export function mockFabCheck(upload: string, files: ReadonlySet<FabFile>, overvi
     ...(overviewOk && found < 6 ? [{ id: 'overview.topics', severity: 'note' as const, file: 'overview' as const, text: `The overview does not say: ${topics.filter((x) => !x.found).map((x) => x.title.toLowerCase()).join(', ')}.`, fix: topics.filter((x) => !x.found).map((x) => x.ask).join(' ') }] : []),
   ]
   return {
-    upload, sizes: { gerbers: has('gerbers') ? SIZES.gerbers : null, bom: has('bom') ? SIZES.bom : null, cpl: has('cpl') ? SIZES.cpl : null },
+    upload, sizes: { source: has('source') ? SIZES.source : null, gerbers: has('gerbers') ? SIZES.gerbers : null, bom: has('bom') ? SIZES.bom : null, cpl: has('cpl') ? SIZES.cpl : null },
     ok: !findings.some((f) => f.severity === 'blocking'),
     summary: {
       board: has('gerbers') ? { layers: 10, width_mm: 200, height_mm: 160, thickness_mm: 1.6, finish: 'ENIG', impedance: true, smallest_hole_mm: 0.15, holes: 5155 } : { layers: 0, width_mm: null, height_mm: null, thickness_mm: null, finish: null, impedance: null, smallest_hole_mm: null, holes: 0 },
-      tool: has('gerbers') ? 'KiCad Pcbnew 10.0.8' : null, project: has('gerbers') ? { name: 'potroller-supervisor', revision: 'M.20' } : { name: null, revision: null }, files: has('gerbers') ? 22 : 0,
+      source: has('source') ? { files: SOURCE_FILES.length, schematics: 1, layouts: 1, netlists: 0, tool: 'KiCad' } : { files: 0, schematics: 0, layouts: 0, netlists: 0, tool: null },
+      tool: has('gerbers') ? 'KiCad Pcbnew 10.0.8' : has('source') ? 'KiCad' : null, project: has('gerbers') ? { name: 'potroller-supervisor', revision: 'M.20' } : { name: null, revision: null }, files: has('gerbers') ? 22 : 0,
       bom: has('bom') ? { lines: 133, parts: 774, with_lcsc: 133, basic: 5, extended: 128, out_of_stock: 2 } : { lines: 0, parts: 0, with_lcsc: 0, basic: 0, extended: 0, out_of_stock: 0 },
       placements: has('cpl') ? { total: 774, top: 675, bottom: 99, hand_placed: 0 } : { total: 0, top: 0, bottom: 0, hand_placed: 0 },
       overview: { chars: t.length, topics: found, of: 6 },
     },
     overview: { chars: t.length, topics, found, ok: overviewOk },
-    findings, hand_placed: [], order_options: all ? OPTIONS : [],
+    findings, hand_placed: [], source_files: has('source') ? SOURCE_FILES : [], order_options: has('gerbers') ? OPTIONS.filter((o) => all || o.group === 'pcb') : [],
     recommended: o.built ? { entry: 'bringup', why: 'You said the boards are built: their bench results become revision A\'s first evidence.' } : { entry: 'fabricate', why: 'The boards are not made yet: trace prepares the JLCPCB order from these files, checks stock again today, and you sign the order.' },
     layers: has('gerbers') ? LAYERS : [],
   }
@@ -97,7 +107,7 @@ export function fabImportAction(name: string, a: Record<string, unknown>): Respo
   if (name === 'projects.import_check') {
     const id = String(a.upload)
     // a draft kept from before a reload has its files uploaded already: VITE_MOCK_FAB=given answers them as given
-    const files = import.meta.env.VITE_MOCK_FAB === 'given' || import.meta.env.VITE_MOCK_FAB === 'blocked' ? new Set<FabFile>(['gerbers', 'bom', 'cpl']) : given.get(id) ?? new Set<FabFile>()
+    const files = import.meta.env.VITE_MOCK_FAB === 'given' || import.meta.env.VITE_MOCK_FAB === 'blocked' ? new Set<FabFile>(['source', 'gerbers', 'bom', 'cpl']) : given.get(id) ?? new Set<FabFile>()
     return later(ok(mockFabCheck(id, files, String(a.overview ?? ''), { quantity: Number(a.quantity) || 10, built: a.built === true })), 600)
   }
   return undefined

@@ -196,7 +196,7 @@ function NewProject() {
           <RadioGroup value={d.start} onValueChange={(v) => set({ start: v as NewProjectDraft['start'], template: recommendTemplate(`${d.name} ${d.description}`, v as NewProjectDraft['start']).template })} className="grid gap-3 lg:grid-cols-3">
             <Choice value="idea" title="From an idea" detail="Opens the Intent builder: trace asks one topic at a time and drafts the requirements." {...(recStart ? {} : { badge: 'trace recommends' })} />
             <Choice value="design" title="From an existing KiCad design" detail="Opens Design import: trace infers the intent and places the project at its entry stage." {...(recStart?.start === 'design' ? { badge: 'trace recommends' } : {})} />
-            <Choice value="files" title="From fabrication files" detail="Gerbers, a bill of materials and a pick and place file, with an overview: trace checks them and starts the project at Fabricate." {...(recStart?.start === 'files' ? { badge: 'trace recommends' } : {})} />
+            <Choice value="files" title="From design or fabrication files" detail="Schematics, layouts and net lists, and optionally Gerbers, a bill of materials and a pick and place file, with an overview: trace checks them and starts the project at Fabricate." {...(recStart?.start === 'files' ? { badge: 'trace recommends' } : {})} />
           </RadioGroup>
           <p className="text-sm text-muted-foreground" data-testid="start-why">{recStart ? recStart.why : 'Nothing in the description speaks of an existing design or of files made for the fab, so trace recommends starting from the idea.'}</p>
           <fieldset>
@@ -271,7 +271,7 @@ function NewProject() {
         <div className="max-w-[720px] space-y-5">
           <h1 className="text-2xl font-semibold tracking-tight">Review</h1>
           <ul className="space-y-2 text-sm">
-            <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : d.start === 'files' ? `from fabrication files, at ${ENTRY_WORDS[d.fab?.built ? 'bringup' : 'fabricate'].title}` : 'from an existing KiCad design'}.</li>
+            <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : d.start === 'files' ? `from design or fabrication files, at ${ENTRY_WORDS[d.fab?.built ? 'bringup' : 'fabricate'].title}` : 'from an existing KiCad design'}.</li>
             {d.start === 'files' && d.fab && <li>{Object.values(d.fab.files).map((f) => f!.name).join(', ')}, and an overview of {d.fab.overview.trim().length.toLocaleString('en')} characters{fabCheck.data ? `: ${fabCheck.data.findings.filter((f) => f.severity === 'warning').length} warnings carried into the project` : ''}.</li>}
             <li>{d.repository.mode === 'new' ? 'A new private repository' : 'The existing repository'} <span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> on <span className="font-mono">{d.repository.branch}</span>{d.advanced.onboardingPr ? ', with an onboarding change' : ''}.</li>
             <li>{d.people.length ? `${d.people.length} ${d.people.length === 1 ? 'person' : 'people'} added` : 'Nobody added yet'}{d.people.some((p) => p.class === 'new') ? `, ${d.people.filter((p) => p.class === 'new').length} to invite by email` : ''}; admins reach it without being added.</li>
@@ -281,7 +281,7 @@ function NewProject() {
             <p className="font-medium">What happens when you press Create</p>
             <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
               <li>{d.repository.mode === 'new' ? 'Create' : 'Connect'} the repository{d.advanced.onboardingPr ? ' and open the onboarding change' : ''}</li>
-              {d.start === 'files' && <li>Add the fabrication files and the overview to it as one change, applied once its checks pass</li>}
+              {d.start === 'files' && <li>Add the files and the overview to it as one change, applied once its checks pass</li>}
               {d.start === 'files' && <li>Start the project at {ENTRY_WORDS[d.fab?.built ? 'bringup' : 'fabricate'].title}, signing {signedBefore(d.fab?.built ? 'bringup' : 'fabricate').join(', ')} on the import evidence, as you</li>}
               <li>Set up the project's agent, knowledge base and build runner</li>
               <li>Invite the people you added</li>
@@ -313,7 +313,7 @@ function Summary({ d, onEdit }: { d: NewProjectDraft; onEdit: () => void }) {
     <div className="mb-6 flex items-start gap-4 rounded-xl border p-4">
       <ProjectIconView icon={d.icon} size={48} />
       <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{d.name || 'Untitled'}</span><span className="rounded border px-1.5 text-xs">{TEMPLATES.find((t) => t.id === d.template)?.label} template</span><span className="rounded border px-1.5 text-xs">{d.start === 'idea' ? 'Start from an idea' : d.start === 'files' ? 'Start from fabrication files' : 'Start from a design'}</span></p>
+        <p className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{d.name || 'Untitled'}</span><span className="rounded border px-1.5 text-xs">{TEMPLATES.find((t) => t.id === d.template)?.label} template</span><span className="rounded border px-1.5 text-xs">{d.start === 'idea' ? 'Start from an idea' : d.start === 'files' ? 'Start from design or fabrication files' : 'Start from a design'}</span></p>
         {d.description && <p className="mt-1 text-sm">{d.description}</p>}
         <p className="mt-1 text-xs text-muted-foreground"><span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> · {d.build.quantity} boards per run · {d.build.fab} · {d.build.budget !== undefined ? `build budget ${money(d.build.budget)}` : 'no build budget set'}{d.build.unitCost !== undefined ? ` · target ${money(d.build.unitCost)} a board` : ''}</p>
       </div>
@@ -412,8 +412,8 @@ function PeopleStep({ d, set, users, me }: { d: NewProjectDraft; set: (p: Partia
 function TraceTip({ step, d }: { step: StepId; d: NewProjectDraft }) {
   const tips: Record<StepId, string> = {
     about: '',
-    start: d.start === 'design' ? 'Design import reads the KiCad project and proposes where it enters the journey.' : d.start === 'files' ? 'Fabrication files suit a board designed elsewhere that you want to order and bring up with trace. Next you give the files and an overview.' : 'The Intent builder takes about 20 minutes; you can stop and come back.',
-    files: 'Export the Gerbers, BOM and pick and place for JLCPCB from your design tool (KiCad: Fabrication outputs), from the same origin. The overview is the project\'s intent: the more of the six topics it covers, the better trace\'s requirements will be.',
+    start: d.start === 'design' ? 'Design import reads the KiCad project and proposes where it enters the journey.' : d.start === 'files' ? 'Design and fabrication files suit a board designed elsewhere that you want to order and bring up with trace. Next you give the files and an overview.' : 'The Intent builder takes about 20 minutes; you can stop and come back.',
+    files: 'Zip the schematics, layouts and net lists (KiCad: the project folder). If you have them, add the Gerbers, BOM and pick and place for JLCPCB (KiCad: Fabrication outputs), from the same origin; trace builds any you leave out. The overview is the project\'s intent: the more of the six topics it covers, the better trace\'s requirements will be.',
     repository: 'A new private repository named from the project is the simplest start. The template and repository cannot change later: the record depends on them.',
     people: 'Give the project a second person who can answer questions while you are away. Inviting someone sends one email; they sign in with a passkey and land on this project.',
     build: '10 boards suits a first run: JLCPCB makes as few as 5 boards and assembles as few as 2 of them. The build budget is the order\'s (boards, parts, case); the cloud-work allowance is trace\'s own spend, and trace warns before a stage uses its share.',

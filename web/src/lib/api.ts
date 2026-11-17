@@ -82,7 +82,7 @@ export interface Actions {
    * project trace knows there (retired too), a free name beside it, and the line to show when it is taken */
   'projects.repo_check': { args: Repo; result: import('@/components/new-project/rules').RepoCheck }
   /** admin: one part (at most 3 MB) of one fabrication file, kept a day (src/api/actions-import.ts) */
-  'projects.import_upload': { args: { upload: string; file: 'gerbers' | 'bom' | 'cpl'; give: string; part: number; parts: number; base64: string }; result: { upload: string; file: string; part: number; parts: number; received: number } }
+  'projects.import_upload': { args: { upload: string; file: 'source' | 'gerbers' | 'bom' | 'cpl'; give: string; part: number; parts: number; base64: string }; result: { upload: string; file: string; part: number; parts: number; received: number } }
   /** admin: the uploaded files and the overview inspected (src/tools/fab/inspect.ts) */
   'projects.import_check': { args: { upload: string; overview: string; quantity?: number; built?: boolean }; result: import('@/components/new-project/fab-import').FabCheck }
   /** admin: what the project is (Settings): written to the journey record, not the repository */
