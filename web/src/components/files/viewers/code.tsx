@@ -8,9 +8,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Toggle } from '@/components/ui/toggle'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { highlight, langOf } from '@/components/chat/code-block'
 import { cn } from '@/lib/utils'
 import { useFileText } from '../data'
+import { isJsonFile, parseJson } from '../json-diff'
+import { JsonTree } from './json-tree'
 import { codeLang, isLog } from '../kinds'
 import { AREA, Controls, FindBox, ViewerError, ViewerLoading, type ViewerProps } from './common'
 
@@ -98,7 +101,9 @@ export function CodeText({ text, lang, size, follow = false, className }: { text
 export default function CodeViewer({ file, size, commit }: ViewerProps) {
   const log = isLog(file.path) && !commit
   const [follow, setFollow] = useState(false)
+  const [as, setAs] = useState<'tree' | 'text'>('tree')
   const q = useFileText(file, { commit, refetchMs: follow ? 3000 : false })
+  const json = useMemo(() => (q.data !== undefined && isJsonFile(file.path) ? parseJson(q.data) : undefined), [q.data, file.path])
   if (q.isError) return <ViewerError error={q.error} onRetry={() => void q.refetch()} />
   if (q.data === undefined) return <ViewerLoading size={size} />
   return (
@@ -111,7 +116,19 @@ export default function CodeViewer({ file, size, commit }: ViewerProps) {
           </Label>
         </Controls>
       )}
-      <CodeText text={q.data} lang={codeLang(file.path)} size={size} follow={follow} className="min-h-0 flex-1" />
+      {json !== undefined && size !== 'card' && (
+        <Controls>
+          <ToggleGroup type="single" size="sm" variant="outline" value={as} onValueChange={(v) => v && setAs(v as 'tree' | 'text')} aria-label="How to show the file">
+            <ToggleGroupItem value="tree" className="h-7 px-3 text-xs">Tree</ToggleGroupItem>
+            <ToggleGroupItem value="text" className="h-7 px-3 text-xs">Text</ToggleGroupItem>
+          </ToggleGroup>
+        </Controls>
+      )}
+      {json !== undefined && size !== 'card' && as === 'tree' ? (
+        <JsonTree value={json} />
+      ) : (
+        <CodeText text={q.data} lang={codeLang(file.path)} size={size} follow={follow} className="min-h-0 flex-1" />
+      )}
     </div>
   )
 }

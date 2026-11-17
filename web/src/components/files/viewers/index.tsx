@@ -35,6 +35,7 @@ const VIEWERS: Record<ViewerKind, Lazy> = {
   touchstone: lazy(() => import('./results').then((m) => ({ default: m.TouchstoneViewer }))),
   gzip: lazy(() => import('./gzip')),
   report: lazy(() => import('./report')),
+  netlist: lazy(() => import('./netlist')),
 }
 
 /** Draw a file with its kind's viewer. `kind` overrides the one worked out from the name. */
