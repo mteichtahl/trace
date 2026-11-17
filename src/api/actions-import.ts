@@ -20,18 +20,18 @@
 import { z } from 'zod'
 import { type Evidence, type StageId, enterImported, STAGE_NAMES } from '../core/journey.js'
 import { IMPORTS_PREFIX } from '../core/project.js'
-import { type Entry, importPaths, inspect, type Inspection, inspectionView, MAX_CSV, MAX_GERBER_ZIP, MAX_OVERVIEW, MB } from '../tools/fab/inspect.js'
+import { type Entry, importPaths, inspect, type Inspection, inspectionView, MAX_CSV, MAX_GERBER_ZIP, MAX_OVERVIEW, MAX_SOURCE_ZIP, MB, sourceEntries } from '../tools/fab/inspect.js'
 import { ActionError, type Context, def, hashOf, label, slugify, storeAt, writeJourney } from './action-kit.js'
 import { publicName } from './actions-changes.js'
 import { editorName, recordEdit } from './edits.js'
 
 /** The most of one file one request carries: 3 MB, so as base64 (4 MB) with the rest it stays under WAF's 5,000,000 bytes. */
 export const IMPORT_PART = 3 * MB
-export const IMPORT_FILES = ['gerbers', 'bom', 'cpl'] as const
+export const IMPORT_FILES = ['source', 'gerbers', 'bom', 'cpl'] as const
 export type ImportFile = (typeof IMPORT_FILES)[number]
 /** the most of each file, in bytes */
-export const IMPORT_MAX: Readonly<Record<ImportFile, number>> = { gerbers: MAX_GERBER_ZIP, bom: MAX_CSV, cpl: MAX_CSV }
-export const MAX_PARTS = Math.ceil(MAX_GERBER_ZIP / IMPORT_PART)
+export const IMPORT_MAX: Readonly<Record<ImportFile, number>> = { source: MAX_SOURCE_ZIP, gerbers: MAX_GERBER_ZIP, bom: MAX_CSV, cpl: MAX_CSV }
+export const MAX_PARTS = Math.ceil(Math.max(MAX_GERBER_ZIP, MAX_SOURCE_ZIP) / IMPORT_PART)
 
 /** An upload's id: the app makes one (a UUID) for each import it starts. */
 export const UploadId = z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/, 'an upload id: lowercase letters, digits and dashes')
@@ -88,21 +88,24 @@ const text = (b: Uint8Array | undefined): string | null => (b ? new TextDecoder(
 /** Inspect an upload with the overview: the inspection, and each file's size (null: not given). */
 export async function checkUpload(ctx: Context, a: { upload: string; overview: string; quantity?: number | undefined; built?: boolean | undefined }): Promise<{ inspection: Inspection; sizes: Record<ImportFile, number | null>; files: Partial<Record<ImportFile, Uint8Array>> }> {
   const { files, incomplete } = await readUpload(ctx, a.upload)
-  const inspection = inspect({ gerbers: files.gerbers ?? null, bom: text(files.bom), cpl: text(files.cpl), overview: a.overview, ...(a.quantity ? { quantity: a.quantity } : {}), ...(a.built ? { built: true } : {}) })
-  // a file whose parts did not all arrive reads as not given: say why instead
+  const inspection = inspect({ source: files.source ?? null, gerbers: files.gerbers ?? null, bom: text(files.bom), cpl: text(files.cpl), overview: a.overview, ...(a.quantity ? { quantity: a.quantity } : {}), ...(a.built ? { built: true } : {}) })
+  // a file whose parts did not all arrive reads as not given, and a missing file is only a note: say why instead, as a
+  // problem to fix (a file the person gave that trace cannot use is not the same as a file they left out)
   for (const [file, why] of Object.entries(incomplete) as [ImportFile, string][]) {
+    const text = /taken\.$/.test(why) ? `The ${FILE_WORDS[file]} is too large: ${why}` : `The ${FILE_WORDS[file]} did not arrive whole: ${why}`
     const f = inspection.findings.find((x) => x.id === `${file}.missing`)
-    if (f) f.text = /taken\.$/.test(why) ? `The ${FILE_WORDS[file]} is too large: ${why}` : `The ${FILE_WORDS[file]} did not arrive whole: ${why}`
+    if (f) { f.severity = 'blocking'; f.text = text; f.fix = 'Give the file again.' } else inspection.findings.unshift({ id: `${file}.missing`, severity: 'blocking', file, text, fix: 'Give the file again.' })
+    inspection.ok = false
   }
-  return { inspection, files, sizes: { gerbers: files.gerbers?.length ?? null, bom: files.bom?.length ?? null, cpl: files.cpl?.length ?? null } }
+  return { inspection, files, sizes: { source: files.source?.length ?? null, gerbers: files.gerbers?.length ?? null, bom: files.bom?.length ?? null, cpl: files.cpl?.length ?? null } }
 }
 
-export const FILE_WORDS: Readonly<Record<ImportFile, string>> = { gerbers: 'Gerber zip', bom: 'bill of materials', cpl: 'pick and place file' }
+export const FILE_WORDS: Readonly<Record<ImportFile, string>> = { source: 'design files zip', gerbers: 'Gerber zip', bom: 'bill of materials', cpl: 'pick and place file' }
 
 /** The blocking findings as one refusal, or null. Pure. */
 export function refusalOf(x: Pick<Inspection, 'findings'>): string | null {
   const b = x.findings.filter((f) => f.severity === 'blocking')
-  return b.length ? `The fabrication files cannot start a project yet: ${b.map((f) => f.text).join(' ')}` : null
+  return b.length ? `The files cannot start a project yet: ${b.map((f) => f.text).join(' ')}` : null
 }
 
 /** The change's branch: trace/import-<board>-<base36 time>. Pure. */
@@ -114,10 +117,24 @@ export function overviewDoc(name: string, overview: string, by: string, at: stri
 }
 
 /** What the entry stage's agents are asked (docs/fab-import.md "What trace sets up", step 3). Pure. */
-export function importWork(o: { entry: Entry; dir: string; bom: string; quantity: number; change: string }): { agent: 'impl' | 'verify'; headline: string; started: string; request: string }[] {
+export function importWork(o: { entry: Entry; dir: string; bom: string; quantity: number; change: string; source?: string; have?: Haves }): { agent: 'impl' | 'verify'; headline: string; started: string; request: string }[] {
+  const have: Haves = o.have ?? { source: false, gerbers: true, bom: true, cpl: true }
   const waitFor = `The files come onto the default branch with the change "${o.change}", which applies once its checks pass: if they are not there yet, wait for it rather than writing them yourself.`
   const out: ReturnType<typeof importWork> = []
-  if (o.entry === 'fabricate') {
+  if (o.entry === 'fabricate' && have.source && !(have.gerbers && have.bom && have.cpl)) {
+    // design files given, and fabrication files missing or partial: trace builds what is missing from the design
+    const missing = [!have.gerbers && 'the Gerbers', !have.bom && 'the bill of materials', !have.cpl && 'the pick and place file'].filter(Boolean).join(', ')
+    out.push({
+      agent: 'impl', headline: 'Preparing the order from the imported design', started: 'The Implementation agent builds the missing fabrication files from the imported design.',
+      request: [
+        `This project was started from its design source files (docs/fab-import.md): they are under ${o.source ?? 'the source folder'}, and it is in Fabricate. Fabrication files not given: ${missing}. Build those from the design with kicad.fab, then prepare the order for JLCPCB.`,
+        waitFor,
+        `Files that were given are in ${o.dir}: use them as given, and build only what is missing. Record fabricate.order.package with journey.check, citing the run.`,
+        `Check stock and prices today: parts.bom_check on the BOM at ${o.quantity} board${o.quantity === 1 ? '' : 's'}, fresh, then shape.check fabricate.order.stock records the criterion. A line now short or out of stock is a question for a person (journey.ask), with an in-stock alternative where there is one.`,
+        'Change no design file: a problem the design shows is a question for a person. Do not order, pay or sign anything: a person checks the order sheet in Order submit and signs the order gate.',
+      ].join('\n'),
+    })
+  } else if (o.entry === 'fabricate') {
     out.push({
       agent: 'impl', headline: 'Recording the imported release package', started: 'The Implementation agent records the imported package and checks stock and prices again today.',
       request: [
@@ -125,6 +142,7 @@ export function importWork(o: { entry: Entry; dir: string; bom: string; quantity
         waitFor,
         `Record the package with fab.import (dir ${o.dir}, boards ${o.quantity}): it inspects the Gerbers, BOM and placement file and records the order options. Do not run kicad.fab or kicad.board: there is no board file. Record fabricate.order.package with journey.check, citing the fab.import run.`,
         `Check stock and prices again today: parts.bom_check on ${o.bom} at ${o.quantity} board${o.quantity === 1 ? '' : 's'}, fresh, then shape.check fabricate.order.stock records the criterion. A line now short or out of stock is a question for a person (journey.ask), with an in-stock alternative where there is one.`,
+        ...(have.bom && have.cpl ? [] : ['No bill of materials or placement file was given: the order is for bare boards. Skip the stock check, and say so in the order sheet instead of asking for the files.']),
         'Change no file: a problem the package shows is a question for a person. Do not order, pay or sign anything: a person checks the order sheet in Order submit and signs the order gate.',
       ].join('\n'),
     })
@@ -132,7 +150,7 @@ export function importWork(o: { entry: Entry; dir: string; bom: string; quantity
   out.push({
     agent: 'verify', headline: 'Drafting requirements from the overview', started: 'The Verification agent drafts the requirements from the project overview.',
     request: [
-      `This project was started from fabrication files (docs/fab-import.md): its intent is the overview in docs/overview.md, and it is in ${STAGE_NAMES[o.entry]}. ${STAGE_NAMES.bringup} verifies the board against its requirements, so they are needed before the boards reach the bench.`,
+      `This project was started from imported files (docs/fab-import.md): its intent is the overview in docs/overview.md, and it is in ${STAGE_NAMES[o.entry]}. ${STAGE_NAMES.bringup} verifies the board against its requirements, so they are needed before the boards reach the bench.`,
       waitFor,
       'Read docs/overview.md and draft the requirements it states (verify.requirements extract with its path, then add each you keep), each with a kind and a measurable acceptance criterion, and the overview\'s words as its source. Add them as proposed, never accepted: each is inferred from the overview, so say so in its source.',
       'Then ask a person to confirm them (journey.ask), listing what you inferred and anything the overview leaves open (limits, ranges, tolerances). Do not accept, waive or sign anything yourself.',
@@ -140,6 +158,11 @@ export function importWork(o: { entry: Entry; dir: string; bom: string; quantity
   })
   return out
 }
+
+/** which of the import's files were given */
+export interface Haves { source: boolean; gerbers: boolean; bom: boolean; cpl: boolean }
+/** Which files an inspection saw. Pure. */
+export const havesOf = (x: Pick<Inspection, 'source' | 'gerbers' | 'bom' | 'placements'>): Haves => ({ source: !!x.source, gerbers: !!x.gerbers, bom: !!x.bom, cpl: x.placements.length > 0 })
 
 export interface ImportRequest { upload: string; overview: string; entry: Entry }
 
@@ -158,21 +181,31 @@ export async function importFiles(ctx: Context, repo: string, o: ImportRequest &
   const by = label(ctx.principal)
   const at = new Date().toISOString()
   const view = inspectionView(o.inspection)
+  // only the files given are kept: the Gerbers, BOM and pick and place are optional, the design's source files are
+  // unpacked under hardware/<board>/source so they are the real design files in the repository
+  const given: { path: string; content: Uint8Array }[] = [
+    ...(o.files.source ? sourceEntries(o.files.source).map((e) => ({ path: `${paths.source}/${e.path}`, content: e.content })) : []),
+    ...(o.files.gerbers ? [{ path: paths.gerbers, content: o.files.gerbers }] : []),
+    ...(o.files.bom ? [{ path: paths.bom, content: o.files.bom }] : []),
+    ...(o.files.cpl ? [{ path: paths.cpl, content: o.files.cpl }] : []),
+  ]
   const files = [
-    { path: paths.gerbers, content: o.files.gerbers! },
-    { path: paths.bom, content: o.files.bom! },
-    { path: paths.cpl, content: o.files.cpl! },
+    ...given,
     { path: paths.inspection, content: new TextEncoder().encode(`${JSON.stringify({ imported_at: at, by, ...view }, null, 2)}\n`) },
     { path: paths.overview, content: new TextEncoder().encode(overviewDoc(o.name, o.overview, await publicName(ctx), at)) },
   ]
-  const title = 'Import the fabrication files'
-  const message = [title, '', ...files.map((f) => `- ${f.path}`), '', `Imported by ${by} through the trace API (docs/fab-import.md).`].join('\n')
+  const title = o.files.source && !o.files.gerbers ? 'Import the design files' : o.files.source ? 'Import the design and fabrication files' : 'Import the fabrication files'
+  // a design may hold hundreds of files: the message lists the folder, not each file
+  const listed = files.filter((f) => !f.path.startsWith(`${paths.source}/`))
+  const listing = [...listed.map((f) => `- ${f.path}`), ...(files.length > listed.length ? [`- ${paths.source}/ (${files.length - listed.length} design files)`] : [])]
+  const message = [title, '', ...listing, '', `Imported by ${by} through the trace API (docs/fab-import.md).`].join('\n')
   const { commit } = await gh.commitFiles(repo, { branch, base, message, files })
   const s = o.inspection.summary
   const body = [
     title, '',
-    `A ${s.board.layers}-layer board, ${s.board.width_mm} × ${s.board.height_mm} mm${s.tool ? `, made in ${s.tool}` : ''}: ${s.bom.lines} BOM lines (${s.bom.parts} parts), ${s.placements.total} placements.`, '',
-    ...files.map((f) => `- \`${f.path}\``), '',
+    ...(s.board.layers ? [`A ${s.board.layers}-layer board, ${s.board.width_mm} × ${s.board.height_mm} mm${s.tool ? `, made in ${s.tool}` : ''}: ${s.bom.lines} BOM lines (${s.bom.parts} parts), ${s.placements.total} placements.`, ''] : []),
+    ...(s.source.files ? [`${plural(s.source.schematics, 'schematic')}, ${plural(s.source.layouts, 'board layout')} and ${plural(s.source.netlists, 'net list')} in ${s.source.files} design files${s.source.tool ? `, from ${s.source.tool}` : ''}.`, ''] : []),
+    ...listing.map((l) => l.replace(/^- ([^ ]+)/, '- `$1`')), '',
     `Imported through trace by ${await editorName(ctx)}.`,
   ].join('\n')
   const edit = await recordEdit(ctx, { repo, branch, base, commit, kind: 'import', title, body, redo: null, paths: files.map((f) => f.path) })
@@ -195,11 +228,13 @@ export function sourceWords(s: Pick<Inspection['summary'], 'project' | 'tool'>, 
 
 /** Enter the journey at the import's stage, on the import's evidence. Answers the gates it signed. */
 export async function enterAtImport(ctx: Context, repo: string, o: { entry: Entry; paths: ReturnType<typeof importPaths>; inspection: Inspection; change: number | null }): Promise<{ signed: string[] }> {
+  const have = havesOf(o.inspection)
   const evidence: Evidence[] = [
     { kind: 'file', ref: o.paths.overview, label: 'The project overview' },
-    { kind: 'file', ref: o.paths.gerbers, label: 'The imported Gerbers' },
-    { kind: 'file', ref: o.paths.bom, label: 'The imported bill of materials' },
-    { kind: 'file', ref: o.paths.cpl, label: 'The imported pick and place' },
+    ...(have.source ? [{ kind: 'file' as const, ref: o.paths.source, label: 'The imported design files' }] : []),
+    ...(have.gerbers ? [{ kind: 'file' as const, ref: o.paths.gerbers, label: 'The imported Gerbers' }] : []),
+    ...(have.bom ? [{ kind: 'file' as const, ref: o.paths.bom, label: 'The imported bill of materials' }] : []),
+    ...(have.cpl ? [{ kind: 'file' as const, ref: o.paths.cpl, label: 'The imported pick and place' }] : []),
     { kind: 'file', ref: o.paths.inspection, label: 'trace\'s inspection of the files' },
   ]
   const s = o.inspection.summary
@@ -211,7 +246,12 @@ export async function enterAtImport(ctx: Context, repo: string, o: { entry: Entr
       // files under the Gerbers' project name, not the names they were given with (potroller-carrier-m20: revision M.20
       // of "potroller-supervisor" became "Rev A" and renamed files, with nothing saying so)
       summary: [
-        `The project was started from its fabrication files: a ${s.board.layers}-layer ${s.board.width_mm} × ${s.board.height_mm} mm board, ${s.bom.lines} BOM lines and ${s.placements.total} placements, with ${plural(warnings.length, 'warning')} carried in.`,
+        `The project was started from its ${have.source && have.gerbers ? 'design and fabrication files' : have.source ? 'design files' : 'fabrication files'}: ${[
+          have.source ? `${plural(s.source.schematics, 'schematic')}, ${plural(s.source.layouts, 'board layout')} and ${plural(s.source.netlists, 'net list')}` : null,
+          have.gerbers ? `a ${s.board.layers}-layer ${s.board.width_mm} × ${s.board.height_mm} mm board` : null,
+          have.bom ? `${plural(s.bom.lines, 'BOM line')}` : null,
+          have.cpl ? `${plural(s.placements.total, 'placement')}` : null,
+        ].filter(Boolean).join(', ')}, with ${plural(warnings.length, 'warning')} carried in.`,
         sourceWords(s, o.paths.dir),
       ].filter(Boolean).join(' '),
       detail: { change: o.change, warnings, source: { name: s.project.name, revision: s.project.revision, tool: s.tool, dir: o.paths.dir } },

@@ -20,6 +20,7 @@ import { IMPORT_SIGNATURE_NOTE, enterImported, gatesBefore, loadJourney, startJo
 import { open } from '../../src/core/store.js'
 import { Registry } from '../../src/core/registry.js'
 import { applyJourneySchema } from '../../src/core/journey.js'
+import { zipOf } from '../fixtures/zip.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
 
 const ADMIN = { sub: 'f-admin', email: 'f-admin@example.com', groups: ['trace-admins'] }
@@ -51,7 +52,7 @@ class ImportGitHub extends FakeGitHub {
   }
 }
 
-const github = new ImportGitHub(['acme/carrier', 'acme/built', 'acme/blocked'])
+const github = new ImportGitHub(['acme/carrier', 'acme/built', 'acme/blocked', 'acme/design'])
 const cognito = new FakeCognito()
 const scratch = mkdtempSync(join(tmpdir(), 'trace-import-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-import-bucket-'))
@@ -68,7 +69,7 @@ const run = async (who: Context['principal'], action: string, args: Record<strin
 
 /** Upload a file in parts of `size` bytes, as the app does. */
 let gives = 1_700_000_000_000
-async function upload(who: Context['principal'], id: string, file: 'gerbers' | 'bom' | 'cpl', bytes: Uint8Array, size = IMPORT_PART): Promise<void> {
+async function upload(who: Context['principal'], id: string, file: 'source' | 'gerbers' | 'bom' | 'cpl', bytes: Uint8Array, size = IMPORT_PART): Promise<void> {
   const parts = Math.max(1, Math.ceil(bytes.length / size))
   const give = String(gives++)
   for (let i = 0; i < parts; i++) {
@@ -95,7 +96,7 @@ describe('the parts of an upload', () => {
     expect(importBranch('Potroller Supervisor', 36 ** 3)).toBe('trace/import-potroller-supervisor-1000')
     expect(overviewDoc('Carrier', '  Words.  ', 'Marc', '2026-11-16T00:00:00Z')).toBe('# Carrier: project overview\n\nGiven by Marc when the project was started from its fabrication files (2026-11-16). trace\'s intent and requirements start from it.\n\nWords.\n')
     expect(refusalOf({ findings: [{ id: 'a', severity: 'warning', file: 'bom', text: 'x', fix: 'y' }] })).toBeNull()
-    expect(refusalOf({ findings: [{ id: 'a', severity: 'blocking', file: 'bom', text: 'No BOM.', fix: 'y' }] })).toBe('The fabrication files cannot start a project yet: No BOM.')
+    expect(refusalOf({ findings: [{ id: 'a', severity: 'blocking', file: 'bom', text: 'No BOM.', fix: 'y' }] })).toBe('The files cannot start a project yet: No BOM.')
   })
 
   it('asks the Implementation agent for the package and stock at Fabricate, and the Verification agent for requirements', () => {
@@ -159,9 +160,10 @@ describe('projects.import_upload and projects.import_check', () => {
     await upload(ADMIN, id, 'gerbers', ZIP, 16 * 1024)
     await upload(ADMIN, id, 'bom', BOM)
     const half = await run(ADMIN, 'projects.import_check', { upload: id, overview: OVERVIEW }) as { ok: boolean; sizes: Record<string, number | null>; findings: { id: string }[] }
-    expect(half.sizes).toEqual({ gerbers: ZIP.length, bom: BOM.length, cpl: null })
-    expect(half.ok).toBe(false)
-    expect(half.findings[0]?.id).toBe('cpl.missing')
+    expect(half.sizes).toEqual({ source: null, gerbers: ZIP.length, bom: BOM.length, cpl: null })
+    // the pick and place file is optional: left out, it is a note and the files still check
+    expect(half.ok).toBe(true)
+    expect(half.findings.find((f) => f.id === 'cpl.missing')).toMatchObject({ severity: 'note' })
     await upload(ADMIN, id, 'cpl', CPL)
     const r = await run(ADMIN, 'projects.import_check', { upload: id, overview: OVERVIEW, quantity: 5 }) as { ok: boolean; summary: { board: { layers: number }; placements: { total: number } }; recommended: { entry: string }; layers: unknown[] }
     expect(r.ok).toBe(true)
@@ -171,7 +173,7 @@ describe('projects.import_upload and projects.import_check', () => {
     expect(r).not.toHaveProperty('placements')
     // another admin does not see this upload
     const theirs = await run(OTHER_ADMIN, 'projects.import_check', { upload: id, overview: OVERVIEW }) as { sizes: Record<string, number | null> }
-    expect(theirs.sizes).toEqual({ gerbers: null, bom: null, cpl: null })
+    expect(theirs.sizes).toEqual({ source: null, gerbers: null, bom: null, cpl: null })
   })
 
   it('refuses a part that is not one, and a file over its size', async () => {
@@ -200,7 +202,7 @@ describe('projects.create with an import', () => {
       import: { upload: id, overview: OVERVIEW, entry: 'fabricate' },
     }) as { ok: boolean; steps: { id: string; state: string; detail: string }[] }
     expect(r.steps.map((s) => [s.id, s.state])).toEqual([['repository', 'done'], ['registry', 'done'], ['people', 'skipped'], ['journey', 'done'], ['import', 'done'], ['cloud', expect.any(String)]])
-    expect(r.steps.find((s) => s.id === 'import')?.detail).toMatch(/Its change "Import the fabrication files" is on the project's Changes.* The project starts at Fabricate, with \d+ earlier gates signed on the import evidence\. 2 warnings from the check are carried into the project\./)
+    expect(r.steps.find((s) => s.id === 'import')?.detail).toMatch(/Its change "Import the fabrication files" is on the project's Changes.* The project starts at Fabricate, with \d+ earlier gates signed on the import evidence\. 3 warnings from the check are carried into the project\./)
     const c = github.committed.at(-1)!
     expect(c.branch).toMatch(/^trace\/import-potroller-supervisor-[0-9a-z]+$/)
     expect(c.files).toEqual([
@@ -246,9 +248,28 @@ describe('projects.create with an import', () => {
     await upload(ADMIN, id, 'gerbers', ZIP)
     const made = github.committed.length
     await expect(run(ADMIN, 'projects.create', { repo: 'acme/blocked', name: 'Blocked', template: 'board', start: 'import', import: { upload: id, overview: 'Too short.', entry: 'fabricate' } }))
-      .rejects.toThrow(/cannot start a project yet: No bill of materials was given\. No pick and place file was given\. The overview is 10 characters/)
+      .rejects.toThrow(/cannot start a project yet: The overview is 10 characters/)
     expect(github.committed.length).toBe(made)
     await expect(journeyStore(ctx(ADMIN), 'acme/blocked').bytes()).resolves.toBeNull()
+  })
+
+  it('starts from the design files alone: they are unpacked into the repository and the missing fabrication files are built from them', async () => {
+    const id = 'upload-source-1'
+    await upload(ADMIN, id, 'source', zipOf({ 'carrier/carrier.kicad_pro': '{}', 'carrier/carrier.kicad_sch': '(kicad_sch)', 'carrier/carrier.kicad_pcb': '(kicad_pcb)' }))
+    started.length = 0
+    const r = await run(ADMIN, 'projects.create', { repo: 'acme/design', name: 'Design only', template: 'board', start: 'import', build: { quantity: 3 }, import: { upload: id, overview: OVERVIEW, entry: 'fabricate' } }) as { steps: { id: string; state: string; detail: string }[] }
+    expect(r.steps.find((s) => s.id === 'import')).toMatchObject({ state: 'done', detail: expect.stringMatching(/Its change "Import the design files"/) })
+    const c = github.committed.at(-1)!
+    expect(c.files).toEqual([
+      'hardware/design-only/source/carrier.kicad_pcb', 'hardware/design-only/source/carrier.kicad_pro', 'hardware/design-only/source/carrier.kicad_sch',
+      'hardware/design-only/release/revA/import.json', 'docs/overview.md',
+    ])
+    expect(c.message).toContain('hardware/design-only/source/ (3 design files)')
+    const j = await run(ADMIN, 'journey.get', { repo: 'acme/design' }) as { decisions: { kind: string; summary: string }[] }
+    expect(j.decisions.find((d) => d.kind === 'journey.imported')?.summary).toContain('The project was started from its design files: 1 schematic, 1 board layout and 0 net lists')
+    // the agent builds the fabrication files that were not given, from the design
+    expect(started.map((s) => [s.agent, s.headline])).toEqual([['impl', 'Preparing the order from the imported design'], ['verify', 'Drafting requirements from the overview']])
+    expect(started[0]!.request).toContain('Fabrication files not given: the Gerbers, the bill of materials, the pick and place file')
   })
 
   it('takes an import only with start: import', async () => {

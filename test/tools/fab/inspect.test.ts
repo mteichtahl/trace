@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { deflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { checkOverview, designators, drillFile, fromFunction, fromName, gerberExtents, importPaths, inspect, inspectionView, jobFile, mmOf, readBom, readCpl, readGerbers, toolWords } from '../../../src/tools/fab/inspect.js'
+import { zipOf } from '../../fixtures/zip.js'
+import { checkOverview, designators, drillFile, fromFunction, fromName, gerberExtents, importPaths, inspect, inspectionView, jobFile, mmOf, readBom, readCpl, readGerbers, readSource, sourceEntries, toolWords } from '../../../src/tools/fab/inspect.js'
 
 const dir = join(import.meta.dirname, '../../fixtures/fab-import')
 const zip = readFileSync(join(dir, 'potroller-supervisor-gerbers.zip'))
@@ -14,32 +14,6 @@ const OVERVIEW = [
   'Interfaces: USB-C, Ethernet, two micro HDMI, I2C to each module and a GPIO header.',
   'It is 200 x 160 mm, mounted on standoffs in a rack enclosure. We will build 5 boards for a prototype run with a budget of 1500 USD.',
 ].join(' ')
-
-/** A zip of these files, stored deflated (the reader under test reads what JLCPCB's exports and zip tools write). */
-function zipOf(files: Record<string, string>): Buffer {
-  const locals: Buffer[] = []
-  const central: Buffer[] = []
-  let at = 0
-  for (const [name, text] of Object.entries(files)) {
-    const raw = Buffer.from(text)
-    const packed = deflateRawSync(raw)
-    const n = Buffer.from(name)
-    const l = Buffer.alloc(30)
-    l.writeUInt32LE(0x04034b50, 0); l.writeUInt16LE(20, 4); l.writeUInt16LE(8, 8)
-    l.writeUInt32LE(packed.length, 18); l.writeUInt32LE(raw.length, 22); l.writeUInt16LE(n.length, 26)
-    locals.push(l, n, packed)
-    const c = Buffer.alloc(46)
-    c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(8, 10)
-    c.writeUInt32LE(packed.length, 20); c.writeUInt32LE(raw.length, 24); c.writeUInt16LE(n.length, 28); c.writeUInt32LE(at, 42)
-    central.push(c, n)
-    at += 30 + n.length + packed.length
-  }
-  const cd = Buffer.concat(central)
-  const end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(Object.keys(files).length, 8); end.writeUInt16LE(Object.keys(files).length, 10)
-  end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(at, 16)
-  return Buffer.concat([...locals, cd, end])
-}
 
 const OUTLINE = '%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,0.050000*%\nD10*\nX0Y0D02*\nX50000000Y0D01*\nX50000000Y-40000000D01*\nX0Y-40000000D01*\nX0Y0D01*\nM02*\n'
 const COPPER = (fn: string): string => `%TF.FileFunction,${fn}*%\n%FSLAX46Y46*%\n%MOMM*%\nM02*\n`
@@ -196,7 +170,9 @@ describe('the inspection', () => {
     const g = zipOf({ 'b-F_Cu.gtl': COPPER('Copper,L1,Top'), 'b-B_Cu.gbl': COPPER('Copper,L3,Bot') , 'b-In1_Cu.g1': COPPER('Copper,L2,Inr') })
     const r = inspect({ gerbers: g, bom: 'Designator,Comment,Qty\nR1,1k,2\n"R1,R2",2k,2\n', cpl: null, overview: 'short' })
     const blocking = r.findings.filter((f) => f.severity === 'blocking').map((f) => f.id)
-    expect(blocking).toEqual(expect.arrayContaining(['gerbers.outline', 'gerbers.drill', 'bom.duplicate', 'cpl.missing', 'overview.thin']))
+    expect(blocking).toEqual(expect.arrayContaining(['gerbers.outline', 'gerbers.drill', 'bom.duplicate', 'overview.thin']))
+    // a file left out is a note, not a problem: the Gerbers, BOM and pick and place are optional
+    expect(r.findings.find((f) => f.id === 'cpl.missing')?.severity).toBe('note')
     expect(r.findings.map((f) => f.id)).toEqual(expect.arrayContaining(['gerbers.layers_odd', 'bom.qty', 'bom.no_lcsc_column', 'gerbers.mask_top']))
     expect(r.ok).toBe(false)
     // blocking first
@@ -217,6 +193,45 @@ describe('the inspection', () => {
     expect(r.findings.filter((f) => f.severity === 'blocking').map((f) => f.id)).toEqual(['gerbers.unreadable', 'bom.unreadable', 'cpl.unreadable'])
   })
 
+  describe('design source files', () => {
+    const KICAD = { 'board/board.kicad_pro': '{}', 'board/board.kicad_sch': '(kicad_sch)', 'board/board.kicad_pcb': '(kicad_pcb)', 'board/fp-lib-table': '' }
+
+    it('takes source files alone: Gerbers, BOM and pick and place are optional', () => {
+      const r = inspect({ source: zipOf(KICAD), gerbers: null, bom: null, cpl: null, overview: OVERVIEW })
+      expect(r.ok).toBe(true)
+      expect(r.summary.source).toEqual({ files: 4, schematics: 1, layouts: 1, netlists: 0, tool: 'KiCad' })
+      expect(r.findings.filter((f) => f.id.endsWith('.missing')).map((f) => [f.id, f.severity])).toEqual(expect.arrayContaining([['gerbers.missing', 'note'], ['bom.missing', 'note'], ['cpl.missing', 'note']]))
+      expect(r.findings.some((f) => f.severity === 'blocking')).toBe(false)
+    })
+
+    it('says what a design lacks: a schematic (or net list), a layout', () => {
+      const none = inspect({ source: zipOf({ 'a.kicad_pro': '{}' }), gerbers: null, bom: null, cpl: null, overview: OVERVIEW })
+      expect(none.findings.filter((f) => f.severity === 'warning').map((f) => f.id)).toEqual(['source.no_schematic', 'source.no_layout'])
+      const net = inspect({ source: zipOf({ 'a.net': '(export)', 'a.kicad_pcb': '(kicad_pcb)' }), gerbers: null, bom: null, cpl: null, overview: OVERVIEW })
+      expect(net.findings.filter((f) => f.severity === 'warning')).toEqual([])
+    })
+
+    it('blocks when no design file at all is given, and when a zip holds nothing recognised', () => {
+      expect(inspect({ gerbers: null, bom: null, cpl: null, overview: OVERVIEW }).findings.filter((f) => f.severity === 'blocking').map((f) => f.id)).toEqual(['design.missing'])
+      expect(inspect({ gerbers: null, bom: bom, cpl: null, overview: OVERVIEW }).ok).toBe(false)
+      const r = inspect({ source: zipOf({ 'readme.txt': 'hi' }), gerbers: null, bom: null, cpl: null, overview: OVERVIEW })
+      expect(r.findings.filter((f) => f.severity === 'blocking').map((f) => f.id)).toEqual(['source.none'])
+      expect(inspect({ source: Buffer.from('nope'), gerbers: null, bom: null, cpl: null, overview: OVERVIEW }).findings.filter((f) => f.severity === 'blocking').map((f) => f.id)).toEqual(['source.unreadable'])
+    })
+
+    it('warns when only fabrication files are given: there is nothing to check the design\'s rules on', () => {
+      const r = inspect({ gerbers: zip, bom, cpl, overview: OVERVIEW })
+      expect(r.findings.find((f) => f.id === 'source.missing')).toMatchObject({ severity: 'warning', file: 'source' })
+      expect(r.ok).toBe(true)
+    })
+
+    it('unpacks without the shared top folder, hidden files or paths that climb out', () => {
+      expect(sourceEntries(zipOf({ 'proj/a.kicad_sch': 'x', 'proj/sub/b.kicad_pcb': 'y', 'proj/.git/config': 'z', '__MACOSX/proj/a': 'm' })).map((e) => e.path)).toEqual(['a.kicad_sch', 'sub/b.kicad_pcb'])
+      expect(sourceEntries(zipOf({ 'a.kicad_sch': 'x', '../evil.kicad_sch': 'y' })).map((e) => e.path)).toEqual(['a.kicad_sch'])
+      expect(readSource(zipOf(KICAD)).files.map((f) => f.kind)).toEqual(['layout', 'project', 'schematic', 'other'])
+    })
+  })
+
   it('keeps a view without each line and placement', () => {
     const v = inspectionView(inspect({ gerbers: zip, bom, cpl, overview: OVERVIEW }))
     expect(v).not.toHaveProperty('placements')
@@ -228,7 +243,7 @@ describe('the inspection', () => {
     expect(importPaths('Potroller Carrier')).toEqual({
       dir: 'hardware/potroller-carrier/release/revA', gerbers: 'hardware/potroller-carrier/release/revA/potroller-carrier-gerbers.zip',
       bom: 'hardware/potroller-carrier/release/revA/potroller-carrier-jlc-bom.csv', cpl: 'hardware/potroller-carrier/release/revA/potroller-carrier-jlc-cpl.csv',
-      inspection: 'hardware/potroller-carrier/release/revA/import.json', overview: 'docs/overview.md',
+      inspection: 'hardware/potroller-carrier/release/revA/import.json', overview: 'docs/overview.md', source: 'hardware/potroller-carrier/source',
     })
   })
 })
