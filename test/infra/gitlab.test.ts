@@ -88,7 +88,8 @@ describe('GitlabServer', () => {
 
   it('makes an IAM OIDC provider for GitLab\'s pipeline ID tokens, audience STS', () => {
     t.resourceCountIs('AWS::IAM::OIDCProvider', 1)
-    t.hasResourceProperties('AWS::IAM::OIDCProvider', { ClientIdList: ['sts.amazonaws.com'] })
+    // with a thumbprint, so IAM need not reach the address (a distribution still deploying) when it is made
+    t.hasResourceProperties('AWS::IAM::OIDCProvider', { ClientIdList: ['sts.amazonaws.com'], ThumbprintList: [Match.stringLikeRegexp('^[0-9a-f]{40}$')] })
   })
 
   it('writes its address where the instance reads it: the distribution\'s, or the installation\'s own domain', () => {

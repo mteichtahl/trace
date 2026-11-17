@@ -68,6 +68,9 @@ export interface GitlabProps extends NestedStackProps {
   root: string
 }
 
+/** SHA-1 thumbprint of Amazon Root CA 1 (https://www.amazontrust.com/repository/). */
+const AMAZON_ROOT_CA_1 = '8da7f965ec5efc37910f1c6e59fdc1cc6a6ede16'
+
 /** The script the instance runs at first boot: install GitLab, keep its address in step, back it up, make the token. */
 export function gitlabUserData(o: { prefix: string; region: string; bucket: string; volumeId: string; rootSecret: string; tokenSecret: string; urlParameter: string; vpcCidr: string }): string {
   return `#!/bin/bash
@@ -341,8 +344,13 @@ export class GitlabServer extends NestedStack {
     })
 
     // ---- GitLab's pipeline ID tokens as AWS sign-in (each project's roles trust it, with their own project path)
-    // the native resource (no custom resource, no thumbprint: IAM checks the address's certificate itself)
-    this.oidc = new iam.OidcProviderNative(this, 'Oidc', { url: this.url, clientIds: ['sts.amazonaws.com'] })
+    // the native resource (no custom resource). A thumbprint is given so IAM does not have to reach the address when
+    // the provider is made: without one it connects to read the certificate, and CloudFormation makes the provider
+    // while the new distribution is still deploying ("Could not connect to https://….cloudfront.net", which failed
+    // the first deploy). The value is Amazon Root CA 1's, the root of CloudFront's and ACM's certificates; IAM does
+    // not use it to check them: an address whose certificate chains to a root AWS trusts is checked against that
+    // library of roots, not the thumbprint
+    this.oidc = new iam.OidcProviderNative(this, 'Oidc', { url: this.url, clientIds: ['sts.amazonaws.com'], thumbprints: [AMAZON_ROOT_CA_1] })
     new CfnOutput(this, 'OidcProviderArn', { value: this.oidc.oidcProviderArn })
 
     // ---- CodeBuild's way into GitLab, for the projects' runners. A host and a connection made here are PENDING: a
