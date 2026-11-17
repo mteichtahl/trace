@@ -93,7 +93,7 @@ import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
 import {
   type ConnectionChoice, type ConnectionWait, type ProjectNames, type SourceCredential, awsEnv, cfnClient, checkAws, chooseRunnerAuth, codebuildClient, connectionName,
-  connectionsClient, connectionsConsoleUrl, connectorAccessNote, webhookRefusedNote, credentials, deployedProjects, ensureGpuImage, ensureSourceCredential, freeSecretNames, liveFacts,
+  connectionsClient, connectionsConsoleUrl, connectorAccessNote, webhookRefusedNote, credentials, deployedProjects, ensureGpuImage, ensureSourceCredential, clearSecretNames, freeSecretNames, liveFacts,
   nameClients, nameIndex, resolveConnection, stackOutputs, waitForConnection,
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
@@ -659,6 +659,8 @@ export interface Hooks {
   /** how the wait for a busy stack looks again (tests) */
   stackWait?: Pick<StackWaitDeps, 'sleep' | 'now' | 'every' | 'timeout'>
   freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
+  /** delete secrets a failed first deploy left behind (GitLab's, before the deploy that adds GitLab) */
+  clearSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
   /** which projects the stack has, and which names are taken in the account (chooseGenerations) */
   names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
   /** CodeBuild's GitLab host's and connection's status (CodeConnections GetHost, GetConnection) */
@@ -1077,6 +1079,13 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     })
     webAcl = edge.aclArn
     if (edge.note) { log('deploy', edge.note); if (!edge.ok) summary.push(edge.note) }
+    // GitLab is added by this deploy (the stack has none yet): its two secrets, when they exist, are what a first
+    // deploy that failed left behind (a rollback keeps what it had finished), and the stack could not create them again
+    if (props.gitlab.enabled && !existing?.outputs[GITLAB_URL_OUTPUT]) {
+      try {
+        for (const l of await (hooks.clearSecrets ?? clearSecretNames)(creds, a.aws.region, [gitlabRootSecretName(props.prefix), gitlabAdminTokenSecretName(props.prefix)])) log('deploy', l)
+      } catch (e) { log('deploy', `GitLab's leftover secrets could not be checked (${redact(e instanceof Error ? e.message : String(e), s)}); deploying anyway`) }
+    }
     for (const [i, d] of deploys.entries()) {
       if (deploys.length > 1) log('deploy', `deploy ${i + 1} of ${deploys.length}: ${d.why}`)
       // the drain deleted every project's secret; one still in its recovery window would block the nested stack's

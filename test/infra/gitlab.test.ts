@@ -42,6 +42,10 @@ describe('GitlabServer', () => {
     expect(JSON.stringify(ingress)).not.toMatch(/"FromPort":22/)
   })
 
+  it('its secrets go with the stack, so a first deploy that fails leaves no name taken', () => {
+    for (const r of Object.values(t.findResources('AWS::SecretsManager::Secret'))) expect((r as { DeletionPolicy?: string }).DeletionPolicy).toBe('Delete')
+  })
+
   it('keeps its data on an encrypted volume that outlives the stack, snapshotted daily for 14 days', () => {
     t.hasResource('AWS::EC2::Volume', { Properties: { Encrypted: true, Size: 100, VolumeType: 'gp3' }, DeletionPolicy: 'Retain' })
     t.hasResourceProperties('AWS::DLM::LifecyclePolicy', {
@@ -64,9 +68,9 @@ describe('GitlabServer', () => {
     })
   })
 
-  it('makes its two secrets, kept when the stack goes, the token a placeholder until the instance writes it', () => {
-    t.hasResource('AWS::SecretsManager::Secret', { Properties: { Name: 'tr/gitlab/root', GenerateSecretString: Match.anyValue() }, DeletionPolicy: 'Retain' })
-    t.hasResource('AWS::SecretsManager::Secret', { Properties: { Name: 'tr/gitlab/admin-token', SecretString: 'pending' }, DeletionPolicy: 'Retain' })
+  it('makes its two secrets, which go with the stack, the token a placeholder until the instance writes it', () => {
+    t.hasResource('AWS::SecretsManager::Secret', { Properties: { Name: 'tr/gitlab/root', GenerateSecretString: Match.anyValue() }, DeletionPolicy: 'Delete' })
+    t.hasResource('AWS::SecretsManager::Secret', { Properties: { Name: 'tr/gitlab/admin-token', SecretString: 'pending' }, DeletionPolicy: 'Delete' })
   })
 
   it('rotates the agents\' tokens twice a day, with a role that may only touch the agents\' secrets', () => {
