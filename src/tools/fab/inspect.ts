@@ -25,13 +25,17 @@ export const MAX_GERBER_ZIP = 25 * MB
 /** what the zip may unpack to: Gerbers compress about five times (the sample: 3.3 MB to 16.8 MB) */
 export const MAX_GERBER_UNPACKED = 200 * MB
 export const MAX_CSV = 2 * MB
+/** the design's source files (schematics, layouts, net lists, libraries), zipped together */
+export const MAX_SOURCE_ZIP = 25 * MB
+export const MAX_SOURCE_UNPACKED = 200 * MB
+export const MAX_SOURCE_FILES = 2000
 export const MIN_OVERVIEW = 300
 export const MAX_OVERVIEW = 40_000
 /** the overview topics an import needs at the least (docs/fab-import.md "The overview's quality bar") */
 export const MIN_TOPICS = 4
 
 export type Severity = 'blocking' | 'warning' | 'note'
-export type FileKey = 'gerbers' | 'bom' | 'cpl' | 'overview'
+export type FileKey = 'source' | 'gerbers' | 'bom' | 'cpl' | 'overview'
 /**
  * A Gerber's GenerationSoftware attribute in words: "KiCad,Pcbnew,10.0.8-10.0.8~ubuntu24.04.1" is "KiCad Pcbnew 10.0.8"
  * (the version without its build and packaging suffix, which a person does not need). Pure.
@@ -52,6 +56,54 @@ export interface Finding {
   fix: string
   /** the designators or file names it is about, when there are some */
   refs?: string[]
+}
+
+// ------------------------------------------------------------------ design source files
+
+export type SourceKind = 'schematic' | 'layout' | 'netlist' | 'project' | 'library' | 'other'
+export interface SourceFile { path: string; kind: SourceKind; bytes: number }
+export interface SourceFiles {
+  files: SourceFile[]
+  schematics: number
+  layouts: number
+  netlists: number
+  /** the design tool the files are from, in words, or null when no file says */
+  tool: string | null
+}
+
+const SOURCE_KINDS: readonly [RegExp, SourceKind, string][] = [
+  [/\.kicad_sch$/i, 'schematic', 'KiCad'], [/\.schdoc$/i, 'schematic', 'Altium Designer'], [/\.sch$/i, 'schematic', 'Eagle or KiCad (older)'],
+  [/\.kicad_pcb$/i, 'layout', 'KiCad'], [/\.pcbdoc$/i, 'layout', 'Altium Designer'], [/\.brd$/i, 'layout', 'Eagle'],
+  [/\.(net|netlist|edif|cir)$/i, 'netlist', ''],
+  [/\.(kicad_pro|prjpcb|epro)$/i, 'project', ''],
+  [/\.(kicad_sym|kicad_mod|lib|pretty)$/i, 'library', ''],
+]
+
+/** The files of a source zip with the top folder every file shares taken off, safe to write into a repository. Pure. */
+export function sourceEntries(zip: Uint8Array): { path: string; content: Uint8Array }[] {
+  if (zip.length > MAX_SOURCE_ZIP) throw new Error(`The design files zip is ${(zip.length / MB).toFixed(1)} MB; at most ${MAX_SOURCE_ZIP / MB} MB is taken.`)
+  const entries = unzip(Buffer.from(zip), MAX_SOURCE_UNPACKED)
+  if (!entries) throw new Error('The design files could not be opened as a zip (it may be damaged, encrypted, or larger than 200 MB unpacked). Zip the schematic, layout and net list files together and give it again.')
+  const all = [...entries].map(([path, buf]) => [path.replace(/\\/g, '/').replace(/^\/+/, ''), buf] as const)
+    .filter(([path]) => !path.endsWith('/') && !/(^|\/)(__MACOSX|\.)/.test(path) && !path.split('/').includes('..'))
+    .sort(([a], [b]) => a.localeCompare(b))
+  if (all.length > MAX_SOURCE_FILES) throw new Error(`The zip holds ${all.length} files; at most ${MAX_SOURCE_FILES} are taken. Leave out build output and backups.`)
+  const tops = new Set(all.map(([p]) => p.split('/')[0]))
+  const strip = all.length > 0 && tops.size === 1 && all.every(([p]) => p.includes('/'))
+  return all.map(([path, buf]) => ({ path: strip ? path.slice(path.indexOf('/') + 1) : path, content: new Uint8Array(buf) }))
+}
+
+/** Read the design source zip: which files are schematics, layouts and net lists, and the tool. Throws plain words. Pure. */
+export function readSource(zip: Uint8Array): SourceFiles {
+  const files: SourceFile[] = []
+  let tool: string | null = null
+  for (const e of sourceEntries(zip)) {
+    const hit = SOURCE_KINDS.find(([re]) => re.test(e.path))
+    files.push({ path: e.path, kind: hit?.[1] ?? 'other', bytes: e.content.length })
+    if (hit?.[2] && !tool && hit[1] !== 'netlist') tool = hit[2]
+  }
+  const n = (k: SourceKind): number => files.filter((f) => f.kind === k).length
+  return { files, schematics: n('schematic'), layouts: n('layout'), netlists: n('netlist'), tool }
 }
 
 // ------------------------------------------------------------------ Gerbers
@@ -392,10 +444,13 @@ export interface Inspection {
     tool: string | null
     project: { name: string | null; revision: string | null }
     files: number
+    /** the design source files given: what they hold (all zero when none were given) */
+    source: { files: number; schematics: number; layouts: number; netlists: number; tool: string | null }
     bom: { lines: number; parts: number; with_lcsc: number; basic: number; extended: number; out_of_stock: number }
     placements: { total: number; top: number; bottom: number; hand_placed: number }
     overview: { chars: number; topics: number; of: number }
   }
+  source: SourceFiles | null
   gerbers: Gerbers | null
   bom: Bom | null
   placements: Placement[]
@@ -411,6 +466,9 @@ export interface Inspection {
 }
 
 export interface InspectInput {
+  /** the design's source files, zipped (optional: an import may be fabrication files alone) */
+  source?: Uint8Array | null
+  /** the Gerbers, BOM and pick and place are all optional, but some design files must be given (source or Gerbers) */
   gerbers: Uint8Array | null
   bom: string | null
   cpl: string | null
@@ -432,9 +490,26 @@ export function inspect(i: InspectInput): Inspection {
   const quantity = Math.max(1, i.quantity ?? 1)
   const caps = BASE_BOARD_CAPABILITIES
 
+  // the design's source files: schematics, layouts, net lists
+  let source: SourceFiles | null = null
+  if (i.source) {
+    try { source = readSource(i.source) } catch (e) { add({ id: 'source.unreadable', severity: 'blocking', file: 'source', text: e instanceof Error ? e.message : String(e), fix: 'Zip the schematic, layout and net list files together and give the zip again.' }) }
+  }
+  if (source) {
+    const s = source
+    if (!s.files.some((f) => f.kind !== 'other')) add({ id: 'source.none', severity: 'blocking', file: 'source', text: 'The zip holds no schematic, layout or net list that trace recognises (KiCad, Altium or Eagle files).', fix: 'Give the design files themselves, such as .kicad_sch and .kicad_pcb.' })
+    else {
+      if (!s.schematics && !s.netlists) add({ id: 'source.no_schematic', severity: 'warning', file: 'source', text: 'There is no schematic or net list: trace cannot check the connections or show the circuit.', fix: 'Add the schematic (or a net list) to the zip.' })
+      if (!s.layouts) add({ id: 'source.no_layout', severity: 'warning', file: 'source', text: 'There is no board layout: trace cannot check the board or draw it from the design.', fix: 'Add the board layout file (.kicad_pcb or the tool\'s own) to the zip.' })
+    }
+  }
+  const hasDesign = !!source || !!i.gerbers
+  if (!hasDesign && !findings.some((f) => f.id === 'source.unreadable')) add({ id: 'design.missing', severity: 'blocking', file: 'source', text: 'No design files were given.', fix: 'Give the design\'s source files (schematics, layout, net lists), or its Gerbers.' })
+  if (i.gerbers && !i.source) add({ id: 'source.missing', severity: 'warning', file: 'source', text: 'No design source files were given: trace cannot check the design\'s rules, or change the design, from the fabrication files alone.', fix: 'Give the schematics, layout and net lists too, if you have them.' })
+
   // the Gerbers
   let g: Gerbers | null = null
-  if (!i.gerbers) add({ id: 'gerbers.missing', severity: 'blocking', file: 'gerbers', text: 'No Gerber zip was given.', fix: 'Give the Gerber and drill files, zipped together.' })
+  if (!i.gerbers) { if (hasDesign) add({ id: 'gerbers.missing', severity: 'note', file: 'gerbers', text: 'No Gerber zip was given.', fix: 'Nothing to do: trace builds the Gerbers from the design when the boards are made.' }) }
   else {
     try { g = readGerbers(i.gerbers) } catch (e) { add({ id: 'gerbers.unreadable', severity: 'blocking', file: 'gerbers', text: e instanceof Error ? e.message : String(e), fix: 'Export the Gerbers again from the design tool and zip them.' }) }
   }
@@ -459,7 +534,7 @@ export function inspect(i: InspectInput): Inspection {
 
   // the bill of materials
   let bom: Bom | null = null
-  if (!i.bom) add({ id: 'bom.missing', severity: 'blocking', file: 'bom', text: 'No bill of materials was given.', fix: 'Give the BOM as a CSV, in JLCPCB\'s columns if you have them.' })
+  if (!i.bom) { if (hasDesign) add({ id: 'bom.missing', severity: 'note', file: 'bom', text: 'No bill of materials was given.', fix: source ? 'Nothing to do: trace builds the BOM from the design.' : 'Without a BOM the order is for bare boards: give it as a CSV to have the boards assembled.' }) }
   else {
     if (i.bom.length > MAX_CSV) add({ id: 'bom.too_big', severity: 'blocking', file: 'bom', text: `The BOM is ${(i.bom.length / MB).toFixed(1)} MB; at most ${MAX_CSV / MB} MB is taken.`, fix: 'Check it is the BOM and not another file.' })
     else try { bom = readBom(i.bom) } catch (e) { add({ id: 'bom.unreadable', severity: 'blocking', file: 'bom', text: e instanceof Error ? e.message : String(e), fix: 'Export the BOM as a CSV with a Designator column.' }) }
@@ -489,7 +564,7 @@ export function inspect(i: InspectInput): Inspection {
 
   // the pick and place
   let placements: Placement[] = []
-  if (!i.cpl) add({ id: 'cpl.missing', severity: 'blocking', file: 'cpl', text: 'No pick and place file was given.', fix: 'Give the placement (CPL) file as a CSV.' })
+  if (!i.cpl) { if (hasDesign) add({ id: 'cpl.missing', severity: 'note', file: 'cpl', text: 'No pick and place file was given.', fix: source ? 'Nothing to do: trace builds the placement file from the board.' : 'Without a placement file the order is for bare boards: give it as a CSV to have the boards assembled.' }) }
   else if (i.cpl.length > MAX_CSV) add({ id: 'cpl.too_big', severity: 'blocking', file: 'cpl', text: `The pick and place file is ${(i.cpl.length / MB).toFixed(1)} MB; at most ${MAX_CSV / MB} MB is taken.`, fix: 'Check it is the placement file.' })
   else {
     try { placements = readCpl(i.cpl) } catch (e) { add({ id: 'cpl.unreadable', severity: 'blocking', file: 'cpl', text: e instanceof Error ? e.message : String(e), fix: 'Export the placement file as a CSV with Designator, Mid X, Mid Y, Layer and Rotation.' }) }
@@ -567,7 +642,8 @@ export function inspect(i: InspectInput): Inspection {
         thickness_mm: g?.job?.thickness_mm ?? null, finish: g?.job?.finish ?? null, impedance: g?.job?.impedance ?? null,
         smallest_hole_mm: g?.drills.smallest_mm ?? null, holes: g?.drills.holes ?? 0,
       },
-      tool: g?.tool ?? null, project: g?.project ?? { name: null, revision: null }, files: g?.files.length ?? 0,
+      tool: g?.tool ?? source?.tool ?? null, project: g?.project ?? { name: null, revision: null }, files: g?.files.length ?? 0,
+      source: { files: source?.files.length ?? 0, schematics: source?.schematics ?? 0, layouts: source?.layouts ?? 0, netlists: source?.netlists ?? 0, tool: source?.tool ?? null },
       bom: {
         lines: bom?.lines.length ?? 0, parts: bom?.parts ?? 0, with_lcsc: bom?.lines.filter((l) => l.lcsc).length ?? 0,
         basic: bom?.lines.filter((l) => l.library === 'basic').length ?? 0, extended: bom?.lines.filter((l) => l.library === 'extended').length ?? 0,
@@ -576,21 +652,21 @@ export function inspect(i: InspectInput): Inspection {
       placements: { total: placements.length, top, bottom, hand_placed: handPlaced.length },
       overview: { chars: overview.chars, topics: overview.found, of: overview.topics.length },
     },
-    gerbers: g, bom, placements, overview, findings, ok, hand_placed: handPlaced, order_options: options, recommended,
+    source, gerbers: g, bom, placements, overview, findings, ok, hand_placed: handPlaced, order_options: options, recommended,
   }
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
 /** The inspection without the bulky parts (each placement, each BOM line): what the app and the record keep. Pure. */
-export function inspectionView(x: Inspection): Omit<Inspection, 'placements' | 'bom' | 'gerbers'> & { layers: Pick<GerberFile, 'name' | 'kind' | 'side' | 'layer' | 'bytes'>[] } {
-  const { placements: _p, bom: _b, gerbers, ...rest } = x
-  return { ...rest, layers: (gerbers?.files ?? []).map((f) => ({ name: f.name, kind: f.kind, side: f.side, layer: f.layer, bytes: f.bytes })) }
+export function inspectionView(x: Inspection): Omit<Inspection, 'placements' | 'bom' | 'gerbers' | 'source'> & { source_files: SourceFile[]; layers: Pick<GerberFile, 'name' | 'kind' | 'side' | 'layer' | 'bytes'>[] } {
+  const { placements: _p, bom: _b, gerbers, source, ...rest } = x
+  return { ...rest, source_files: source?.files ?? [], layers: (gerbers?.files ?? []).map((f) => ({ name: f.name, kind: f.kind, side: f.side, layer: f.layer, bytes: f.bytes })) }
 }
 
 /** The repository paths the imported files are kept at, for a board named `board` at `revision`. Pure. */
-export function importPaths(board: string, revision = 'A'): { dir: string; gerbers: string; bom: string; cpl: string; inspection: string; overview: string } {
+export function importPaths(board: string, revision = 'A'): { dir: string; source: string; gerbers: string; bom: string; cpl: string; inspection: string; overview: string } {
   const b = board.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'board'
   const dir = `hardware/${b}/release/rev${revision}`
-  return { dir, gerbers: `${dir}/${b}-gerbers.zip`, bom: `${dir}/${b}-jlc-bom.csv`, cpl: `${dir}/${b}-jlc-cpl.csv`, inspection: `${dir}/import.json`, overview: 'docs/overview.md' }
+  return { dir, source: `hardware/${b}/source`, gerbers: `${dir}/${b}-gerbers.zip`, bom: `${dir}/${b}-jlc-bom.csv`, cpl: `${dir}/${b}-jlc-cpl.csv`, inspection: `${dir}/import.json`, overview: 'docs/overview.md' }
 }

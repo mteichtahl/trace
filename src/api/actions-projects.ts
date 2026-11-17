@@ -66,7 +66,7 @@ import { appliesOf } from '../core/app-edits.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
 import { editStore, editorName } from './edits.js'
 import { startQueued } from './agent-queue.js'
-import { checkUpload, enterAtImport, ImportArg, importFiles, importWork, refusalOf } from './actions-import.js'
+import { checkUpload, enterAtImport, havesOf, ImportArg, importFiles, importWork, refusalOf } from './actions-import.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
 
@@ -673,7 +673,7 @@ export const PROJECT_ACTIONS = {
         const entered = await enterAtImport(ctx, repo, { entry: a.import.entry, paths: f.paths, inspection: imported.inspection, change: f.change })
         const jobs = await ctx.deps.jobs()
         const started: string[] = []
-        for (const w of importWork({ entry: a.import.entry, dir: f.paths.dir, bom: f.paths.bom, quantity, change: f.title })) {
+        for (const w of importWork({ entry: a.import.entry, dir: f.paths.dir, bom: f.paths.bom, quantity, change: f.title, source: f.paths.source, have: havesOf(imported.inspection) })) {
           const s = await jobs.startJob({ kind: 'task', repository: repo, request: w.request, headline: w.headline, agent: w.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub }).catch(() => null)
           if (s?.accepted) started.push(w.started)
         }
