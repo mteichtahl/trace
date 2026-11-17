@@ -1068,6 +1068,9 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         } catch (e) { log('deploy', `${r}: could not remove ${SMOKE_SECRET_VARIABLE} (${redact(e instanceof Error ? e.message : String(e), s)}): remove it by hand`) }
       }
     }
+    // the choices are kept from here on, so a deploy that fails does not lose them: the next run starts with what was
+    // asked for (GitLab turned on, say), not with the last run that finished
+    try { remember(a) } catch (e) { log('deploy', `these answers could not be saved for the next run (${e instanceof Error ? e.message : String(e)})`) }
     current = 'deploy'
     set('deploy', 'running', existing ? 'updating the stack: only what changed' : `the first deploy ${props.images.source === 'prebuilt' ? 'copies the agent image (or builds it when this version has none published): 15–40 minutes' : 'builds the agent image: expect 20–40 minutes'}`)
     // the web app's WAF first: CloudFront takes a web ACL from us-east-1 only (src/installer/edge.ts). A failure is said
