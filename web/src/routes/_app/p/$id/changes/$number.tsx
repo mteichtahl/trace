@@ -137,6 +137,12 @@ function Review() {
       {d.requirement_edits && d.state === 'open' && <RequirementEditsNotice className="mt-4" edits={d.requirement_edits} />}
       {d.rule_blocks && d.state === 'open' && <RuleFix repo={repo} change={d} onFixed={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })} note={note.trim()} />}
 
+      {/* trace's recommendation leads the page, above the detail, so nobody scrolls to find it */}
+      <section className={cn('mt-5 rounded-xl border p-5', d.recommendation.verdict === 'accept' ? 'border-primary/40 bg-primary-soft' : 'bg-card')} aria-labelledby="rec">
+        <h3 id="rec" className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary"><Sparkles className="size-3.5" aria-hidden /> {recommendationWords(d.recommendation, d.working, d.updating)}</h3>
+        <p className="mt-2 text-sm">{d.recommendation.why || 'trace will recommend once the checks have run.'}</p>
+      </section>
+
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-5">
           {/* checks with steps and Watch need the room of the main column */}
@@ -222,10 +228,6 @@ function Review() {
               loading={coverage.isPending}
               link={(rid, children, className) => <Link to="/p/$id/requirements/$rid" params={{ id, rid }} className={className}>{children}</Link>}
             />
-          </section>
-          <section className={cn('rounded-xl border p-5', d.recommendation.verdict === 'accept' ? 'border-primary/40 bg-primary-soft' : 'bg-card')} aria-labelledby="rec">
-            <h3 id="rec" className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary"><Sparkles className="size-3.5" aria-hidden /> {recommendationWords(d.recommendation, d.working, d.updating)}</h3>
-            <p className="mt-2 text-sm">{d.recommendation.why || 'trace will recommend once the checks have run.'}</p>
           </section>
         </aside>
       </div>

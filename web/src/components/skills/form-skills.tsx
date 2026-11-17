@@ -330,6 +330,8 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
         )}
         {s.step.id === 'impact' && (
           <>
+            {/* trace's recommendation leads the step, above the impact detail */}
+            {rec && <DecisionCard decision={rec} chosen={d.choice ? { option: d.choice.option, recommended: d.choice.option === rec.recommended, reason: d.choice.reason } : undefined} onChoose={(c) => set({ choice: { option: c.option, reason: c.reason } })} />}
             <StepPicture repo={repo} kind={pictureOf(def, 'impact')} view={v} height={300} />
             {!imp ? (
               <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">{s.view.isLoading ? 'trace is following the traceability chains…' : 'trace has not traced the impact yet. It follows the chains from what you named in step 1.'}</p>
@@ -341,7 +343,6 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
                 <div className="rounded-xl border p-4 text-sm"><p className="text-xs text-muted-foreground">Expected cost and time</p><p className="mt-1">{imp.cost ?? '—'} · {imp.time ?? '—'}</p></div>
               </div>
             )}
-            {rec && <DecisionCard decision={rec} chosen={d.choice ? { option: d.choice.option, recommended: d.choice.option === rec.recommended, reason: d.choice.reason } : undefined} onChoose={(c) => set({ choice: { option: c.option, reason: c.reason } })} />}
             <Label className="flex items-center gap-2 font-normal"><Checkbox checked={d.acknowledged} disabled={!imp} onCheckedChange={(x) => set({ acknowledged: !!x })} /> I've read the impact: what reopens, what goes stale and what it costs.</Label>
           </>
         )}
