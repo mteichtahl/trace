@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
@@ -13,5 +14,9 @@ export default defineConfig({
     // one temporary folder per run, removed at its end (test/global-tmp.ts)
     globalSetup: ['test/global-tmp.ts'],
     pool: 'forks',
+    // at most 8 forks, however many cores the machine reports: the suites are heavy on disk (a SQLite store and git
+    // per project), and with a fork per core on a large build machine they starve each other until their own timeouts
+    // and rate windows fail (job-queue's 3 s waits, memory.remember's burst, a local server's connection reset)
+    maxWorkers: Math.min(8, availableParallelism()),
   },
 })
