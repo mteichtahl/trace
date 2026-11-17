@@ -586,6 +586,12 @@ export class ProjectStack extends Construct {
     }
 
     // ------------------------------------------------------------------ the worker runtime
+    // on trace's GitLab, the runtime clones, pushes and asks there, with the project's agents' token
+    // (src/agents/runtime/forge.ts); its role may read that secret (below)
+    const runtimeOnGitlab = projectSettings(cfg, repository).forge === 'gitlab' && p.gitlab ? p.gitlab : null
+    const forgeEnv: Record<string, string> = runtimeOnGitlab
+      ? { TRACE_GITLAB_URL: runtimeOnGitlab.url, TRACE_GITLAB_PATH: gitlabProjectPath(cfg.prefix, repository), TRACE_GITLAB_SECRET: gitlabAgentSecret(cfg.prefix, repository) }
+      : {}
     this.runtime = new CfnRuntime(this, 'Runtime', {
       agentRuntimeName: this.runtimeName,
       description: `trace: Claude working on ${slug}`.slice(0, 200),
@@ -601,6 +607,7 @@ export class ProjectStack extends Construct {
         TRACE_PROJECT: slug,
         TRACE_PROJECT_HOME: `s3://${bucket.bucketName}/${projectDataPrefix(repository)}`,
         TRACE_GITHUB_SECRET_ARN: this.secret.secretArn,
+        ...forgeEnv,
         TRACE_VOCABULARY_BASE: vocabularyBase(cfg.prefix, hash),
         ...memoryEnv,
         ...kbEnv,

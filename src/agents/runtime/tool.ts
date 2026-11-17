@@ -143,11 +143,13 @@ export function toolRunner(d: ToolDeps): ToolRunner {
 export function runtimeCheckout(o: { exec: Exec; getToken: () => Promise<string>; workspace: string; persistent: boolean; cli: string }): (repository: string) => Promise<ToolCheckout> {
   return async (repository) => {
     // the job runner's git helpers and Octokit only here: the API imports this module for its policy alone
-    const [{ cloneDefault, cloneDir, gitAuthEnv, redactor, removeDir }, { Octokit }] = await Promise.all([import('./job.js'), import('@octokit/rest')])
+    const [{ cloneDefault, cloneDir, gitAuthEnv, redactor, removeDir }, { forgeClient, runtimeForge }] = await Promise.all([import('./job.js'), import('./forge.js')])
     const token = await o.getToken()
     const redact = redactor(token)
     const [owner = '', repo = ''] = repository.split('/')
-    const defaultBranch = (await new Octokit({ auth: token, userAgent: 'trace-agent' }).rest.repos.get({ owner, repo })).data.default_branch
+    // GitHub, or trace's GitLab (src/agents/runtime/forge.ts)
+    const gh = forgeClient(runtimeForge(), repository)(token)
+    const defaultBranch = (await gh.rest.repos.get({ owner, repo })).data.default_branch
     const dir = cloneDir(o.workspace, repository, 'api-tool')
     try {
       await cloneDefault({ exec: o.exec, dir, auth: gitAuthEnv(token), log: () => undefined, repository, defaultBranch, cli: o.cli })
@@ -171,12 +173,12 @@ export const TOOL_WORKSPACE = '/tmp/trace-tools'
 
 /** The real runner: the registry of every tool, and the runtime's own clone (TRACE_GITHUB_SECRET_ARN). */
 export async function realToolRunner(env: Record<string, string | undefined> = process.env): Promise<ToolRunner> {
-  const [{ execReal, secretsToken }, { prepareRecord, recordFingerprint }, { processRunLogs, workerQuiet }] = await Promise.all([import('./job.js'), import('./record-guard.js'), import('./log-stream.js')])
+  const [{ execReal, secretsToken }, { prepareRecord, recordFingerprint }, { processRunLogs, workerQuiet }, { runtimeForge, tokenSecret }] = await Promise.all([import('./job.js'), import('./record-guard.js'), import('./log-stream.js'), import('./forge.js')])
   return toolRunner({
     registry: async () => (await import('../../tools/index.js')).allTools(),
     record: { prepare: prepareRecord, fingerprint: recordFingerprint },
     // the call's log (a run id from the API, TRACE_RUNS_LOG_GROUP here) and its quiet gaps (src/agents/runtime/log-stream.ts)
     runLogs: processRunLogs(), learn: workerQuiet(env as NodeJS.ProcessEnv),
-    checkout: runtimeCheckout({ exec: execReal, getToken: secretsToken(env.TRACE_GITHUB_SECRET_ARN, env.AWS_REGION), workspace: env.TRACE_TOOL_WORKSPACE || TOOL_WORKSPACE, persistent: true, cli: env.TRACE_CLI || '/app/dist/cli.js' }),
+    checkout: runtimeCheckout({ exec: execReal, getToken: secretsToken(tokenSecret(runtimeForge(env), env), env.AWS_REGION), workspace: env.TRACE_TOOL_WORKSPACE || TOOL_WORKSPACE, persistent: true, cli: env.TRACE_CLI || '/app/dist/cli.js' }),
   })
 }
