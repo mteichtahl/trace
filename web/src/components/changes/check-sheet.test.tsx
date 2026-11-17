@@ -57,12 +57,14 @@ describe('a check, opened', () => {
     { name: 'A status', state: 'passed', summary: 'ok', id: null },
   ]
 
-  it('shows the result first, its findings, the log, and walks to the next check', async () => {
+  it('shows the result first, its findings, the log, and walks to the next check', { timeout: 30_000 }, async () => {
     const onIndex = vi.fn()
     wrap(<CheckSheet repo="acme/soil-sensor" number={13} checks={checks} index={1} onIndex={onIndex} />)
     expect(screen.getByRole('dialog', { name: /Enclosure clearance/ })).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Failed. J3 is 0.6 mm from the wall')
-    await waitFor(() => expect(screen.getByText('J3 too close to the wall')).toBeInTheDocument())
+    // the first call loads the mock handlers (and every fixture) before it answers: on a busy CI machine that alone
+    // took longer than waitFor's default second, so this wait is given the time the import needs
+    await waitFor(() => expect(screen.getByText('J3 too close to the wall')).toBeInTheDocument(), { timeout: 15_000 })
     expect(screen.getByText(/What it found \(2\)/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Log' }))
     expect(await screen.findByText(/Process completed with exit code 1/)).toBeInTheDocument()
