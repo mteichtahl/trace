@@ -150,13 +150,15 @@ RB
 [ -f /etc/gitlab/gitlab.rb ] || echo "from_file '/etc/gitlab/trace.rb'" > /etc/gitlab/gitlab.rb
 grep -q "^external_url" /etc/gitlab/gitlab.rb || echo "external_url '$url'" >> /etc/gitlab/gitlab.rb
 
+# the root password from Secrets Manager, for whichever reconfigure seeds the database (the first one may not get that
+# far: GitLab then made up its own, and the secret was wrong)
+export GITLAB_ROOT_PASSWORD=$(aws secretsmanager get-secret-value --secret-id '${o.rootSecret}' --query SecretString --output text)
 if ! rpm -q gitlab-ce >/dev/null 2>&1; then
-  export GITLAB_ROOT_PASSWORD=$(aws secretsmanager get-secret-value --secret-id '${o.rootSecret}' --query SecretString --output text)
   curl -fsSL https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.rpm.sh | bash
   EXTERNAL_URL="$url" dnf install -y gitlab-ce
-  unset GITLAB_ROOT_PASSWORD
 fi
 gitlab-ctl reconfigure
+unset GITLAB_ROOT_PASSWORD
 
 # ---- keep the address in step: every five minutes, reconfigure when the parameter changed
 cat > /usr/local/bin/trace-gitlab-address <<'SH'
