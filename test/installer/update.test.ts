@@ -386,3 +386,30 @@ describe('a move asked for in the web app', () => {
     expect(last(moves).status ?? 'waiting').toBe('waiting')
   })
 })
+
+describe('an update that meets the installer', () => {
+  it('waits for a deploy already running before it reads the settings, so it deploys what that deploy saved', async () => {
+    const w = world()
+    const order: string[] = []
+    const statuses = ['UPDATE_IN_PROGRESS', 'UPDATE_COMPLETE']
+    w.deps.stackStatus = () => async () => { order.push('status'); return statuses.length > 1 ? statuses.shift()! : statuses[0]! }
+    w.deps.stackWait = { sleep: async () => undefined, every: 1 }
+    const read = w.deps.readRecord
+    w.deps.readRecord = async (...a) => { order.push('read'); return read(...a) }
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(order.indexOf('read')).toBeGreaterThan(order.lastIndexOf('status', order.indexOf('read')))
+    expect(order.slice(0, 2)).toEqual(['status', 'status'])
+    expect(w.infra).toHaveLength(1)
+  })
+
+  it('does not deploy over settings the installer saved while it was preparing', async () => {
+    const w = world()
+    w.deps.stackStatus = () => async () => 'UPDATE_COMPLETE'
+    let reads = 0
+    const read = w.deps.readRecord
+    w.deps.readRecord = async (...a) => { const t = await read(...a); return reads++ === 0 ? t : t.replace('"savedAt"', ' "savedAt"') }
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.infra).toHaveLength(0)
+    expect(w.summary.join('\n')).toContain('Not deployed: the installer saved new settings while this update was preparing')
+  })
+})

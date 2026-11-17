@@ -378,6 +378,16 @@ describe('installing', () => {
     expect(failed.at(-1)?.summary?.join(' ')).toMatch(/mteichtahl\/fw's own token \(blind\) cannot see mteichtahl\/fw/)
   })
 
+  it('keeps the choices of a run whose deploy fails, for the next run', async () => {
+    const { saveAnswers } = await import('../../src/core/client.js')
+    const before = savedAnswers().answers
+    const changed = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, idleMinutes: 27 } })
+    const ok = await apply(changed, SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, { cdk: async (a) => (a[0] === 'deploy' ? 1 : 0), outputs: async () => OUTPUTS })
+    expect(ok).toBe(false)
+    expect((savedAnswers().answers as { agents: { idleMinutes: number } }).agents.idleMinutes).toBe(27)
+    saveAnswers({ answers: before })
+  })
+
   it('a second run takes away what the answers no longer list', async () => {
     // dev moves from user on board to guest on fw; visitor is dropped from the list entirely.
     const again = { ...ANSWERS, people: [{ email: 'dev@example.com', class: 'guest', projects: ['mteichtahl/fw'] }, { email: 'boss@example.com', class: 'admin' }] }

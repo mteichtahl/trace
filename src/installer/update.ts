@@ -60,7 +60,7 @@ import { deployEdge, withAcl } from './edge.js'
 import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
 import { registerWebhooks } from './hooks.js'
-import { type StackWaitDeps, cfnStackStatus, waitForStack } from './stack-wait.js'
+import { type StackWaitDeps, cfnStackStatus, stackBusy, waitForStack } from './stack-wait.js'
 import { type MoveDeps, type MoveEntry, type MovesIo, applyMove, parseMoves, s3MovesIo, withForges } from './moves.js'
 import { gitlabSide, githubSide } from '../core/forge-move-sides.js'
 import { type MoveRecord, forgeLabel } from '../core/forge-move-record.js'
@@ -217,13 +217,19 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   let before: Record<string, string>
   let bucket = ''
   let pending: PendingEntry[] = []
+  let recordText = ''
   try {
     creds = await d.credentials()
     log(`Updating ${stack} in ${region}.`)
+    // the installer (or an earlier update) may be deploying the stack now: wait for it here, before the settings are
+    // read, so this update deploys what that one saved and not what was there before it (an update that read first
+    // and waited after deployed the old settings over the installer's, and took its new GitLab away again)
+    if (d.stackStatus) await waitForStack(stack, { status: d.stackStatus(creds, region, stack), log: (l) => log(redact(l)), ...(d.stackWait ?? {}) })
     before = await d.outputs(creds, region, stack)
     bucket = before[CENTRAL_BUCKET_OUTPUT] ?? ''
     if (!bucket) throw new Error(`the stack has no ${CENTRAL_BUCKET_OUTPUT} output`)
-    const record = InstallationRecordSchema.parse(JSON.parse(await d.readRecord(creds, region, bucket, INSTALLATION_RECORD_KEY)) as unknown)
+    recordText = await d.readRecord(creds, region, bucket, INSTALLATION_RECORD_KEY)
+    const record = InstallationRecordSchema.parse(JSON.parse(recordText) as unknown)
     if (record.stack !== stack) throw new Error(`the saved settings are for ${record.stack}, not ${stack}`)
     props = record.props
     given = record.connectionArn
@@ -337,12 +343,18 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   input = withAcl(input, edge.aclArn)
   if (edge.note) { if (edge.ok) log(edge.note); else say(edge.note) }
   log(`Deploying ${stack} from this commit${ready ? '' : ', without the build runners (the GitHub connection is not authorized yet)'}. When the agent image changed, CodeBuild builds it again: allow 20–40 minutes.`)
-  // the installer (or an earlier update) may be deploying the stack now: wait for it rather than fail
+  // someone else took the stack or changed the settings while this update prepared (the installer, started since): do
+  // not deploy what was read before over what they saved. The next change to trace's main updates the installation
   if (d.stackStatus) {
-    try { await waitForStack(stack, { status: d.stackStatus(creds, region, stack), log: (l) => log(redact(l)), ...(d.stackWait ?? {}) }) } catch (e) {
-      say(`Not deployed: ${redact(message(e))}.`)
-      for (const x of homes.taken) await putMove(x.key, { ...x.record, status: 'failed', step: 'deploy', error: 'another update of the stack was still running; it is where it was', finished_at: new Date().toISOString() })
-      return 1
+    let changed: string | null = null
+    try {
+      if (stackBusy(await d.stackStatus(creds, region, stack)())) changed = 'another update of the stack started'
+      else if ((await d.readRecord(creds, region, bucket, INSTALLATION_RECORD_KEY)) !== recordText) changed = 'the installer saved new settings'
+    } catch (e) { log(`Could not check for a change since the settings were read (${redact(message(e))}); deploying.`) }
+    if (changed) {
+      say(`Not deployed: ${changed} while this update was preparing, and deploying now would undo it. The next change to trace's main branch updates the installation.`)
+      for (const x of homes.taken) await putMove(x.key, x.record)
+      return 0
     }
   }
   const code = await d.cdk(cdkDeployArgs(stack, app), {
