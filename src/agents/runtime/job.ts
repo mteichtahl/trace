@@ -57,7 +57,7 @@
  * Everything with side effects is injected (RunnerDeps), so tests check the commands without git, GitHub or a model.
  */
 import { query } from '@anthropic-ai/claude-agent-sdk'
-import { Octokit } from '@octokit/rest'
+import { forgeClient, remoteBase, remoteUrl, remoteUser, runtimeForge, serverUrl, tokenSecret, type RuntimeForge } from './forge.js'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -212,7 +212,7 @@ const MAX_LIFETIME_S = 28_800
 // ------------------------------------------------------------------ secrets and redaction
 
 /** The extraheader value git sends: basic auth as x-access-token, the way actions/checkout does it. */
-export const authHeader = (token: string): string => `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`
+export const authHeader = (token: string, f: RuntimeForge = runtimeForge()): string => `AUTHORIZATION: basic ${Buffer.from(`${remoteUser(f)}:${token}`).toString('base64')}`
 
 /**
  * Environment that gives one git command (or Claude's shell) access to github.com, without touching any config file.
@@ -222,11 +222,12 @@ export const authHeader = (token: string): string => `AUTHORIZATION: basic ${Buf
  * in a git directory", so every fresh checkout failed right after its clone). Every repository git sees here is one
  * this runtime cloned. Given as command-scope config (GIT_CONFIG_*), which git honours for safe.directory.
  */
-export function gitAuthEnv(token: string): Record<string, string> {
+export function gitAuthEnv(token: string, f: RuntimeForge = runtimeForge()): Record<string, string> {
   return {
     GIT_CONFIG_COUNT: '2',
-    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
-    GIT_CONFIG_VALUE_0: authHeader(token),
+    // the project's forge: github.com, or trace's GitLab (src/agents/runtime/forge.ts)
+    GIT_CONFIG_KEY_0: `http.${remoteBase(f)}.extraheader`,
+    GIT_CONFIG_VALUE_0: authHeader(token, f),
     GIT_CONFIG_KEY_1: 'safe.directory',
     GIT_CONFIG_VALUE_1: '*',
     GIT_TERMINAL_PROMPT: '0',
@@ -234,7 +235,7 @@ export function gitAuthEnv(token: string): Record<string, string> {
 }
 
 export function redactor(token: string): (s: string) => string {
-  const secrets = [token, Buffer.from(`x-access-token:${token}`).toString('base64')].filter((s) => s.length >= 8)
+  const secrets = [token, Buffer.from(`x-access-token:${token}`).toString('base64'), Buffer.from(`oauth2:${token}`).toString('base64')].filter((s) => s.length >= 8)
   return (s) => secrets.reduce((acc, t) => acc.split(t).join('***'), s)
 }
 
@@ -298,7 +299,7 @@ const gitIn = (o: GitOpts) => (args: string[], cwd: string = o.dir): Promise<Exe
 export async function cloneDefault(o: GitOpts & { repository: string; defaultBranch: string; cli: string }): Promise<Checkout> {
   const db = BranchSchema.parse(o.defaultBranch)
   const git = gitIn(o)
-  const url = `https://github.com/${o.repository}.git`
+  const url = remoteUrl(runtimeForge(), o.repository)
   const reused = existsSync(join(o.dir, '.git'))
   if (reused) {
     o.log(`reusing the clone in ${o.dir}`)
@@ -1167,7 +1168,7 @@ export async function runSweep(d: RunnerDeps, p: SweepJob, ctx: JobContext): Pro
       setOutput: (k, v) => { outputs[k] = v },
       summary: { addRaw: () => ({ write: async () => undefined }) },
     }
-    const context: Context = { repo: { owner, repo }, serverUrl: 'https://github.com', runId: 0, eventName: 'schedule', ref: '', sha: '', actor: 'trace-agent', payload: {} }
+    const context: Context = { repo: { owner, repo }, serverUrl: serverUrl(runtimeForge()), runId: 0, eventName: 'schedule', ref: '', sha: '', actor: 'trace-agent', payload: {} }
     try {
       const cfg = await d.remoteSettings(gh, context, core)
       if (cfg.worker.runner !== 'agentcore') { log(`${repository}: worker.runner is ${cfg.worker.runner}: left to its workflow`); continue }
@@ -1233,7 +1234,7 @@ export function secretsToken(arn: string | undefined, region?: string): () => Pr
   let cached: { token: string; at: number } | null = null
   return async () => {
     if (cached && Date.now() - cached.at < 300e3) return cached.token
-    if (!arn) throw new Error('TRACE_GITHUB_SECRET_ARN is not set')
+    if (!arn) throw new Error('TRACE_GITHUB_SECRET_ARN (or, on trace\'s GitLab, TRACE_GITLAB_SECRET) is not set')
     const { SecretsManagerClient, GetSecretValueCommand } = await import('@aws-sdk/client-secrets-manager')
     const sm = new SecretsManagerClient(region ? { region } : {})
     const out = await sm.send(new GetSecretValueCommand({ SecretId: arn }))
@@ -1248,10 +1249,12 @@ export function realRunner(env: Record<string, string | undefined> = process.env
   const ws = workspaceDir(env)
   const requested = Number(env.TRACE_JOB_TIMEOUT_S ?? '')
   const timeoutS = Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_LIFETIME_S - 600) : MAX_LIFETIME_S - 1800
+  // GitHub, or trace's GitLab: its token and its client (src/agents/runtime/forge.ts)
+  const forge = runtimeForge(env)
   return createRunner({
     exec: execReal,
-    getToken: secretsToken(env.TRACE_GITHUB_SECRET_ARN, env.AWS_REGION),
-    github: (token) => new Octokit({ auth: token, userAgent: 'trace-agent' }),
+    getToken: secretsToken(tokenSecret(forge, env), env.AWS_REGION),
+    github: forgeClient(forge, env.TRACE_PROJECT ?? ''),
     claude: (args) => query(args),
     settingsOf: (dir) => load(dir),
     remoteSettings: loadConfig,

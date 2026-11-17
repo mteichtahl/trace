@@ -188,6 +188,14 @@ describe('the installation with trace\'s GitLab', () => {
     expect(all).not.toContain('trace/gitlab/agents/other')
     const env = JSON.stringify(s.parent.findResources('AWS::BedrockAgentCore::Runtime'))
     expect(env).toMatch(/TRACE_GITLAB_REPOS":"mteichtahl\/board"/)
+    // its worker runtime clones, pushes and asks on GitLab with that token (src/agents/runtime/forge.ts); the other
+    // project's stays on GitHub
+    const runtimes = Object.values(s.all.findResources('AWS::BedrockAgentCore::Runtime')).map((r) => (r as { Properties: { EnvironmentVariables: Record<string, unknown> } }).Properties.EnvironmentVariables)
+    const board = runtimes.find((e) => e.TRACE_PROJECT === 'mteichtahl/board')
+    const other = runtimes.find((e) => e.TRACE_PROJECT === 'mteichtahl/other')
+    expect(board).toMatchObject({ TRACE_GITLAB_PATH: 'trace/board', TRACE_GITLAB_SECRET: 'trace/gitlab/agents/board', TRACE_GITLAB_URL: expect.anything() })
+    expect(other).toBeDefined()
+    expect(other).not.toHaveProperty('TRACE_GITLAB_PATH')
   }, 300_000)
 
   it('gives a GitLab project a CodeBuild runner on its GitLab path once the connection is set up, and none before', () => {
