@@ -75,8 +75,22 @@ jobs:
           done
           sudo gpg --dearmor --yes -o /etc/apt/keyrings/kicad.gpg /tmp/kicad.asc
           echo "deb [signed-by=/etc/apt/keyrings/kicad.gpg] https://ppa.launchpadcontent.net/kicad/kicad-10.0-releases/ubuntu $VERSION_CODENAME main" | sudo tee /etc/apt/sources.list.d/kicad.list
-          sudo apt-get update -q
-          sudo -E apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$APT_CACHE" $APT_PACKAGES
+          # apt-get update does not fail when one source cannot be reached: it carries on, and apt then installs Ubuntu's own
+          # KiCad 7, which has no `kicad-cli sch erc` or `pcb drc`, so nine KiCad tests fail far from the cause. Retry the
+          # update until the PPA's KiCad 10 is the candidate, and stop here, saying so, if it never is.
+          for i in 1 2 3 4; do
+            sudo apt-get update -q -o Acquire::Retries=3 || true
+            apt-cache policy kicad | grep -qE "Candidate: (1:)?10\." && break
+            if [ "$i" = 4 ]; then
+              echo "::error::The KiCad 10 PPA's packages are not available (apt would install: $(apt-cache policy kicad | sed -n 's/ *Candidate: //p'))"
+              apt-cache policy kicad
+              exit 1
+            fi
+            sleep 20
+          done
+          sudo -E apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 -o Dir::Cache::Archives="$APT_CACHE" $APT_PACKAGES
+          # and whatever was installed must be KiCad 10
+          kicad-cli --version | grep -qE '^10\.' || { echo "::error::kicad-cli is $(kicad-cli --version), not 10"; exit 1; }
           # apt leaves the archives root-owned: hand them back to whoever runs this job so actions/cache can save them.
           sudo chown -R "$(id -u):$(id -g)" "$APT_CACHE" && sudo rm -f "$APT_CACHE/lock"
       - name: Python bridge
