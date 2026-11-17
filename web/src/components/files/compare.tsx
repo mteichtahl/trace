@@ -11,6 +11,9 @@ import { type FileRef, resolveUrl, useFileText } from './data'
 import { parseDelimited, partsColumns } from './csv'
 import { compareMode, viewerKind } from './kinds'
 import { describeDiff, diffParts } from './parts-diff'
+import { brief, diffJson, isJsonFile, parseJson, type KeyChange } from './json-diff'
+import { diffNets, parseNetlist } from './netlist'
+import { JsonTree } from './viewers/json-tree'
 import { svgDataUrl } from './sanitize'
 import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerSize } from './viewers/common'
 import { PictureCompare } from './viewers/image'
@@ -87,7 +90,91 @@ function TextBased({ file, before, after, size, table }: { file: FileRef; before
   const b = useFileText(file, { commit: after === 'current' ? undefined : after })
   if (a.isError || b.isError) return <ViewerError error={a.error ?? b.error} what="both versions" />
   if (a.data === undefined || b.data === undefined) return <ViewerLoading size={size} label="Opening both versions" />
-  return table ? <PartsCompare before={a.data} after={b.data} size={size} /> : <TextDiff before={a.data} after={b.data} size={size} />
+  if (table) return <PartsCompare before={a.data} after={b.data} size={size} />
+  return isJsonFile(file.path) ? <JsonCompare file={file} before={a.data} after={b.data} size={size} /> : <TextDiff before={a.data} after={b.data} size={size} />
+}
+
+/** Structured data: the keys that changed (and the tree with them marked), or the line diff. A file that is not JSON is the line diff. */
+function JsonCompare({ file, before, after, size }: { file: FileRef; before: string; after: string; size: ViewerSize }) {
+  const [view, setView] = useState<'keys' | 'tree' | 'lines'>('keys')
+  const parsed = useMemo(() => {
+    const a = parseJson(before)
+    const b = parseJson(after)
+    return a === undefined || b === undefined ? null : { b, diff: diffJson(a, b) }
+  }, [before, after])
+  if (!parsed) return <TextDiff before={before} after={after} size={size} />
+  const marks = new Map<string, KeyChange>(parsed.diff.map((d) => [d.path, d.change]))
+  return (
+    <div className={cn('flex flex-col', AREA[size])}>
+      <Controls>
+        <ToggleGroup type="single" size="sm" variant="outline" value={view} onValueChange={(v) => v && setView(v as typeof view)} aria-label="How to show the changes">
+          <ToggleGroupItem value="keys" className="h-7 px-3 text-xs">Changed keys</ToggleGroupItem>
+          <ToggleGroupItem value="tree" className="h-7 px-3 text-xs">Tree</ToggleGroupItem>
+          <ToggleGroupItem value="lines" className="h-7 px-3 text-xs">Lines</ToggleGroupItem>
+        </ToggleGroup>
+        <span className="ml-auto text-muted-foreground">{parsed.diff.length === 0 ? `${file.path.split('/').pop()}: same keys and values` : `${parsed.diff.length} key${parsed.diff.length === 1 ? '' : 's'} changed`}</span>
+      </Controls>
+      {view === 'tree' && <JsonTree value={parsed.b} marks={marks} />}
+      {view === 'lines' && <TextDiff before={before} after={after} size={size} />}
+      {view === 'keys' && (
+        <div className="min-h-0 flex-1 overflow-auto">
+          {parsed.diff.length === 0 ? (
+            <Note>The two versions have the same keys and values.</Note>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-background"><tr className="border-b text-left text-xs text-muted-foreground"><th className="px-3 py-2 font-medium">Change</th><th className="px-3 py-2 font-medium">Key</th><th className="px-3 py-2 font-medium">Before → after</th></tr></thead>
+              <tbody>
+                {parsed.diff.map((d) => (
+                  <tr key={d.path} className={cn('border-b align-top', d.change === 'added' && 'bg-verified/5', d.change === 'removed' && 'bg-destructive/5')}>
+                    <td className="px-3 py-2"><StatusBadge status={d.change === 'added' ? 'passed' : d.change === 'removed' ? 'failing' : 'warning'} label={d.change === 'added' ? 'Added' : d.change === 'removed' ? 'Removed' : 'Changed'} /></td>
+                    <td className="px-3 py-2 font-mono text-xs">{d.path}</td>
+                    <td className="px-3 py-2 font-mono text-xs"><del className="text-muted-foreground">{d.change === 'added' ? 'none' : brief(d.before)}</del> → <ins className="no-underline font-medium">{d.change === 'removed' ? 'none' : brief(d.after)}</ins></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A net list: the nets added, removed or rewired, or the line diff when a side is not a net list. */
+function NetlistCompare({ file, before, after, size }: { file: FileRef; before: string; after: string; size: ViewerSize }) {
+  const a = useFileText(file, { commit: before })
+  const b = useFileText(file, { commit: after === 'current' ? undefined : after })
+  if (a.isError || b.isError) return <ViewerError error={a.error ?? b.error} what="both versions" />
+  if (a.data === undefined || b.data === undefined) return <ViewerLoading size={size} label="Opening both versions" />
+  const x = parseNetlist(a.data)
+  const y = parseNetlist(b.data)
+  if (!x || !y) return <TextDiff before={a.data} after={b.data} size={size} />
+  const diff = diffNets(x, y)
+  const word = { added: 'Added', removed: 'Removed', changed: 'Rewired' } as const
+  return (
+    <div className={cn('flex flex-col', AREA[size])}>
+      <Controls><span className="font-medium">{diff.length === 0 ? 'The two net lists connect the same pins' : `${diff.length} net${diff.length === 1 ? '' : 's'} changed`}</span></Controls>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {diff.length === 0 ? <Note>Nothing is connected differently.</Note> : (
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-background"><tr className="border-b text-left text-xs text-muted-foreground"><th className="px-3 py-2 font-medium">Change</th><th className="px-3 py-2 font-medium">Net</th><th className="px-3 py-2 font-medium">Pins</th></tr></thead>
+            <tbody>
+              {diff.map((d) => (
+                <tr key={d.name} className={cn('border-b align-top', d.change === 'added' && 'bg-verified/5', d.change === 'removed' && 'bg-destructive/5')}>
+                  <td className="px-3 py-2"><StatusBadge status={d.change === 'added' ? 'passed' : d.change === 'removed' ? 'failing' : 'warning'} label={word[d.change]} /></td>
+                  <td className="px-3 py-2 font-mono text-xs">{d.name}</td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {d.joined.length > 0 && <div>Joined: <ins className="no-underline font-medium">{d.joined.join(', ')}</ins></div>}
+                    {d.left.length > 0 && <div>Left: <del className="text-muted-foreground">{d.left.join(', ')}</del></div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function Pictures({ file, before, after, size }: { file: FileRef; before: string; after: string; size: ViewerSize }) {
@@ -153,6 +240,7 @@ export function CompareView({ file, before, after, size }: { file: FileRef; befo
   const mode = compareMode(viewerKind(file.path))
   if (mode === 'text') return <TextBased file={file} before={before} after={after} size={size} table={false} />
   if (mode === 'table') return <TextBased file={file} before={before} after={after} size={size} table />
+  if (mode === 'netlist') return <NetlistCompare file={file} before={before} after={after} size={size} />
   if (mode === 'image') return <Pictures file={file} before={before} after={after} size={size} />
   if (mode === 'kicad') return <KiCad file={file} before={before} after={after} size={size} />
   if (mode === 'database')

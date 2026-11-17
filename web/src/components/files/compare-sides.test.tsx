@@ -14,7 +14,7 @@ vi.mock('./viewers', () => ({
 
 const KINDS: ViewerKind[] = [
   'schematic', 'board', 'gerber', 'gerber-zip', 'model', 'step', 'image', 'video', 'svg', 'pdf', 'table', 'vcd', 'plot', 'wavedrom',
-  'code', 'markdown', 'firmware', 'archive', 'database', 'unknown', 'spice', 'touchstone', 'gzip', 'report',
+  'code', 'markdown', 'firmware', 'archive', 'database', 'unknown', 'spice', 'touchstone', 'gzip', 'report', 'netlist',
 ]
 
 describe('comparing any kind of file', () => {
