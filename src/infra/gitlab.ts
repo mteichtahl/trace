@@ -254,7 +254,8 @@ export class GitlabServer extends NestedStack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSDataLifecycleManagerServiceRole')],
     })
     new dlm.CfnLifecyclePolicy(this, 'Snapshots', {
-      description: `trace ${p.prefix}: GitLab data, daily, kept 14 days`,
+      // DLM takes letters, digits, spaces, _ and - only ([0-9A-Za-z _-]{0,500}): no colons or commas
+      description: `trace ${p.prefix} GitLab data daily kept 14 days`,
       state: 'ENABLED', executionRoleArn: dlmRole.roleArn,
       policyDetails: {
         resourceTypes: ['VOLUME'], targetTags: [{ key: 'trace:gitlab-data', value: p.prefix }],

@@ -47,6 +47,12 @@ describe('GitlabServer', () => {
     t.hasResourceProperties('AWS::DLM::LifecyclePolicy', {
       PolicyDetails: { TargetTags: [{ Key: 'trace:gitlab-data', Value: 'tr' }], Schedules: [Match.objectLike({ RetainRule: { Count: 14 } })] },
     })
+    // DLM refuses anything but letters, digits, spaces, _ and - in its description and schedule names
+    for (const p of Object.values(t.findResources('AWS::DLM::LifecyclePolicy'))) {
+      const props = (p as { Properties: { Description: string; PolicyDetails: { Schedules: { Name?: string }[] } } }).Properties
+      expect(props.Description).toMatch(/^[0-9A-Za-z _-]{1,500}$/)
+      for (const sch of props.PolicyDetails.Schedules) if (sch.Name) expect(sch.Name).toMatch(/^[0-9A-Za-z _-]{1,120}$/)
+    }
   })
 
   it('is served by CloudFront from a VPC origin, HTTPS to people, nothing cached', () => {
