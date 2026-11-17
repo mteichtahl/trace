@@ -136,7 +136,7 @@ export function SectionsSheet({ name, base, tabs, journey, changes, ready, check
                       {line && <span className="block text-xs text-muted-foreground">{line}</span>}
                     </span>
                     {t.id === 'changes' && ready > 0 && <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-xs font-semibold text-primary">{ready} for you</span>}
-                    {t.id === 'changes' && checking > 0 && <span className="shrink-0 rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-semibold text-orange-700 dark:text-orange-300">{checking} checking</span>}
+                    {t.id === 'changes' && checking > 0 && <span className="shrink-0 rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-semibold text-orange-700 dark:text-orange-300">{checking} with trace</span>}
                     {active && <span className="shrink-0 text-xs font-semibold text-primary">You are here</span>}
                   </Link>
                 </li>
