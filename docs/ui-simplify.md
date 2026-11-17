@@ -18,7 +18,7 @@ All eight recommendations, built as a stack of pull requests in this order.
 | 2 | The project Overview uses the phone's structure on every screen size | `claude/ui-overview` |
 | 3 | Five project tabs (Overview, Design, Proof, Changes, More) instead of thirteen | `claude/ui-five-tabs` |
 | 4 | One exception card | `claude/ui-overview` |
-| 5 | Changes: yours first, three states, a stack accepted in one tap | `claude/ui-changes` |
+| 5 | Changes: yours first, three states (stack accept and auto-apply: decision needed, see section 5) | `claude/ui-changes` |
 | 6 | One gate checklist | `claude/ui-overview` |
 | 7 | One place for running work; Agents, Operations and Admin under System | `claude/ui-system` |
 | 8 | Project Settings split into sub-pages | `claude/ui-settings` |
@@ -86,14 +86,33 @@ there too, and is the Next step card itself when it is what holds the project.
 
 ## 5. Changes
 
-- **Yours first.** The list opens on the changes waiting for this person; "All" is one tap away.
-- **Three states.** Yours (ready for you), trace's (still being made or checked), blocked (cannot go on without
-  something). The five older words map onto these.
-- **A stack in one tap.** Accepting a change that others build on offers "Accept all N", in order, when every one of
-  them is ready.
-- **Record and documents on their own.** A change with no design content (only the project's record, or only its
-  documents: src/core/change-contents.ts) applies once its checks pass, as a revision's renders already do. It never
-  held a gate; now it does not ask for a tap either.
+Built:
+
+- **Yours first.** The Changes list opens on the changes waiting for this person (For you) when there are any;
+  "trace is on it", "Blocked" and "All" are one tap away, each with its count
+  (web/src/routes/_app/p/$id/changes/index.tsx).
+- **Three states** (`changeState` in web/src/lib/guided.ts) in place of seven pills. The verdict's own words stay in
+  the line under the title.
+
+  | State | Means | Verdicts |
+  | --- | --- | --- |
+  | For you | it waits for you: to review, or to ask for a fix | ready; failing with no job fixing it; unfinished |
+  | trace is on it | trace is making, checking, updating or applying it | checking, applying, conflict; any change whose job is still working; an answer trace is applying |
+  | Blocked | it cannot go on until something else happens | blocked (the change it builds on); checks that cannot start |
+
+Not built, waiting on a decision, because each changes a rule the API keeps on purpose:
+
+- **A stack accepted in one tap.** Accepting a change accepts the commit the person was shown and no other
+  (`change.accept` refuses any other head). Once the lower change is accepted, the ones built on it are moved onto the
+  default branch and get it merged in (docs/stacked-changes.md), so each has a new head and new checks: one tap would
+  accept commits nobody was shown. The choice is between keeping that rule (one tap each, in order) and letting an
+  accept of a stack stand for the merged-forward heads when the only difference is the merge.
+- **Record-only and document-only changes applying on their own.** Today evidence a gate criterion cites counts only
+  once a person accepts the change that carries it, and a record that edits a requirement takes the project back to
+  Define when it is accepted (docs/user-journey.md, "A stage is signed only when its work is settled"). Applying these
+  without a person, as a revision's renders do (src/api/apply-renders.ts), moves that decision from the accept to the
+  gate signature. It needs the same care renders got: which tables a record may add to, and which it must leave
+  untouched.
 
 ## 6. One gate checklist
 

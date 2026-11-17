@@ -1,10 +1,12 @@
 /**
  * Changes (/p/:id/changes): the open changes trace's jobs made, as the one Data table (sortable, searchable,
- * filterable, kept per person). Each row opens its review page. What a change is, and why it waits, in one line above.
+ * filterable, kept per person), opened on the ones waiting for this person (For you), with trace is on it, Blocked and
+ * All one tap away (docs/ui-simplify.md, "Changes"). Each row opens its review page. What a change is, and why it waits, in one line above.
  *
  * Data: changes.list (asked for again every 30 s as a fallback for live events).
  */
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { z } from 'zod'
 import { useTraceContext } from '@/components/chat/context'
@@ -14,7 +16,8 @@ import { TabSkeleton } from '@/components/project/shared'
 import { EmptyState, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { ago } from '@/lib/format'
-import { KIND_TAG, VERDICT_WORDS, changeLine } from '@/lib/guided'
+import { type ChangeState, KIND_TAG, STATE_WORDS, changeLine, changeState } from '@/lib/guided'
+import { cn } from '@/lib/utils'
 import { useJourney } from '@/lib/queries'
 import type { ChangeSummary } from '@/lib/types'
 
@@ -37,7 +40,7 @@ export const changeColumns: ColumnDef<ChangeSummary, any>[] = [
     ),
   },
   { id: 'kind', accessorFn: (c) => (c.kind && KIND_TAG[c.kind]) || 'Specialist\'s work', header: 'Kind', size: 140, meta: { label: 'Kind', kind: 'enum' } },
-  { id: 'verdict', accessorFn: (c) => VERDICT_WORDS[c.verdict].pill, header: 'Where it is', size: 130, meta: { label: 'Where it is', kind: 'enum', options: Object.values(VERDICT_WORDS).map((v) => v.pill) }, cell: ({ row }) => <ChangePill verdict={row.original.verdict} /> },
+  { id: 'verdict', accessorFn: (c) => STATE_WORDS[changeState(c)].pill, header: 'Where it is', size: 130, meta: { label: 'Where it is', kind: 'enum', options: Object.values(STATE_WORDS).map((v) => v.pill) }, cell: ({ row }) => <ChangePill verdict={row.original.verdict} change={row.original} /> },
   { id: 'checks', accessorFn: (c) => (c.checks ? c.checks.passed : -1), header: 'Checks', size: 170, meta: { label: 'Checks', kind: 'number' }, cell: ({ row }) => <ChecksBadge c={row.original.checks} stuck={row.original.stuck} /> },
   { accessorKey: 'from', header: 'Made by', size: 200, meta: { label: 'Made by', kind: 'enum' } },
   { id: 'stage', accessorFn: (c) => stageName(c.stage), header: 'Stage', size: 110, meta: { label: 'Stage', kind: 'enum' } },
@@ -46,6 +49,23 @@ export const changeColumns: ColumnDef<ChangeSummary, any>[] = [
   { id: 'number', accessorFn: (c) => c.number, header: 'Number', size: 90, meta: { label: 'Number', kind: 'number', align: 'right', mono: true } },
 ]
 
+type Show = ChangeState | 'all'
+const SHOWS: Show[] = ['yours', 'trace', 'blocked', 'all']
+
+/** How many changes are in each of the three states. */
+export function countStates(xs: readonly ChangeSummary[]): Record<ChangeState, number> {
+  const n: Record<ChangeState, number> = { yours: 0, trace: 0, blocked: 0 }
+  for (const c of xs) n[changeState(c)]++
+  return n
+}
+
+/** "12 open changes: 6 for you, 4 with trace, 2 blocked." */
+export function summaryLine(n: Record<ChangeState, number>, total: number): string {
+  if (!total) return 'No open changes.'
+  const parts = [n.yours && `${n.yours} for you`, n.trace && `${n.trace} with trace`, n.blocked && `${n.blocked} blocked`].filter(Boolean)
+  return `${total} open ${total === 1 ? 'change' : 'changes'}: ${parts.join(', ')}.`
+}
+
 function Changes() {
   const { id } = Route.useParams()
   const repo = repoOf(id)
@@ -53,23 +73,41 @@ function Changes() {
   const list = useChanges(repo)
   const j = useJourney(repo)
   const url = useUrlView('changes')
+  const [picked, setPicked] = useState<Show | null>(null)
   useTraceContext({ label: 'Changes', description: 'The project tab on screen: changes trace made, waiting to be reviewed', value: { tab: 'changes', count: list.data?.changes.length ?? 0 } }, 'screen')
   if (list.isError) return <div className="mt-6"><QueryError error={list.error} what="the changes" onRetry={() => void list.refetch()} /></div>
   if (!list.data) return <TabSkeleton loading={list.isLoading} />
-  const rows = list.data.changes
-  const ready = rows.filter((c) => c.verdict === 'ready').length
+  const all = list.data.changes
+  const counts = countStates(all)
+  // yours first: the list opens on what waits for this person, when anything does; All is one tap away
+  const shown: Show = picked ?? (counts.yours ? 'yours' : 'all')
+  const rows = shown === 'all' ? all : all.filter((c) => changeState(c) === shown)
   return (
     <div className="pb-12">
       <p className="mt-6 text-[15px]">
-        <span className="font-semibold">{rows.length === 0 ? 'No open changes.' : `${rows.length} open ${rows.length === 1 ? 'change' : 'changes'} from trace${ready ? `, ${ready} ready for you` : ''}.`}</span>{' '}
+        <span className="font-semibold">{summaryLine(counts, all.length)}</span>{' '}
         <span className="text-muted-foreground">When a specialist finishes a piece of work, it comes here as a change. Its work counts once someone accepts it into the design.</span>
       </p>
+      {all.length > 0 && (
+        <div role="tablist" aria-label="Which changes" className="mt-4 inline-flex flex-wrap gap-1 rounded-lg bg-muted p-1">
+          {SHOWS.map((k) => {
+            const n = k === 'all' ? all.length : counts[k]
+            return (
+              <button key={k} type="button" role="tab" aria-selected={shown === k} onClick={() => setPicked(k)} className={cn('rounded-md px-3 py-1 text-sm', shown === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
+                {k === 'all' ? 'All' : STATE_WORDS[k].tab} <span className="tabular-nums text-muted-foreground">{n}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
       {j.data?.changesUnavailable && <p className="mt-2 text-sm text-muted-foreground">trace could not reach GitHub just now, so this list may be out of date.</p>}
       <div className="mt-4">
-        {rows.length === 0 ? (
+        {all.length > 0 && rows.length === 0 ? (
+          <EmptyState>{shown === 'yours' ? 'Nothing waits for you here.' : shown === 'blocked' ? 'Nothing is blocked.' : 'trace is not working on any change right now.'}</EmptyState>
+        ) : rows.length === 0 ? (
           <EmptyState>Nothing waits for review. trace adds a change here when one of its specialists finishes a piece of work.</EmptyState>
         ) : (
-          <DataTable id="changes" url={url} data={rows} columns={changeColumns} getRowId={(r) => String(r.number)} noun="changes" onRowClick={(r) => void navigate({ to: '/p/$id/changes/$number', params: { id, number: String(r.number) } })} defaultView={{ sorting: [{ id: 'opened', desc: false }] }} />
+          <DataTable key={shown} id="changes" url={url} data={rows} columns={changeColumns} getRowId={(r) => String(r.number)} noun="changes" onRowClick={(r) => void navigate({ to: '/p/$id/changes/$number', params: { id, number: String(r.number) } })} defaultView={{ sorting: [{ id: 'opened', desc: false }] }} />
         )}
       </div>
     </div>
