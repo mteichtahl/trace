@@ -8,6 +8,7 @@
  * Live: the run's job is read with `job`, whose key the live connection invalidates on job.updated; when the job's
  * version moves on, the run is read again. Nothing polls.
  */
+import { isRunId } from '@/lib/readers'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { ArrowUp, Check, ChevronRight, CircleX, FileText, Loader2, Pause, X } from 'lucide-react'
@@ -35,7 +36,7 @@ import { Term } from '@/components/term'
 import { useNow } from '@/components/use-now'
 import { call, repoOf } from '@/lib/api'
 import { duration, eng, time } from '@/lib/format'
-import { q, useAction, useProjects } from '@/lib/queries'
+import { q, useProjects } from '@/lib/queries'
 import type { RunRecordView } from '@/lib/types-s1'
 import { RUN_STATUS } from './evidence'
 import { HandoffRow, useDeclineHandoffs } from '@/components/handoff'
@@ -54,7 +55,9 @@ function RunPage() {
   const { id, run: runId } = Route.useParams()
   const repo = repoOf(id)
   const qc = useQueryClient()
-  const run = useAction('run', { repo, id: runId })
+  // only an id the run action takes: a link to something else (a job, a graph name) says so rather than "run: id: Too big"
+  const valid = isRunId(runId)
+  const run = useQuery({ ...q('run', { repo, id: runId }), enabled: valid })
   const r = run.data as RunRecordView | undefined
   const job = useQuery({ ...q('job', { id: r?.jobId ?? '' }), enabled: !!r?.jobId && r.status === 'running' })
   const now = useNow(1000)
@@ -98,6 +101,7 @@ function RunPage() {
     ...(can('cancel') ? [{ id: 'run-cancel', label: 'Cancel this run', run: () => setConfirm(true) }] : []),
   ] : [])
 
+  if (!valid) return <div className="mt-6"><EmptyState>This is not a run: trace has no run called {runId.slice(0, 80)}. The link that brought you here points at something else.</EmptyState></div>
   if (run.isError) return <div className="mt-6"><QueryError error={run.error} what="this run" onRetry={() => void run.refetch()} /></div>
   if (!r)
     return (

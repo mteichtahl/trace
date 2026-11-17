@@ -3,6 +3,7 @@
  * the run behind it (its verdict, its table, plots and findings) or the record it names. The gate records that it was
  * opened (journey.criterion.open); the row's "Opened" tick can come no other way.
  */
+import { isRunId } from '@/lib/readers'
 import { Link } from '@tanstack/react-router'
 import { ExternalLink, X } from 'lucide-react'
 import { lazy, Suspense } from 'react'
@@ -38,7 +39,8 @@ export function EvidenceBody({ repo, criterion, opened }: { repo: string; criter
       {listed.length > 0 && <CheckedList repo={repo} items={listed} />}
       {!isRun && !listed.length && <p>{ev?.summary ?? 'trace has not recorded what this criterion was checked on yet.'}</p>}
       {criterion.status === 'not_met' && <DoneIn repo={repo} criterion={criterion.id} />}
-      {isRun && ev?.id && <RunEvidence repo={repo} id={ev.id} fallback={ev.summary} />}
+      {isRun && ev?.id && isRunId(ev.id) && <RunEvidence repo={repo} id={ev.id} fallback={ev.summary} />}
+      {isRun && ev?.id && !isRunId(ev.id) && <p>{ev.summary ?? ev.label}</p>}
     </div>
   )
 }

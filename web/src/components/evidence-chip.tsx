@@ -3,6 +3,7 @@
  * tapping opens it in a side sheet so the person keeps their place. `onOpen` replaces the sheet (a gate records
  * that the evidence was opened, for example).
  */
+import { isRunId } from '@/lib/readers'
 import { Link } from '@tanstack/react-router'
 import { BookOpen, ExternalLink, FileText, FlaskConical, ListChecks, MessageSquare, Brain, Cpu } from 'lucide-react'
 import { lazy, Suspense, useState, type ComponentType } from 'react'
@@ -18,7 +19,9 @@ const RunEvidence = lazy(() => import('@/components/skills/evidence-sheet').then
 /** The project and run a run chip opens (its address is /p/<owner>~<name>/runs/<id>), or null. */
 export function runOfChip(e: Pick<EvidenceRef, 'kind' | 'id' | 'to'>): { repo: string; id: string } | null {
   const m = e.kind === 'run' ? /^\/p\/([^/]+)\/runs\/([^/?#]+)/.exec(e.to ?? '') : null
-  return m ? { repo: decodeURIComponent(m[1]!).replace('~', '/'), id: e.id || decodeURIComponent(m[2]!) } : null
+  const id = m ? (isRunId(e.id) ? e.id : decodeURIComponent(m[2]!)) : null
+  // only an id the run action takes ("run: id: Too big" otherwise)
+  return m && id && isRunId(id) ? { repo: decodeURIComponent(m[1]!).replace('~', '/'), id } : null
 }
 
 /** What a chip's sheet says when there is nothing to load: what kind of thing it is, never "Evidence" alone. */
