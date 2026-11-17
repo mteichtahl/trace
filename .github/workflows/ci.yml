@@ -88,7 +88,14 @@ jobs:
             fi
             sleep 20
           done
-          sudo -E apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 -o Dir::Cache::Archives="$APT_CACHE" $APT_PACKAGES
+          # Launchpad answers 503 for single packages now and then, even after apt's own retries: the packages already
+          # fetched are kept in the cache, so trying the whole install again only fetches what is missing.
+          for i in 1 2 3 4; do
+            sudo -E apt-get install -y -q --no-install-recommends --fix-missing -o Acquire::Retries=3 -o Dir::Cache::Archives="$APT_CACHE" $APT_PACKAGES && break
+            [ "$i" = 4 ] && { echo "::error::The packages could not be installed after 4 tries"; exit 1; }
+            echo "install failed (try $i), trying again in 30 s"; sleep 30
+            sudo apt-get update -q -o Acquire::Retries=3 || true
+          done
           # and whatever was installed must be KiCad 10
           kicad-cli --version | grep -qE '^10\.' || { echo "::error::kicad-cli is $(kicad-cli --version), not 10"; exit 1; }
           # apt leaves the archives root-owned: hand them back to whoever runs this job so actions/cache can save them.
