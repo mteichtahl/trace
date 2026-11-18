@@ -62,6 +62,9 @@ export interface GitlabProps extends NestedStackProps {
   instanceType: string
   /** the data volume's size (GB) */
   volumeGb: number
+  /** the image the instance runs, kept as it is; absent, the newest Amazon Linux 2023 (which replaces the instance when a
+   * newer one is published) */
+  imageId?: string | undefined
   /** the installation's own address for GitLab, with its certificate in ACM (us-east-1); absent: CloudFront's */
   domain?: { name: string; certificateArn: string } | undefined
   /** the repository's root, for bundling the token rotation function */
@@ -314,7 +317,9 @@ export class GitlabServer extends NestedStack {
     const instance = new ec2.Instance(this, 'Instance', {
       vpc, vpcSubnets: { subnets: [subnet] }, securityGroup: sg, role,
       instanceType: new ec2.InstanceType(p.instanceType),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
+      machineImage: p.imageId
+        ? { getImage: () => ({ imageId: p.imageId as string, osType: ec2.OperatingSystemType.LINUX, userData: ec2.UserData.forLinux() }) }
+        : ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
       blockDevices: [{ deviceName: '/dev/xvda', volume: ec2.BlockDeviceVolume.ebs(30, { encrypted: true, volumeType: ec2.EbsDeviceVolumeType.GP3 }) }],
       requireImdsv2: true, ssmSessionPermissions: true,
       userData: ec2.UserData.custom(gitlabUserData({

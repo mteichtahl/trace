@@ -52,7 +52,7 @@ import { REPO_ROOT } from '../infra/stack.js'
 import { ListSourceCredentialsCommand } from '@aws-sdk/client-codebuild'
 import type { RUNNER_AUTH } from './answers.js'
 import {
-  type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, connectorAccessNote, resolveConnection, stackOutputs, webhookRefusedNote,
+  type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, connectorAccessNote, gitlabImageId, resolveConnection, stackOutputs, webhookRefusedNote,
 } from './aws.js'
 import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
 import { checkToken, deleteVariable, getVariable, immutableSubject, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
@@ -83,6 +83,8 @@ export interface UpdateDeps {
   stackWait?: Pick<StackWaitDeps, 'sleep' | 'now' | 'every' | 'timeout'>
   /** the installation record's text */
   readRecord: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string) => Promise<string>
+  /** the image GitLab's instance runs now (aws.ts gitlabImageId); absent, the settings' own (or the newest) */
+  gitlabImage?: (creds: AwsCredentialIdentity, region: string, stack: string) => Promise<string | null>
   resolveConnection: (creds: AwsCredentialIdentity, region: string, o: { prefix: string; given?: string; deployed: Record<string, string> | null }) => Promise<ConnectionChoice>
   /** whether CodeBuild has a GitHub source credential in this account and region (what runners.auth token uses) */
   hasSourceCredential: (creds: AwsCredentialIdentity, region: string) => Promise<boolean>
@@ -130,6 +132,7 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
     const r = await new S3Client({ region, credentials: creds }).send(new GetObjectCommand({ Bucket: bucket, Key: key }))
     return (await r.Body?.transformToString('utf8')) ?? ''
   },
+  gitlabImage: (creds, region, stack) => gitlabImageId(creds, region, stack),
   resolveConnection: (creds, region, o) => resolveConnection(connectionsClient(creds, region), o),
   hasSourceCredential: async (creds, region) => ((await codebuildClient(creds, region).send(new ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []).some((c) => c.serverType === 'GITHUB'),
   cdk: (args, e, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], e, onLine),
@@ -316,7 +319,18 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     auth = await chooseRunnerAuth(mode, { prefix, ...(given ? { given } : {}), deployed: before }, (o) => d.resolveConnection(creds, region, o))
     log(auth.auth === 'connection' ? auth.connection.message : auth.message)
     input = updateProps(props, auth)
-    InfraPropsSchema.parse(input)
+    const parsed = InfraPropsSchema.parse(input)
+    // a running GitLab keeps its image: "the newest Amazon Linux" changes now and then, which replaces the instance, and
+    // CloudFormation cannot move its data volume or CloudFront origin to the new one (the deploy fails and rolls back)
+    if (parsed.gitlab.enabled && !parsed.gitlab.imageId && d.gitlabImage) {
+      try {
+        const ami = await d.gitlabImage(creds, region, stack)
+        if (ami) {
+          input = { ...input, gitlab: { ...parsed.gitlab, imageId: ami } } as InfraInput
+          log(`GitLab keeps the image it runs (${ami}); set gitlab.imageId to upgrade its host.`)
+        }
+      } catch (e) { log(`Could not read GitLab's running image (${redact(message(e))}): its host follows the newest Amazon Linux.`) }
+    }
   } catch (e) {
     say(`Could not update the installation: ${redact(message(e))}`)
     return 1
