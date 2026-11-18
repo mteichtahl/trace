@@ -154,6 +154,19 @@ export async function stackResources(cfn: Cfn, stack: string): Promise<{ logical
   return out
 }
 
+/**
+ * The machine image GitLab's instance was last deployed with, or null (no GitLab, or none readable). It is the SSM-resolved
+ * value of the AMI parameter on GitLab's nested stack (src/infra/gitlab.ts). The update pins the instance to it, so
+ * the newest Amazon Linux 2023 being published does not replace a running GitLab (props.ts gitlab.imageId).
+ */
+export async function gitlabImageId(creds: AwsCredentialIdentity, region: string, stack: string, cfn: Cfn = new CloudFormationClient({ region, credentials: creds })): Promise<string | null> {
+  const nested = (await stackResources(cfn, stack)).find((r) => r.type === 'AWS::CloudFormation::Stack' && /^GitlabNestedStack/.test(r.logicalId) && r.physicalId)
+  if (!nested) return null
+  const s = (await cfn.send(new DescribeStacksCommand({ StackName: nested.physicalId }))).Stacks?.[0]
+  const ami = (s?.Parameters ?? []).map((p) => p.ResolvedValue ?? p.ParameterValue ?? '').find((v) => /^ami-[0-9a-f]{8,17}$/.test(v))
+  return ami ?? null
+}
+
 /** A project's nested stack's logical id in the parent: Project<hash>Stack… (src/infra/stack.ts). */
 const NESTED_ID = /^Project([0-9a-f]{8})Stack/
 

@@ -224,6 +224,10 @@ export const InfraPropsSchema = z.object({
     instanceType: z.string().regex(/^[a-z0-9]+\.[a-z0-9]+$/).default('m7g.large'),
     /** its data volume (GB): repositories, merge requests, uploads, and GitLab's local backup copies */
     volumeGb: z.number().int().min(50).max(16_384).default(100),
+    /** the machine image GitLab's instance runs. Unset: the newest Amazon Linux 2023, which replaces the instance (and
+     * fails the deploy: its data volume and CloudFront origin cannot move while in use) whenever Amazon publishes a
+     * newer one. `trace update-installation` fills it with the running instance's image, so a host upgrade is a choice */
+    imageId: z.string().regex(/^ami-[0-9a-f]{8,17}$/, 'an AMI id such as ami-0123456789abcdef0').optional(),
     /** the installation's own address for GitLab (e.g. git.trace-eda.com) and its certificate in ACM, us-east-1, as
      * CloudFront needs; absent, GitLab answers on the distribution's own address */
     /** CodeBuild's way into GitLab (src/infra/gitlab.ts GitlabConnection): an AWS CodeConnections host and connection,

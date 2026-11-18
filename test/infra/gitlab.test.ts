@@ -13,10 +13,10 @@ import { RUNNERS, synth } from './templates.js'
 
 const ENV = { account: '123456789012', region: 'ap-southeast-2' }
 
-function gitlabTemplate(domain?: { name: string; certificateArn: string }): Template {
+function gitlabTemplate(domain?: { name: string; certificateArn: string }, imageId?: string): Template {
   const stack = new Stack(new App(), 'Parent', { env: ENV })
   const central = new s3.Bucket(stack, 'Central')
-  return Template.fromStack(new GitlabServer(stack, 'Gitlab', { prefix: 'tr', central, instanceType: 'm7g.large', volumeGb: 100, domain, root: process.cwd() }))
+  return Template.fromStack(new GitlabServer(stack, 'Gitlab', { prefix: 'tr', central, instanceType: 'm7g.large', volumeGb: 100, domain, imageId, root: process.cwd() }))
 }
 
 describe('GitlabServer', () => {
@@ -30,6 +30,15 @@ describe('GitlabServer', () => {
     expect(inst?.Properties.KeyName).toBeUndefined()
     t.hasResourceProperties('AWS::EC2::LaunchTemplate', { LaunchTemplateData: { MetadataOptions: { HttpTokens: 'required' } } })
     t.resourceCountIs('AWS::EC2::NatGateway', 1)
+  })
+
+  it('runs the image it is given, so a newer Amazon Linux does not replace the instance', () => {
+    const pinned = gitlabTemplate(undefined, 'ami-0123456789abcdef0')
+    const [inst] = Object.values(pinned.findResources('AWS::EC2::Instance')) as { Properties: Record<string, unknown> }[]
+    expect(inst?.Properties.ImageId).toBe('ami-0123456789abcdef0')
+    expect(JSON.stringify(pinned.toJSON())).not.toContain('ami-amazon-linux-latest')
+    // without one it follows the newest, as before
+    expect(JSON.stringify(t.toJSON())).toContain('ami-amazon-linux-latest')
   })
 
   it('lets only CloudFront\'s origin-facing addresses in, on port 80, and nothing on SSH', () => {

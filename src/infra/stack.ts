@@ -355,7 +355,7 @@ export class TraceStack extends Stack {
     }
     // ------------------------------------------------------------------ trace's own GitLab (src/infra/gitlab.ts)
     const gitlab = cfg.gitlab.enabled
-      ? new GitlabServer(this, 'Gitlab', { prefix: cfg.prefix, central, instanceType: cfg.gitlab.instanceType, volumeGb: cfg.gitlab.volumeGb, domain: cfg.gitlab.domain, root: REPO_ROOT })
+      ? new GitlabServer(this, 'Gitlab', { prefix: cfg.prefix, central, instanceType: cfg.gitlab.instanceType, volumeGb: cfg.gitlab.volumeGb, ...(cfg.gitlab.imageId ? { imageId: cfg.gitlab.imageId } : {}), domain: cfg.gitlab.domain, root: REPO_ROOT })
       : null
     if (gitlab) {
       new CfnOutput(this, GITLAB_URL_OUTPUT, { value: gitlab.url })

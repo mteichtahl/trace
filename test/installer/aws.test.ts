@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { type WaitNotice, activeWaits, checkNow } from '../../src/core/wait.js'
 import {
-  CONNECTION_WAIT_WHY, GPU_WAIT_WHY, type ConnectionChoice, type NameClients, chooseRunnerAuth, clockTime, deployedProjects, ensureGpuImage, ensureSourceCredential, nameIndex,
+  CONNECTION_WAIT_WHY, GPU_WAIT_WHY, type ConnectionChoice, type NameClients, chooseRunnerAuth, clockTime, gitlabImageId, deployedProjects, ensureGpuImage, ensureSourceCredential, nameIndex,
   removeSourceCredential, resolveConnection, reusableConnection, stackOutputs, waitForConnection,
 } from '../../src/installer/aws.js'
 import { chooseGenerations, projectNames } from '../../src/installer/bootstrap.js'
@@ -444,5 +444,29 @@ describe('how the build runners reach GitHub (runners.auth)', () => {
     expect((await chooseRunnerAuth('token', { prefix: 'trace', deployed: null }, none.resolve)).auth).toBe('token')
     expect(none.asked).toEqual([])
     await expect(chooseRunnerAuth('connection', { prefix: 'trace', deployed: null }, resolver(new Error('status ERROR')).resolve)).rejects.toThrow(/ERROR/)
+  })
+})
+
+describe('gitlabImageId', () => {
+  const NESTED = 'arn:aws:cloudformation:us-east-1:123456789012:stack/TraceStack-Gitlab/abc'
+  const cfnFor = (params: { ParameterKey: string; ParameterValue: string; ResolvedValue?: string }[], withGitlab = true) => fake((c) => {
+    if (c instanceof ListStackResourcesCommand) {
+      return { StackResourceSummaries: withGitlab ? [{ LogicalResourceId: 'GitlabNestedStackGitlabNestedStackResourceC915C4DC', ResourceType: 'AWS::CloudFormation::Stack', PhysicalResourceId: NESTED }] : [] }
+    }
+    if (c instanceof DescribeStacksCommand) return { Stacks: [{ StackName: 'TraceStack-Gitlab', Parameters: params }] }
+    throw new Error('unexpected command')
+  })
+
+  it('reads the image the instance was deployed with from the nested stack\'s resolved parameters', async () => {
+    const c = cfnFor([
+      { ParameterKey: 'referencetoTraceStackSomething', ParameterValue: 'arn:aws:s3:::b' },
+      { ParameterKey: 'SsmParameterValueawsserviceamiamazonlinuxlatestal2023', ParameterValue: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64', ResolvedValue: 'ami-0aaa1111bbb22222c' },
+    ])
+    expect(await gitlabImageId(creds, 'us-east-1', 'TraceStack', c as never)).toBe('ami-0aaa1111bbb22222c')
+  })
+
+  it('is null when there is no GitLab stack, or no image among its parameters', async () => {
+    expect(await gitlabImageId(creds, 'us-east-1', 'TraceStack', cfnFor([], false) as never)).toBeNull()
+    expect(await gitlabImageId(creds, 'us-east-1', 'TraceStack', cfnFor([{ ParameterKey: 'x', ParameterValue: 'y' }]) as never)).toBeNull()
   })
 })
